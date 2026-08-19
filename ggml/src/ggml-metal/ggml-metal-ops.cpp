@@ -2335,6 +2335,7 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
     // to the matrix-vector kernel
     static const int ne11_mm_min = getenv("GGML_MM_MIN")     ? atoi(getenv("GGML_MM_MIN"))     : 8;
     static const int ne11_mv_max = getenv("GGML_MV_EXT_MAX") ? atoi(getenv("GGML_MV_EXT_MAX")) : 8;
+    static const int ne11_kq_min = getenv("GGML_MV_EXT_KQ_MIN") ? atoi(getenv("GGML_MV_EXT_KQ_MIN")) : 2;
     static const int env_nsg     = getenv("GGML_MV_EXT_NSG")   ? atoi(getenv("GGML_MV_EXT_NSG"))   : 0;
     static const int env_nxpsg   = getenv("GGML_MV_EXT_NXPSG") ? atoi(getenv("GGML_MV_EXT_NXPSG")) : 0;
 
@@ -2365,7 +2366,7 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
            op->src[0]->type == GGML_TYPE_Q6_K ||
            op->src[0]->type == GGML_TYPE_Q2_K ||
            op->src[0]->type == GGML_TYPE_Q3_K ||
-           false) && (ne11 >= 4 && ne11 <= ne11_mv_max)
+           false) && (ne11 >= ne11_kq_min && ne11 <= ne11_mv_max)
          )
         )
        ) {
@@ -2393,7 +2394,7 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
             nxpsg = env_nxpsg;
         }
 
-        // the t4 kernel family supports multiple src0 rows per thread; the x4 family (K-quants) does not
+        // r1_6/r1_8 kernel variants exist only for the t4 family
         const bool is_t4 =
             op->src[0]->type != GGML_TYPE_Q4_K &&
             op->src[0]->type != GGML_TYPE_Q5_K &&
@@ -2410,9 +2411,9 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
 
         // num src0 rows per thread: more rows amortize the src1 loads, but shrink the grid and use more registers
         // quantized types benefit the most; float types are limited by the weight reads instead
-        const int16_t nr0 = !is_t4 ? 1 :
-                            env_nr0 > 0 ? env_nr0 :
+        const int16_t nr0 = env_nr0 > 0 ? env_nr0 :
                             is_float ? (ne11 >= 5 ? 2 : 1) :
+                            !is_t4 ? 2 :
                             (ne11 >= 5 || ne01 >= 8192) ? 4 : 2;
 
         const int16_t nypsg  = 32/nxpsg;          // num threads along col per simdgroup (i.e. a simdgroup processes that many src0 rows at a time)
