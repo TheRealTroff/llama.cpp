@@ -222,6 +222,18 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
                     [prep setObject:@"1" forKey:@"GGML_METAL_HAS_TENSOR"];
                 }
 
+                // TurboQuant turbo3 dequant: on pre-M5 GPUs a 4-entry magnitude LUT with
+                // ALU sign beats the 8-entry signed LUT (fewer constant-cache addresses).
+                // Numerically identical. Force with TURBO_FORCE_4MAG=1/0.
+                {
+                    const char * env = getenv("TURBO_FORCE_4MAG");
+                    const bool use_4mag = env ? env[0] == '1' : !ggml_metal_device_get_props(dev)->has_tensor;
+                    if (use_4mag) {
+                        [prep setObject:@"1" forKey:@"TURBO_USE_4MAG"];
+                        GGML_LOG_INFO("%s: turbo3 using 4-mag LUT (pre-M5 hardware)\n", __func__);
+                    }
+                }
+
 #if GGML_METAL_EMBED_LIBRARY
                 [prep setObject:@"1" forKey:@"GGML_METAL_EMBED_LIBRARY"];
 #endif
