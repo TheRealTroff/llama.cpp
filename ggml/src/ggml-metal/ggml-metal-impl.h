@@ -1297,4 +1297,9 @@ typedef struct {
     int64_t ne;
 } ggml_metal_kargs_silu_back;
 
+typedef struct {
+    int64_t n_elements;
+    int32_t direction;
+} ggml_metal_kargs_turbo_wht;
+
 #endif // GGML_METAL_IMPL
