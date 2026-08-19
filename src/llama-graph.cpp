@@ -2561,6 +2561,14 @@ ggml_tensor * llm_graph_context::build_attn_mha(
         ggml_flash_attn_ext_add_sinks(cur, sinks);
         ggml_flash_attn_ext_set_prec (cur, GGML_PREC_F32);
 
+        // TurboQuant V stays in the rotated domain; undo the rotation on the attention output
+        // (linearity: sum_i a_i*WHT(v_i) == WHT(sum_i a_i*v_i))
+        if (v->type == GGML_TYPE_TURBO2_0 || v->type == GGML_TYPE_TURBO3_0 || v->type == GGML_TYPE_TURBO4_0) {
+            GGML_ASSERT(cur->ne[0] % 128 == 0);
+            cur = ggml_turbo_wht(ctx0, cur, 1);
+            cb(cur, "fattn_turbo_wht_inv", il);
+        }
+
         if (v_mla) {
 #if 0
             // v_mla can be applied as a matrix-vector multiplication with broadcasting across dimension 3 == n_tokens.
@@ -2623,6 +2631,11 @@ ggml_tensor * llm_graph_context::build_attn_mha(
             v = ggml_cont(ctx0, ggml_transpose(ctx0, v));
             cb(v, "v_cont", il);
         }
+
+        // TurboQuant KV requires flash attention (enforced in llama_context); the non-FA
+        // path has no inverse rotation and no Metal mul_mv kernels for these types
+        GGML_ASSERT(v->type != GGML_TYPE_TURBO2_0 && v->type != GGML_TYPE_TURBO3_0 && v->type != GGML_TYPE_TURBO4_0);
+        GGML_ASSERT(k->type != GGML_TYPE_TURBO2_0 && k->type != GGML_TYPE_TURBO3_0 && k->type != GGML_TYPE_TURBO4_0);
 
         ggml_tensor * kqv = ggml_mul_mat(ctx0, v, kq);
         cb(kqv, "kqv", il);
@@ -2807,6 +2820,17 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * k = mctx_cur->get_k(ctx0, il);
     ggml_tensor * v = mctx_cur->get_v(ctx0, il);
 
+    // TurboQuant K is stored WHT-rotated (fused into the set_rows quantizer);
+    // rotate Q the same way so the attention scores are computed in the rotated basis
+    if (k->type == GGML_TYPE_TURBO2_0 || k->type == GGML_TYPE_TURBO3_0 || k->type == GGML_TYPE_TURBO4_0) {
+        GGML_ASSERT(q->ne[0] % 128 == 0);
+        if (!ggml_is_contiguous(q)) {
+            q = ggml_cont(ctx0, q);
+        }
+        q = ggml_turbo_wht(ctx0, q, 0);
+        cb(q, "q_turbo_wht", il);
+    }
+
     ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, kq_scale, il);
     cb(cur, "kqv_out", il);
 
@@ -2896,6 +2920,11 @@ ggml_tensor * llm_graph_context::build_attn(
 
     ggml_tensor * q = q_cur;
     ggml_tensor * k = mctx_cur->get_k(ctx0, il);
+
+    // TurboQuant types are not supported for the K-only (MLA) cache: V is a byte-view of K,
+    // which is incompatible with 128-wide rotated blocks
+    GGML_ASSERT(k->type != GGML_TYPE_TURBO2_0 && k->type != GGML_TYPE_TURBO3_0 && k->type != GGML_TYPE_TURBO4_0);
+
     ggml_tensor * v = ggml_view_4d(ctx0, k, v_cur->ne[0], k->ne[1], k->ne[2], k->ne[3], k->nb[1], k->nb[2], k->nb[3], 0);
 
     ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, kq_scale, il);
@@ -2981,6 +3010,11 @@ ggml_tensor * llm_graph_context::build_attn(
 
     ggml_tensor * q = q_cur;
     ggml_tensor * k = mctx_cur->get_k(ctx0, il);
+
+    // TurboQuant types are not supported for the K-only (MLA) cache: V is a byte-view of K,
+    // which is incompatible with 128-wide rotated blocks
+    GGML_ASSERT(k->type != GGML_TYPE_TURBO2_0 && k->type != GGML_TYPE_TURBO3_0 && k->type != GGML_TYPE_TURBO4_0);
+
     ggml_tensor * v = ggml_view_4d(ctx0, k, v_cur->ne[0], k->ne[1], k->ne[2], k->ne[3], k->nb[1], k->nb[2], k->nb[3], 0);
 
     ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask_top_k, sinks, v_mla, kq_scale, il);
@@ -3061,6 +3095,16 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * q = q_cur;
     ggml_tensor * k = mctx_cur->get_k(ctx0, il);
     ggml_tensor * v = mctx_cur->get_v(ctx0, il);
+
+    // TurboQuant K is stored WHT-rotated; rotate Q to match (see the unified-KV overload)
+    if (k->type == GGML_TYPE_TURBO2_0 || k->type == GGML_TYPE_TURBO3_0 || k->type == GGML_TYPE_TURBO4_0) {
+        GGML_ASSERT(q->ne[0] % 128 == 0);
+        if (!ggml_is_contiguous(q)) {
+            q = ggml_cont(ctx0, q);
+        }
+        q = ggml_turbo_wht(ctx0, q, 0);
+        cb(q, "q_turbo_wht", il);
+    }
 
     ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, kq_scale, il);
     cb(cur, "kqv_out", il);

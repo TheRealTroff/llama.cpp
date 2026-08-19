@@ -3593,6 +3593,25 @@ llama_context * llama_init_from_model(
         return nullptr;
     }
 
+    {
+        const auto is_turbo = [](ggml_type t) {
+            return t == GGML_TYPE_TURBO2_0 || t == GGML_TYPE_TURBO3_0 || t == GGML_TYPE_TURBO4_0;
+        };
+        if ((is_turbo(params.type_k) || is_turbo(params.type_v)) && params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_ENABLED) {
+            if (params.flash_attn_type == LLAMA_FLASH_ATTN_TYPE_AUTO) {
+                LLAMA_LOG_INFO("%s: enabling flash_attn since it is required for TurboQuant cache types\n", __func__);
+                params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;
+            } else {
+                LLAMA_LOG_ERROR("%s: TurboQuant cache types require flash_attn to be enabled\n", __func__);
+                return nullptr;
+            }
+        }
+        if (is_turbo(params.type_k) && (model->hparams.is_mla() || model->arch == LLM_ARCH_DEEPSEEK4)) {
+            LLAMA_LOG_ERROR("%s: TurboQuant K cache is not supported for MLA models\n", __func__);
+            return nullptr;
+        }
+    }
+
     if (ggml_is_quantized(params.type_v) && params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_ENABLED) {
         if (params.flash_attn_type == LLAMA_FLASH_ATTN_TYPE_AUTO) {
             LLAMA_LOG_INFO("%s: enabling flash_attn since it is required for quantized V cache\n", __func__);

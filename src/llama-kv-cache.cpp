@@ -97,6 +97,30 @@ llama_kv_cache::llama_kv_cache(
 
     GGML_ASSERT(kv_size % n_pad == 0);
 
+    // TurboQuant auto-asymmetric: symmetric turbo K+V on a high-GQA model amplifies the
+    // K quantization error across all query heads sharing each KV head. Measured on this
+    // machine: Qwen2.5-3B (8:1) symmetric turbo3 PPL 176 vs 8.17 with K upgraded to q8_0.
+    // Threshold ratio >= 6. Disable with TURBO_AUTO_ASYMMETRIC=0 (fine on low-GQA models).
+    {
+        const bool k_is_turbo = type_k == GGML_TYPE_TURBO2_0 || type_k == GGML_TYPE_TURBO3_0 || type_k == GGML_TYPE_TURBO4_0;
+        if (k_is_turbo && type_k == type_v) {
+            const uint32_t n_head    = hparams.n_head(0);
+            const uint32_t n_head_kv = hparams.n_head_kv(0);
+            const uint32_t gqa_ratio = n_head_kv > 0 ? n_head/n_head_kv : 1;
+
+            const char * env = getenv("TURBO_AUTO_ASYMMETRIC");
+            const bool disabled = env && env[0] == '0';
+
+            if (!disabled && gqa_ratio >= 6) {
+                LLAMA_LOG_WARN("%s: auto-asymmetric: GQA ratio %u:1 (n_head=%u, n_head_kv=%u) — "
+                               "upgrading K from %s to q8_0 to prevent quality degradation. "
+                               "Disable with TURBO_AUTO_ASYMMETRIC=0\n",
+                               __func__, gqa_ratio, n_head, n_head_kv, ggml_type_name(type_k));
+                type_k = GGML_TYPE_Q8_0;
+            }
+        }
+    }
+
     const uint32_t n_layer = hparams.n_layer_all;
 
     // define a comparator for the buft -> ctx map to ensure that the order is well-defined:
@@ -316,8 +340,14 @@ llama_kv_cache::llama_kv_cache(
             LLAMA_LOG_WARN("%s: attention rotation force disabled (LLAMA_ATTN_ROT_DISABLE)\n", __func__);
         }
 
+        // TurboQuant types carry their own signed WHT inside the quantizer — exclude them
+        // from the generic Hadamard attention rotation to avoid rotating twice
+        const bool k_is_turbo = type_k == GGML_TYPE_TURBO2_0 || type_k == GGML_TYPE_TURBO3_0 || type_k == GGML_TYPE_TURBO4_0;
+        const bool v_is_turbo = type_v == GGML_TYPE_TURBO2_0 || type_v == GGML_TYPE_TURBO3_0 || type_v == GGML_TYPE_TURBO4_0;
+
         attn_rot_k =
             !attn_rot_disable &&
+            !k_is_turbo &&
             n_embd_head_k_all > 0 &&
             ggml_is_quantized(type_k) &&
             hparams.n_embd_head_k() % 64 == 0;
@@ -330,6 +360,7 @@ llama_kv_cache::llama_kv_cache(
 
         attn_rot_v =
             !attn_rot_disable &&
+            !v_is_turbo &&
             n_embd_head_v_all > 0 &&
             ggml_is_quantized(type_v) &&
             hparams.n_embd_head_v() % 64 == 0;
