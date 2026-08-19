@@ -2,6 +2,7 @@
 
 #include "ggml-cpu.h"
 #include "ggml-impl.h"
+#include "ggml-quants.h"
 #include "binary-ops.h"
 #include "simd-gemm.h"
 #include "ggml.h"
@@ -12010,5 +12011,39 @@ void ggml_compute_forward_lightning_indexer(
                 dst_row[ik] = score + GGML_CPU_FP16_TO_FP32(m_row[ik]);
             }
         }
+    }
+}
+
+// ggml_compute_forward_turbo_wht
+// normalized signed WHT over consecutive 128-element groups of dim 0 (TurboQuant KV cache).
+// op_params[0]: direction (0 = forward, 1 = inverse). The transform routine lives in
+// ggml-turbo-quant.c so the sign tables have a single CPU definition.
+
+void ggml_compute_forward_turbo_wht(const ggml_compute_params * params, ggml_tensor * dst) {
+    const ggml_tensor * src0 = dst->src[0];
+
+    GGML_ASSERT(src0->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->type  == GGML_TYPE_F32);
+    GGML_ASSERT(ggml_is_contiguous(src0));
+    GGML_ASSERT(ggml_is_contiguous(dst));
+    GGML_ASSERT(src0->ne[0] % 128 == 0);
+
+    const int direction = ggml_get_op_params_i32(dst, 0);
+
+    const int64_t n_groups = ggml_nelements(src0)/128;
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    const int64_t groups_per_thread = (n_groups + nth - 1)/nth;
+    const int64_t g0 = ith*groups_per_thread;
+    const int64_t g1 = MIN(g0 + groups_per_thread, n_groups);
+
+    const float * x = (const float *) src0->data;
+    float       * y = (float       *) dst->data;
+
+    for (int64_t g = g0; g < g1; g++) {
+        memcpy(y + g*128, x + g*128, 128*sizeof(float));
+        ggml_turbo_wht_group(y + g*128, direction);
     }
 }

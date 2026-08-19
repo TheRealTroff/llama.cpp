@@ -430,7 +430,10 @@ extern "C" {
         GGML_TYPE_NVFP4   = 40, // NVFP4 (4 blocks, E4M3 scale)
         GGML_TYPE_Q1_0    = 41,
         GGML_TYPE_Q2_0    = 42,
-        GGML_TYPE_COUNT   = 43,
+        GGML_TYPE_TURBO2_0 = 43, // TurboQuant 2-bit KV cache: WHT + 2-bit Lloyd-Max
+        GGML_TYPE_TURBO3_0 = 44, // TurboQuant 3-bit KV cache: WHT + 3-bit Lloyd-Max
+        GGML_TYPE_TURBO4_0 = 45, // TurboQuant 4-bit KV cache: WHT + 4-bit Lloyd-Max
+        GGML_TYPE_COUNT   = 46,
     };
 
     // precision
@@ -589,6 +592,8 @@ extern "C" {
         GGML_OP_OPT_STEP_SGD,
 
         GGML_OP_GLU,
+
+        GGML_OP_TURBO_WHT,
 
         GGML_OP_COUNT,
     };
@@ -2286,6 +2291,15 @@ extern "C" {
             int64_t               ne2,
             int64_t               ne3,
             uint32_t              mode); // ggml_scale_mode [ | ggml_scale_flag...]
+
+    // normalized signed Walsh-Hadamard transform over consecutive 128-element groups of dim 0
+    // used by the TurboQuant KV cache types: forward on Q, inverse on the attention output
+    // direction: 0 = forward (s1 -> H/sqrt(128) -> s2), 1 = inverse (s2 -> H/sqrt(128) -> s1)
+    // requires a->ne[0] % 128 == 0 (llama pads KV heads to a multiple of 128)
+    GGML_API struct ggml_tensor * ggml_turbo_wht(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            int                   direction);
 
     // pad each dimension with zeros: [x, ..., x] -> [x, ..., x, 0, ..., 0]
     GGML_API struct ggml_tensor * ggml_pad(

@@ -288,6 +288,39 @@ typedef struct {
 static_assert(sizeof(block_tq2_0) == sizeof(ggml_half) + QK_K / 4, "wrong tq2_0 block size/padding");
 
 //
+// TurboQuant KV-cache types: one block == one 128-element rotation group (== padded head_dim slice).
+// Values are Lloyd-Max centroid indices for N(0, 1/128) of the L2-normalized, sign-WHT-rotated group.
+// norm is the *corrected* group L2 norm (grp_norm / ||centroid reconstruction||), so
+// dequantization is exactly centroid[idx] * norm with no further scaling.
+// Dequantization does NOT invert the rotation: Q is forward-WHT'd in the graph and the
+// attention output is inverse-WHT'd (GGML_OP_TURBO_WHT), so attention runs in rotated space.
+//
+
+#define QK_TURBO 128
+
+// 2.125 bpw
+typedef struct {
+    ggml_half norm;
+    uint8_t   qs[QK_TURBO/4];    // 2-bit indices, 4 per byte, LSB first
+} block_turbo2_0;
+static_assert(sizeof(block_turbo2_0) == sizeof(ggml_half) + QK_TURBO/4, "wrong turbo2_0 block size/padding"); // 34 bytes
+
+// 3.125 bpw
+typedef struct {
+    ggml_half norm;
+    uint8_t   qs[QK_TURBO/4];    // low 2 bits of the 3-bit index, 4 per byte
+    uint8_t   signs[QK_TURBO/8]; // high bit of the 3-bit index, 8 per byte
+} block_turbo3_0;
+static_assert(sizeof(block_turbo3_0) == sizeof(ggml_half) + QK_TURBO/4 + QK_TURBO/8, "wrong turbo3_0 block size/padding"); // 50 bytes
+
+// 4.125 bpw
+typedef struct {
+    ggml_half norm;
+    uint8_t   qs[QK_TURBO/2];    // 4-bit indices, 2 per byte, low nibble first
+} block_turbo4_0;
+static_assert(sizeof(block_turbo4_0) == sizeof(ggml_half) + QK_TURBO/2, "wrong turbo4_0 block size/padding"); // 66 bytes
+
+//
 // Super-block quantization structures
 //
 

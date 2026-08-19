@@ -7,6 +7,7 @@
 #include "ggml-cpu-impl.h"
 #include "ggml-impl.h"
 #include "quants.h"
+#include "ggml-quants.h"
 #include "ggml-threading.h"
 #include "unary-ops.h"
 #include "binary-ops.h"
@@ -211,6 +212,56 @@ typedef pthread_t ggml_thread_t;
 #include <TargetConditionals.h>
 #endif
 
+// TurboQuant KV types: scalar dequant-then-dot against f32 (values stay in the rotated domain,
+// which is fine for dot products against a graph-rotated Q — WHT preserves inner products)
+static void ggml_vec_dot_turbo2_0_f32(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    GGML_UNUSED(bs); GGML_UNUSED(bx); GGML_UNUSED(by); GGML_UNUSED(nrc);
+    assert(n % QK_TURBO == 0);
+    const block_turbo2_0 * x = vx;
+    const float * y = vy;
+    float sumf = 0.0f;
+    for (int b = 0; b < n/QK_TURBO; b++) {
+        float buf[QK_TURBO];
+        dequantize_row_turbo2_0(x + b, buf, QK_TURBO);
+        for (int j = 0; j < QK_TURBO; j++) {
+            sumf += buf[j]*y[b*QK_TURBO + j];
+        }
+    }
+    *s = sumf;
+}
+
+static void ggml_vec_dot_turbo3_0_f32(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    GGML_UNUSED(bs); GGML_UNUSED(bx); GGML_UNUSED(by); GGML_UNUSED(nrc);
+    assert(n % QK_TURBO == 0);
+    const block_turbo3_0 * x = vx;
+    const float * y = vy;
+    float sumf = 0.0f;
+    for (int b = 0; b < n/QK_TURBO; b++) {
+        float buf[QK_TURBO];
+        dequantize_row_turbo3_0(x + b, buf, QK_TURBO);
+        for (int j = 0; j < QK_TURBO; j++) {
+            sumf += buf[j]*y[b*QK_TURBO + j];
+        }
+    }
+    *s = sumf;
+}
+
+static void ggml_vec_dot_turbo4_0_f32(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    GGML_UNUSED(bs); GGML_UNUSED(bx); GGML_UNUSED(by); GGML_UNUSED(nrc);
+    assert(n % QK_TURBO == 0);
+    const block_turbo4_0 * x = vx;
+    const float * y = vy;
+    float sumf = 0.0f;
+    for (int b = 0; b < n/QK_TURBO; b++) {
+        float buf[QK_TURBO];
+        dequantize_row_turbo4_0(x + b, buf, QK_TURBO);
+        for (int j = 0; j < QK_TURBO; j++) {
+            sumf += buf[j]*y[b*QK_TURBO + j];
+        }
+    }
+    *s = sumf;
+}
+
 static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
     [GGML_TYPE_F32] = {
         .from_float               = (ggml_from_float_t) ggml_cpu_fp32_to_fp32,
@@ -281,6 +332,24 @@ static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
     [GGML_TYPE_Q8_1] = {
         .from_float               = quantize_row_q8_1,
         .vec_dot_type             = GGML_TYPE_Q8_1,
+        .nrows                    = 1,
+    },
+    [GGML_TYPE_TURBO2_0] = {
+        .from_float               = (ggml_from_float_t) quantize_row_turbo2_0_ref,
+        .vec_dot                  = ggml_vec_dot_turbo2_0_f32,
+        .vec_dot_type             = GGML_TYPE_F32,
+        .nrows                    = 1,
+    },
+    [GGML_TYPE_TURBO3_0] = {
+        .from_float               = (ggml_from_float_t) quantize_row_turbo3_0_ref,
+        .vec_dot                  = ggml_vec_dot_turbo3_0_f32,
+        .vec_dot_type             = GGML_TYPE_F32,
+        .nrows                    = 1,
+    },
+    [GGML_TYPE_TURBO4_0] = {
+        .from_float               = (ggml_from_float_t) quantize_row_turbo4_0_ref,
+        .vec_dot                  = ggml_vec_dot_turbo4_0_f32,
+        .vec_dot_type             = GGML_TYPE_F32,
         .nrows                    = 1,
     },
     [GGML_TYPE_MXFP4] = {
@@ -2032,6 +2101,10 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
             {
                 ggml_compute_forward_glu(params, tensor);
             } break;
+        case GGML_OP_TURBO_WHT:
+            {
+                ggml_compute_forward_turbo_wht(params, tensor);
+            } break;
         case GGML_OP_GET_REL_POS:
             {
                 ggml_compute_forward_get_rel_pos(params, tensor);
@@ -2389,6 +2462,7 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
             } break;
         case GGML_OP_UPSCALE:
         case GGML_OP_PAD:
+        case GGML_OP_TURBO_WHT:
         case GGML_OP_PAD_REFLECT_1D:
         case GGML_OP_ROLL:
         case GGML_OP_ARANGE:

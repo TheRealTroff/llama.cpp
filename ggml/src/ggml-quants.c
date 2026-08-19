@@ -5604,6 +5604,18 @@ bool ggml_validate_row_data(enum ggml_type type, const void * data, size_t nbyte
             {
                 VALIDATE_ROW_DATA_D_F16_IMPL(block_tq2_0, data, nb);
             } break;
+        case GGML_TYPE_TURBO2_0:
+            {
+                VALIDATE_ROW_DATA_DM_F16_IMPL(block_turbo2_0, data, nb, norm, norm);
+            } break;
+        case GGML_TYPE_TURBO3_0:
+            {
+                VALIDATE_ROW_DATA_DM_F16_IMPL(block_turbo3_0, data, nb, norm, norm);
+            } break;
+        case GGML_TYPE_TURBO4_0:
+            {
+                VALIDATE_ROW_DATA_DM_F16_IMPL(block_turbo4_0, data, nb, norm, norm);
+            } break;
         case GGML_TYPE_IQ1_S:
             {
                 VALIDATE_ROW_DATA_D_F16_IMPL(block_iq1_s, data, nb);
