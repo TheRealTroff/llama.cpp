@@ -716,10 +716,11 @@ void dequantize_turbo2_0(device const block_turbo2_0 * xb, short il, thread type
 template <typename type4>
 void dequantize_turbo2_0_t4(device const block_turbo2_0 * xb, short il, thread type4 & reg) {
     // il in [0..31], 4 elements each: one qs byte
-    const half norm = xb->norm;
+    // note: float math — at 2 bits the extra half rounding measurably costs PPL
+    const float norm = float(xb->norm);
     const uint8_t qb = xb->qs[il];
     for (int i = 0; i < 4; i++) {
-        reg[i] = turbo_centroids_2bit_h[(qb >> (i*2)) & 0x3]*norm;
+        reg[i] = float(turbo_centroids_2bit_h[(qb >> (i*2)) & 0x3])*norm;
     }
 }
 
@@ -7668,12 +7669,12 @@ template [[host_name("kernel_flash_attn_ext_kq8_0_vturbo4_dk128_dv128")]] kernel
 template [[host_name("kernel_flash_attn_ext_kq8_0_vturbo2_dk256_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_q8_0, 2, dequantize_q8_0, block_turbo2_0, 8, dequantize_turbo2_0, 256, 256>;
 template [[host_name("kernel_flash_attn_ext_kq8_0_vturbo3_dk256_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_q8_0, 2, dequantize_q8_0, block_turbo3_0, 8, dequantize_turbo3_0, 256, 256>;
 template [[host_name("kernel_flash_attn_ext_kq8_0_vturbo4_dk256_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_q8_0, 2, dequantize_q8_0, block_turbo4_0, 8, dequantize_turbo4_0, 256, 256>;
-template [[host_name("kernel_flash_attn_ext_kf16_vturbo2_dk128_dv128")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, half4x4, 1, dequantize_f16, block_turbo2_0, 8, dequantize_turbo2_0, 128, 128>;
-template [[host_name("kernel_flash_attn_ext_kf16_vturbo3_dk128_dv128")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, half4x4, 1, dequantize_f16, block_turbo3_0, 8, dequantize_turbo3_0, 128, 128>;
-template [[host_name("kernel_flash_attn_ext_kf16_vturbo4_dk128_dv128")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, half4x4, 1, dequantize_f16, block_turbo4_0, 8, dequantize_turbo4_0, 128, 128>;
-template [[host_name("kernel_flash_attn_ext_kf16_vturbo2_dk256_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, half4x4, 1, dequantize_f16, block_turbo2_0, 8, dequantize_turbo2_0, 256, 256>;
-template [[host_name("kernel_flash_attn_ext_kf16_vturbo3_dk256_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, half4x4, 1, dequantize_f16, block_turbo3_0, 8, dequantize_turbo3_0, 256, 256>;
-template [[host_name("kernel_flash_attn_ext_kf16_vturbo4_dk256_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, half4x4, 1, dequantize_f16, block_turbo4_0, 8, dequantize_turbo4_0, 256, 256>;
+template [[host_name("kernel_flash_attn_ext_kturbo2_vq8_0_dk128_dv128")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo2_0, 8, dequantize_turbo2_0, block_q8_0, 2, dequantize_q8_0, 128, 128>;
+template [[host_name("kernel_flash_attn_ext_kturbo3_vq8_0_dk128_dv128")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo3_0, 8, dequantize_turbo3_0, block_q8_0, 2, dequantize_q8_0, 128, 128>;
+template [[host_name("kernel_flash_attn_ext_kturbo4_vq8_0_dk128_dv128")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo4_0, 8, dequantize_turbo4_0, block_q8_0, 2, dequantize_q8_0, 128, 128>;
+template [[host_name("kernel_flash_attn_ext_kturbo2_vq8_0_dk256_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo2_0, 8, dequantize_turbo2_0, block_q8_0, 2, dequantize_q8_0, 256, 256>;
+template [[host_name("kernel_flash_attn_ext_kturbo3_vq8_0_dk256_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo3_0, 8, dequantize_turbo3_0, block_q8_0, 2, dequantize_q8_0, 256, 256>;
+template [[host_name("kernel_flash_attn_ext_kturbo4_vq8_0_dk256_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo4_0, 8, dequantize_turbo4_0, block_q8_0, 2, dequantize_q8_0, 256, 256>;
 template [[host_name("kernel_flash_attn_ext_q8_0_dk320_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES,    block_q8_0, 2, dequantize_q8_0, block_q8_0, 2, dequantize_q8_0, 320, 256>;
 template [[host_name("kernel_flash_attn_ext_q8_0_dk512_dv512")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES,    block_q8_0, 2, dequantize_q8_0, block_q8_0, 2, dequantize_q8_0, 512, 512>;
 template [[host_name("kernel_flash_attn_ext_q8_0_dk576_dv512")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES,    block_q8_0, 2, dequantize_q8_0, block_q8_0, 2, dequantize_q8_0, 576, 512>;
@@ -8259,12 +8260,12 @@ template [[host_name("kernel_flash_attn_ext_vec_kq8_0_vturbo4_dk128_dv128")]] ke
 template [[host_name("kernel_flash_attn_ext_vec_kq8_0_vturbo2_dk256_dv256")]] kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES, block_q8_0, 8, dequantize_q8_0_t4, block_turbo2_0, 32, dequantize_turbo2_0_t4, 256, 256, 1>;
 template [[host_name("kernel_flash_attn_ext_vec_kq8_0_vturbo3_dk256_dv256")]] kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES, block_q8_0, 8, dequantize_q8_0_t4, block_turbo3_0, 32, dequantize_turbo3_0_t4, 256, 256, 1>;
 template [[host_name("kernel_flash_attn_ext_vec_kq8_0_vturbo4_dk256_dv256")]] kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES, block_q8_0, 8, dequantize_q8_0_t4, block_turbo4_0, 32, dequantize_turbo4_0_t4, 256, 256, 1>;
-template [[host_name("kernel_flash_attn_ext_vec_kf16_vturbo2_dk128_dv128")]] kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES, half4, 1, dequantize_f16_t4, block_turbo2_0, 32, dequantize_turbo2_0_t4, 128, 128, 1>;
-template [[host_name("kernel_flash_attn_ext_vec_kf16_vturbo3_dk128_dv128")]] kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES, half4, 1, dequantize_f16_t4, block_turbo3_0, 32, dequantize_turbo3_0_t4, 128, 128, 1>;
-template [[host_name("kernel_flash_attn_ext_vec_kf16_vturbo4_dk128_dv128")]] kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES, half4, 1, dequantize_f16_t4, block_turbo4_0, 32, dequantize_turbo4_0_t4, 128, 128, 1>;
-template [[host_name("kernel_flash_attn_ext_vec_kf16_vturbo2_dk256_dv256")]] kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES, half4, 1, dequantize_f16_t4, block_turbo2_0, 32, dequantize_turbo2_0_t4, 256, 256, 1>;
-template [[host_name("kernel_flash_attn_ext_vec_kf16_vturbo3_dk256_dv256")]] kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES, half4, 1, dequantize_f16_t4, block_turbo3_0, 32, dequantize_turbo3_0_t4, 256, 256, 1>;
-template [[host_name("kernel_flash_attn_ext_vec_kf16_vturbo4_dk256_dv256")]] kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES, half4, 1, dequantize_f16_t4, block_turbo4_0, 32, dequantize_turbo4_0_t4, 256, 256, 1>;
+template [[host_name("kernel_flash_attn_ext_vec_kturbo2_vq8_0_dk128_dv128")]] kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES, block_turbo2_0, 32, dequantize_turbo2_0_t4, block_q8_0, 8, dequantize_q8_0_t4, 128, 128, 1>;
+template [[host_name("kernel_flash_attn_ext_vec_kturbo3_vq8_0_dk128_dv128")]] kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES, block_turbo3_0, 32, dequantize_turbo3_0_t4, block_q8_0, 8, dequantize_q8_0_t4, 128, 128, 1>;
+template [[host_name("kernel_flash_attn_ext_vec_kturbo4_vq8_0_dk128_dv128")]] kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES, block_turbo4_0, 32, dequantize_turbo4_0_t4, block_q8_0, 8, dequantize_q8_0_t4, 128, 128, 1>;
+template [[host_name("kernel_flash_attn_ext_vec_kturbo2_vq8_0_dk256_dv256")]] kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES, block_turbo2_0, 32, dequantize_turbo2_0_t4, block_q8_0, 8, dequantize_q8_0_t4, 256, 256, 1>;
+template [[host_name("kernel_flash_attn_ext_vec_kturbo3_vq8_0_dk256_dv256")]] kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES, block_turbo3_0, 32, dequantize_turbo3_0_t4, block_q8_0, 8, dequantize_q8_0_t4, 256, 256, 1>;
+template [[host_name("kernel_flash_attn_ext_vec_kturbo4_vq8_0_dk256_dv256")]] kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES, block_turbo4_0, 32, dequantize_turbo4_0_t4, block_q8_0, 8, dequantize_q8_0_t4, 256, 256, 1>;
 
 template [[host_name("kernel_flash_attn_ext_vec_f32_dk320_dv256")]]  kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES_F32, float4,     1, dequantize_f32_t4,  float4,      1, dequantize_f32_t4,  320, 256, 2>;
 template [[host_name("kernel_flash_attn_ext_vec_f16_dk320_dv256")]]  kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES,     half4,      1, dequantize_f16_t4,  half4,       1, dequantize_f16_t4,  320, 256, 2>;

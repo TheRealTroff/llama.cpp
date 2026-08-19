@@ -2986,10 +2986,15 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
     GGML_ASSERT(ne00 % 4 == 0);
 
     GGML_ASSERT(op->src[0]->type == GGML_TYPE_F32);
-    // K/V types must match, except for the TurboQuant mixed pairs (K in {q8_0, f16}, V turbo)
-    GGML_ASSERT(op->src[1]->type == op->src[2]->type ||
-               ((op->src[2]->type == GGML_TYPE_TURBO2_0 || op->src[2]->type == GGML_TYPE_TURBO3_0 || op->src[2]->type == GGML_TYPE_TURBO4_0) &&
-                (op->src[1]->type == GGML_TYPE_Q8_0 || op->src[1]->type == GGML_TYPE_F16)));
+    // K/V types must match, except for the TurboQuant mixed pairs (q8_0 on one side, turbo on the other)
+    {
+        const auto is_turbo = [](enum ggml_type t) {
+            return t == GGML_TYPE_TURBO2_0 || t == GGML_TYPE_TURBO3_0 || t == GGML_TYPE_TURBO4_0;
+        };
+        GGML_ASSERT(op->src[1]->type == op->src[2]->type ||
+                   (is_turbo(op->src[2]->type) && op->src[1]->type == GGML_TYPE_Q8_0) ||
+                   (is_turbo(op->src[1]->type) && op->src[2]->type == GGML_TYPE_Q8_0));
+    }
 
     //GGML_ASSERT(ggml_are_same_shape (src1, src2));
     GGML_ASSERT(ne11 == ne21);

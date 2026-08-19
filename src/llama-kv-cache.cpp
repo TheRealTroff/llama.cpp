@@ -252,8 +252,23 @@ llama_kv_cache::llama_kv_cache(
         const bool has_k = true;
         const bool has_v = !is_mla;
 
+        // TurboQuant "Boundary V": with V=turbo2 the first and last two layers are
+        // quality-critical, so their V stays at q8_0 (opt-out: TURBO_LAYER_ADAPTIVE=0)
+        ggml_type layer_type_v = type_v;
+        if (type_v == GGML_TYPE_TURBO2_0 && hparams.n_layer() >= 8) {
+            const char * env = getenv("TURBO_LAYER_ADAPTIVE");
+            if (!(env && env[0] == '0')) {
+                if (il < 2 || il >= hparams.n_layer() - 2) {
+                    layer_type_v = GGML_TYPE_Q8_0;
+                }
+                if (il == 0) {
+                    LLAMA_LOG_INFO("%s: Boundary V enabled for turbo2-V: first2+last2 V=q8_0 (opt-out: TURBO_LAYER_ADAPTIVE=0)\n", __func__);
+                }
+            }
+        }
+
         ggml_tensor * k = has_k ? ggml_new_tensor_3d(ctx, type_k, n_embd_k_gqa, kv_size, n_stream) : nullptr;
-        ggml_tensor * v = has_v ? ggml_new_tensor_3d(ctx, type_v, n_embd_v_gqa, kv_size, n_stream) : nullptr;
+        ggml_tensor * v = has_v ? ggml_new_tensor_3d(ctx, layer_type_v, n_embd_v_gqa, kv_size, n_stream) : nullptr;
 
         has_k && ggml_format_name(k, "cache_k_l%d", il);
         has_v && ggml_format_name(v, "cache_v_l%d", il);

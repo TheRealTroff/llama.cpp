@@ -1293,11 +1293,12 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
             }
             if (op->src[1]->type != op->src[2]->type) {
                 // mixed K/V is only instantiated for the TurboQuant pairs, dk/dv 128 or 256:
-                // K in {q8_0, f16} with V in {turbo2, turbo3, turbo4}
+                // K q8_0 with turbo V, or turbo K with q8_0 V (f16 K falls back to CPU FA)
                 const enum ggml_type tk = op->src[1]->type;
                 const enum ggml_type tv = op->src[2]->type;
+                const bool k_is_turbo = tk == GGML_TYPE_TURBO2_0 || tk == GGML_TYPE_TURBO3_0 || tk == GGML_TYPE_TURBO4_0;
                 const bool v_is_turbo = tv == GGML_TYPE_TURBO2_0 || tv == GGML_TYPE_TURBO3_0 || tv == GGML_TYPE_TURBO4_0;
-                if (!v_is_turbo || (tk != GGML_TYPE_Q8_0 && tk != GGML_TYPE_F16)) {
+                if (!((v_is_turbo && tk == GGML_TYPE_Q8_0) || (k_is_turbo && tv == GGML_TYPE_Q8_0))) {
                     return false;
                 }
                 if ((op->src[1]->ne[0] != 128 && op->src[1]->ne[0] != 256) || op->src[2]->ne[0] != op->src[1]->ne[0]) {
