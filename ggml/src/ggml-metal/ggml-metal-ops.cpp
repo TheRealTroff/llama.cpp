@@ -2333,7 +2333,10 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
 
     // find the break-even point where the matrix-matrix kernel becomes more efficient compared
     // to the matrix-vector kernel
-    const int ne11_mm_min = 8;
+    static const int ne11_mm_min = getenv("GGML_MM_MIN")     ? atoi(getenv("GGML_MM_MIN"))     : 8;
+    static const int ne11_mv_max = getenv("GGML_MV_EXT_MAX") ? atoi(getenv("GGML_MV_EXT_MAX")) : 8;
+    static const int env_nsg     = getenv("GGML_MV_EXT_NSG")   ? atoi(getenv("GGML_MV_EXT_NSG"))   : 0;
+    static const int env_nxpsg   = getenv("GGML_MV_EXT_NXPSG") ? atoi(getenv("GGML_MV_EXT_NXPSG")) : 0;
 
     // first try to use small-batch mat-mv kernels
     // these should be efficient for BS [2, ~8]
@@ -2353,7 +2356,7 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
            op->src[0]->type == GGML_TYPE_Q8_0 ||
            op->src[0]->type == GGML_TYPE_MXFP4 ||
            op->src[0]->type == GGML_TYPE_IQ4_NL ||
-           false) && (ne11 >= 2 && ne11 <= 8)
+           false) && (ne11 >= 2 && ne11 <= ne11_mv_max)
          ) ||
          (
           (
@@ -2362,7 +2365,7 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
            op->src[0]->type == GGML_TYPE_Q6_K ||
            op->src[0]->type == GGML_TYPE_Q2_K ||
            op->src[0]->type == GGML_TYPE_Q3_K ||
-           false) && (ne11 >= 4 && ne11 <= 8)
+           false) && (ne11 >= 4 && ne11 <= ne11_mv_max)
          )
         )
        ) {
@@ -2374,7 +2377,7 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
         //       my current hypothesis is that the work grid is not evenly divisible for different nsg
         //       values and there can be some tail effects when nsg is high. need to confirm this
         //
-        const int nsg    = 2;                 // num simdgroups per threadgroup
+        const int nsg    = env_nsg > 0 ? env_nsg : 2; // num simdgroups per threadgroup
 
         // num threads along row per simdgroup
         int16_t nxpsg = 0;
@@ -2386,9 +2389,27 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
             nxpsg = 4;
         }
 
+        if (env_nxpsg > 0) {
+            nxpsg = env_nxpsg;
+        }
+
+        // the t4 kernel family supports multiple src0 rows per thread; the x4 family (K-quants) does not
+        const bool is_t4 =
+            op->src[0]->type != GGML_TYPE_Q4_K &&
+            op->src[0]->type != GGML_TYPE_Q5_K &&
+            op->src[0]->type != GGML_TYPE_Q6_K &&
+            op->src[0]->type != GGML_TYPE_Q2_K &&
+            op->src[0]->type != GGML_TYPE_Q3_K;
+
+        static const int env_nr0 = getenv("GGML_MV_EXT_NR0") ? atoi(getenv("GGML_MV_EXT_NR0")) : 2;
+
+        const int16_t nr0 = is_t4 ? env_nr0 : 1; // num src0 rows per thread
+
         const int16_t nypsg  = 32/nxpsg;          // num threads along col per simdgroup (i.e. a simdgroup processes that many src0 rows at a time)
-        const int16_t r0ptg  = nypsg*nsg;         // num src0 rows per threadgroup
+        const int16_t r0ptg  = nypsg*nsg*nr0;     // num src0 rows per threadgroup
               int16_t r1ptg  = 4;                 // num src1 rows per threadgroup
+
+        static const int env_r1max = getenv("GGML_MV_EXT_R1MAX") ? atoi(getenv("GGML_MV_EXT_R1MAX")) : 5;
 
         // note: not sure how optimal are those across all different hardware. there might be something cleverer
         switch (ne11) {
@@ -2407,7 +2428,20 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
                 GGML_ABORT("unsupported ne11");
         };
 
-        auto pipeline = ggml_metal_library_get_pipeline_mul_mv_ext(lib, op, nsg, nxpsg, r1ptg);
+        // the t4 family also has r1_6 and r1_8 variants that cover ne11 6..8 in a single pass over the weights
+        if (is_t4 && env_r1max >= 6) {
+            switch (ne11) {
+                case 6:
+                    r1ptg = 6; break;
+                case 7:
+                case 8:
+                    r1ptg = env_r1max >= 8 ? 8 : r1ptg; break;
+                default:
+                    break;
+            }
+        }
+
+        auto pipeline = ggml_metal_library_get_pipeline_mul_mv_ext(lib, op, nsg, nxpsg, r1ptg, nr0);
 
         ggml_metal_kargs_mul_mv_ext args = {
             /*.ne00  =*/ ne00,
