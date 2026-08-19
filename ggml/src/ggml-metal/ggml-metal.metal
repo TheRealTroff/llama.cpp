@@ -4003,7 +4003,7 @@ void kernel_mul_mv_ext_q4_f32_impl(
     constexpr short CHPTMAX = 4;
 
     // fewer chunks per thread when many rows/cols are processed to reduce register pressure
-    const short chpt = (nr0*r1ptg >= 6) ? 2 : 4; // chunks per thread
+    const short chpt = (nr0*r1ptg >= 12) ? 1 : (nr0*r1ptg >= 6) ? 2 : 4; // chunks per thread
 
   //const short nxpsg = (32);
     const short nypsg = (32/nxpsg);

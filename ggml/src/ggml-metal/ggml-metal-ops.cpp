@@ -2401,9 +2401,19 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
             op->src[0]->type != GGML_TYPE_Q2_K &&
             op->src[0]->type != GGML_TYPE_Q3_K;
 
-        static const int env_nr0 = getenv("GGML_MV_EXT_NR0") ? atoi(getenv("GGML_MV_EXT_NR0")) : 2;
+        static const int env_nr0 = getenv("GGML_MV_EXT_NR0") ? atoi(getenv("GGML_MV_EXT_NR0")) : 0;
 
-        const int16_t nr0 = is_t4 ? env_nr0 : 1; // num src0 rows per thread
+        const bool is_float =
+            op->src[0]->type == GGML_TYPE_F32 ||
+            op->src[0]->type == GGML_TYPE_F16 ||
+            op->src[0]->type == GGML_TYPE_BF16;
+
+        // num src0 rows per thread: more rows amortize the src1 loads, but shrink the grid and use more registers
+        // quantized types benefit the most; float types are limited by the weight reads instead
+        const int16_t nr0 = !is_t4 ? 1 :
+                            env_nr0 > 0 ? env_nr0 :
+                            is_float ? (ne11 >= 5 ? 2 : 1) :
+                            (ne11 >= 5 || ne01 >= 8192) ? 4 : 2;
 
         const int16_t nypsg  = 32/nxpsg;          // num threads along col per simdgroup (i.e. a simdgroup processes that many src0 rows at a time)
         const int16_t r0ptg  = nypsg*nsg*nr0;     // num src0 rows per threadgroup
