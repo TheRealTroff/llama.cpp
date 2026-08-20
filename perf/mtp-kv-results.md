@@ -273,3 +273,19 @@ scale ALU, kernel bw tail.
 NEW PROD PICK: uniform Q4_0 + GGML_MM_SKINNY=4 + GGML_MV_REPACK=1 + MTP d4
 -> 19.9 t/s @ f16 KV. (turbo-KV variant and no-repack control not yet run
 on this file.)
+
+## N=2..4 sweet-spot round (current stack: uniform Q4_0 + CPY fix + routing)
+
+Measured composite curve, ms/pass (batch-1 = 69.6):
+N2 85.3 (ext, 1.23x) | N3 105.2 (tie, 1.51x) | N4 106.5 (skinny, 1.53x) |
+N5 106.1 | N8 112.0. Crossover N~3.5; GGML_MM_SKINNY=4 remains optimal.
+
+Shelf decomposition experiments: dequant ALU stub = 5-6 ms -> vectorized
+short/half dequant recovered 1-2 (committed); intra-MAC simdgroup_barrier
+removal = REGRESSION (scheduler relies on them); double-buffered staging =
+REGRESSION (10 KB shmem occupancy tax, consistent with NK=128 result).
+The remaining ~15 ms shelf premium over the ~90 ms floor is the
+registers->shmem->fragment staging detour itself, forced by simdgroup_load
+semantics — lowering it further means a structurally different kernel
+(e.g. warp-specialized column sharing), not parameter tuning.
+oMLX comparison at the sweet spot: their N4 ~ +13 ms over batch-1, ours +37.
