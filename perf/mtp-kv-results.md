@@ -245,3 +245,31 @@ ceiling 7 — exploration + transient adoptions cost ~10%). Next: evaluate on
 heterogeneous prompts (chat, code) where fixed depth cannot win; suppress
 exploration when the depth posterior is confident. Pessimistic cost
 extrapolation + local-only exploration (v4) traps shallow: reverted.
+
+## Ghost check: byte-uniform Q4_0 vs the unsloth recipe
+
+Built from pristine bf16 (Qwen/Qwen3.8-27B -> convert q8_0 -> llama-quantize
+--pure --output-tensor-type q4_0 --token-embedding-type q4_0). Every matmul
+tensor incl. the 248k-vocab head is q4_0: 14.32 GiB vs unsloth's 14.94 (which
+carries q6_K head, q5_K o_proj, q4_1 stragglers). MTP nextn tensors survive
+conversion. File: ~/play/Qwen3.8-27B-uniform-Q4_0.gguf.
+
+| metric | unsloth Q4_0 | uniform Q4_0 |
+|---|---:|---:|
+| tg64 (batch-1) | 13.83 | **14.37** (+3.9%) |
+| MTP d4 e2e (skinny+repack, f16 KV) | 18.9 | **19.9** (+5.3%) |
+| acceptance at d4 | 60% | 58% |
+| PPL wikitext 30ch | 6.5879 +/- 0.094 | **6.5286 +/- 0.091** |
+
+The recipe's premium tensors bought nothing measurable on wikitext and cost
+~2.1 ms/token of weight bytes — confirmed end-to-end, and quality did not
+regress (if anything the fresh-from-bf16 quantization is marginally better
+than unsloth's despite the q8_0 intermediate).
+
+Floor scoreboard (ms/token batch-1): 79 this morning -> 72.7 (CPY fast path)
+-> 69.6 (uniform file). oMLX: ~66. Remaining ~5%: GET_ROWS tuning, gs64-class
+scale ALU, kernel bw tail.
+
+NEW PROD PICK: uniform Q4_0 + GGML_MM_SKINNY=4 + GGML_MV_REPACK=1 + MTP d4
+-> 19.9 t/s @ f16 KV. (turbo-KV variant and no-repack control not yet run
+on this file.)
