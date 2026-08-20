@@ -2327,6 +2327,7 @@ static bool ggml_metal_mul_mat_use_f16_src1(const ggml_tensor * op) {
         case GGML_TYPE_Q6_K:
         case GGML_TYPE_Q2_K:
         case GGML_TYPE_Q3_K:
+        case GGML_TYPE_IQ4_XS:
             return true;
         default:
             return false;
@@ -2410,6 +2411,7 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
            op->src[0]->type == GGML_TYPE_Q6_K ||
            op->src[0]->type == GGML_TYPE_Q2_K ||
            op->src[0]->type == GGML_TYPE_Q3_K ||
+           op->src[0]->type == GGML_TYPE_IQ4_XS ||
            false) && (ne11 >= ne11_kq_min && ne11 <= ne11_mv_max)
          )
         )
@@ -2444,7 +2446,8 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
             op->src[0]->type != GGML_TYPE_Q5_K &&
             op->src[0]->type != GGML_TYPE_Q6_K &&
             op->src[0]->type != GGML_TYPE_Q2_K &&
-            op->src[0]->type != GGML_TYPE_Q3_K;
+            op->src[0]->type != GGML_TYPE_Q3_K &&
+            op->src[0]->type != GGML_TYPE_IQ4_XS;
 
         static const int env_nr0 = getenv("GGML_MV_EXT_NR0") ? atoi(getenv("GGML_MV_EXT_NR0")) : 0;
 
