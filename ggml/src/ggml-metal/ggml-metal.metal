@@ -4484,6 +4484,29 @@ kernel void kernel_mul_mv_ext_q4_f16y_disp(
     kernel_mul_mv_ext_q4_f16y_impl<r1ptg, q_t, epb/4, deq_t4>(args, src0, src1, dst, tgpig, tiisg, sgitg);
 }
 
+// contiguous same-type copy: raw 16-byte chunks, grid-strided
+kernel void kernel_cpy_cont(
+        constant ggml_metal_kargs_cpy_cont & args,
+        device const char * src0,
+        device       char * dst,
+        uint3 tpig[[thread_position_in_grid]],
+        uint3 tpg [[threads_per_grid]]) {
+    const uint64_t n16 = args.nb/16;
+
+    device const uint4 * s = (device const uint4 *) src0;
+    device       uint4 * d = (device       uint4 *) dst;
+
+    for (uint64_t i = tpig.x; i < n16; i += tpg.x) {
+        d[i] = s[i];
+    }
+
+    if (tpig.x == 0) {
+        for (uint64_t i = 16*n16; i < args.nb; ++i) {
+            dst[i] = src0[i];
+        }
+    }
+}
+
 // weight-repack probe: q4_0 -> deinterleaved rows ([d x nblk][pad to 16B][qs x nblk])
 kernel void kernel_repack_q4_0_di(
         constant ggml_metal_kargs_repack_q4_0_di & args,

@@ -506,6 +506,11 @@ typedef struct {
     int16_t  r3;
 } ggml_metal_kargs_mul_mv_ext;
 
+// contiguous same-type copy fast path
+typedef struct {
+    uint64_t nb; // total bytes
+} ggml_metal_kargs_cpy_cont;
+
 // weight-repack probe: q4_0 -> deinterleaved (per row: [d x nblk][pad16][qs x nblk])
 typedef struct {
     int32_t  nblk; // blocks per row
