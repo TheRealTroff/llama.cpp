@@ -2090,6 +2090,32 @@ int ggml_metal_op_cpy(ggml_metal_op_t ctx, int idx) {
     GGML_TENSOR_LOCALS( int32_t, ne,  op,         ne);
     GGML_TENSOR_LOCALS(uint64_t, nb,  op,         nb);
 
+    // contiguous same-type copies are raw byte moves; the generic kernel does scalar
+    // element-wise indexing and runs ~7x below bandwidth on large tensors
+    if (op->src[0]->type == op->type &&
+        ggml_is_contiguous(op->src[0]) && ggml_is_contiguous(op) &&
+        ggml_nbytes(op->src[0]) == ggml_nbytes(op)) {
+        const uint64_t nb = ggml_nbytes(op);
+
+        auto pipeline_cont = ggml_metal_library_get_pipeline(lib, "kernel_cpy_cont");
+        if (!pipeline_cont.pipeline) {
+            pipeline_cont = ggml_metal_library_compile_pipeline(lib, "kernel_cpy_cont", "kernel_cpy_cont", nullptr);
+        }
+
+        ggml_metal_kargs_cpy_cont cargs = { /*.nb =*/ nb };
+
+        const int ntg = (int) std::min<uint64_t>((nb/16 + 255)/256, 1024);
+
+        ggml_metal_encoder_set_pipeline(enc, pipeline_cont);
+        ggml_metal_encoder_set_bytes   (enc, &cargs, sizeof(cargs), 0);
+        ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[0]), 1);
+        ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         2);
+
+        ggml_metal_encoder_dispatch_threadgroups(enc, std::max(ntg, 1), 1, 1, 256, 1, 1);
+
+        return 1;
+    }
+
     auto pipeline = ggml_metal_library_get_pipeline_cpy(lib, op->src[0]->type, op->type);
 
     GGML_ASSERT(ne00 % ggml_blck_size(op->src[0]->type) == 0);
