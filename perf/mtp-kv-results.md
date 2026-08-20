@@ -86,3 +86,32 @@ Same protocol, UD-Q4_K_M after the fix (pre-fix in parens):
   the llama_kv_cache size lines).
 - Harness: ~/play/kvquant-experiments/RUN_27B_MTP_KV.sh; raw logs in
   kvquant-experiments/results/mtpkv-*.
+
+## Spec-loop overhead profiling (27B Q4_0, f16 KV, MTP)
+
+Instrumented server round segments (perf/spec-prof.patch, reapply with `git apply`;
+enables the upstream DEBUG_TIMINGS define + spec-specific buckets, dumps every 5 s).
+1000 tokens, temp 0, same prompt. Per-round breakdown:
+
+| segment | d2 (147.7 ms/round) | d3 (184.8 ms/round) |
+|---|---:|---:|
+| verify GPU wait (llama_synchronize) | 123.1 (83%) | 146.8 (79%) |
+| MTP draft call (d sequential head passes) | 13.9 (9%) | 20.3 (11%) |
+| decode submit (CPU) | 1.6 | 1.6 |
+| accept blk (clone+sample_and_accept+rollback) | 0.31 | 0.36 |
+| spec checkpoints (save pre + post) | ~0.01 | ~0.01 |
+| sampling (non-spec path) | 0.16 | 0.14 |
+| unaccounted (batch build/queue/detok/http) | ~8.7 (6%) | ~15.6 (8%) |
+
+Verdict on the "unknown" spec-loop term: MEASURED, and it is secondary. For built-in
+MTP the CPU-side engine overhead is ~10-17 ms/round (~7-9%), not the ~33 ms seen in
+the DFlash2 analysis — that number was dominated by the external drafter's own
+forward pass. The feared hybrid-SSM checkpoint copies are effectively free here
+(microseconds), and rollback cost is inside the 0.3 ms accept block.
+
+Ceiling math (d2): killing ALL engine overhead -> 2.70 tok / 137 ms = 19.7 t/s (+8%).
+Flattening the verify batch cost to single-token cost (80.6 ms, what near-flat MLX
+achieves) -> ~28.6 t/s. Confirms the order of attack: simdgroup-matrix verify kernels
+and weight repack are the big levers; spec-loop micro-opts are a one-time ~+8% at most.
+Updated order: repack (medium) -> sgmatrix verify (large) -> spec-loop micro-opts (small,
+optional) . t4 16-elem chunks remains orthogonal.
