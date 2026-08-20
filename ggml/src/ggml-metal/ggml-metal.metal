@@ -11767,12 +11767,35 @@ kernel void kernel_mul_mm_skinny_q4_0_di_f32(
     xqs += 8*(NK/32);
 
     for (int loop_k = 0; loop_k < args.ne00; loop_k += NK) {
-        ushort qr[8] = { q0.x, q0.y, q0.z, q0.w, q1.x, q1.y, q1.z, q1.w };
-
+        // fast register dequant: e = d*(nibble - 8), vectorized short->half math
         half4x4 ta0;
         half4x4 ta1;
-        dequantize_q4_0_reg(qr, dh, 0, ta0);
-        dequantize_q4_0_reg(qr, dh, 1, ta1);
+        {
+            const short4 qlo0 = short4(q0 & (ushort4)0x000F) - 8;
+            const short4 qhi0 = short4((q0 >> 8) & (ushort4)0x000F) - 8;
+            const short4 qlo1 = short4(q1 & (ushort4)0x000F) - 8;
+            const short4 qhi1 = short4((q1 >> 8) & (ushort4)0x000F) - 8;
+            const short4 rlo0 = short4((q0 >> 4) & (ushort4)0x000F) - 8;
+            const short4 rhi0 = short4((q0 >> 12) & (ushort4)0x000F) - 8;
+            const short4 rlo1 = short4((q1 >> 4) & (ushort4)0x000F) - 8;
+            const short4 rhi1 = short4((q1 >> 12) & (ushort4)0x000F) - 8;
+
+            const half4 elo0 = half4(qlo0)*dh, ehi0 = half4(qhi0)*dh;
+            const half4 elo1 = half4(qlo1)*dh, ehi1 = half4(qhi1)*dh;
+            const half4 flo0 = half4(rlo0)*dh, fhi0 = half4(rhi0)*dh;
+            const half4 flo1 = half4(rlo1)*dh, fhi1 = half4(rhi1)*dh;
+
+            // il=0 (low nibbles), sequential elems: lane j -> e[2j] (lo byte), e[2j+1] (hi byte)
+            ta0[0] = half4(elo0.x, ehi0.x, elo0.y, ehi0.y);
+            ta0[1] = half4(elo0.z, ehi0.z, elo0.w, ehi0.w);
+            ta0[2] = half4(elo1.x, ehi1.x, elo1.y, ehi1.y);
+            ta0[3] = half4(elo1.z, ehi1.z, elo1.w, ehi1.w);
+            // il=1 (high nibbles)
+            ta1[0] = half4(flo0.x, fhi0.x, flo0.y, fhi0.y);
+            ta1[1] = half4(flo0.z, fhi0.z, flo0.w, fhi0.w);
+            ta1[2] = half4(flo1.x, fhi1.x, flo1.y, fhi1.y);
+            ta1[3] = half4(flo1.z, fhi1.z, flo1.w, fhi1.w);
+        }
 
         threadgroup_barrier(mem_flags::mem_threadgroup);
 
@@ -11806,13 +11829,14 @@ kernel void kernel_mul_mm_skinny_q4_0_di_f32(
         }
 
         threadgroup const half * lsma = sa + 16*sgitg*NK;
+        threadgroup const half * lsmb = sb;
 
         FOR_UNROLL (short ik = 0; ik < NK/8; ik++) {
             simdgroup_barrier(mem_flags::mem_none);
 
             simdgroup_load(ma[0], lsma + 8*ik,        NK,  0, false);
             simdgroup_load(ma[1], lsma + 8*NK + 8*ik, NK,  0, false);
-            simdgroup_load(mb,    sb + 8*ik*NR1,      NR1, 0, false);
+            simdgroup_load(mb,    lsmb + 8*ik*NR1,    NR1, 0, false);
 
             simdgroup_barrier(mem_flags::mem_none);
 
