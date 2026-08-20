@@ -2441,6 +2441,55 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
 
     // first try to use small-batch mat-mv kernels
     // these should be efficient for BS [2, ~8]
+    // skinny simdgroup-matrix kernel for speculative-verify batches
+    // GGML_MM_SKINNY=N: route ne11 in [max(2,N), 8] to the skinny kernel (0/unset = off)
+    static const int env_mm_skinny = getenv("GGML_MM_SKINNY") ? atoi(getenv("GGML_MM_SKINNY")) : 0;
+
+    if (env_mm_skinny > 0 && ne11 >= std::max(2, env_mm_skinny) &&
+        op->src[0]->type == GGML_TYPE_Q4_0 &&
+        op->src[1]->type == GGML_TYPE_F32 &&
+        !ggml_is_transposed(op->src[0]) &&
+        !ggml_is_transposed(op->src[1]) &&
+        props_dev->has_simdgroup_mm &&
+        ne00 % 32 == 0 && ne11 <= 8) {
+        // optionally read the deinterleaved side copy (repack infra from the mv probe)
+        ggml_metal_buffer_id bid_src0 = ggml_metal_get_buffer_id(op->src[0]);
+        uint64_t nb01_eff = nb01;
+
+        const bool use_di = ggml_metal_op_mul_mat_try_repack_q4_0(ctx, op, bid_src0, nb01_eff);
+
+        auto pipeline = ggml_metal_library_get_pipeline_mul_mm_skinny(lib, op, use_di);
+
+        ggml_metal_kargs_mul_mm args = {
+            /*.ne00 =*/ ne00,
+            /*.ne02 =*/ ne02,
+            /*.nb01 =*/ nb01_eff,
+            /*.nb02 =*/ nb02,
+            /*.nb03 =*/ nb03,
+            /*.ne12 =*/ ne12,
+            /*.nb10 =*/ nb10,
+            /*.nb11 =*/ nb11,
+            /*.nb12 =*/ nb12,
+            /*.nb13 =*/ nb13,
+            /*.ne0  =*/ ne0,
+            /*.ne1  =*/ ne1,
+            /*.r2   =*/ r2,
+            /*.r3   =*/ r3,
+        };
+
+        ggml_metal_encoder_set_pipeline(enc, pipeline);
+        ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);
+        ggml_metal_encoder_set_buffer  (enc, bid_src0,                              1);
+        ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[1]), 2);
+        ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         3);
+
+        ggml_metal_encoder_set_threadgroup_memory_size(enc, pipeline.smem, 0);
+
+        ggml_metal_encoder_dispatch_threadgroups(enc, ((ne11 + 7)/8), ((ne01 + 31)/32), ne12*ne13, 32, 2, 1);
+
+        return 1;
+    }
+
     if (op->src[1]->type == GGML_TYPE_F32 && (ne00%128 == 0) &&
         (
          (
