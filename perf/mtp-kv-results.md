@@ -115,3 +115,27 @@ achieves) -> ~28.6 t/s. Confirms the order of attack: simdgroup-matrix verify ke
 and weight repack are the big levers; spec-loop micro-opts are a one-time ~+8% at most.
 Updated order: repack (medium) -> sgmatrix verify (large) -> spec-loop micro-opts (small,
 optional) . t4 16-elem chunks remains orthogonal.
+
+## Weight repack probe (branch weight-repack, a559a52d) — NEGATIVE RESULT
+
+Tested the notes' repack hypothesis (MLX-style deinterleaved weights: separate d/qs
+streams, 16B-aligned qs, scale hoisted per block). Env-gated lazy GPU repack into a
+persistent side buffer + di kernel variants for BOTH the mv_ext f16y path and the
+batch-1 mv kernel. Outputs bit-identical. 27B Q4_0, M4 Pro:
+
+| test | baseline | repack |
+|---|---:|---:|
+| pp2 / pp4 / pp8 (ext) | 22.15 / 33.73 / 40.98 | 21.73 / 31.41 / 37.63 |
+| tg64 (batch-1 mv) | 13.32 | 13.16 |
+
+Deinterleaving LOSES 2-8% on verify batches and ~1% at batch-1: post-f16y the mv
+kernels are not weight-layout bound on this hardware; the extra d-stream + pointer
+bookkeeping outweighs aligned wide loads. Both halves of the layout hypothesis
+(gap component #1 and part of #2 in perf/results.md) are refuted for M4.
+
+Implications: (1) oMLX's batch-1 edge is likely its w4:gs64 format (half the scale
+traffic of Q4_0 gs32) and/or kernel structure, not layout per se — a gs64 test would
+need a different quant, not a repack. (2) The remaining verify-slope levers are
+simdgroup-matrix kernels (large) and possibly t4 16-elem chunk granularity (small,
+bookkeeping ALU not loads — untested, my DI result does not rule it out).
+Probe kept on branch weight-repack (default off, GGML_MV_REPACK=1 to enable).
