@@ -192,3 +192,16 @@ until a load-time transform replaces (not duplicates) the weights. Remaining
 kernel headroom: pipeline 105-117 ms vs 82 ms floor (dequant ALU + barrier waits);
 q4_K/UD variants of the skinny kernel not yet written; turbo-KV x skinny d4 combo
 not yet measured.
+
+## Final prod combo (turbo4-sym KV x skinny x MTP)
+
+turbo4+skinny d3: 16.0 t/s (acc 68%), d4: 16.2 t/s (acc 62%) — vs turbo4 ext-d2
+16.4. Under quantized KV the FA dequant cost grows with verify length and absorbs
+the skinny matmul gain, so the turbo-KV optimum STAYS at d2. Prod menu:
+
+| priority | config | t/s | KV @10240 |
+|---|---|---:|---:|
+| max speed | f16 KV, GGML_MM_SKINNY=4, MTP d4 | **18.9** | 640 MiB |
+| max memory | turbo4 sym KV, MTP d2 (skinny optional) | 16.4 | **165 MiB** |
+
+(GGML_MV_REPACK omitted from both: +15 GB residency for ~0.4 t/s.)
