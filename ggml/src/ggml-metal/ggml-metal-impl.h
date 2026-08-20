@@ -506,6 +506,14 @@ typedef struct {
     int16_t  r3;
 } ggml_metal_kargs_mul_mv_ext;
 
+// weight-repack probe: q4_0 -> deinterleaved (per row: [d x nblk][pad16][qs x nblk])
+typedef struct {
+    int32_t  nblk; // blocks per row
+    int32_t  ne01; // rows
+    uint64_t nb01; // src row stride
+    uint64_t nbd1; // dst row stride
+} ggml_metal_kargs_repack_q4_0_di;
+
 typedef struct {
     int32_t  ne02;
     int32_t  ne10;

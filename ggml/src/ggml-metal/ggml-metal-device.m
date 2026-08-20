@@ -546,6 +546,10 @@ struct ggml_metal_device {
 
     // virtual address for GPU memory allocations
     atomic_uintptr_t addr_virt;
+
+    // weight-repack probe (GGML_MV_REPACK): per-tensor cache of deinterleaved weight copies
+    NSMutableDictionary * repack_bufs;
+    NSLock * repack_lock;
 };
 
 //
@@ -738,6 +742,9 @@ ggml_metal_device_t ggml_metal_device_init(int device) {
             }
 
             dev->addr_virt = 0x000000400ULL;
+
+            dev->repack_bufs = [[NSMutableDictionary alloc] init];
+            dev->repack_lock = [[NSLock alloc] init];
 
             dev->props.device = device;
             dev->props.has_simdgroup_reduction  = [dev->mtl_device supportsFamily:MTLGPUFamilyApple7];
@@ -969,6 +976,19 @@ void ggml_metal_device_free(ggml_metal_device_t dev) {
 
     ggml_metal_rsets_free(dev->rsets);
 
+    if (dev->repack_bufs) {
+        for (NSNumber * key in dev->repack_bufs) {
+            id<MTLBuffer> buf = dev->repack_bufs[key];
+            [buf release];
+        }
+        [dev->repack_bufs release];
+        dev->repack_bufs = nil;
+    }
+    if (dev->repack_lock) {
+        [dev->repack_lock release];
+        dev->repack_lock = nil;
+    }
+
     ggml_metal_library_free(dev->library);
     dev->library = NULL;
 
@@ -983,6 +1003,35 @@ void ggml_metal_device_free(ggml_metal_device_t dev) {
     }
 
     free(dev);
+}
+
+struct ggml_metal_buffer_id ggml_metal_device_get_repack_buffer(ggml_metal_device_t dev, const struct ggml_tensor * t, size_t size, bool * is_new) {
+    struct ggml_metal_buffer_id res = { NULL, 0 };
+
+    NSNumber * key = [NSNumber numberWithUnsignedLongLong:(unsigned long long)(uintptr_t) t->data];
+
+    [dev->repack_lock lock];
+
+    id<MTLBuffer> buf = dev->repack_bufs[key];
+    if (buf) {
+        *is_new = false;
+    } else {
+        buf = [dev->mtl_device newBufferWithLength:size options:MTLResourceStorageModePrivate];
+        if (buf == nil) {
+            GGML_LOG_ERROR("%s: failed to allocate repack buffer of size %zu\n", __func__, size);
+            [dev->repack_lock unlock];
+            return res;
+        }
+        dev->repack_bufs[key] = buf;
+        *is_new = true;
+    }
+
+    [dev->repack_lock unlock];
+
+    res.metal = buf;
+    res.offs  = 0;
+
+    return res;
 }
 
 void * ggml_metal_device_get_obj(ggml_metal_device_t dev) {

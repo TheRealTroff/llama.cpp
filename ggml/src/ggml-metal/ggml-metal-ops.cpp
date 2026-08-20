@@ -2345,6 +2345,61 @@ size_t ggml_metal_op_mul_mat_extra_src1f16(const ggml_tensor * op) {
     return GGML_PAD(ggml_nelements(op->src[1])*sizeof(ggml_fp16_t), 32);
 }
 
+// weight-repack probe (GGML_MV_REPACK=1): redirect an immutable 2D q4_0 weight to a persistent
+// deinterleaved side buffer ([d x nblk][pad16][qs x nblk] per row), encoding the one-time repack
+// kernel on first use. On success, bid_src0/nb01_eff point at the repacked copy.
+static bool ggml_metal_op_mul_mat_try_repack_q4_0(ggml_metal_op_t ctx, const ggml_tensor * op, ggml_metal_buffer_id & bid_src0, uint64_t & nb01_eff) {
+    static const bool env_repack = getenv("GGML_MV_REPACK") ? atoi(getenv("GGML_MV_REPACK")) : 0;
+
+    if (!(env_repack &&
+          op->src[0]->type == GGML_TYPE_Q4_0 &&
+          op->src[0]->buffer && op->src[0]->buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS &&
+          !op->src[0]->view_src && op->src[0]->ne[2] == 1 && op->src[0]->ne[3] == 1)) {
+        return false;
+    }
+
+    ggml_metal_library_t lib = ctx->lib;
+    ggml_metal_encoder_t enc = ctx->enc;
+
+    const int64_t ne00 = op->src[0]->ne[0];
+    const int64_t ne01 = op->src[0]->ne[1];
+
+    const int      nblk = ne00/32;
+    const uint64_t doff = ((2*(uint64_t) nblk + 15)/16)*16;
+    const uint64_t nbd1 = doff + 16*(uint64_t) nblk;
+
+    bool is_new = false;
+    ggml_metal_buffer_id bid_di = ggml_metal_device_get_repack_buffer(ctx->dev, op->src[0], nbd1*ne01, &is_new);
+    if (!bid_di.metal) {
+        return false;
+    }
+
+    if (is_new) {
+        auto pipeline_rp = ggml_metal_library_get_pipeline_repack_q4_0_di(lib);
+
+        ggml_metal_kargs_repack_q4_0_di rargs = {
+            /*.nblk =*/ nblk,
+            /*.ne01 =*/ (int32_t) ne01,
+            /*.nb01 =*/ op->src[0]->nb[1],
+            /*.nbd1 =*/ nbd1,
+        };
+
+        ggml_metal_encoder_set_pipeline(enc, pipeline_rp);
+        ggml_metal_encoder_set_bytes   (enc, &rargs, sizeof(rargs), 0);
+        ggml_metal_encoder_set_buffer  (enc, bid_src0, 1);
+        ggml_metal_encoder_set_buffer  (enc, bid_di,   2);
+
+        ggml_metal_encoder_dispatch_threadgroups(enc, (nblk + 31)/32, ne01, 1, 32, 1, 1);
+
+        ggml_metal_op_concurrency_reset(ctx);
+    }
+
+    bid_src0 = bid_di;
+    nb01_eff = nbd1;
+
+    return true;
+}
+
 int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
     ggml_tensor * op = ctx->node(idx);
 
@@ -2509,6 +2564,12 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
             }
         }
 
+        // weight-repack probe: deinterleaved q4_0 weights in a persistent side buffer
+        ggml_metal_buffer_id bid_src0 = ggml_metal_get_buffer_id(op->src[0]);
+        uint64_t nb01_eff = nb01;
+
+        const bool use_di = use_f16y && ggml_metal_op_mul_mat_try_repack_q4_0(ctx, op, bid_src0, nb01_eff);
+
         // optionally convert src1 to f16 into the scratch after dst: one 16B load then covers 8 elements
         ggml_metal_buffer_id bid_src1 = ggml_metal_get_buffer_id(op->src[1]);
 
@@ -2555,14 +2616,14 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
             bid_src1 = bid_y16;
         }
 
-        auto pipeline = ggml_metal_library_get_pipeline_mul_mv_ext(lib, op, nsg, nxpsg, r1ptg, nr0, use_f16y ? GGML_TYPE_F16 : op->src[1]->type);
+        auto pipeline = ggml_metal_library_get_pipeline_mul_mv_ext(lib, op, nsg, nxpsg, r1ptg, nr0, use_f16y ? GGML_TYPE_F16 : op->src[1]->type, use_di);
 
         ggml_metal_kargs_mul_mv_ext args = {
             /*.ne00  =*/ ne00,
             /*.ne01  =*/ ne01,
             /*.ne02  =*/ ne02,
             /*.nb00  =*/ nb00,
-            /*.nb01  =*/ nb01,
+            /*.nb01  =*/ nb01_eff,
             /*.nb02  =*/ nb02,
             /*.nb03  =*/ nb03,
             /*.ne10  =*/ ne10,
@@ -2580,7 +2641,7 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
 
         ggml_metal_encoder_set_pipeline(enc, pipeline);
         ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);
-        ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[0]), 1);
+        ggml_metal_encoder_set_buffer  (enc, bid_src0,                             1);
         ggml_metal_encoder_set_buffer  (enc, bid_src1,                             2);
         ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         3);
 
@@ -2637,7 +2698,13 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
 
         ggml_metal_encoder_dispatch_threadgroups(enc, ((ne11 + nr1 - 1) / nr1), ((ne01 + nr0 - 1) / nr0), ne12 * ne13, 32, nsg, 1);
     } else {
-        auto pipeline = ggml_metal_library_get_pipeline_mul_mv(lib, op);
+        // weight-repack probe: deinterleaved q4_0 for the batch-1 mv kernel
+        ggml_metal_buffer_id bid_src0 = ggml_metal_get_buffer_id(op->src[0]);
+        uint64_t nb01_eff = nb01;
+
+        const bool use_di = ggml_metal_op_mul_mat_try_repack_q4_0(ctx, op, bid_src0, nb01_eff);
+
+        auto pipeline = ggml_metal_library_get_pipeline_mul_mv(lib, op, use_di);
 
         const int nr0 = pipeline.nr0;
         const int nr1 = pipeline.nr1;
@@ -2650,7 +2717,7 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
             /*.ne01 =*/ ne01,
             /*.ne02 =*/ ne02,
             /*.nb00 =*/ nb00,
-            /*.nb01 =*/ nb01,
+            /*.nb01 =*/ nb01_eff,
             /*.nb02 =*/ nb02,
             /*.nb03 =*/ nb03,
             /*.ne10 =*/ ne10,
@@ -2669,7 +2736,7 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
 
         ggml_metal_encoder_set_pipeline(enc, pipeline);
         ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);
-        ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[0]), 1);
+        ggml_metal_encoder_set_buffer  (enc, bid_src0,                             1);
         ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[1]), 2);
         ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         3);
 
