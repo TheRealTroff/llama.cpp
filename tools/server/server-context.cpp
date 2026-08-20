@@ -215,6 +215,91 @@ struct server_slot {
     common_prompt_checkpoint spec_ckpt;
     bool spec_is_replay = false;
 
+    // adaptive speculation depth (LLAMA_SPEC_ADAPTIVE=1): throughput-driven
+    // base/probe controller over draft depth in [1, --spec-draft-n-max]
+    struct spec_adaptive_t {
+        bool inited = false;
+
+        static constexpr int   DMAX          = 15;
+        static constexpr float P_DECAY       = 0.92f;
+        static constexpr float C_DECAY       = 0.85f;
+        static constexpr float HYST          = 1.02f;
+        static constexpr int   EXPLORE_EVERY = 16;
+
+        float   p_ema[DMAX];        // marginal acceptance per draft position (prefix semantics)
+        float   cost_ema[DMAX + 1]; // us per round when n_draft == d (0 = unseen)
+        int     d_cur    = 4;
+        int     round_ix = 0;
+        int64_t t_last_us = 0;
+
+        void reset(int d_max) {
+            inited = true;
+            for (int i = 0; i < DMAX; ++i) {
+                p_ema[i] = 0.55f;
+            }
+            for (int i = 0; i <= DMAX; ++i) {
+                cost_ema[i] = 0.0f;
+            }
+            d_cur     = std::max(1, std::min(d_max, 4));
+            round_ix  = 0;
+            t_last_us = 0;
+        }
+
+        int depth(int d_max) const {
+            // periodic full-depth exploration keeps deep-position stats and costs fresh
+            if (round_ix % EXPLORE_EVERY == EXPLORE_EVERY - 1) {
+                return d_max;
+            }
+            return std::min(d_cur, d_max);
+        }
+
+        void update(int n_draft, int n_accepted, int d_max) {
+            const int64_t t_now = ggml_time_us();
+            if (t_last_us > 0 && n_draft >= 1 && n_draft <= DMAX) {
+                const float dt = (float) (t_now - t_last_us);
+                cost_ema[n_draft] = cost_ema[n_draft] == 0.0f ? dt : C_DECAY*cost_ema[n_draft] + (1.0f - C_DECAY)*dt;
+            }
+            t_last_us = t_now;
+
+            // per-position marginal acceptance: positions 0..n_accepted-1 hit;
+            // position n_accepted (if drafted) missed; beyond that unobserved
+            for (int i = 0; i < n_accepted && i < DMAX; ++i) {
+                p_ema[i] = P_DECAY*p_ema[i] + (1.0f - P_DECAY);
+            }
+            if (n_accepted < n_draft && n_accepted < DMAX) {
+                p_ema[n_accepted] = P_DECAY*p_ema[n_accepted];
+            }
+
+            round_ix++;
+
+            // expected tokens/us argmax over depth, flat cost extrapolation for unseen depths
+            float scores[DMAX + 1] = {};
+            float pfx  = 1.0f;
+            float etok = 1.0f;
+            for (int d = 1; d <= d_max && d <= DMAX; ++d) {
+                pfx  *= p_ema[d - 1];
+                etok += pfx;
+                float c = cost_ema[d];
+                for (int k = d - 1; c == 0.0f && k >= 1; --k) {
+                    c = cost_ema[k];
+                }
+                scores[d] = c > 0.0f ? etok/c : 0.0f;
+            }
+            const int d0 = std::min(d_cur, std::min(d_max, (int) DMAX));
+            int bestd = d0;
+            for (int d = 1; d <= d_max && d <= DMAX; ++d) {
+                if (scores[d] > scores[bestd]*HYST) {
+                    bestd = d;
+                }
+            }
+            if (bestd != d_cur && getenv("LLAMA_SPEC_ADAPTIVE_DBG")) {
+                fprintf(stderr, "spec-adaptive: d %d -> %d (score %.4f -> %.4f, p0..3 = %.2f %.2f %.2f %.2f)\n",
+                        d_cur, bestd, 1e3f*scores[d0], 1e3f*scores[bestd], p_ema[0], p_ema[1], p_ema[2], p_ema[3]);
+            }
+            d_cur = bestd;
+        }
+    } spec_adaptive;
+
     // TODO: move members that belong to the task (such as `generated_text`, `has_new_line`) to task_results_state
     //       see https://github.com/ggml-org/llama.cpp/pull/18283#issuecomment-3710175837
     std::unique_ptr<const server_task> task;
@@ -341,6 +426,7 @@ struct server_slot {
             spec_dists.clear();
             spec_i_batch.clear();
             spec_ckpt.clear();
+            spec_adaptive.inited = false;
         }
         generated_tokens.clear();
         generated_token_probs.clear();
@@ -2909,7 +2995,17 @@ private:
                 const bool use_ckpt_tgt = ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL;
                 const bool use_ckpt_dft = ctx_dft_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL;
 
-                const int n_draft_max = slot.get_n_draft_max();
+                int n_draft_max = slot.get_n_draft_max();
+
+                // adaptive speculation depth (LLAMA_SPEC_ADAPTIVE=1)
+                static const bool env_spec_adaptive = getenv("LLAMA_SPEC_ADAPTIVE") ? atoi(getenv("LLAMA_SPEC_ADAPTIVE")) : 0;
+                if (env_spec_adaptive && n_draft_max > 0) {
+                    const int d_cli = common_speculative_n_max(&params_base.speculative);
+                    if (!slot.spec_adaptive.inited) {
+                        slot.spec_adaptive.reset(std::min(n_draft_max, d_cli));
+                    }
+                    n_draft_max = std::min(n_draft_max, slot.spec_adaptive.depth(std::min(n_draft_max, d_cli)));
+                }
 
                 if (n_draft_max > 0) {
                     GGML_ASSERT(slot.can_speculate());
@@ -3892,6 +3988,11 @@ private:
 
             // update how many tokens out of those tested were accepted
             slot.stats.n_draft_accepted += n_accepted;
+
+            if (slot.spec_adaptive.inited) {
+                const int d_cli = common_speculative_n_max(&params_base.speculative);
+                slot.spec_adaptive.update((int) n_draft, (int) n_accepted, d_cli);
+            }
             slot.stats.n_draft_verif_steps += 1;
 
             auto & n_accepted_per_pos = slot.n_accepted_per_pos;
