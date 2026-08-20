@@ -4795,6 +4795,11 @@ template [[host_name("kernel_mul_mv_ext_q3_K_f32_r1_3")]] kernel mul_mv_ext_q4x4
 template [[host_name("kernel_mul_mv_ext_q3_K_f32_r1_4")]] kernel mul_mv_ext_q4x4_f32_t kernel_mul_mv_ext_q4x4_f32_disp<4, block_q3_K, 256, dequantize_q3_K>;
 template [[host_name("kernel_mul_mv_ext_q3_K_f32_r1_5")]] kernel mul_mv_ext_q4x4_f32_t kernel_mul_mv_ext_q4x4_f32_disp<5, block_q3_K, 256, dequantize_q3_K>;
 
+template [[host_name("kernel_mul_mv_ext_iq4_xs_f32_r1_2")]] kernel mul_mv_ext_q4x4_f32_t kernel_mul_mv_ext_q4x4_f32_disp<2, block_iq4_xs, 256, dequantize_iq4_xs>;
+template [[host_name("kernel_mul_mv_ext_iq4_xs_f32_r1_3")]] kernel mul_mv_ext_q4x4_f32_t kernel_mul_mv_ext_q4x4_f32_disp<3, block_iq4_xs, 256, dequantize_iq4_xs>;
+template [[host_name("kernel_mul_mv_ext_iq4_xs_f32_r1_4")]] kernel mul_mv_ext_q4x4_f32_t kernel_mul_mv_ext_q4x4_f32_disp<4, block_iq4_xs, 256, dequantize_iq4_xs>;
+template [[host_name("kernel_mul_mv_ext_iq4_xs_f32_r1_5")]] kernel mul_mv_ext_q4x4_f32_t kernel_mul_mv_ext_q4x4_f32_disp<5, block_iq4_xs, 256, dequantize_iq4_xs>;
+
 // f16 src1 variants (activations pre-converted to half)
 template [[host_name("kernel_mul_mv_ext_q1_0_f16_r1_2")]] kernel mul_mv_ext_q4_f32_t kernel_mul_mv_ext_q4_f16y_disp<2, block_q1_0, 128, dequantize_q1_0_t4>;
 template [[host_name("kernel_mul_mv_ext_q1_0_f16_r1_3")]] kernel mul_mv_ext_q4_f32_t kernel_mul_mv_ext_q4_f16y_disp<3, block_q1_0, 128, dequantize_q1_0_t4>;
@@ -4870,6 +4875,10 @@ template [[host_name("kernel_mul_mv_ext_q3_K_f16_r1_2")]] kernel mul_mv_ext_q4x4
 template [[host_name("kernel_mul_mv_ext_q3_K_f16_r1_3")]] kernel mul_mv_ext_q4x4_f32_t kernel_mul_mv_ext_q4x4_f32_disp<3, block_q3_K, 256, dequantize_q3_K, half4x4>;
 template [[host_name("kernel_mul_mv_ext_q3_K_f16_r1_4")]] kernel mul_mv_ext_q4x4_f32_t kernel_mul_mv_ext_q4x4_f32_disp<4, block_q3_K, 256, dequantize_q3_K, half4x4>;
 template [[host_name("kernel_mul_mv_ext_q3_K_f16_r1_5")]] kernel mul_mv_ext_q4x4_f32_t kernel_mul_mv_ext_q4x4_f32_disp<5, block_q3_K, 256, dequantize_q3_K, half4x4>;
+template [[host_name("kernel_mul_mv_ext_iq4_xs_f16_r1_2")]] kernel mul_mv_ext_q4x4_f32_t kernel_mul_mv_ext_q4x4_f32_disp<2, block_iq4_xs, 256, dequantize_iq4_xs, half4x4>;
+template [[host_name("kernel_mul_mv_ext_iq4_xs_f16_r1_3")]] kernel mul_mv_ext_q4x4_f32_t kernel_mul_mv_ext_q4x4_f32_disp<3, block_iq4_xs, 256, dequantize_iq4_xs, half4x4>;
+template [[host_name("kernel_mul_mv_ext_iq4_xs_f16_r1_4")]] kernel mul_mv_ext_q4x4_f32_t kernel_mul_mv_ext_q4x4_f32_disp<4, block_iq4_xs, 256, dequantize_iq4_xs, half4x4>;
+template [[host_name("kernel_mul_mv_ext_iq4_xs_f16_r1_5")]] kernel mul_mv_ext_q4x4_f32_t kernel_mul_mv_ext_q4x4_f32_disp<5, block_iq4_xs, 256, dequantize_iq4_xs, half4x4>;
 
 template<typename T0, typename T1, short NR0, typename args_t>
 void kernel_mul_mv_t_t_impl(
