@@ -139,3 +139,56 @@ need a different quant, not a repack. (2) The remaining verify-slope levers are
 simdgroup-matrix kernels (large) and possibly t4 16-elem chunk granularity (small,
 bookkeeping ALU not loads — untested, my DI result does not rule it out).
 Probe kept on branch weight-repack (default off, GGML_MV_REPACK=1 to enable).
+
+## Skinny simdgroup-matrix verify kernel (branch sgmatrix-verify, 61713246)
+
+The big lever, pulled. Diagnostic first: forcing the existing mul_mm at N=2..8
+(GGML_MV_EXT_MAX=1 GGML_MM_MIN=1) is perfectly FLAT but ~283 ms/pass (53 GB/s —
+shmem round-trip + barriers), vs mv_ext's sloped 90..195 ms. Target: mm's flatness
+at mv's streaming efficiency.
+
+kernel_mul_mm_skinny_q4_0_f32: 32x8 tile, NK=64, 2 SGs (each 16 rows x 8 cols,
+2 accumulators), row-major A staging (contiguous half4 stores), software-pipelined
+weight prefetch. Iteration log: v1 64x8/NK32 135-154 ms; occupancy split and
+half-accumulators: no effect; NK=64: -8%; NK=128: regression (shmem/occupancy);
+pipelining: no effect solo. No-MAC diagnostic: pipeline 105-117 ms vs 82 ms
+streaming floor, MACs ~20 ms.
+
+_di variant reads the GGML_MV_REPACK deinterleaved copy (aligned 8B qs loads,
+register dequant): ~9% more — the repack hypothesis is WRONG for mv (189 GB/s,
+not layout-bound) but RIGHT inside a 129 GB/s staged kernel.
+
+27B Q4_0 ms/pass:
+
+| N | ext | skinny | skinny+di |
+|---|---:|---:|---:|
+| 2 | **90** | 118 | 107 |
+| 3 | **108** | 123 | 113 |
+| 4 | 119 | 125 | **114** |
+| 5 | 131 | 126 | **115** |
+| 6 | 163 | 132 | **122** |
+| 8 | 195 | 137 | **126** |
+
+Routing: GGML_MM_SKINNY=4 (skinny for ne11>=4, ext below). Composite N8 slope
+1.60x vs batch-1 78.9 ms — MLX-parity slope (~1.5x) on the verify path.
+
+E2e (Q4_0, f16 KV, GGML_MM_SKINNY=4 GGML_MV_REPACK=1): MTP optimum moves d2->d4:
+| config | t/s |
+|---|---:|
+| MTP d2 (ext, old best) | 18.4 |
+| MTP d3 routed | 18.4 |
+| **MTP d4 routed** | **18.9** |
+| MTP d5 routed | 17.6 |
+| DFlash2 n3 routed | 18.8 (was 18.0) |
+| DFlash2 n7 skinny vs ext | 15.9 vs 12.7 (+25%, acceptance-capped) |
+
+Correctness: test-backend-ops MUL_MAT passes both variants (NMSE vs CPU); not
+bit-identical to ext by design (sgmatrix accumulation order); normal acceptance
+rates across all e2e runs corroborate.
+
+Caveats / next: GGML_MV_REPACK doubles Q4_0 weight residency (+15 GB on the 27B)
+for ~0.4 t/s over skinny-alone at d4 — for prod prefer GGML_MM_SKINNY=4 alone
+until a load-time transform replaces (not duplicates) the weights. Remaining
+kernel headroom: pipeline 105-117 ms vs 82 ms floor (dequant ALU + barrier waits);
+q4_K/UD variants of the skinny kernel not yet written; turbo-KV x skinny d4 combo
+not yet measured.
