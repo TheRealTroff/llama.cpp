@@ -205,3 +205,43 @@ the skinny matmul gain, so the turbo-KV optimum STAYS at d2. Prod menu:
 | max memory | turbo4 sym KV, MTP d2 (skinny optional) | 16.4 | **165 MiB** |
 
 (GGML_MV_REPACK omitted from both: +15 GB residency for ~0.4 t/s.)
+
+## Batch-1 floor analysis (GPU per-op profile, perf/profiler.patch)
+
+Question: oMLX decodes at ~66 ms/token; we were at 79. Where does ours go?
+Profiled tg32 (serialized, shares normalized per token):
+
+- Quantized matmuls: ~63 ms/token, running at 210-245 GB/s = 77-90% of the
+  M4 Pro's 273 GB/s — near the wall already. NOT the recoverable part.
+- Non-matmul ops: ~10-14 ms/token, dominated by hybrid-SSM state machinery:
+  a 3 MB f32 state CPY per layer per token at 36 GB/s (scalar element-wise
+  kernel), a state GET_ROWS at ~140 GB/s, SSM_CONV + GATED_DELTA_NET.
+- Output head: q6_K over the 248k vocab = 4 ms/token (1 GB read; efficient
+  but heavy).
+
+FIXED (branch metal-cpy-cont, 40b946ca): contiguous same-type CPY fast path
+(raw grid-strided 16B chunks). State CPY 86 -> 24 us/call. Batch-1 decode
+13.32 -> 13.75 t/s (79 -> 72.7 ms/token). Helps every verify round too.
+
+Remaining path to ~66 ms/token, ranked:
+1. GET_ROWS tuning for huge single rows (~1 ms/token).
+2. Requantize the output head q6_K -> q4_K/q5_K (~1.2-1.5 ms/token; needs a
+   PPL check, one llama-quantize run with --output-tensor-type).
+3. The unsloth recipe's q5_K o_proj / q4_1 stragglers carry more bytes than a
+   uniform 4-bit model (~0.5-1 ms) — same --token-embedding/tensor-type levers.
+4. mv kernel bw 245 -> MLX-class ~255 GB/s: diminishing, gs64-format territory.
+Realistic near-term floor: ~68-70 ms/token without a format change.
+
+## Adaptive speculation depth (branch adaptive-spec, 42126b7f; default off)
+
+LLAMA_SPEC_ADAPTIVE=1: per-position acceptance EMA x per-depth cost EMA ->
+expected-throughput argmax; full-depth exploration every 16 rounds; 2% hysteresis.
+Iterations: throughput hill-climbing (v1/v2) chases text-difficulty noise
+(+/-35% same-depth window variance) and fails; the model-based controller (v3)
+is the keeper. Pinned == fixed exactly (18.8 == 18.8, zero overhead); from a bad
+ceiling it recovers most of the loss (DFlash2 n7: 15.9 fixed -> 17.4 adaptive)
+but does not beat the best fixed depth on stable text (16.8 vs 18.8 from
+ceiling 7 — exploration + transient adoptions cost ~10%). Next: evaluate on
+heterogeneous prompts (chat, code) where fixed depth cannot win; suppress
+exploration when the depth posterior is confident. Pessimistic cost
+extrapolation + local-only exploration (v4) traps shallow: reverted.
