@@ -30,6 +30,9 @@ int ggml_metal_op_encode(ggml_metal_op_t ctx, int idx);
 // available ops:
 //
 
+// scratch for src1 converted to f16 for the small-batch mul_mv_ext kernels
+size_t ggml_metal_op_mul_mat_extra_src1f16(const struct ggml_tensor * op);
+
 // tokens per expert
 size_t ggml_metal_op_mul_mat_id_extra_tpe(const struct ggml_tensor * op);
 
