@@ -54,6 +54,28 @@ prompt (~/play/benchprompt.txt), 300 tokens, temp 0, ctx 10240, one server launc
   tensors not worth it). Check the dispatch gates in ggml-metal-ops.cpp, not just
   kernel existence.
 
+## iq4_xs mul_mv_ext port (e4e0d328 on metal-mv-ext-nr0) — UD re-bench
+
+13-line change: q4x4-family instantiations r1_2..r1_5 (f32 + f16y) reusing
+dequantize_iq4_xs, plus the three ops.cpp gates. test-backend-ops MUL_MAT passes.
+Same protocol, UD-Q4_K_M after the fix (pre-fix in parens):
+
+| KV config | plain | d1 | d2 | d3 |
+|---|---:|---:|---:|---:|
+| f16/f16    | 11.7 (11.8) | 15.8 (14.2) | **16.6** (13.7) | 16.1 (12.9) |
+| q8_0/q8_0  | 11.2 (11.3) | 14.9 (13.5) | 15.5 (13.0) | 14.6 (12.3) |
+| turbo4 aa  | 11.0 (11.0) | 14.6 (13.2) | 15.2 (12.8) | 15.0 (12.3) |
+| turbo4 sym | 10.9 (11.0) | 14.7 (13.3) | 15.6 (13.4) | **15.9** (12.8) |
+| turbo3 sym | 10.4 (10.4) | 13.8 (12.5) | 14.3 (12.1) | 14.1 (11.7) |
+
+- Up to +25% at the depths that matter (turbo4 sym d3 12.8 -> 15.9); plain decode
+  unchanged as expected (n=1 does not use the ext path). Depth-2 optimum restored;
+  UD best 16.6 now beats the OLD Q4_K_M's 15.5 and sits ~10% under Q4_0's 18.4.
+- Oddity worth noting: UD + turbo4 sym peaks at d3 (15.9, acc 73%) — UD's acceptance
+  runs slightly higher than Q4_0's at every depth on this prompt.
+- UD prod pick if using this quant: turbo4 sym d3 -> 15.9 t/s at 3.9x KV compression.
+  Q4_0 remains the overall fastest 27B file (18.4 f16 / 16.4 turbo4 d2).
+
 ## Ops notes
 
 - llama-server does not reliably exit on SIGTERM (can hang in Metal teardown holding
