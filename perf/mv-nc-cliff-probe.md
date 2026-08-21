@@ -85,23 +85,59 @@ and ~7% at N=4. But N=2 REGRESSES (143.68 -> 168.73), and even NR0=8's 265.76 is
 still 32% worse than ext's 201.62. Necessary, not sufficient. A depth-dependent NR0
 (4 at NC=2, 8 at NC>=3) is a cheap partial win if anyone wants it.
 
-## What is still unexplained
+## DIAGNOSED: a fixed ~112 us penalty that switches on at NC>=3
 
-Cost per y-load-unit is 4.49 us at N=2, 6.50 at N=3, 5.44 at N=4 — **N=3 is worse
-per unit of work than N=4**. No load-count or bandwidth model produces a non-monotonic
-shape like that. NC=3 is also the only odd unroll factor tested, which makes a codegen
-or scheduling artifact at odd NC the leading remaining suspect.
+Added nc5/nc6 instantiations, raised the routing clamp to 6, added N=6/7 perf shapes,
+and swept N=2..7 (all correct: test-backend-ops MUL_MAT OK at NC=6). N=7 is a control
+— above the clamp, so it must fall back to ext, and it does (436.38 vs 436.78).
 
-Next probes, in order:
-1. Test NC=5 and NC=6 (needs new instantiations + raising the `min(env_mv_nc, 4)`
-   clamp). If odd NC is systematically bad, that is codegen, and it localizes the
-   problem far better than anything tried here.
-2. Full Xcode -> `xcrun metal -S -emit-llvm` per nc variant and diff the IR for
-   spills/stack traffic. This is the probe that would actually settle it; it needs an
-   interactive Apple ID to install.
-3. Depth-dependent NR0 as a partial mitigation, independent of root cause.
+| N | parity | ext us | mv-nc us | excess |
+|---|---|---:|---:|---:|
+| 2 | even | 157.24 | **145.71** | **-11.5** |
+| 3 | odd  | 198.96 | 310.38 | +111.4 |
+| 4 | even | 238.59 | 347.86 | +109.3 |
+| 5 | odd  | 277.19 | 390.53 | +113.3 |
+| 6 | even | 357.30 | 474.56 | +117.3 |
+| 7 | odd  | 436.78 | 436.38 | 0 (control, not routed) |
 
-Standing conclusion: mv-nc remains correctly clamped to N=2, where it wins 9% and
-delivers +9.7% e2e at MTP d1 (see perf/dflash-vs-mtp-uniform.md). The N>=3 cliff is
-NOT diagnosed, and the size of the prize there is unknown — the earlier "2x" figure
-was an artifact.
+**Odd-vs-even NC is REFUTED.** NC=5 tracks ext exactly as well as NC=6.
+
+Marginal cost of each added column:
+
+| step | mv-nc | ext |
+|---|---:|---:|
+| 2->3 | **164.7** | 41.7 |
+| 3->4 | 37.5 | 39.6 |
+| 4->5 | 42.7 | 38.6 |
+| 5->6 | 84.0 | 80.1 |
+
+The entire cliff is a ONE-TIME step at 2->3. Every column after that costs mv-nc what
+it costs ext, within noise. The excess over ext is flat at ~112 us for all N>=3 —
+constant, not growing with NC.
+
+A constant NC-independent penalty implicates the NC-INDEPENDENT state: ax[NR0],
+q[NR0], d[NR0] (the hoisted weight side) spilling once total register demand crosses
+a threshold at NC=3. This refines rather than restores the register hypothesis: it is
+not that sumf/yb grow with NC, it is that their growth evicts the fixed weight-side
+state. It also explains the NR0 results — NR0=8 amortizes the fixed cost over fewer
+row-groups (helps: 312->266), NR0=2 doubles the row-groups paying it (hurts badly).
+
+## CONSEQUENCE: the cliff is not worth fixing
+
+Since mv-nc's marginal per-column cost already EQUALS ext's, removing the fixed
+penalty would bring mv-nc to ~parity with ext at N>=3 (310.38 - 112 = 198 vs ext
+198.96), not ahead of it. mv-nc's genuine advantage is confined to N=2, where its
+plain-mv structure (masked-nibble + sumy, no dequant, no shmem) beats ext by 7%.
+
+**The projection in mtp-kv-results.md — "if the cliff falls, N3/N4 project to 21-23
+t/s" — is NOT supported.** There is no 2x, and no 20%, behind this cliff. N>=3
+already routes to ext, so fixing it would gain approximately nothing end to end.
+
+Recommendation: keep mv-nc clamped at GGML_MV_NC=2, bank the +9.7% e2e it already
+delivers at MTP d1 (perf/dflash-vs-mtp-uniform.md), and close this line. Effort is
+better spent where perf/mv-bandwidth-probe.md points: batch-1 is at MLX parity, so
+the remaining e2e gap is in small/awkward shapes and non-matmul ops.
+
+Reproduce: add `mul_vec_q4_0_nc_f32_impl<4, 5>` / `<4, 6>` kernels, change
+`std::min(env_mv_nc, 4)` to 6 in ggml-metal-ops.cpp, add bs 6/7 q4_0 perf cases.
+All reverted here; the shipping kernel set is unchanged.
