@@ -181,6 +181,28 @@ The blog's 2.7-3.4x numbers are SGLang/CUDA with flat small-batch cost.
 
 ## Cross-framework: oMLX + DFlash2 on the same M4 Pro
 
+> **SUPERSEDED 2026-08-21 — DO NOT USE THIS TABLE AS A TARGET.**
+> See `perf/head-to-head-cooled.md` and `perf/omlx-target-recheck.md`.
+>
+> The two columns below are **not like-for-like**. The oMLX rows were measured on an
+> **18-token** prompt (a couple at 70); every llama.cpp row uses the **8288-token**
+> B-tree prompt. An 18-token context makes decode far cheaper, so the comparison
+> flatters oMLX. The archived runs also vary hugely at fixed settings — six identical
+> block=16 runs span **21.18 to 35.10 tok/s** — so 34.7 is the top of a wide
+> distribution, not a typical value. The llama.cpp column is additionally stale: it
+> predates byte-uniform Q4_0, the skinny kernel and the multi-column mv kernel.
+>
+> Re-measured properly (same 8288-token prompt both sides, same dflash_mlx
+> 0.1.10+omlx.6 build, 5 runs each, 120 s apart, on a cooling grid):
+> **llama.cpp 20.39 vs dflash_mlx 29.55 — a gap of 1.45x, not the 2.01x implied
+> below.** Both reproduce to ~+/-0.02 t/s.
+>
+> The remaining 1.45x is ~9% batch-1 and ~33% speculation multiplier, and it is **not**
+> the kernels: batch-1 matvec is at MLX parity (251.3 vs 252.0 GB/s), the real 50 MB
+> ffn shape is within 5%, verify scaling at n=5 is at parity, and non-matmul work is
+> flat in N. The live lead is that oMLX drafts from a sink+window context (sink 64,
+> window 1024) while llama.cpp feeds its drafter the full 8288 tokens.
+
 Replication of the "22 -> 35 tok/s on M3 Max" oMLX/DFlash2 claim, same hardware as all numbers
 above (oMLX 0.1.10+omlx.6 from source, mlx-community/Qwen3.8-27B-4bit + incoai DFlash2 drafter,
 same B-tree prompt, 300 tokens, temp 0):
@@ -215,6 +237,19 @@ with the same drafter - MLX's small-batch verify pass is near flat-cost while ll
 (even after the nr0 fix) still doubles by N=8. This bounds the prize for the remaining
 llama.cpp structural work (simdgroup-matrix small-N verify kernels) at roughly 17 -> ~35 tok/s
 on this machine. The "block size 5" community tip reproduces (34.7 vs 33.4 at default).
+
+> **2026-08-21 correction to the paragraph above.** The "17 -> ~35 tok/s" prize is wrong
+> and should not drive planning; the real figure is **20.4 -> ~29.6** (see the banner at
+> the top of this section). Two specific claims here also did not survive re-measurement:
+>
+> - *"MLX's small-batch verify pass is near flat-cost"* — it is not. At the real 50 MB ffn
+>   shape, MLX's n=5 verify costs 1.74x/2.18x a single column against our 1.81x/1.99x;
+>   we are ahead on ffn-down. MLX is only genuinely flat at n=2 (1.01x), which
+>   `GGML_MV_NC=2` now recovers (+9.7% e2e at MTP d1).
+> - *"the prize is simdgroup-matrix small-N verify kernels"* — that work was done
+>   (`sgmatrix-verify`) and the kernels are now at parity or better. The residual gap is
+>   in the speculation multiplier, not the verify matmuls. See
+>   `perf/mv-bandwidth-probe.md` and `perf/head-to-head-cooled.md`.
 
 ## Correctness
 
