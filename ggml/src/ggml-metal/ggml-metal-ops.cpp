@@ -2471,6 +2471,52 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
 
     // first try to use small-batch mat-mv kernels
     // these should be efficient for BS [2, ~8]
+    // multi-column mv probe (GGML_MV_NC=1): plain-mv structure with an ne11 loop, N=2..4
+    static const int env_mv_nc = getenv("GGML_MV_NC") ? atoi(getenv("GGML_MV_NC")) : 0;
+
+    if (env_mv_nc > 0 &&
+        op->src[0]->type == GGML_TYPE_Q4_0 &&
+        op->src[1]->type == GGML_TYPE_F32 &&
+        !ggml_is_transposed(op->src[0]) &&
+        !ggml_is_transposed(op->src[1]) &&
+        ne00 % 32 == 0 && ne11 >= 2 && ne11 <= std::min(env_mv_nc, 4)) {
+        auto pipeline = ggml_metal_library_get_pipeline_mul_mv_nc(lib, op, (int) ne11);
+
+        ggml_metal_kargs_mul_mv args = {
+            /*.ne00 =*/ ne00,
+            /*.ne01 =*/ ne01,
+            /*.ne02 =*/ ne02,
+            /*.nb00 =*/ nb00,
+            /*.nb01 =*/ nb01,
+            /*.nb02 =*/ nb02,
+            /*.nb03 =*/ nb03,
+            /*.ne10 =*/ ne10,
+            /*.ne11 =*/ ne11,
+            /*.ne12 =*/ ne12,
+            /*.nb10 =*/ nb10,
+            /*.nb11 =*/ nb11,
+            /*.nb12 =*/ nb12,
+            /*.nb13 =*/ nb13,
+            /*.ne0  =*/ ne0,
+            /*.ne1  =*/ ne1,
+            /*.nr0  =*/ pipeline.nr0,
+            /*.r2   =*/ r2,
+            /*.r3   =*/ r3,
+        };
+
+        ggml_metal_encoder_set_pipeline(enc, pipeline);
+        ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);
+        ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[0]), 1);
+        ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[1]), 2);
+        ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         3);
+
+        const int nrptg = pipeline.nr0*pipeline.nsg;
+
+        ggml_metal_encoder_dispatch_threadgroups(enc, ((ne01 + nrptg - 1)/nrptg), 1, ne12*ne13, 32, pipeline.nsg, 1);
+
+        return 1;
+    }
+
     // skinny simdgroup-matrix kernel for speculative-verify batches
     // GGML_MM_SKINNY=N: route ne11 in [max(2,N), 8] to the skinny kernel (0/unset = off)
     static const int env_mm_skinny = getenv("GGML_MM_SKINNY") ? atoi(getenv("GGML_MM_SKINNY")) : 0;
