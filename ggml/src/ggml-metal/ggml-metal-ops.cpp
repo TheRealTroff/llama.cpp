@@ -3564,7 +3564,24 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
 #undef FATTN_SMEM
     } else {
         // half4x4 kernel
-        const int nqptg = OP_FLASH_ATTN_EXT_VEC_NQPSG; // queries per threadgroup
+        //
+        // GGML_FA_NQ sets the query rows per threadgroup (default 1 = upstream behaviour).
+        // The vec kernel otherwise runs one query per threadgroup, so each kv-head's cache
+        // is re-streamed ne01 times per layer; batching the rows lets one threadgroup fetch
+        // a chunk once and score it against all of them. Only exact divisors of ne01 are
+        // used, so no padded query rows are ever scored.
+        static const int env_fa_nq = getenv("GGML_FA_NQ") ? atoi(getenv("GGML_FA_NQ")) : 1;
+
+        int nqptg = OP_FLASH_ATTN_EXT_VEC_NQPSG;       // queries per threadgroup
+        if (env_fa_nq > 1) {
+            for (int c = std::min<int>(env_fa_nq, OP_FLASH_ATTN_EXT_VEC_MAX_NQ); c > 1; --c) {
+                if (ne01 % c == 0) {
+                    nqptg = c;
+                    break;
+                }
+            }
+        }
+
         const int ncpsg = OP_FLASH_ATTN_EXT_VEC_NCPSG; // cache values per simdgroup !! sync with kernel template arguments !!
         const int nhptg = 1;                           // heads per threadgroup
 
@@ -3628,7 +3645,9 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
         // ne20*(nsg)
         // each simdgroup has a full f32 head vector in shared mem to accumulate results
         //
-#define FATTN_SMEM(nsg) (GGML_PAD(((GGML_PAD(ne00, 128) + 4*ncpsg + 2*GGML_PAD(ne20, 128))*(nsg))*(sizeof(float)/2), 16))
+        // with nqptg > 1 the shared memory is NQ-strided: nqptg query vectors, then
+        // nsg*nqptg scratch blocks and nsg*nqptg result blocks
+#define FATTN_SMEM(nsg) (GGML_PAD((((int64_t) GGML_PAD(ne00, 128) + (4*ncpsg + 2*GGML_PAD(ne20, 128))*(nsg))*(nqptg))*(sizeof(float)/2), 16))
 
         int64_t nsg = 1;
 
@@ -3646,6 +3665,20 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
             while (2*nwg*nsg*ncpsg < ne11 && nsg < 4) {
                 nsg *= 2;
             }
+        }
+
+        // GGML_FA_NSG pins simdgroups per threadgroup. With nqptg > 1 each simdgroup keeps
+        // its own K/V chunk in flight, so nsg copies compete for L1 and the per-query
+        // re-reads miss; pinning nsg=1 tests whether the re-reads can be served locally.
+        static const int env_fa_nsg = getenv("GGML_FA_NSG") ? atoi(getenv("GGML_FA_NSG")) : 0;
+        if (env_fa_nsg > 0) {
+            nsg = env_fa_nsg;
+        }
+
+        // batching query rows multiplies the shared-memory footprint -- give back
+        // simdgroups rather than overflow the threadgroup budget
+        while (nsg > 1 && FATTN_SMEM(nsg) > (int64_t) props_dev->max_theadgroup_memory_size) {
+            nsg /= 2;
         }
 
         ggml_metal_kargs_flash_attn_ext_vec args = {
@@ -3683,7 +3716,7 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
             /*.logit_softcap =*/ logit_softcap,
         };
 
-        auto pipeline = ggml_metal_library_get_pipeline_flash_attn_ext_vec(lib, op, has_mask, has_sinks, has_bias, has_scap, has_kvpad, nsg, nwg);
+        auto pipeline = ggml_metal_library_get_pipeline_flash_attn_ext_vec(lib, op, has_mask, has_sinks, has_bias, has_scap, has_kvpad, nsg, nwg, nqptg);
 
         GGML_ASSERT(nsg*32 <= ggml_metal_pipeline_max_theads_per_threadgroup(pipeline));
 

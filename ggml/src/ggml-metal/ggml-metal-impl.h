@@ -113,6 +113,8 @@
 #define OP_FLASH_ATTN_EXT_NCPSG 64
 
 #define OP_FLASH_ATTN_EXT_VEC_NQPSG 1
+// upper bound on query rows per threadgroup for the vec kernel; must match MAX_NQ in the shader
+#define OP_FLASH_ATTN_EXT_VEC_MAX_NQ 8
 #define OP_FLASH_ATTN_EXT_VEC_NCPSG 32
 
 #define OP_LIGHTNING_INDEXER_DK    128
