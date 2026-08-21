@@ -31,8 +31,21 @@ archived block=5 run gives 28.13, not 34.7.
 
 ## Re-measured like-for-like
 
-oMLX 0.6.2 (note: the original was 0.1.10+omlx.6), same 8288-token B-tree prompt,
-300 tokens, block 5, raw tokenization, --draft-quant w4:gs64:
+Same 8288-token B-tree prompt, 300 tokens, block 5, raw tokenization,
+--draft-quant w4:gs64.
+
+WHICH BUILD (disambiguated — an earlier draft of this file got it wrong):
+- The `dflash` CLI is **dflash_mlx 0.1.10+omlx.6**, installed by `uv` into
+  `~/play/omlx/.venv` from github.com/jundot/dflash-mlx @ b7f62550. This is what both
+  the archived Aug-19 runs and this re-run used — **identical build, no version jump**.
+- `omlx 0.6.2` is a SEPARATE project (source tree at `~/play/omlx`, last commit
+  c1a3d44). It is NOT installed into that venv — no dist-info, no .pth. It is only
+  importable when cwd happens to be inside the tree, which is what misled the earlier
+  draft into reporting a "0.1.10 -> 0.6.2 version jump". There is none.
+- dflash_mlx does not import omlx (only its own version string and a code comment
+  mention it), so cwd does not change the code path either.
+
+So the only material difference between the archived runs and this one is the prompt.
 
 ```
 dflash benchmark --model .../Qwen3.8-27B-4bit --draft .../Qwen3.8-27B-DFlash2 \
@@ -42,7 +55,7 @@ dflash benchmark --model .../Qwen3.8-27B-4bit --draft .../Qwen3.8-27B-DFlash2 \
 
 | | plain | speculative | multiplier |
 |---|---:|---:|---:|
-| oMLX 0.6.2 | 14.78 | **28.11** (acc 0.67) | 1.90x |
+| dflash_mlx 0.1.10+omlx.6 | 14.78 | **28.11** (acc 0.67) | 1.90x |
 | llama.cpp (uniform Q4_0, MV_NC=2, MTP d1) | 13.56 | **20.23** (acc 86%) | 1.49x |
 
 **Real gap: 39%, not 71%.** oMLX's baseline reproduces its recorded 15.1 within 2%
