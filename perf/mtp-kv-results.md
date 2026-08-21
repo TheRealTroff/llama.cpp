@@ -289,3 +289,24 @@ registers->shmem->fragment staging detour itself, forced by simdgroup_load
 semantics — lowering it further means a structurally different kernel
 (e.g. warp-specialized column sharing), not parameter tuning.
 oMLX comparison at the sweet spot: their N4 ~ +13 ms over batch-1, ours +37.
+
+## Multi-column mv (the "ne11 loop over columns" suggestion) — N2 SOLVED
+
+Suggestion (via friend): loop columns inside the PLAIN mv kernel before any
+rewrite. Key insight validated: mv_ext forked away from plain-mv's best trick
+(masked-nibble dot + sumy algebra = no per-element dequant, no shmem); adding
+a column loop to the plain structure with hoisted weight nibbles gives:
+
+| N | before (ext/skinny) | mv-nc | slope vs 69.6 |
+|---|---:|---:|---:|
+| 2 | 85.3 | **73.8** | **1.06x** |
+| 3 | 105.2 | 118-135 (cliff) | — |
+| 4 | 106.5 | 154 (cliff) | — |
+
+E2e: MTP d1 (GGML_MV_NC=2) = 19.5 t/s at 86% acceptance — near the d4 record
+from the shallowest config. Iteration notes: yl[NC][16] spills catastrophically
+(180/437ms); per-column yl + hoisted q fixes NC2; NR0=2 worse than 4; half-yl
+helps NC2 (75.3->73.8) but WORSENS NC3 — the NC2->NC3 cliff is not yl register
+pressure; unexplained, needs Metal compiler stats/occupancy profiling.
+If the cliff falls, N3/N4 at ~1.15x project MTP d3/d4 at 21-23 t/s.
+Routing: GGML_MV_NC=2 + GGML_MM_SKINNY=4.
