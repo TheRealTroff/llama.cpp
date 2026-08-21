@@ -1,95 +1,107 @@
-# The mv-nc NC2->NC3 cliff: it's the y-side, not registers
+# The mv-nc NC2->NC3 cliff: four hypotheses tested, none sufficient
 
 2026-08-21. Branch `mv-nc-cliff` off `prod` (f4b0bd56). Probe only — no kernel change
-is committed; all diagnostic edits were reverted and the build re-verified
-(test-backend-ops MUL_MAT OK, timings back to baseline).
+committed; every diagnostic edit was reverted and the build re-verified
+(test-backend-ops MUL_MAT OK, baseline timings restored).
 
-Isolated at kernel level with `test-backend-ops perf -o MUL_MAT
+> **CORRECTION.** The first version of this file (commit 4ac662ce) claimed the cliff
+> was y-side memory access with ~2x available, based on a y-stub. **That claim is
+> retracted — the stub was confounded by compiler CSE.** See "Why the stub lied".
+
+Isolated at kernel level: `test-backend-ops perf -o MUL_MAT
 -p "type_a=q4_0,type_b=f32,m=4096,n=N,"`, GGML_MV_NC=4 vs unset. No model, no server.
+Offline AIR/compiler stats were NOT available: only Command Line Tools are installed
+(no `xcrun metal`); getting it needs full Xcode, which requires interactive Apple ID
+sign-in. llama.cpp compiles the shader at runtime, so the build never needed it.
 
-## Baseline: the cliff reproduces cleanly
+## The cliff
 
 | N | ext | mv-nc | mv-nc vs ext |
 |---|---:|---:|---|
 | 2 | 158.11 | **143.68** | 0.91x (9% faster) |
-| 3 | 201.62 | 314.27 | 1.56x (56% SLOWER) |
-| 4 | 239.20 | 349.49 | 1.46x (46% SLOWER) |
+| 3 | 201.62 | 312.86 | 1.55x (55% SLOWER) |
+| 4 | 239.20 | 350.03 | 1.46x (46% SLOWER) |
 
-E2e corroboration on the 27B (uniform Q4_0, f16 KV): MTP d2 with 3-col batches routed
-to mv-nc (GGML_MV_NC=3) is 15.32 t/s vs 19.09 to ext; d3 with GGML_MV_NC=4 is 15.15
-vs 18.65. Same ~20% penalty end to end.
+E2e on the 27B (uniform Q4_0, f16 KV): MTP d2 with 3-col batches to mv-nc
+(GGML_MV_NC=3) is 15.32 t/s vs 19.09 to ext; d3 with GGML_MV_NC=4 is 15.15 vs 18.65.
 
-## NOT threadgroup-size limited
+## All variants measured
 
-`maxTotalThreadsPerThreadgroup` is **1024 for all of nc2/nc3/nc4** (th_width 32,
-from the existing GGML_LOG_DEBUG in ggml_metal_library_compile_pipeline). On Apple
-GPUs that number reflects threadgroup-size limits, not resident-simdgroup occupancy,
-so it does not settle register pressure either way.
+| variant | N=2 | N=3 | N=4 |
+|---|---:|---:|---:|
+| ext (reference) | 158.11 | 201.62 | 239.20 |
+| mv-nc NR0=4 (shipping) | **143.68** | 312.86 | 350.03 |
+| mv-nc NR0=2 | — | 433.46 | 1266.67 |
+| mv-nc NR0=8 | 168.73 | **265.76** | **323.66** |
+| A: 2 distinct y streams, 56 KB stride | 146.51 | 297.07 | 309.98 |
+| B: NC distinct y streams, 64 B stride | 145.12 | 285.09 | 290.10 |
+| y-stub (INVALID, see below) | 144.12 | 155.12 | 183.44 |
 
-Offline AIR/compiler-stats analysis was NOT possible: only Command Line Tools are
-installed, no full Xcode, so `xcrun metal` does not exist. llama.cpp compiles the
-shader at runtime (GGML_METAL_EMBED_LIBRARY), which is why the build never needed it.
+## Not threadgroup-size limited
+
+`maxTotalThreadsPerThreadgroup` is 1024 for nc2/nc3/nc4 alike (th_width 32), from the
+existing GGML_LOG_DEBUG in ggml_metal_library_compile_pipeline. On Apple GPUs that
+reflects threadgroup-size limits, not resident-simdgroup occupancy, so it settles
+nothing about registers either way.
 
 ## REFUTED: register pressure
 
 Live per-thread state is sumf[NR0][NC] (4NC) + ax[NR0] (8) + yb[NC] (2NC) + q[NR0]
-(8) + d[NR0] (4) + yl[16] as half (8) = **40 regs at NC2, 46 at NC3, 52 at NC4** —
-a plausible bucket crossing. Tested by dropping NR0 4->2 for nc3/nc4 (~30 regs at
-NC3), with the matching `res.nr0` fix in ggml_metal_library_get_pipeline_mul_mv_nc:
+(8) + d[NR0] (4) + yl[16] as half (8) = 40 / 46 / 52 regs at NC=2/3/4 — a plausible
+bucket crossing. Cutting NR0 4->2 (~30 regs at NC3) makes it far WORSE (N=4: 350 ->
+1267 us). Fewer registers, much slower. Not register pressure.
 
-| N | NR0=4 | NR0=2 |
-|---|---:|---:|
-| 3 | 314.27 | 433.46 |
-| 4 | 349.49 | **1266.67** |
+## REFUTED: number of concurrent y streams
 
-Dramatically WORSE, so register pressure is not the mechanism. (Consistent with the
-existing note that half-yl, which also cuts registers, worsened NC3.) NR0=2 doubles
-the number of row-groups and therefore doubles how many times y is re-read — which
-pointed at the actual cause.
+Probe A maps the NC pointers onto only 2 distinct columns (`r1 + (c & 1)`), changing
+setup only — NC pointers, NC advances, NC reads, loop body untouched. N=3: 297.07 vs
+312.86. ~5% only. And note N=2 runs 2 streams at 143.68 while probe A runs 2 streams
+at 297.07, so stream count cannot be the determinant.
 
-## CONFIRMED: y-side memory access, worth ~2x
+## REFUTED: inter-column stride
 
-Y-STUB: point every column's reads at `yb[0]` instead of `yb[c]`. Numerically wrong
-on purpose. Instruction count, register usage and unrolling are all IDENTICAL — the
-only thing that changes is the y address stream.
+Probe B keeps NC genuinely distinct streams but places them 64 B apart instead of
+nb11 = 57344 B, all inside one column. N=3: 285.09 vs 312.86 — a real but partial
+9%; N=4 gets 17%. Locality matters a little. It is not the cliff.
 
-| N | real | y-stub | speedup | ext |
-|---|---:|---:|---:|---:|
-| 2 | 143.68 | 144.12 | 1.00x | 158.11 |
-| 3 | 314.27 | **155.12** | **2.03x** | 201.62 |
-| 4 | 349.49 | **183.44** | **1.91x** | 239.20 |
+## Why the stub lied (retraction)
 
-The cliff vanishes entirely. NC2 is unchanged (it already behaves), NC3/NC4 collapse
-to just above NC2. **The whole cliff is y access.**
+The original y-stub replaced the READ index with `yb[0]` but left the advance as
+`yb[c] += QK4_0*NQ`. Tracing NC=3: c=0 reads P then advances yb[0] to P+X; c=1 reads
+P+X; c=2 reads P+X — **the same address twice**, so the compiler can CSE the third
+column's 16 loads away entirely. At NC=4 it collapses 4 sets of loads to 2 (-50%) and
+the time fell 350 -> 183 (-48%). That correspondence is the tell: the stub measured
+*doing less work*, not better memory behaviour.
 
-Note the ceiling this establishes: with y access fixed, mv-nc would beat ext by ~23%
-at BOTH N=3 and N=4, on top of its existing 9% at N=2 — which is what the 21-23 t/s
-projection in mtp-kv-results.md needs.
+Probe B is the CSE-proof version of the same idea (minimal footprint, all loads at
+distinct addresses). It gives 285, not 155. **So the honest y-locality ceiling is
+~9%, not 2x.**
 
-## Open: stream count vs stride
+## PARTIAL: y-load amortization via NR0
 
-Not resolved. Columns live `nb11` = ne10*4 = 57344 B apart, so NC columns means NC
-concurrent streams at a 56 KB stride — either could be the problem (cache set
-conflicts at that stride, or exceeding a per-thread stream/MSHR limit).
+N=3 is monotonic in rows-per-thread: NR0 2/4/8 -> 433 / 313 / 266 us. More rows per
+y load is better, so amortization is a genuine factor and NR0=8 is worth ~15% at N=3
+and ~7% at N=4. But N=2 REGRESSES (143.68 -> 168.73), and even NR0=8's 265.76 is
+still 32% worse than ext's 201.62. Necessary, not sufficient. A depth-dependent NR0
+(4 at NC=2, 8 at NC>=3) is a cheap partial win if anyone wants it.
 
-A follow-up probe reading `yb[c & 1]` (2 distinct streams, NC columns of work) gave
-147/469/343 us, but it is INVALID and was discarded: the pointer advance
-`yb[c] += QK4_0*NQ` was left indexed by `c` while the read used `c & 1`, so the
-streams desynchronize and it measures neither hypothesis. Redo it with the advance
-and the read using the same index.
+## What is still unexplained
 
-## Candidate fixes, in order of appeal
+Cost per y-load-unit is 4.49 us at N=2, 6.50 at N=3, 5.44 at N=4 — **N=3 is worse
+per unit of work than N=4**. No load-count or bandwidth model produces a non-monotonic
+shape like that. NC=3 is also the only odd unroll factor tested, which makes a codegen
+or scheduling artifact at odd NC the leading remaining suspect.
 
-1. **Interleave y in a pre-pass**: gather the NC columns into a contiguous [ne00][NC]
-   scratch buffer, so each thread reads NC *consecutive* floats — one coalesced
-   stream instead of NC strided ones. Cost is NC*ne00*4 B of copy (57 KB per column
-   here) against a 2x kernel win. Kills both candidate mechanisms at once, which is
-   why it is first: it does not require resolving the open question above.
-2. **Stage y in threadgroup memory** once per ib block and have all rows read from
-   there. Closer to what MLX's `qmv_wide_impl` does (see perf/results.md).
-3. **Pad nb11** so the inter-column stride is not 56 KB. Cheapest to test, but only
-   works if the mechanism is set conflicts, and it needs a src1 layout change.
+Next probes, in order:
+1. Test NC=5 and NC=6 (needs new instantiations + raising the `min(env_mv_nc, 4)`
+   clamp). If odd NC is systematically bad, that is codegen, and it localizes the
+   problem far better than anything tried here.
+2. Full Xcode -> `xcrun metal -S -emit-llvm` per nc variant and diff the IR for
+   spills/stack traffic. This is the probe that would actually settle it; it needs an
+   interactive Apple ID to install.
+3. Depth-dependent NR0 as a partial mitigation, independent of root cause.
 
-Given the stub proves ~2x is available and mv-nc already wins at N2, this is the
-highest-value remaining item in the small-batch stack — it is worth more than any
-batch-1 work, which perf/mv-bandwidth-probe.md shows is already at MLX parity.
+Standing conclusion: mv-nc remains correctly clamped to N=2, where it wins 9% and
+delivers +9.7% e2e at MTP d1 (see perf/dflash-vs-mtp-uniform.md). The N>=3 cliff is
+NOT diagnosed, and the size of the prize there is unknown — the earlier "2x" figure
+was an artifact.
