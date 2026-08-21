@@ -10196,6 +10196,21 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
         }
     }
 
+    // cold-streaming matvec: working sets far above the SLC, so the measured rate is
+    // DRAM bandwidth rather than cache bandwidth (33 MB above is partly cache-resident)
+    for (int bs : {1, 2, 3, 4, 5, 8}) {
+        for (ggml_type type_a : {GGML_TYPE_Q4_0}) {
+            test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32, 16384, bs, 32768, {1, 1}, {1, 1}));
+        }
+    }
+    // small, fully cache-resident: probes the kernel's consumption ceiling rather than DRAM
+    for (int bs : {1}) {
+        for (ggml_type type_a : {GGML_TYPE_Q4_0}) {
+            test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32, 2048, bs,  8192, {1, 1}, {1, 1}));
+            test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32, 4096, bs,  8192, {1, 1}, {1, 1}));
+        }
+    }
+
     // qwen3-30b-a3b
     for (int bs : {1, 4, 8, 32, 64, 128, 256, 512}) {
         for (ggml_type type_a : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_Q4_0, GGML_TYPE_Q8_0, GGML_TYPE_Q4_K, GGML_TYPE_Q6_K, GGML_TYPE_IQ2_XS}) {
