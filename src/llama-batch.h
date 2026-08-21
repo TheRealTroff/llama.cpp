@@ -75,13 +75,17 @@ public:
 
     // sanitize and auto-gen missing data in the input batch
     // memory is optional. if provided will be used to check for sequence continuity and to determine the positions
+    // pos_gaps_ok skips the position-continuity checks: valid only for non-causal embedding
+    // injection (e.g. rebuilding a drafter cache as sink + window), where cell membership alone
+    // defines visibility and nothing downstream assumes consecutive positions
     bool init(
             const llama_batch & batch_inp,
             const llama_vocab & vocab,
             const llama_memory_i * memory,
             uint32_t n_embd,
             uint32_t n_seq_max,
-            bool output_all);
+            bool output_all,
+            bool pos_gaps_ok = false);
 
     const llama_batch & get_batch() const;
 

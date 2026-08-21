@@ -17,6 +17,7 @@
 #include <chrono>
 #include <cinttypes>
 #include <cstring>
+#include <deque>
 #include <iomanip>
 #include <map>
 #include <random>
@@ -942,6 +943,23 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
     // scratch buffer for concatenated target features [n_tokens, n_embd_enc]
     std::vector<float> features_buf;
 
+    // StreamingLLM-style sink+window view of the drafter context, mirroring dflash_mlx's
+    // draft_sink_size/draft_window_size/draft_full_context_min_ctx. The drafter KV at
+    // position p is a pure function of the injected encoder row at p, so keeping a ring
+    // of those rows is enough to rebuild the cache with only sink + window cells.
+    int32_t n_sink       = 0;
+    int32_t n_window     = 0; // 0 = disabled
+    int32_t full_ctx_min = 0; // > 0: keep the full drafter context once n_past reaches this
+
+    struct feat_row {
+        llama_pos pos;
+        std::vector<float> row;
+    };
+    std::vector<std::vector<feat_row>> ring_sink; // per seq: rows with pos < n_sink
+    std::vector<std::deque<feat_row>>  ring_win;  // per seq: last n_window rows
+    std::vector<llama_pos> ring_pos_last;         // per seq: highest pos pushed
+    std::vector<bool>      windowed;              // per seq: cache is compacted to sink+window
+
     common_speculative_impl_draft_dflash(const common_params_speculative & params, uint32_t n_seq,
             common_speculative_type type = COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH)
         : common_speculative_impl(type, n_seq)
@@ -1010,6 +1028,25 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
         selector_rng.resize(n_seq);
         selector_reset.assign(n_seq, true);
 
+        if (const char * env = std::getenv("LLAMA_DRAFT_WINDOW")) {
+            n_window = std::atoi(env);
+        }
+        if (n_window > 0) {
+            n_sink = 64;
+            if (const char * env = std::getenv("LLAMA_DRAFT_SINK")) {
+                n_sink = std::atoi(env);
+            }
+            if (const char * env = std::getenv("LLAMA_DRAFT_FULL_CTX_MIN")) {
+                full_ctx_min = std::atoi(env);
+            }
+            LOG_INF("%s: - drafter context window: sink=%d window=%d full_ctx_min=%d\n",
+                    __func__, n_sink, n_window, full_ctx_min);
+        }
+        ring_sink.resize(n_seq);
+        ring_win.resize(n_seq);
+        ring_pos_last.assign(n_seq, -1);
+        windowed.assign(n_seq, false);
+
         // offload draft sampling to the backend
         backend_chains.assign(n_seq, nullptr);
         if (this->params.backend_sampling && !is_dflash2) {
@@ -1064,6 +1101,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
         }
 
         selector_reset[seq_id] = true;
+        windowed[seq_id] = false; // a new request re-fills the cache; re-compact from the ring
 
         const llama_pos pos_max = llama_memory_seq_pos_max(llama_get_memory(params.ctx_dft), seq_id);
         if (pos_max < N - 1) {
@@ -1071,6 +1109,85 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
                     "Drafts may degrade.\n",
                     __func__, (int) pos_max, N - 1);
         }
+    }
+
+    void ring_push(llama_seq_id seq_id, llama_pos pos, const float * row) {
+        auto & sink = ring_sink[seq_id];
+        auto & win  = ring_win [seq_id];
+        if (pos <= ring_pos_last[seq_id]) {
+            // rollback (rejected drafts) or prompt reuse: drop stale rows from pos on
+            while (!win.empty() && win.back().pos >= pos) {
+                win.pop_back();
+            }
+            while (!sink.empty() && sink.back().pos >= pos) {
+                sink.pop_back();
+            }
+        }
+        ring_pos_last[seq_id] = pos;
+        if (pos < n_sink) {
+            sink.push_back({pos, std::vector<float>(row, row + n_embd_dec)});
+        }
+        win.push_back({pos, std::vector<float>(row, row + n_embd_dec)});
+        while ((int32_t) win.size() > n_window) {
+            win.pop_front();
+        }
+    }
+
+    // restrict the drafter cache for seq_id to sink + window cells. attention is
+    // non-causal and unmasked, so visibility is pure cell membership. the first
+    // time this trips it clears the sequence and re-injects from the feature ring:
+    // removing only the middle cells would leave the tail at high cell indices and
+    // n_kv (= highest used cell + 1, the attention span) would stay at the prefill
+    // high-water mark. afterwards aged-out cells are freed incrementally each
+    // round and their slots get reused, keeping the cell span bounded.
+    void apply_window(llama_seq_id seq_id, llama_pos n_past) {
+        if (n_past <= n_sink + n_window) {
+            return;
+        }
+        auto * mem = llama_get_memory(params.ctx_dft);
+        if (windowed[seq_id]) {
+            llama_memory_seq_rm(mem, seq_id, n_sink, n_past - n_window);
+            return;
+        }
+        llama_memory_seq_rm(mem, seq_id, -1, -1);
+        // non-causal decode requires n_ubatch >= n_tokens, so chunk like process() does
+        const int32_t cap = (int32_t) llama_n_ubatch(params.ctx_dft);
+        batch_inject.n_tokens = 0;
+        auto flush = [&]() {
+            if (batch_inject.n_tokens == 0) {
+                return;
+            }
+            const int32_t rc = llama_decode(params.ctx_dft, batch_inject);
+            GGML_ASSERT(rc == 0 && "DFlash: sink+window re-injection failed");
+            llama_synchronize(params.ctx_dft);
+            batch_inject.n_tokens = 0;
+        };
+        auto push = [&](const feat_row & fr) {
+            if (fr.pos >= n_past) {
+                return; // stale rows from a rejected draft, purged on the next process()
+            }
+            const int32_t i = batch_inject.n_tokens++;
+            std::memcpy(batch_inject.embd + (size_t) i * n_embd_dec, fr.row.data(), (size_t) n_embd_dec * sizeof(float));
+            batch_inject.pos[i]       = fr.pos;
+            batch_inject.n_seq_id[i]  = 1;
+            batch_inject.seq_id[i][0] = seq_id;
+            batch_inject.logits[i]    = false;
+            if (batch_inject.n_tokens == cap) {
+                flush();
+            }
+        };
+        for (const auto & fr : ring_sink[seq_id]) {
+            push(fr);
+        }
+        for (const auto & fr : ring_win[seq_id]) {
+            if (fr.pos >= n_sink) { // sink rows are already injected
+                push(fr);
+            }
+        }
+        flush();
+        windowed[seq_id] = true;
+        SPC_DBG("rebuilt drafter cache for seq %d: sink=%zu window=%zu n_past=%d\n",
+                (int) seq_id, ring_sink[seq_id].size(), ring_win[seq_id].size(), (int) n_past);
     }
 
     bool process(const llama_batch & batch_in) override {
@@ -1143,6 +1260,9 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
                 batch_inject.n_seq_id[i]  = 1;
                 batch_inject.seq_id[i][0] = seq_id;
                 batch_inject.logits[i]    = false;
+                if (n_window > 0) {
+                    ring_push(seq_id, batch_in.pos[j], inp_g + (size_t) i * n_embd_dec);
+                }
             }
 
             rc = llama_decode(ctx_dft, batch_inject);
@@ -1177,6 +1297,10 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
             common_sampler_reset(smpls[seq_id].get());
 
             const int32_t n = (int32_t) dp.n_past;
+
+            if (n_window > 0 && (full_ctx_min <= 0 || n < full_ctx_min)) {
+                apply_window(seq_id, n);
+            }
 
             const int32_t n_draft = params.n_max;
 
