@@ -3188,7 +3188,15 @@ bool ggml_metal_op_flash_attn_ext_use_vec(const ggml_tensor * op) {
     const int64_t ne01 = op->src[0]->ne[1]; // batch size
 
     // use vec kernel if the batch size is small and if the head size is supported
-    return (ne01 < 20) && (ne00 % 32 == 0);
+    //
+    // GGML_FA_VEC_MAX overrides the cutoff (default 20). The vec kernel runs one query and
+    // one head per threadgroup, so it re-streams each kv-head's cache ne01*gqa times; the
+    // non-vec kernel batches NQPSG=8 queries per threadgroup and drops the ne01 factor.
+    // Lowering this routes speculative-verify batches to the non-vec path -- a probe for how
+    // much of the redundancy is query-side.
+    static const int64_t vec_max = getenv("GGML_FA_VEC_MAX") ? atoll(getenv("GGML_FA_VEC_MAX")) : 20;
+
+    return (ne01 < vec_max) && (ne00 % 32 == 0);
 }
 
 size_t ggml_metal_op_flash_attn_ext_extra_pad(const ggml_tensor * op) {
