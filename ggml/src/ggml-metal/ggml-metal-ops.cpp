@@ -36,10 +36,12 @@ struct ggml_metal_op {
         bool use_concurrency,
         bool use_capture,
         int  debug_graph,
-        int  debug_fusion) {
+        int  debug_fusion,
+        void * prof_smpbuf,
+        int  prof_idx0) {
         this->dev             = dev;
         this->lib             = ggml_metal_device_get_library(dev);
-        this->enc             = ggml_metal_encoder_init(cmd_buf, use_concurrency);
+        this->enc             = prof_smpbuf ? ggml_metal_encoder_init_timed(cmd_buf, prof_smpbuf, prof_idx0) : ggml_metal_encoder_init(cmd_buf, use_concurrency);
         this->mem_ranges      = ggml_mem_ranges_init(debug_graph);
         this->idx_start       = idx_start;
         this->idx_end         = idx_end;
@@ -75,6 +77,11 @@ struct ggml_metal_op {
     ggml_tensor * node(int i) const {
         assert(i >= 0 && i < (int) idxs.size());
         return ggml_graph_node(gf, idxs[i]);
+    }
+
+    int node_idx(int i) const {
+        assert(i >= 0 && i < (int) idxs.size());
+        return idxs[i];
     }
 
     bool can_fuse(int i0, const ggml_op * ops, int n_ops) const {
@@ -120,7 +127,9 @@ ggml_metal_op_t ggml_metal_op_init(
         bool use_concurrency,
         bool use_capture,
         int debug_graph,
-        int debug_fusion) {
+        int debug_fusion,
+        void * prof_smpbuf,
+        int prof_idx0) {
     ggml_metal_op_t res = new ggml_metal_op(
         dev,
         cmd_buf,
@@ -131,7 +140,9 @@ ggml_metal_op_t ggml_metal_op_init(
         use_concurrency,
         use_capture,
         debug_graph,
-        debug_fusion);
+        debug_fusion,
+        prof_smpbuf,
+        prof_idx0);
 
     return res;
 }
@@ -142,6 +153,10 @@ void ggml_metal_op_free(ggml_metal_op_t ctx) {
 
 int ggml_metal_op_n_nodes(ggml_metal_op_t ctx) {
     return ctx->n_nodes();
+}
+
+int ggml_metal_op_node_idx(ggml_metal_op_t ctx, int i) {
+    return ctx->node_idx(i);
 }
 
 static bool ggml_metal_op_concurrency_reset(ggml_metal_op_t ctx) {
@@ -2112,6 +2127,45 @@ int ggml_metal_op_cpy(ggml_metal_op_t ctx, int idx) {
         ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         2);
 
         ggml_metal_encoder_dispatch_threadgroups(enc, std::max(ntg, 1), 1, 1, 256, 1, 1);
+
+        return 1;
+    }
+
+    // row-contiguous same-type copies with arbitrary outer strides (e.g. the strided 3D
+    // recurrent-state snapshot writebacks) are per-row byte moves; the generic kernel's
+    // scalar indexing runs ~7x below bandwidth on them
+    if (op->src[0]->type == op->type && !ggml_is_quantized(op->type) &&
+        ne00 == ne0 && ne01 == ne1 && ne02 == ne2 && ne03 == ne3 &&
+        nb00 == ggml_type_size(op->type) && nb0 == ggml_type_size(op->type) &&
+        ((uint64_t) ne00*nb00) % 16 == 0 &&
+        (nb01 | nb02 | nb03 | nb1 | nb2 | nb3) % 16 == 0 &&
+        ((uintptr_t) op->src[0]->data % 16) == 0 && ((uintptr_t) op->data % 16) == 0) {
+        auto pipeline_rows = ggml_metal_library_get_pipeline(lib, "kernel_cpy_cont_rows");
+        if (!pipeline_rows.pipeline) {
+            pipeline_rows = ggml_metal_library_compile_pipeline(lib, "kernel_cpy_cont_rows", "kernel_cpy_cont_rows", nullptr);
+        }
+
+        const uint64_t nb_row = (uint64_t) ne00*nb00;
+
+        ggml_metal_kargs_cpy_cont_rows cargs = {
+            /*.nb_row =*/ nb_row,
+            /*.ne2    =*/ ne2,
+            /*.nb1    =*/ nb1,
+            /*.nb2    =*/ nb2,
+            /*.nb3    =*/ nb3,
+            /*.nb01   =*/ nb01,
+            /*.nb02   =*/ nb02,
+            /*.nb03   =*/ nb03,
+        };
+
+        const int ntg = (int) std::min<uint64_t>((nb_row/16 + 255)/256, 1024);
+
+        ggml_metal_encoder_set_pipeline(enc, pipeline_rows);
+        ggml_metal_encoder_set_bytes   (enc, &cargs, sizeof(cargs), 0);
+        ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[0]), 1);
+        ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         2);
+
+        ggml_metal_encoder_dispatch_threadgroups(enc, std::max(ntg, 1), ne1, ne2*ne3, 256, 1, 1);
 
         return 1;
     }

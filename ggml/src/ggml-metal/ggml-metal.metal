@@ -4904,6 +4904,30 @@ kernel void kernel_mul_mv_ext_q4_f16y_disp(
 }
 
 // contiguous same-type copy: raw 16-byte chunks, grid-strided
+// row-contiguous same-type copy: each row is a raw byte move, outer strides arbitrary
+// (e.g. strided 3D recurrent-state snapshot writebacks). host guarantees nb_row % 16 == 0
+// and 16-byte aligned bases/strides.
+kernel void kernel_cpy_cont_rows(
+        constant ggml_metal_kargs_cpy_cont_rows & args,
+        device const char * src0,
+        device       char * dst,
+        uint3 tgpig[[threadgroup_position_in_grid]],
+        uint3 ntg  [[threadgroups_per_grid]],
+        uint3 tpitg[[thread_position_in_threadgroup]],
+        uint3 ntpg [[threads_per_threadgroup]]) {
+    const int i1 = tgpig.y;
+    const int i2 = tgpig.z % args.ne2;
+    const int i3 = tgpig.z / args.ne2;
+
+    device const uint4 * s = (device const uint4 *)(src0 + i1*args.nb01 + i2*args.nb02 + i3*args.nb03);
+    device       uint4 * d = (device       uint4 *)(dst  + i1*args.nb1  + i2*args.nb2  + i3*args.nb3);
+
+    const uint64_t n16 = args.nb_row/16;
+    for (uint64_t i = (uint64_t) tgpig.x*ntpg.x + tpitg.x; i < n16; i += (uint64_t) ntg.x*ntpg.x) {
+        d[i] = s[i];
+    }
+}
+
 kernel void kernel_cpy_cont(
         constant ggml_metal_kargs_cpy_cont & args,
         device const char * src0,

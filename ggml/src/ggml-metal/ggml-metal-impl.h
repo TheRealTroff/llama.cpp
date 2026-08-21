@@ -511,6 +511,18 @@ typedef struct {
     uint64_t nb; // total bytes
 } ggml_metal_kargs_cpy_cont;
 
+// row-contiguous same-type copy: rows are raw byte moves, outer strides arbitrary
+typedef struct {
+    uint64_t nb_row; // bytes per contiguous row
+    int32_t  ne2;    // rows in dim 2 (dim 3 is folded into grid z)
+    uint64_t nb1;    // dst strides
+    uint64_t nb2;
+    uint64_t nb3;
+    uint64_t nb01;   // src strides
+    uint64_t nb02;
+    uint64_t nb03;
+} ggml_metal_kargs_cpy_cont_rows;
+
 // weight-repack probe: q4_0 -> deinterleaved (per row: [d x nblk][pad16][qs x nblk])
 typedef struct {
     int32_t  nblk; // blocks per row
