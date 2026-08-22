@@ -114,8 +114,41 @@ Prior record was 10.29 t/s on the older stack; the collapse is milder now but st
 
 1. **Effective depth must stay <= 7** for any speculation type on this kernel set. dflash
    enforces this itself via the block-size clamp; **MTP does not** - `--spec-draft-n-max 8`
-   is accepted and silently costs 13% versus not speculating. A clamp to 7 (or extending
-   the skinny window past 8) would close a live foot-gun.
+   is accepted and silently costs 13% versus not speculating. A clamp to 7 would close a
+   live foot-gun.
+
+### Fixing the cliff is NOT a performance lever
+
+Extending the skinny window past 8 would fix the foot-gun and buy no speed. Counterfactual
+d8 at the measured 4.00 committed tokens/round:
+
+| assumed d8 round cost | t/s |
+|---|---:|
+| flat from d7, zero marginal cost (most generous possible) | 23.92 |
+| on the d6->d7 trend (+6.3 ms) | 23.06 |
+| on the mean in-window marginal (+7.3 ms) | 22.92 |
+
+All three are **below the measured MTP d6 (24.215)** and well below dflash n6 (25.038).
+
+The reason is that **committed tokens/round has saturated at ~4.0**: d6 -> d7 *lost* 0.05
+tokens/round and d7 -> d8 gained only 0.15, while every added column costs 6-7 ms even
+inside the window. Depth is finished as a lever in both directions - the optimum is
+interior, and the cliff sits past the point where extra depth stops paying.
+
+**All remaining upside is round cost, not depth.** At a saturated 4.0 tokens/round:
+
+| round cost | t/s |
+|---|---:|
+| 167.2 (today, MTP d7) | 23.92 |
+| 160.9 (today, MTP d6) | 24.86 |
+| 150.0 | 26.67 |
+| 140.0 | 28.57 |
+| 130.0 | 30.77 |
+
+Concretely for the prod pick: dflash n6 commits 3.75 tokens in a 149.8 ms round. Matching
+dflash_mlx's 29.55 t/s at that same committed/round needs a **126.9 ms** round, i.e. cutting
+**22.9 ms**. The verify-slope lever in `round-decomp-fused.md` is scoped at ~20 ms. Those
+two numbers agreeing is the case for that lever being the whole remaining game.
 2. **MTP d6 is worth re-testing in any config where dflash is unavailable** - it is only
    1.0 t/s behind the prod pick and drafts better.
 3. The N=3/N=4 gap is the one remaining structural dip inside the window. Both routes into
