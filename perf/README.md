@@ -78,8 +78,10 @@ Cross-framework: **verified 2026-08-22, both sides in one run at a recorded sha*
 llama.cpp 25.004 +/- 0.015 vs dflash_mlx 29.613 +/- 0.060 = **1.184x**
 (`head-to-head-aug22.md`, `run-head-to-head.sh`). Their side reproduced its archived 29.55
 to +0.2%. The entire gap is cycle cost: matching them at our own 3.75 committed/round needs
-a 126.6 ms round against today's 150.0, a 23.3 ms cut, and the verify-slope lever is scoped
-at ~20 ms.
+a 126.6 ms round against today's 150.0, a 23.3 ms cut. **That cut is not available from the
+verify slope** - see `verify-slope-close.md`, which retires the "~20 ms verify-slope lever"
+this file used to quote. At matched depth 5 we are the faster engine; their whole edge is
+one cheap operating point (block 4) that our cost curve does not have.
 
 ## Two traps that have each cost a day
 
@@ -132,6 +134,9 @@ Current state:
   and the whole gap is a 23.3 ms cycle-cost cut. Run it with `run-head-to-head.sh`.
 - `acceptance-metric-conversion.md` - drafter quality vs oMLX, denominators reconciled.
   Drafter quality is not the gap; cycle cost is.
+- `verify-slope-close.md` - the verify slope is dense-matmul width scaling, not overhead:
+  matmul alone fills the entire 1.5x budget, so there is no ~20 ms to remove. Also the
+  first measured read of oMLX's own cost curve, and the one run that decides what is left.
 
 Wins, each with its mechanism:
 
