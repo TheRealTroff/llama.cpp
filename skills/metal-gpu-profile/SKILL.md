@@ -75,10 +75,36 @@ Replay writes to `/tmp/com.apple.gputools.profiling/<trace>_stream.gpuprofiler_r
 - `Counters_f_*.raw`, `Timeline_f_*.raw`, `Profiling_f_*.raw` - 20 each, undocumented
   binary.
 
+## Why step 2 needs the GUI
+
+Traced with a process monitor across a real reopen. The replay is driven over **XPC**, not
+by a command you can copy:
+
+- `GPUToolsReplayService.xpc` (in `/System/Library/PrivateFrameworks/GPUToolsDeviceServices.framework`)
+  starts with **ppid 1** - launchd-spawned, Xcode connects to it by service name.
+- The only children Xcode spawns directly are
+  `GTLLVMHelper <arch> Host 0 <xcode-pid> 0 /tmp/unixsocketipc_gtd` (a second one follows
+  with arch suffix `-b1` and `/tmp/unixsocketipc_test`). Those are shader-compiler helpers.
+- **No process anywhere receives the `.gputrace` path in argv.** It travels over XPC.
+
+So there is no CLI to invoke. Headless replay would mean speaking XPC to
+`GPUToolsReplayService`, or loading `GPUToolsShaderProfiler.framework` in-process the way
+`perf/gputrace-dump.py` already loads the archive reader. Neither is done.
+**Do not go hunting for a command-line replay tool - there isn't one.**
+
 ## Gotchas
 
-- **Each replay writes ~900 MB to `/tmp`.** It is not cleaned up. Delete
-  `/tmp/com.apple.gputools.profiling` when done.
+- **Wait for the replay to settle before parsing.** The file count under
+  `/tmp/com.apple.gputools.profiling` oscillates while it works - measured
+  0, 72, 92, 112, **40**, 112, 132, 112, 132, 152, **60**, 122 over about 5 s. It deletes
+  and rewrites, so parsing mid-replay yields partial data. Watch until the count holds
+  steady (122 files, ~1.7 GB, for a single-kernel capture).
+- **Each replay writes ~1.7 GB to `/tmp`.** It is not cleaned up, and closing Xcode does
+  not remove it - though Xcode does recreate the empty parent directory on exit. Delete
+  `/tmp/com.apple.gputools.profiling` yourself when done.
+- **Results are reproducible.** Two independent replays of the same capture gave
+  byte-identical register counts and instruction mixes, so a surprising number is a real
+  finding, not replay noise.
 - **Replays accumulate and are keyed by pid**, so several stale directories pile up.
   `gpuprofiler-stats.py` picks the newest by mtime; pass a path to override.
 - **Do not read timing from a captured run.** Capture distorts it. Registers, spill and
