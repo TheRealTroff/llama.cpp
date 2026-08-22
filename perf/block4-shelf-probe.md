@@ -57,6 +57,31 @@ Decision rule:
 
 Either outcome is worth recording; there is no null result here.
 
+## Pre-registered bound: (b) cannot fully rescue us
+
+Written before the run. Misattribution has to conserve the total, which is what makes the
+2.7% reconciliation useless as evidence - but conservation also *constrains* it. Let `d` be
+the ms per block-4 cycle deferred into the block-5 cycles that force the sync. Then
+`T4 = 91.9 + d` and, spreading 81 cycles of deferral over 17 block-5 cycles,
+`T5 = 140.2 - (81/17)d`. A block-5 cycle cannot be cheaper than a block-4 one, so
+`T5 >= T4` gives `48.3 >= 5.76d`, i.e. **`d <= 8.4 ms`** and therefore
+**`T4 <= 100.3 ms`**.
+
+So even under the most misattribution the data permits, their depth-4 cycle costs between
+**91.9 and 100.3 ms** against our n4's **144.9**. At their 3.049 tokens/cycle that is
+**30.4 to 33.2 t/s**. Predictions:
+
+- **33 t/s** -> shelf real as measured, `d ~ 0`.
+- **30.4-33 t/s** -> shelf real but partly misattributed; the cheap cycle still stands and
+  the programme is the same.
+- **below 30.4** -> the cost model itself is wrong, not just the split. Most likely cause
+  would be that fixed block 4 accepts worse than adaptive block 4 (the controller may be
+  picking its moments), so check `accepted_from_draft` and `tokens_per_cycle` before
+  concluding anything about cycle cost.
+
+Note this bound means **(b) was never a way for the gap to be illusory** - it only changes
+how much of the shelf is real, not whether their shallow cycle is far cheaper than ours.
+
 ## Gotchas that apply to this run
 
 - The `dflash` CLI has **no `--version`** (it prints usage into the log). Read the installed
