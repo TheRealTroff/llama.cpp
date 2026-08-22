@@ -13,6 +13,47 @@
 #include <limits>
 #include <cmath>
 
+// max distance in graph nodes between a gated-delta-net op and its snapshot writeback
+#define GGML_METAL_GDN_WB_WINDOW 16
+
+static bool ggml_metal_gdn_wb_enabled(void) {
+    static const bool res = getenv("GGML_GDN_FUSE_WB") ? atoi(getenv("GGML_GDN_FUSE_WB")) != 0 : false;
+    return res;
+}
+
+// if cpy moves the state snapshots of a gated-delta-net op into the recurrent state
+// cache, return that op, else null.
+// the op side and the copy side must agree exactly, or the copy gets dropped while the
+// op still writes dst. so this depends only on the graph: no encoder state, and nothing
+// that differs between the normal encoder and the per-op profiling encoder (which
+// builds one op context per node)
+static const ggml_tensor * ggml_metal_gdn_wb_op(const ggml_tensor * cpy) {
+    if (cpy->op != GGML_OP_CPY || !cpy->src[0]) {
+        return nullptr;
+    }
+
+    const ggml_tensor * op = cpy->src[0]->view_src;
+
+    if (!op || op->op != GGML_OP_GATED_DELTA_NET || ggml_get_op_params_i32(op, 0) <= 1) {
+        return nullptr;
+    }
+
+    if (cpy->src[0]->type != GGML_TYPE_F32 || cpy->type != GGML_TYPE_F32) {
+        return nullptr;
+    }
+
+    if (!ggml_is_contiguous(cpy->src[0]) || cpy->nb[0] != sizeof(float)) {
+        return nullptr;
+    }
+
+    // the snapshots start right after the attention scores in dst
+    if ((size_t) ((char *) cpy->src[0]->data - (char *) op->data) != ggml_nelements(op->src[2])*sizeof(float)) {
+        return nullptr;
+    }
+
+    return op;
+}
+
 static ggml_metal_buffer_id ggml_metal_get_buffer_id(const ggml_tensor * t) {
     if (!t) {
         return { nullptr, 0 };
@@ -74,13 +115,9 @@ struct ggml_metal_op {
         return idxs.size();
     }
 
-    // nodes already handled by an earlier node (see the fused gated-delta-net writeback).
-    // they are not always adjacent, so n_fuse cannot express this
-    bool is_skipped(int i) const {
-        return std::find(idx_skip.begin(), idx_skip.end(), node_idx(i)) != idx_skip.end();
+    const ggml_cgraph * graph() const {
+        return gf;
     }
-
-    std::vector<int> idx_skip;
 
     ggml_tensor * node(int i) const {
         assert(i >= 0 && i < (int) idxs.size());
@@ -204,8 +241,21 @@ static int ggml_metal_op_encode_impl(ggml_metal_op_t ctx, int idx) {
         return 1;
     }
 
-    if (ctx->is_skipped(idx)) {
-        return 1;
+    // the gated-delta-net op wrote these snapshots into the cache already
+    if (ggml_metal_gdn_wb_enabled() && node->op == GGML_OP_CPY) {
+        const ggml_tensor * op = ggml_metal_gdn_wb_op(node);
+
+        if (op) {
+            const ggml_cgraph * gf = ctx->graph();
+
+            const int ci = ctx->node_idx(idx);
+
+            for (int j = ci - 1; j >= 0 && j >= ci - GGML_METAL_GDN_WB_WINDOW; j--) {
+                if (gf->nodes[j] == op) {
+                    return 1;
+                }
+            }
+        }
     }
 
     switch (node->op) {
@@ -1863,39 +1913,29 @@ int ggml_metal_op_gated_delta_net(ggml_metal_op_t ctx, int idx) {
     GGML_TENSOR_LOCALS(uint64_t, nb,  op,         nb);
 
     // the graph writes the K snapshots into dst, then copies them into the state cache.
-    // the copy is a few nodes later (the attention output path comes first), so scan
-    // for it and write the snapshots straight to its destination
-    const int32_t K = ggml_get_op_params_i32(op, 0);
+    // write them straight to the cache instead, so ggml_metal_op_encode_impl can drop
+    // that copy. the copy sits a few nodes later (the attention output path comes
+    // first), so look for it over the same window the copy side uses
+    const ggml_tensor * cpy = nullptr;
 
-    // the snapshots start right after the attention scores in dst
-    const size_t off_snap = ggml_nelements(op->src[2])*sizeof(float);
+    if (ggml_metal_gdn_wb_enabled()) {
+        const ggml_cgraph * gf = ctx->graph();
 
-    int idx_cpy = -1;
+        const int gi = ctx->node_idx(idx);
 
-    for (int j = idx + 1; j < ctx->n_nodes() && j <= idx + 8; j++) {
-        const ggml_tensor * c = ctx->node(j);
-        if (c->op == GGML_OP_CPY && c->src[0] && c->src[0]->view_src == op) {
-            idx_cpy = j;
-            break;
+        for (int j = gi + 1; j < gf->n_nodes && j <= gi + GGML_METAL_GDN_WB_WINDOW; j++) {
+            if (ggml_metal_gdn_wb_op(gf->nodes[j]) == op) {
+                cpy = gf->nodes[j];
+                break;
+            }
         }
     }
 
-    const ggml_tensor * cpy = idx_cpy >= 0 ? ctx->node(idx_cpy) : nullptr;
-
-    // GGML_GDN_FUSE_WB=1 enables the fused writeback (0/unset keeps the separate copy).
-    // BROKEN, do not enable: correct with GGML_METAL_CONCURRENCY_DISABLE=1, but wrong
-    // under the default concurrent dispatch. See perf/gdn-writeback-fusion.md
-    static const bool env_fuse_wb = getenv("GGML_GDN_FUSE_WB") ? atoi(getenv("GGML_GDN_FUSE_WB")) != 0 : false;
-
-    const bool fuse_wb = env_fuse_wb && ctx->use_fusion && K > 1 && cpy && cpy->op == GGML_OP_CPY &&
-        cpy->src[0]->view_src == op &&
-        cpy->src[0]->type == GGML_TYPE_F32 && cpy->type == GGML_TYPE_F32 &&
-        ggml_is_contiguous(cpy->src[0]) && cpy->nb[0] == sizeof(float) &&
-        (size_t) ((char *) cpy->src[0]->data - (char *) op->data) == off_snap;
+    const bool fuse_wb = cpy != nullptr;
 
     // the kernel writes the state cache, which is not part of this node's ranges,
     // so order it against earlier nodes before touching the encoder
-    if (fuse_wb) {
+    if (fuse_wb && !ggml_metal_op_concurrency_check(ctx, cpy)) {
         ggml_metal_op_concurrency_reset(ctx);
     }
 
@@ -1959,8 +1999,7 @@ int ggml_metal_op_gated_delta_net(ggml_metal_op_t ctx, int idx) {
     ggml_metal_encoder_dispatch_threadgroups(enc, op->src[2]->ne[0]/nsg, op->src[2]->ne[1], op->src[2]->ne[3], 32, nsg, 1);
 
     if (fuse_wb) {
-        ggml_metal_op_concurrency_reset(ctx);
-        ctx->idx_skip.push_back(ctx->node_idx(idx_cpy));
+        ggml_metal_op_concurrency_add(ctx, cpy);
     }
 
     return 1;
