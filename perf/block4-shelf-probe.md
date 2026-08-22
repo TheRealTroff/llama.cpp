@@ -34,10 +34,22 @@ n=5 slope 1.74x vs our 1.81x). So either:
 
 ## The run
 
-`DFLASH_VERIFY_MODE` takes `dflash|adaptive|ddtree|off` (`runtime/config.py:759`, resolved
-from CLI or that env var). `adaptive` is the default and is what every archived run used;
-**`dflash` is fixed-block, non-adaptive**, which pins the cycle mix and removes the
-controller from the comparison.
+`verify_mode` takes `dflash|adaptive|ddtree|off`. `adaptive` is the default and is what
+every archived run used; **`dflash` is fixed-block, non-adaptive** (`engine/spec_epoch.py:340`
+returns no policy unless the mode is `adaptive`).
+
+> **MEASURED 2026-08-22, do not repeat my mistake: the `DFLASH_VERIFY_MODE` env var is
+> IGNORED by `dflash benchmark`.** `_resolve_verify_mode` (`runtime/config.py:759`) checks
+> the CLI value first and only falls back to the env var when that value is `None`, and the
+> benchmark CLI always supplies one. My first fixed-block-5 arm silently ran adaptive and
+> reproduced the adaptive number exactly. **Use the `--verify-mode dflash` CLI flag**
+> (`benchmark.py:1787`), and **always verify the mode took** by checking
+> `adaptive_metrics.cycles_by_block` in the artifact: it must be absent/empty. If it reads
+> `{1:1, 4:81, 5:17}` per run, the controller was live and the arm is not fixed-block.
+>
+> Note `--block-tokens 4` is fixed regardless, for an unrelated reason: `from_runtime` also
+> bails at `full_block_tokens <= 4` (`spec_epoch.py:343`). That is why the block-4 arm was
+> genuinely pinned even though the env var did nothing.
 
 Run fixed block 4 and fixed block 5, 5 reps each, same 8288-token prompt, via
 `run-head-to-head.sh` (it regenerates the MLX-side prompt jsonl from `benchprompt.txt`
