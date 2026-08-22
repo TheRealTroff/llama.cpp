@@ -134,6 +134,8 @@ Current state:
   and the whole gap is a 23.3 ms cycle-cost cut. Run it with `run-head-to-head.sh`.
 - `acceptance-metric-conversion.md` - drafter quality vs oMLX, denominators reconciled.
   Drafter quality is not the gap; cycle cost is.
+- **`block4-shelf-probe.md` - the one open task.** Is their cheap block-4 cycle real or a
+  lazy-eval artifact? One fixed-block run on their side decides which programme is left.
 - `verify-slope-close.md` - the verify slope is dense-matmul width scaling, not overhead:
   matmul alone fills the entire 1.5x budget, so there is no ~20 ms to remove. Also the
   first measured read of oMLX's own cost curve, and the one run that decides what is left.
