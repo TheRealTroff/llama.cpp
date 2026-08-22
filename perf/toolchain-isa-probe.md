@@ -378,9 +378,33 @@ AGX source group as an argument, so the same wall.
 (`DevToolsSecurity -status`), the user is in `_developer` and `admin`, and
 `com.apple.gputoolsserviced` is running. SIP is enabled, which is the untested variable.
 
-**Do not re-derive the above.** The remaining leads are: get the instrument to select
-enum 3, or find the entitlement/service path that lets `AGXGPURawCounterSourceGroup`
-instantiate. Until one of those lands, GPU counters are unavailable here.
+**Entitlements are not the cause either.** Our binaries are `adhoc, linker-signed` with no
+entitlements blob at all - no `com.apple.security.get-task-allow`, which is the usual
+requirement for GPU tools to attach. Re-signing a copy with it
+(`codesign -s - -f --entitlements ent.plist <bin>`, verified present afterwards) changes
+nothing: same warning, same 0 rows. Worth knowing, because it is the first thing anyone
+will suspect.
+
+### The likely reason: on macOS the counters come from replaying a capture
+
+Instruments' live counter sampling is not how Xcode shows per-kernel counters for a Mac
+app. The Metal Debugger *replays* a `.gputrace` in a separate replayer process and collects
+profiling data from that. The evidence is a whole framework plus its message vocabulary:
+
+- `SharedFrameworks/GPUToolsShaderProfiler.framework`
+- `DYMTLShaderProfilerResult`, `DYMTLDeviceProfile`, `DYProgressMonitorShaderProfiler`
+- `DYMessageGuestAppProfilingData`, and a family of `DYMessageReplayer*` messages
+  (`ReplayerAppReady`, `ReplayerBeginDebugArchive`, `ReplayerArchivesDirectoryPath`, ...)
+
+That reframes the problem in our favour. **We already produce captures headlessly**, and
+`perf/gputrace-dump.py` already drives these same GPUTools frameworks through the ObjC
+runtime, so the technique is established in-tree. The missing piece is driving the replayer
+over a capture we already have, rather than making Instruments sample counters live.
+
+**Do not re-derive any of the above.** Ranked leads: (1) drive the replayer /
+`GPUToolsShaderProfiler` over an existing `.gputrace`; (2) get the instrument to select
+profile enum 3; (3) find the service path that lets `AGXGPURawCounterSourceGroup`
+instantiate. Until one lands, GPU counters are unavailable here.
 
 **What is usable today** without any of that: dispatch geometry from the GPU capture,
 `GPUTimestamp` for GPU-side timing, and the offline spill probe.
