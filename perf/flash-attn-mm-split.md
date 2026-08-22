@@ -61,12 +61,21 @@ the partial read. At NWG=32 `valid` is always true, so the vec path is unchanged
 | dflash n6, mm + nwg=32      | 22.10            |
 | dflash n5, mm + nwg=8       | 22.27            |
 | dflash n7, mm + nwg=8       | 22.83            |
-| dflash n8, mm + nwg=8       | 23.13            |
+| dflash n8, mm + nwg=8       | 23.13            |  <!-- MISLABELLED: this is n7, see below -->
+
 | MTP d1, vec                 | 21.61            |
 | batch-1 (either path)       | 13.62            |
 
 nwg is flat from 4 to 12 then falls off; 8 is the best measured but 4-12 are all within
 ~0.8%. Depth optimum stays at n6. Batch-1 is untouched (ne01=1 stays on vec).
+
+> [!WARNING]
+> **The "dflash n8" row is a mislabelled n7** (found 2026-08-22, `slope-sweep.md`).
+> `common/speculative.cpp:1008` clamps dflash's `n_max` to `block_size - 1` = 7 for this
+> drafter, logging `clamping to 7`. So that row did not test 9 verify columns, and its
+> 23.13-vs-22.83 edge over the n7 row is run variance (a same-config replicate pair in the
+> sweep spread 0.51% at this n_predict). dflash cannot reach the ne11=9 cliff at all; only
+> MTP can, where d8 collapses to 11.9 t/s.
 
 Per-op profile at n6 (`s0=[256,7,24]`, 15.4 calls/round):
 

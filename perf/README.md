@@ -34,6 +34,11 @@ Model files are not interchangeable: the target must be the byte-uniform Q4_0 bu
 the drafter must be the pure-Q4_0 requant. Both fast paths are hard-gated on
 `GGML_TYPE_Q4_0`, so a K-quant drafter silently misses them (drafter-quant-routing.md).
 
+**Depth must stay <= 7.** Skinny routes `ne11 <= 8` and depth d verifies d+1 columns, so
+d=8 drops onto mul_mm and the round cost doubles. dflash clamps itself to 7 via the
+drafter's block size; **MTP does not** - `--spec-draft-n-max 8` is accepted and lands at
+11.9 t/s, slower than not speculating at all (slope-sweep.md).
+
 ### Current number
 
 **25.02 t/s** (dflash n6, `n_predict` 300). prod `9f477ae5`, clean tree, build 2026-08-22
@@ -112,7 +117,10 @@ against it and reported a bogus +5.8%.
 
 Current state:
 
-- **prod-pick: this file** + `RUN_PROD_PICK.sh`
+- **prod-pick: this file** + `run-prod-pick.sh`
+- `slope-sweep.md` - the small-batch slope, the ne11=9 skinny cliff, and both depth
+  sweeps. Supersedes the "MTP d1 is optimal, don't re-run" note: the optimum is now d6.
+  Run it with `run-slope-sweep.sh`.
 - `round-decomp-fused.md` - where a round goes, and the live lever board. Read the
   CORRECTION sections; the tables above them contain the profiler-inflated CPU numbers.
 - `prod-baseline.md` - cumulative prod vs master on llama-bench. Its e2e section is a
