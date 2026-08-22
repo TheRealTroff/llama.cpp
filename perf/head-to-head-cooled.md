@@ -1,5 +1,12 @@
 # llama.cpp vs dflash_mlx head-to-head — 5 runs each, cooled (2026-08-21)
 
+> [!WARNING]
+> **SUPERSEDED by [head-to-head-aug22.md](head-to-head-aug22.md) (2026-08-22).** Both sides
+> were re-measured at a recorded sha: llama.cpp 25.004, dflash_mlx 29.613, gap 1.184x.
+> The dflash side reproduced (+0.2% vs the 29.55 here), so this file's dflash number is
+> still sound - but its llama.cpp number (20.39) and its gap (1.45x) are dead, and the
+> llama.cpp config it used is no longer the prod pick.
+
 Best known config per side, SAME 8288-token B-tree prompt, 300 tokens, temp 0,
 M4 Pro. 5 runs each, 120 s between runs, 180 s opening cooldown. Run twice: once
 with the laptop flat on a desk ("hot"), once on a metal grid with airflow

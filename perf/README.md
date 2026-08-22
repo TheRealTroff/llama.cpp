@@ -42,7 +42,7 @@ drafter's block size; **MTP does not** - `--spec-draft-n-max 8` is accepted and 
 ### Current number
 
 **25.02 t/s** (dflash n6, `n_predict` 300). prod `9f477ae5`, clean tree, build 2026-08-22
-16:02, measured by `RUN_PROD_PICK.sh` (`TAG=prodpick-aug22`), fresh server per run.
+16:02, measured by `run-prod-pick.sh` (`TAG=prodpick-aug22`), fresh server per run.
 
 | config | env | n_predict | t/s | acc | sha1 |
 |---|---|---:|---:|---:|---|
@@ -74,9 +74,12 @@ Three things this run settled:
   (+2.7%). `prod-baseline.md` measured it partial-env, so its "flat" verdict is only true
   for the partial config. dflash n6 still wins by 2.9 t/s.
 
-Cross-framework: the last dflash_mlx measurement was 29.55 t/s, which would put the gap at
-1.18x - but `head-to-head-cooled.md` is stale and the dflash side has not been re-run since
-2026-08-21. Treat that gap as unverified until it is.
+Cross-framework: **verified 2026-08-22, both sides in one run at a recorded sha** -
+llama.cpp 25.004 +/- 0.015 vs dflash_mlx 29.613 +/- 0.060 = **1.184x**
+(`head-to-head-aug22.md`, `run-head-to-head.sh`). Their side reproduced its archived 29.55
+to +0.2%. The entire gap is cycle cost: matching them at our own 3.75 committed/round needs
+a 126.6 ms round against today's 150.0, a 23.3 ms cut, and the verify-slope lever is scoped
+at ~20 ms.
 
 ## Two traps that have each cost a day
 
@@ -125,6 +128,8 @@ Current state:
   CORRECTION sections; the tables above them contain the profiler-inflated CPU numbers.
 - `prod-baseline.md` - cumulative prod vs master on llama-bench. Its e2e section is a
   **partial-env** run (MV_NC + SKINNY only), which is why it reads ~22 not ~25.
+- `head-to-head-aug22.md` - both sides re-measured 2026-08-22: 25.004 vs 29.613 = 1.184x,
+  and the whole gap is a 23.3 ms cycle-cost cut. Run it with `run-head-to-head.sh`.
 - `acceptance-metric-conversion.md` - drafter quality vs oMLX, denominators reconciled.
   Drafter quality is not the gap; cycle cost is.
 
@@ -149,7 +154,8 @@ Refuted - do not reopen without new information:
 Superseded, kept for history - do not quote numbers from these:
 
 - `results.md` - carries an inline SUPERSEDED banner.
-- `head-to-head-cooled.md` - flagged stale; the dflash side has not been re-run.
+- `head-to-head-cooled.md` - superseded by `head-to-head-aug22.md`; its llama.cpp
+  number (20.39) and gap (1.45x) are dead, though its dflash side reproduced.
 - `round-decomp-post-fa-split.md` - superseded by `round-decomp-fused.md`.
 - `flash-attn-scoping.md` - its proposed fix was refuted; its model facts are still good.
 - `baseline.md`, `mtp-kv-results.md`, `dflash-vs-mtp-uniform.md` - earlier configs.

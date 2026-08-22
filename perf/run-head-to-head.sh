@@ -34,7 +34,8 @@ PICK_ENV=(GGML_MV_NC=2 GGML_MM_SKINNY=5 GGML_FA_VEC_MAX=5 GGML_FA_MM_NWG=8 GGML_
 
 echo "=== head to head: $TAG ==="
 echo "llama.cpp : $(cd "$B" && git rev-parse --short HEAD) on $(cd "$B" && git rev-parse --abbrev-ref HEAD) ($(cd "$B" && git status --porcelain | wc -l | tr -d ' ') dirty), binary $(date -r "$BIN/llama-server" '+%Y-%m-%d %H:%M')"
-echo "dflash    : $("/Users/troff/play/omlx/.venv/bin/dflash" --version 2>&1 | head -1)"
+# the dflash CLI has no --version (it prints usage), so read the installed dist version
+echo "dflash    : dflash-mlx $("/Users/troff/play/omlx/.venv/bin/python" -c "import importlib.metadata as m; print(m.version('dflash-mlx'))" 2>/dev/null || echo unknown)"
 echo "env       : ${PICK_ENV[*]}"
 echo "runs      : $NRUN per side, ${PAUSE}s between"
 
