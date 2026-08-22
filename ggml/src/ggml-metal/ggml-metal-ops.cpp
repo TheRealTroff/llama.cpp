@@ -74,6 +74,14 @@ struct ggml_metal_op {
         return idxs.size();
     }
 
+    // nodes already handled by an earlier node (see the fused gated-delta-net writeback).
+    // they are not always adjacent, so n_fuse cannot express this
+    bool is_skipped(int i) const {
+        return std::find(idx_skip.begin(), idx_skip.end(), node_idx(i)) != idx_skip.end();
+    }
+
+    std::vector<int> idx_skip;
+
     ggml_tensor * node(int i) const {
         assert(i >= 0 && i < (int) idxs.size());
         return ggml_graph_node(gf, idxs[i]);
@@ -193,6 +201,10 @@ static int ggml_metal_op_encode_impl(ggml_metal_op_t ctx, int idx) {
     //GGML_LOG_INFO("%s: encoding node %3d, op = %8s\n", __func__, idx, ggml_op_name(node->op));
 
     if (ggml_is_empty(node)) {
+        return 1;
+    }
+
+    if (ctx->is_skipped(idx)) {
         return 1;
     }
 
@@ -1850,7 +1862,44 @@ int ggml_metal_op_gated_delta_net(ggml_metal_op_t ctx, int idx) {
     GGML_TENSOR_LOCALS( int32_t, ne,  op,         ne);
     GGML_TENSOR_LOCALS(uint64_t, nb,  op,         nb);
 
-    auto pipeline = ggml_metal_library_get_pipeline_gated_delta_net(lib, op);
+    // the graph writes the K snapshots into dst, then copies them into the state cache.
+    // the copy is a few nodes later (the attention output path comes first), so scan
+    // for it and write the snapshots straight to its destination
+    const int32_t K = ggml_get_op_params_i32(op, 0);
+
+    // the snapshots start right after the attention scores in dst
+    const size_t off_snap = ggml_nelements(op->src[2])*sizeof(float);
+
+    int idx_cpy = -1;
+
+    for (int j = idx + 1; j < ctx->n_nodes() && j <= idx + 8; j++) {
+        const ggml_tensor * c = ctx->node(j);
+        if (c->op == GGML_OP_CPY && c->src[0] && c->src[0]->view_src == op) {
+            idx_cpy = j;
+            break;
+        }
+    }
+
+    const ggml_tensor * cpy = idx_cpy >= 0 ? ctx->node(idx_cpy) : nullptr;
+
+    // GGML_GDN_FUSE_WB=1 enables the fused writeback (0/unset keeps the separate copy).
+    // BROKEN, do not enable: correct with GGML_METAL_CONCURRENCY_DISABLE=1, but wrong
+    // under the default concurrent dispatch. See perf/gdn-writeback-fusion.md
+    static const bool env_fuse_wb = getenv("GGML_GDN_FUSE_WB") ? atoi(getenv("GGML_GDN_FUSE_WB")) != 0 : false;
+
+    const bool fuse_wb = env_fuse_wb && ctx->use_fusion && K > 1 && cpy && cpy->op == GGML_OP_CPY &&
+        cpy->src[0]->view_src == op &&
+        cpy->src[0]->type == GGML_TYPE_F32 && cpy->type == GGML_TYPE_F32 &&
+        ggml_is_contiguous(cpy->src[0]) && cpy->nb[0] == sizeof(float) &&
+        (size_t) ((char *) cpy->src[0]->data - (char *) op->data) == off_snap;
+
+    // the kernel writes the state cache, which is not part of this node's ranges,
+    // so order it against earlier nodes before touching the encoder
+    if (fuse_wb) {
+        ggml_metal_op_concurrency_reset(ctx);
+    }
+
+    auto pipeline = ggml_metal_library_get_pipeline_gated_delta_net(lib, op, fuse_wb);
 
     int ida = 0;
 
@@ -1890,6 +1939,8 @@ int ggml_metal_op_gated_delta_net(ggml_metal_op_t ctx, int idx) {
         /*.nb1  =*/ nb1,
         /*.nb2  =*/ nb2,
         /*.nb3  =*/ nb3,
+        /*.wb_nb1 =*/ fuse_wb ? cpy->nb[1] : 0,
+        /*.wb_nb2 =*/ fuse_wb ? cpy->nb[2] : 0,
     };
 
     ggml_metal_encoder_set_pipeline(enc, pipeline);
@@ -1901,10 +1952,16 @@ int ggml_metal_op_gated_delta_net(ggml_metal_op_t ctx, int idx) {
     ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[4]), ida++); // beta
     ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[5]), ida++); // state
     ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         ida++); // dst
+    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(fuse_wb ? cpy : op), ida++); // snapshot writeback
 
     const int nsg = pipeline.nsg;
 
     ggml_metal_encoder_dispatch_threadgroups(enc, op->src[2]->ne[0]/nsg, op->src[2]->ne[1], op->src[2]->ne[3], 32, nsg, 1);
+
+    if (fuse_wb) {
+        ggml_metal_op_concurrency_reset(ctx);
+        ctx->idx_skip.push_back(ctx->node_idx(idx_cpy));
+    }
 
     return 1;
 }
@@ -2527,7 +2584,7 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
     // these should be efficient for BS [2, ~8]
     // multi-column mv probe (GGML_MV_NC=1): plain-mv structure with an ne11 loop, N=2..4
     // GGML_MV_NC_SMALL=<ne01_max>: small-dst matmuls (ne01 <= ne01_max) route here for
-    // ne11 up to 8, taking precedence over skinny — skinny tiles 32 dst rows per TG, so
+    // ne11 up to 8, taking precedence over skinny - skinny tiles 32 dst rows per TG, so
     // small-ne01 dsts dispatch starved (2 TGs for [*,48]) and pay a flat ~80 us at N=7;
     // the mv structure keeps rows/nr0 parallelism. The NC>=3 fixed spill penalty is paid
     // per row-group, so small ne01 dodges most of it.

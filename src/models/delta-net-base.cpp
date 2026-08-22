@@ -585,7 +585,16 @@ ggml_tensor * llm_build_delta_net_base::build_recurrent_attn(
     const size_t row_size = hparams.n_embd_s() * ggml_element_size(ssm_states_all);
 
     // op writes the last min(n_seq_tokens, K) snapshots; trailing slots are left unwritten
-    const int64_t n_written = std::min<int64_t>(n_seq_tokens, K);
+    int64_t n_written = std::min<int64_t>(n_seq_tokens, K);
+
+    // CEILING PROBE ONLY -- LLAMA_GDN_WB_SLOTS=<n> clamps how many snapshot slots are
+    // copied into the recurrent cache. Any value below n_written leaves the remaining
+    // rollback groups STALE, so speculative rollback is WRONG: this exists purely to
+    // upper-bound what an acceptance-aware (lazy) writeback could save. Default 0 = off.
+    static const int env_wb_slots = getenv("LLAMA_GDN_WB_SLOTS") ? atoi(getenv("LLAMA_GDN_WB_SLOTS")) : 0;
+    if (env_wb_slots > 0 && env_wb_slots < n_written) {
+        n_written = env_wb_slots;
+    }
 
     // write the produced snapshots into the recurrent cache (snapshot slot i -> rollback group i)
     ggml_tensor * src = ggml_view_3d(ctx0, gdn_out,

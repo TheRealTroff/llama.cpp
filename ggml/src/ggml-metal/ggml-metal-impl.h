@@ -971,6 +971,9 @@ typedef struct {
     uint64_t nb1;
     uint64_t nb2;
     uint64_t nb3;
+    // strides in the state cache, used when the snapshot writeback is fused
+    uint64_t wb_nb1; // per-seq
+    uint64_t wb_nb2; // per-slot
 } ggml_metal_kargs_gated_delta_net;
 
 typedef struct {

@@ -2,6 +2,21 @@
 
 > [!IMPORTANT]
 >
+> **This checkout is a personal fork - read this block before the upstream rules below.**
+>
+> This is Johan's fork (`TheRealTroff/llama.cpp`). It is public, but it is a private working fork in the sense that section uses: nothing here is submitted to `ggml-org/llama.cpp`, and he is the only consumer of the code. Everything below is written for people sending PRs upstream. Where his instructions and the upstream contributor rules disagree, **his instructions win** - the upstream text itself says private forks are exempt.
+>
+> For work in this fork:
+> - Commit and push when he asks. No per-commit approval ritual, and no re-asking for something he already approved this session.
+> - Do not pause for confirmation just because a change is large or introduces a new pattern. Experimental kernel and scheduling work is the entire point of this fork. Still pause for genuinely risky or ambiguous things: destructive operations, history rewrites, or a design decision that is really his to make.
+> - Trailer convention is his call, not a rule to enforce.
+>
+> Keep following the **Code and Commit Standards** below (ASCII only, concise comments, match the surrounding code). Those keep diffs readable and individual commits cherry-pickable, which matters here because some of this work may get rebased onto upstream later.
+>
+> Unchanged and non-negotiable, because it touches the upstream project and his standing in it: do not create pull requests, issues, or comments on `ggml-org/llama.cpp` by any means.
+
+> [!IMPORTANT]
+>
 > AI-generated code is allowed. What is **not** allowed is submitting code you do not understand. You are 100% responsible for every line, however it was produced.
 >
 > Read more: [CONTRIBUTING.md](CONTRIBUTING.md)

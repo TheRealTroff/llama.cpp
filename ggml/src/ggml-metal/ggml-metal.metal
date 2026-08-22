@@ -2980,6 +2980,8 @@ kernel void kernel_rwkv_wkv7_f32(
 constant short FC_gated_delta_net_ne20 [[function_constant(FC_GATED_DELTA_NET + 0)]];
 constant short FC_gated_delta_net_ne30 [[function_constant(FC_GATED_DELTA_NET + 1)]];
 constant short FC_gated_delta_net_K    [[function_constant(FC_GATED_DELTA_NET + 2)]];
+// write snapshots directly into the state cache, instead of into dst
+constant bool  FC_gated_delta_net_WB   [[function_constant(FC_GATED_DELTA_NET + 3)]];
 
 #if 1
 template<short NSG>
@@ -2992,6 +2994,7 @@ kernel void kernel_gated_delta_net_impl(
         device const char * b,
         device const char * s,
         device       char * dst,
+        device       char * wb,
         uint3 tgpig[[threadgroup_position_in_grid]],
         uint3 tpitg[[thread_position_in_threadgroup]],
         uint3   ntg[[threads_per_threadgroup]])  {
@@ -3093,7 +3096,9 @@ kernel void kernel_gated_delta_net_impl(
         if (K > 1) {
             const int target_slot = (int)args.ne22 - 1 - (int)t;
             if (target_slot >= 0 && target_slot < (int)K) {
-                device float * dst_state = (device float *) (dst) + attn_size + (uint)target_slot * state_size_per_snap + state_out_base;
+                device float * dst_state = FC_gated_delta_net_WB
+                    ? (device float *) (wb + i23*args.wb_nb1 + (uint64_t) target_slot*args.wb_nb2) + (i21*S_v*S_v + i20*S_v)
+                    : (device float *) (dst) + attn_size + (uint)target_slot * state_size_per_snap + state_out_base;
                 FOR_UNROLL (short j = 0; j < NSG; j++) {
                     const short is = tx*NSG + j;
                     dst_state[is] = ls[j];
