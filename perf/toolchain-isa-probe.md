@@ -330,8 +330,57 @@ stock GPU ones simply select none (`Counter Set: (null)`). That is a configurati
 a driver wall. The `counterprofile` / `countersshaderprofiler` keys named above are the
 lever, and the group names here are the values they are choosing between.
 
-**Still untested:** actually setting one and getting rows back. That is the next step, and
-it is now a well-posed one.
+### Tried on 2026-08-23. Still blocked, but the block is now exact.
+
+**The entry point is an instrument, not a template.** `xcrun xctrace list instruments`
+shows `Metal GPU Counters` (alongside `GPU`, `Metal Application`,
+`Metal Performance Overview`, `Metal Resource Events`). No template edit is needed:
+
+```sh
+xcrun xctrace record --instrument "Metal GPU Counters" --output t.trace --launch -- <cmd>
+```
+
+That runs, and fails with one specific warning:
+
+```
+[Warning] GPU Service reported error: Selected counter profile is not supported on target device
+```
+
+`gpu-counter-info` comes back with 0 rows. Same warning when combined with
+`--template "Metal System Trace"`. `--instrument "GPU"` and
+`--instrument "Metal Performance Overview"` also yield 0 counters.
+
+**The supported profile names can be enumerated**, via
+`DTGPUCounterProfile_GPURawCounters +_supportedProfileNameFromEnum:vendor:` in
+`DVTInstrumentsFoundation`. It is sparse - only one or two enum values return a name:
+
+| vendor | enum | profile |
+|--:|--:|---|
+| 0 | 3 | `Render Basic` |
+| 1 | 3 | `Limiters1` |
+| 2 | 3 | `Set1`, 4 `Set2` |
+
+So a supported profile exists; the instrument is selecting a different one and there is no
+CLI flag, no wired template key and no shipped template that sets it.
+
+**Driving the private class in-process fails one layer lower.**
+`DTGPUCounterProfile_GPURawCounters +create:<MTLDevice>:profile:` returns an object with 0
+counters and logs:
+
+```
+Error Domain=GPURawCounterErrorDomain Code=-1 "Fail to instantiate AGXGPURawCounterSourceGroup"
+```
+
+`DTGPUAGXCounterSourceGroup -initWithSourceGroup:selects:apsSelects:profile:` needs that
+AGX source group as an argument, so the same wall.
+
+**Ruled out as the cause** - all checked and all fine: developer mode is enabled
+(`DevToolsSecurity -status`), the user is in `_developer` and `admin`, and
+`com.apple.gputoolsserviced` is running. SIP is enabled, which is the untested variable.
+
+**Do not re-derive the above.** The remaining leads are: get the instrument to select
+enum 3, or find the entitlement/service path that lets `AGXGPURawCounterSourceGroup`
+instantiate. Until one of those lands, GPU counters are unavailable here.
 
 **What is usable today** without any of that: dispatch geometry from the GPU capture,
 `GPUTimestamp` for GPU-side timing, and the offline spill probe.
