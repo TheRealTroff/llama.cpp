@@ -271,6 +271,71 @@ Within-session repeats agree to < 1%. *Across* sessions the same arm drifted ~3%
 `v1 nr0=2` read 324-330 earlier in the day, 337.9 here). Always re-measure the baseline arm
 in the same session as the change; do not diff against a number from another session.
 
+## Run 3 (2026-08-22): `ext` is the right family, and `nxpsg` is the live lever
+
+This is experiment 2, which the file had written off as "confirmation" and never ran. It was
+not confirmation.
+
+### Why we are on `ext` at widths 3-4
+
+By *configuration*, not by measurement. `mv_nc_route` needs
+`ne11 <= min(GGML_MV_NC, 4)` and skinny needs `ne11 >= max(2, GGML_MM_SKINNY)`
+(`ggml-metal-ops.cpp:2633, 2683`). With the prod env - `GGML_MV_NC=2 GGML_MM_SKINNY=5` -
+widths 3 and 4 fall in the gap between them and land on `ext` by default. Both thresholds
+were set by whole-model sweeps; neither was ever A/B'd *at* widths 3-4.
+
+### The A/B, and `ext` wins by a lot
+
+`ffn_down`, 3 reps, all three families available and already compiled:
+
+| width | `ext` (prod) | `mul_mv` nc | `mul_mm_skinny` |
+|---|--:|--:|--:|
+| 3 | **333** | 455 (+37%) | 417 (+25%) |
+| 4 | **361** | 516 (+43%) | 420 (+16%) |
+
+So the routing is correct and the gap is not a family-choice mistake. Two things fall out:
+
+- **`GGML_MM_SKINNY=5` is at its optimum, and now we know why.** Skinny costs ~418 us at
+  width 3 *and* width 4 *and* width 5 - it is nearly width-independent. It therefore wins
+  only once `ext` climbs past ~420, which happens at width 5. The threshold is the crossover.
+- **The nc cliff reproduces.** nc3 at 455 vs ext at 333 is +122 us, matching the fixed
+  ~112 us at NC>=3 that `ead90eb62` diagnosed and declined to fix.
+
+### The lever is `nxpsg`, not `nr0`
+
+`nxpsg=16` is gated on `ne00 % 256 == 0 && ne11 < 3` (`:2770-2776`), so widths 3-4 lose the
+wide variant that makes width 2 nearly free. Unlike `nr0` there is no kernel limit here -
+`nxpsg` is a function constant and `GGML_MV_EXT_NXPSG` already forces it. Forcing 16:
+
+| shape | width 3 | width 4 |
+|---|--:|--:|
+| ffn_gate/up | **-7.4%** | +0.1% |
+| ffn_down | **-5.0%** | **-3.2%** |
+| gdn_qkv | -0.6% | **-2.5%** |
+| attn_q | +2.5% | **+8.3%** |
+
+**Shape-dependent, and it is the first lever that helps at width 4 at all.** It wins on the
+two large FFN projections and loses on `attn_q`, the smallest shape (8.8 MB, m=3072). So it
+is a per-shape routing question, not a blanket flip of the `ne11 < 3` gate. This does *not*
+contradict run 2: `nxpsg` changes how threads are laid out along the row, not the register
+tile.
+
+`nr0=4` does not stack with it: at width 3 `nxpsg=16` alone gets ~320 and adding `nr0=4`
+gets ~314 (inside drift), and at width 4 `nr0=4` still costs ~12 us on top. `nr0` is done.
+
+### Drift got worse over the session
+
+`ffn_down` width 3 at the prod config read 336, 340, 362 and 363 across four blocks tonight,
+an ~8% spread, on a machine that had been benchmarking continuously for hours. The
+`nxpsg=16` arm was far steadier (318-320). **Only compare arms measured inside the same
+block**, which is how the tables above are built. The ~3% figure recorded under run 2 is a
+floor, not a bound.
+
+### Next
+
+Confirm on llama-bench before touching the gate - the per-shape split means the net effect
+is an aggregation question that arithmetic over these tables will not settle honestly.
+
 ## Superseded plan: port the V2 base-pointer rewrite to `ext`
 
 `metal-mv-nc-spill` commit `fe0429daf` already did this for `mul_mv_nc`: keep one base
