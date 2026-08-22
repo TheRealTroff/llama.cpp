@@ -7522,6 +7522,7 @@ constant bool FC_flash_attn_ext_bc_mask [[function_constant(FC_FLASH_ATTN_EXT + 
 constant int32_t FC_flash_attn_ext_ns10 [[function_constant(FC_FLASH_ATTN_EXT + 20)]];
 constant int32_t FC_flash_attn_ext_ns20 [[function_constant(FC_FLASH_ATTN_EXT + 21)]];
 constant int32_t FC_flash_attn_ext_nsg  [[function_constant(FC_FLASH_ATTN_EXT + 22)]];
+constant int32_t FC_flash_attn_ext_nwg  [[function_constant(FC_FLASH_ATTN_EXT + 23)]];
 
 // ref: https://arxiv.org/pdf/2307.08691.pdf
 template<
@@ -7567,7 +7568,17 @@ void kernel_flash_attn_ext_impl(
         uint3   tgpig,
         ushort  tiisg,
         ushort  sgitg) {
-    const ushort iq3 = tgpig[2];
+    // NWG splits the KV cache across workgroups. This kernel already shares each cache
+    // chunk across its Q=8 query rows (the simdgroups split queries, not keys), so unlike
+    // the vec kernel it needs no extra traffic to widen the batch -- what it lacked was
+    // parallelism: without a split it dispatches only (ne01/Q, ne02, ne03) threadgroups.
+    // With NWG > 1 each workgroup accumulates over a strided subset of chunks and writes
+    // partial O/S/M, which kernel_flash_attn_ext_vec_reduce then combines (same layout).
+#define NWG (FC_flash_attn_ext_nwg)
+
+    const short  iwg = tgpig[2]%NWG;
+
+    const ushort iq3 = tgpig[2]/NWG;
     const ushort iq2 = tgpig[1];
     const ushort iq1 = tgpig[0]*Q;
 
@@ -7625,6 +7636,10 @@ void kernel_flash_attn_ext_impl(
         const short j = jj*NSG + sgitg;
 
         pm2[jj] = (device const half2 *) ((device const char *) mask + (iq1 + j)*args.nb31 + (iq2%args.ne32)*args.nb32 + (iq3%args.ne33)*args.nb33);
+
+        // these advance one chunk per loop iteration, so they start at this workgroup's
+        // first chunk and step by NWG chunks below
+        pm2[jj] += iwg*NW;
     }
 
     {
@@ -7675,10 +7690,10 @@ void kernel_flash_attn_ext_impl(
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
     float S[NQ] = { [0 ... NQ-1] = 0.0f };
+    // note: M has to outlive the loop when NWG > 1 -- the partial results carry it
+    float M[NQ] = { [0 ... NQ-1] = -FLT_MAX/2 };
 
     {
-        float M[NQ] = { [0 ... NQ-1] = -FLT_MAX/2 };
-
         float slope = 1.0f;
 
         // ALiBi
@@ -7693,7 +7708,7 @@ void kernel_flash_attn_ext_impl(
 
         // loop over the KV cache
         // each simdgroup handles blocks of Q rows and C columns
-        for (int ic0 = 0; ; ++ic0) {
+        for (int ic0 = iwg; ; ic0 += NWG) {
             int ic = ic0*C;
             if (ic >= args.ne11) {
                 break;
@@ -7745,7 +7760,7 @@ void kernel_flash_attn_ext_impl(
 
                 if (blk_cur == 0) {
                     FOR_UNROLL (short jj = 0; jj < NQ; ++jj) {
-                        pm2[jj] += NW;
+                        pm2[jj] += NWG*NW;
                     }
 
                     continue;
@@ -7761,11 +7776,11 @@ void kernel_flash_attn_ext_impl(
                             sm2[j*SH + tiisg] = pm2[jj][tiisg];
                         }
 
-                        pm2[jj] += NW;
+                        pm2[jj] += NWG*NW;
                     }
                 } else if (blk_cur == 2) {
                     FOR_UNROLL (short jj = 0; jj < NQ; ++jj) {
-                        pm2[jj] += NW;
+                        pm2[jj] += NWG*NW;
                     }
                 }
 
@@ -8114,7 +8129,8 @@ void kernel_flash_attn_ext_impl(
             threadgroup_barrier(mem_flags::mem_threadgroup);
         }
 
-        if (FC_flash_attn_ext_has_sinks) {
+        // the sink contributes once per row, not once per workgroup
+        if (FC_flash_attn_ext_has_sinks && iwg == 0) {
             FOR_UNROLL (short jj = 0; jj < NQ; ++jj) {
                 const short j = jj*NSG + sgitg;
 
@@ -8142,22 +8158,45 @@ void kernel_flash_attn_ext_impl(
             break;
         }
 
-        device float4 * dst4 = (device float4 *) dst + ((uint64_t)iq3*args.ne2*args.ne1 + iq2 + (uint64_t)(iq1 + j)*args.ne1)*DV4;
+        const uint64_t rid = (uint64_t)iq3*args.ne2*args.ne1 + iq2 + (uint64_t)(iq1 + j)*args.ne1;
 
-        const float scale = S[jj] == 0.0 ? 0.0f : 1.0f/S[jj];
+        if (NWG == 1) {
+            device float4 * dst4 = (device float4 *) dst + rid*DV4;
 
-        if (DV4 % NW == 0) {
-            FOR_UNROLL (short ii = 0; ii < DV4/NW; ++ii) {
-                const short i = ii*NW + tiisg;
+            const float scale = S[jj] == 0.0 ? 0.0f : 1.0f/S[jj];
 
-                dst4[i] = (float4) so4[j*PV4 + i]*scale;
+            if (DV4 % NW == 0) {
+                FOR_UNROLL (short ii = 0; ii < DV4/NW; ++ii) {
+                    const short i = ii*NW + tiisg;
+
+                    dst4[i] = (float4) so4[j*PV4 + i]*scale;
+                }
+            } else {
+                for (short i = tiisg; i < DV4; i += NW) {
+                    dst4[i] = (float4) so4[j*PV4 + i]*scale;
+                }
             }
         } else {
+            // partial result for this workgroup, interleaved so that
+            // kernel_flash_attn_ext_vec_reduce can consume it unchanged:
+            // O is left unnormalised and S/M travel alongside it
+            const uint64_t nrows = (uint64_t)args.ne3*args.ne2*args.ne1;
+
+            device float4 * htmp4 = (device float4 *) dst + rid*DV4*NWG;
+            device float  * htmp1 = (device float  *) dst + nrows*DV*NWG;
+
             for (short i = tiisg; i < DV4; i += NW) {
-                dst4[i] = (float4) so4[j*PV4 + i]*scale;
+                htmp4[i*NWG + iwg] = (float4) so4[j*PV4 + i];
+            }
+
+            if (tiisg == 0) {
+                htmp1[rid*(2*NWG) + 2*iwg + 0] = S[jj];
+                htmp1[rid*(2*NWG) + 2*iwg + 1] = M[jj];
             }
         }
     }
+
+#undef NWG
 
 #undef NS10
 #undef NS20
@@ -9108,11 +9147,15 @@ kernel void kernel_flash_attn_ext_vec_reduce(
 
     device const float  * ss    = (device const float  *) htmp + (uint64_t)args.nrows*DV*NWG;
 
-    float S = ss[rid*(2*NWG) + 2*iwg + 0];
-    float M = ss[rid*(2*NWG) + 2*iwg + 1];
+    // one workgroup per simd lane, so lanes >= NWG have no partial to contribute.
+    // they must feed identities into the reductions below rather than read past the row.
+    const bool valid = iwg < NWG;
+
+    float S = valid ? ss[rid*(2*NWG) + 2*iwg + 0] : 0.0f;
+    float M = valid ? ss[rid*(2*NWG) + 2*iwg + 1] : -FLT_MAX/2;
 
     const float m  = simd_max(M);
-    const float ms = exp(M - m);
+    const float ms = valid ? exp(M - m) : 0.0f;
 
     S = simd_sum(S*ms);
     S = S == 0.0f ? 0.0f : 1.0f/S;
@@ -9123,7 +9166,9 @@ kernel void kernel_flash_attn_ext_vec_reduce(
     device       float4 * dst4  = (device       float4 *) dst  + rid*DV4;
 
     for (short i = sgitg; i < DV4; i += NWG) {
-        const float4 v = simd_sum(htmp4[i*NWG + iwg]*ms);
+        const float4 h = valid ? htmp4[i*NWG + iwg] : float4(0.0f);
+
+        const float4 v = simd_sum(h*ms);
 
         if (iwg == 0) {
             dst4[i] = v*S;

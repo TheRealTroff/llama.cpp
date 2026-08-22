@@ -3545,7 +3545,29 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
             /*.logit_softcap =*/ logit_softcap,
         };
 
-        auto pipeline = ggml_metal_library_get_pipeline_flash_attn_ext(lib, op, has_mask, has_sinks, has_bias, has_scap, has_kvpad, nsg);
+        // GGML_FA_MM_NWG splits the KV cache across workgroups for this kernel.
+        //
+        // It already shares every cache chunk across its Q=8 query rows, so unlike the vec
+        // kernel it needs no extra traffic to widen the batch -- what it lacks is
+        // parallelism: at decode it dispatches only (ne01/Q, ne02, ne03) threadgroups, i.e.
+        // 24 for a 24-head model, which is why routing verify batches to it measured no
+        // better than the vec kernel. Splitting the cache gives it both.
+        //
+        // Restricted to ne01 <= 32 because the temp buffer is reserved for
+        // min(ne01, 32)*ne02*ne03 rows -- prefill-sized batches would overflow it, and they
+        // have plenty of threadgroups already.
+        static const int env_fa_mm_nwg = getenv("GGML_FA_MM_NWG") ? atoi(getenv("GGML_FA_MM_NWG")) : 1;
+
+        int32_t nwg = 1;
+        if (env_fa_mm_nwg > 1 && ne01 <= 32) {
+            nwg = std::min<int32_t>(env_fa_mm_nwg, 32);
+
+            // never launch more workgroups than there are cache chunks
+            nwg = std::min<int32_t>(nwg, (ne11 + ncpsg - 1)/ncpsg);
+            nwg = std::max<int32_t>(nwg, 1);
+        }
+
+        auto pipeline = ggml_metal_library_get_pipeline_flash_attn_ext(lib, op, has_mask, has_sinks, has_bias, has_scap, has_kvpad, nsg, nwg);
 
         ggml_metal_encoder_set_pipeline(enc, pipeline);
         ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);
@@ -3556,11 +3578,38 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
         ggml_metal_encoder_set_buffer  (enc, bid_src4, 5);
         ggml_metal_encoder_set_buffer  (enc, bid_pad,  6);
         ggml_metal_encoder_set_buffer  (enc, bid_blk,  7);
-        ggml_metal_encoder_set_buffer  (enc, bid_dst,  8);
+        ggml_metal_encoder_set_buffer  (enc, nwg == 1 ? bid_dst : bid_tmp, 8);
 
         ggml_metal_encoder_set_threadgroup_memory_size(enc, smem, 0);
 
-        ggml_metal_encoder_dispatch_threadgroups(enc, (ne01 + nqptg - 1)/nqptg, ne02, ne03, 32, nsg, 1);
+        ggml_metal_encoder_dispatch_threadgroups(enc, (ne01 + nqptg - 1)/nqptg, ne02, ne03*nwg, 32, nsg, 1);
+
+        if (nwg > 1) {
+            // sanity checks
+            assert(ggml_metal_op_flash_attn_ext_extra_tmp(op) != 0);
+
+            GGML_ASSERT(ne01*ne02*ne03 == ne1*ne2*ne3);
+            GGML_ASSERT((uint64_t)ne1*ne2*ne3 <= (1u << 31));
+
+            // sync the 2 kernels
+            ggml_metal_op_concurrency_reset(ctx);
+
+            // the partials use the same layout as the vec kernel, so the same reduction applies
+            const int32_t nrows = ne1*ne2*ne3;
+
+            ggml_metal_kargs_flash_attn_ext_vec_reduce args0 = {
+                nrows,
+            };
+
+            auto pipeline0 = ggml_metal_library_get_pipeline_flash_attn_ext_vec_reduce(lib, op, ne20, nwg);
+
+            ggml_metal_encoder_set_pipeline(enc, pipeline0);
+            ggml_metal_encoder_set_bytes   (enc, &args0, sizeof(args0), 0);
+            ggml_metal_encoder_set_buffer  (enc, bid_tmp, 1);
+            ggml_metal_encoder_set_buffer  (enc, bid_dst, 2);
+
+            ggml_metal_encoder_dispatch_threadgroups(enc, nrows, 1, 1, 32*nwg, 1, 1);
+        }
 #undef FATTN_SMEM
     } else {
         // half4x4 kernel
