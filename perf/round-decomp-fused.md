@@ -84,3 +84,47 @@ Verify GPU beyond these is big-mat slope at parity — kernel work there is clos
 drafter + submit-delta went to zero the cycle would be ~130 ms = 1.77 floors, still above
 oMLX's 1.36–1.52: the residual is the N=7-vs-block-4 depth difference, i.e. structural
 verify slope, not an inefficiency.
+
+---
+
+## CORRECTION (same day): the CPU-submit line item was a profiler artifact
+
+New instrumentation (`LLAMA_DECODE_PROF=1`, commit 583d8cf5; harness
+`kvquant-experiments/RUN_DECODE_PROF.sh`, logs `results/decodeprof-aug22-{b1,n6}.server.log`)
+splits llama_decode's CPU cost on UNPROFILED runs: apply / reuse-check / set_inputs /
+compute-submit / rest. Result, batch-1: **decode total 1.23 ms/token** (submit 1.15,
+reuse 0.02, set_inputs 0.01). Target verify decode at n6: 1.80 ms/round (submit 1.43).
+Unprofiled spec-prof agrees: b1 dec_sub_tg **1.21** + dec_syn_tg 72.85 = 74.06 ms =
+13.51 t/s exactly; n6 draft_call 17.11 + sub 1.69 + syn 129.99 + accept 0.44 = 149.3 ms
+vs wall 149.1 (25.16 t/s).
+
+**The 9.0–11.6 ms dec_sub_tg figures in every GGML_METAL_PROFILE-based decomposition
+(including the tables above) are 6–8x inflated**: the profiler creates one encoder per op,
+and that cost lands on the CPU encode path specifically, so the uniform ×0.83 tick
+deflation cannot correct it — it just relabeled ~8 ms of profiler overhead as "CPU
+submit". Graph reuse was absorbing the build cost all along (298/300 hits at b1; the
+open question in the lever list is answered).
+
+**METHODOLOGY RULE (add to the small-ne01 one): under GGML_METAL_PROFILE, CPU-side
+components of spec-prof are invalid — only GPU-wait shares deflate uniformly. Measure
+CPU components on unprofiled runs.**
+
+Corrected round wall (n6, real, unprofiled):
+
+| component | real ms | share |
+|---|---|---|
+| verify GPU wait | 130.0 | 87.2% |
+| draft_call | 17.1 | 11.5% |
+| CPU submit | 1.7 | 1.1% |
+| accept + checkpoints | 0.4 | 0.3% |
+
+Corrected excess over floor: 149.1 − 74.1 = 75.0 ms = verify GPU slope 57.2 (1.79x at
+N=7) + draft_call 17.1 + submit delta 0.5.
+
+**Lever 1 (CPU submit) is REFUTED — ceiling ~1 ms, not 8–10.** The batch-1 floor is
+GPU-bound: 72.8 of 74.1 ms is verify wait, so there is no "floor to 66 ms via submit"
+path. `GGML_METAL_N_CB` (encode threads, default 1) is in the tree as a probe but the
+ceiling (~1 ms) no longer justifies a run. Remaining levers: **draft_call 17.1 ms**
+(dflash-prof shows enc 0.87 + inject 0.50 + noise decode 0.67 + drafter submit ~0.3;
+the unattributed ~14.8 ms is drafter GPU wait + lattice CPU — profile that split next)
+and the verify GPU slope itself (1.79x vs oMLX's implied ~1.5x).
