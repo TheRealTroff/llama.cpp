@@ -1239,6 +1239,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
                 /*.logits   =*/ nullptr,
             };
 
+            const int64_t t_enc0 = ggml_time_us();
             int32_t rc = llama_encode(ctx_dft, enc_batch);
             if (rc != 0) {
                 LOG_ERR("%s: llama_encode(ctx_dft) failed rc=%d (n_tokens=%d, offset=%d)\n",
@@ -1265,6 +1266,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
                 }
             }
 
+            const int64_t t_inj0 = ggml_time_us();
             rc = llama_decode(ctx_dft, batch_inject);
             if (rc != 0) {
                 LOG_ERR("%s: llama_decode(ctx_dft) failed rc=%d (n_tokens=%d, offset=%d)\n",
@@ -1273,6 +1275,17 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
             }
             // The server may switch contexts before the next draft decode.
             llama_synchronize(ctx_dft);
+
+            if (n_chunk <= 16) { // generation-size chunks only, keep prefill out of the averages
+                static int64_t t_enc = 0, t_inj = 0, n_prof = 0;
+                const int64_t t_now = ggml_time_us();
+                t_enc += t_inj0 - t_enc0;
+                t_inj += t_now  - t_inj0;
+                if (++n_prof % 32 == 0) {
+                    LOG_INF("dflash-prof process: n=%lld enc avg %.3f ms, inject+sync avg %.3f ms\n",
+                            (long long) n_prof, (double) t_enc / n_prof / 1000.0, (double) t_inj / n_prof / 1000.0);
+                }
+            }
         }
 
         return true;
@@ -1317,10 +1330,19 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
         }
 
         // decode all sequence's noise block in a single batch
+        const int64_t t_dec0 = ggml_time_us();
         int ret = llama_decode(ctx_dft, batch);
         if (ret != 0) {
             LOG_WRN("%s: llama_decode returned %d\n", __func__, ret);
             return;
+        }
+        {
+            static int64_t t_dec = 0, n_prof = 0;
+            t_dec += ggml_time_us() - t_dec0;
+            if (++n_prof % 32 == 0) {
+                LOG_INF("dflash-prof draft: n=%lld noise decode avg %.3f ms\n",
+                        (long long) n_prof, (double) t_dec / n_prof / 1000.0);
+            }
         }
 
         for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {

@@ -18,11 +18,16 @@ ggml_metal_op_t ggml_metal_op_init(
         bool use_concurrency,
         bool use_capture,
         int  debug_graph,
-        int  debug_fusion);
+        int  debug_fusion,
+        void * prof_smpbuf,
+        int  prof_idx0);
 
 void ggml_metal_op_free(ggml_metal_op_t ctx);
 
 int ggml_metal_op_n_nodes(ggml_metal_op_t ctx);
+
+// raw graph index of node i (profiling)
+int ggml_metal_op_node_idx(ggml_metal_op_t ctx, int i);
 
 int ggml_metal_op_encode(ggml_metal_op_t ctx, int idx);
 

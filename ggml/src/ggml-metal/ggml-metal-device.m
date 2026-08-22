@@ -489,6 +489,24 @@ ggml_metal_encoder_t ggml_metal_encoder_init(ggml_metal_cmd_buf_t cmd_buf_raw, b
     return res;
 }
 
+ggml_metal_encoder_t ggml_metal_encoder_init_timed(ggml_metal_cmd_buf_t cmd_buf_raw, void * smpbuf, int idx0) {
+    ggml_metal_encoder_t res = calloc(1, sizeof(struct ggml_metal_encoder));
+
+    id<MTLCommandBuffer> cmd_buf = (id<MTLCommandBuffer>) cmd_buf_raw;
+
+    MTLComputePassDescriptor * desc = [MTLComputePassDescriptor computePassDescriptor];
+    desc.dispatchType = MTLDispatchTypeSerial;
+    desc.sampleBufferAttachments[0].sampleBuffer = (id<MTLCounterSampleBuffer>) smpbuf;
+    desc.sampleBufferAttachments[0].startOfEncoderSampleIndex = idx0;
+    desc.sampleBufferAttachments[0].endOfEncoderSampleIndex   = idx0 + 1;
+
+    res->obj = [cmd_buf computeCommandEncoderWithDescriptor:desc];
+
+    [res->obj retain];
+
+    return res;
+}
+
 void ggml_metal_encoder_free(ggml_metal_encoder_t encoder) {
     [encoder->obj release];
     free(encoder);

@@ -73,6 +73,9 @@ typedef void * ggml_metal_cmd_buf_t;
 typedef struct ggml_metal_encoder * ggml_metal_encoder_t;
 
 ggml_metal_encoder_t ggml_metal_encoder_init(ggml_metal_cmd_buf_t cmd_buf_raw, bool concurrent);
+
+// profiling: encoder with a timestamp counter sample buffer attached at start/end of encoder (samples idx0 and idx0 + 1)
+ggml_metal_encoder_t ggml_metal_encoder_init_timed(ggml_metal_cmd_buf_t cmd_buf_raw, void * smpbuf, int idx0);
 void ggml_metal_encoder_free(ggml_metal_encoder_t encoder);
 
 void ggml_metal_encoder_debug_group_push(ggml_metal_encoder_t encoder, const char * name);

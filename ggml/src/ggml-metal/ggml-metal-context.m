@@ -19,6 +19,124 @@
 // max number of MTLCommandBuffer used to submit a graph for processing
 #define GGML_METAL_MAX_COMMAND_BUFFERS 8
 
+// per-op GPU time profiling (GGML_METAL_PROFILE=1)
+// one encoder per op with timestamp samples at the encoder boundaries
+#define GGML_METAL_PROF_MAX_ENTRIES 1024
+
+struct ggml_metal_prof_entry {
+    char     key[192];
+    uint64_t ticks;
+    uint64_t count;
+};
+
+static struct ggml_metal_prof_entry g_prof_entries[GGML_METAL_PROF_MAX_ENTRIES];
+static int                          g_prof_n_entries  = 0;
+static int                          g_prof_enabled    = -1;
+static MTLTimestamp                 g_prof_cpu0       = 0;
+static MTLTimestamp                 g_prof_gpu0       = 0;
+static NSLock *                     g_prof_lock       = nil;
+
+static bool ggml_metal_prof_enabled(void) {
+    if (g_prof_enabled < 0) {
+        const char * val = getenv("GGML_METAL_PROFILE");
+        g_prof_enabled = val ? atoi(val) : 0;
+        if (g_prof_enabled) {
+            g_prof_lock = [[NSLock alloc] init];
+        }
+    }
+    return g_prof_enabled > 0;
+}
+
+static void ggml_metal_prof_add(const char * key, uint64_t ticks) {
+    [g_prof_lock lock];
+    for (int i = 0; i < g_prof_n_entries; ++i) {
+        if (strcmp(g_prof_entries[i].key, key) == 0) {
+            g_prof_entries[i].ticks += ticks;
+            g_prof_entries[i].count += 1;
+            [g_prof_lock unlock];
+            return;
+        }
+    }
+    if (g_prof_n_entries < GGML_METAL_PROF_MAX_ENTRIES) {
+        struct ggml_metal_prof_entry * e = &g_prof_entries[g_prof_n_entries++];
+        snprintf(e->key, sizeof(e->key), "%s", key);
+        e->ticks = ticks;
+        e->count = 1;
+    }
+    [g_prof_lock unlock];
+}
+
+static void ggml_metal_prof_make_key(const struct ggml_tensor * node, char * key, size_t len) {
+    const struct ggml_tensor * s0 = node->src[0];
+    const struct ggml_tensor * s1 = node->src[1];
+    snprintf(key, len, "%-16s %-6s s0=[%lld,%lld,%lld] s1=[%lld,%lld] dst=[%lld,%lld]",
+        ggml_op_desc(node),
+        s0 ? ggml_type_name(s0->type) : "-",
+        s0 ? s0->ne[0] : 0, s0 ? s0->ne[1] : 0, s0 ? s0->ne[2] : 0,
+        s1 ? s1->ne[0] : 0, s1 ? s1->ne[1] : 0,
+        node->ne[0], node->ne[1]);
+}
+
+static int ggml_metal_prof_cmp(const void * a, const void * b) {
+    const struct ggml_metal_prof_entry * ea = a;
+    const struct ggml_metal_prof_entry * eb = b;
+    return ea->ticks < eb->ticks ? 1 : ea->ticks > eb->ticks ? -1 : 0;
+}
+
+// device limits: at most 32 live sample buffers, at most 4096 samples each -> one buffer per command buffer
+#define GGML_METAL_PROF_MAX_SAMPLES 4096
+
+static id<MTLCounterSampleBuffer> ggml_metal_prof_new_smpbuf(id<MTLDevice> device) {
+    static id<MTLCounterSet> cset = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        for (id<MTLCounterSet> cs in device.counterSets) {
+            if ([cs.name isEqualToString:MTLCommonCounterSetTimestamp]) {
+                cset = [cs retain];
+                break;
+            }
+        }
+        GGML_ASSERT(cset != nil);
+    });
+
+    MTLCounterSampleBufferDescriptor * desc = [[MTLCounterSampleBufferDescriptor alloc] init];
+    desc.counterSet  = cset;
+    desc.storageMode = MTLStorageModeShared;
+    desc.sampleCount = GGML_METAL_PROF_MAX_SAMPLES;
+
+    NSError * err = nil;
+    id<MTLCounterSampleBuffer> res = [device newCounterSampleBufferWithDescriptor:desc error:&err];
+    if (!res) {
+        GGML_LOG_ERROR("%s: error: %s\n", __func__, [[err localizedDescription] UTF8String]);
+    }
+    [desc release];
+
+    return res;
+}
+
+static void ggml_metal_prof_dump(id<MTLDevice> device) {
+    MTLTimestamp cpu1 = 0;
+    MTLTimestamp gpu1 = 0;
+    [device sampleTimestamps:&cpu1 gpuTimestamp:&gpu1];
+
+    // CPU timestamps are in ns; convert GPU ticks to ns via correlation
+    const double factor = gpu1 > g_prof_gpu0 ? (double)(cpu1 - g_prof_cpu0)/(double)(gpu1 - g_prof_gpu0) : 1.0;
+
+    qsort(g_prof_entries, g_prof_n_entries, sizeof(g_prof_entries[0]), ggml_metal_prof_cmp);
+
+    double total_ms = 0.0;
+    for (int i = 0; i < g_prof_n_entries; ++i) {
+        total_ms += 1e-6*factor*g_prof_entries[i].ticks;
+    }
+
+    fprintf(stderr, "ggml_metal_prof: ts factor = %.3f, total GPU time = %.3f ms\n", factor, total_ms);
+    fprintf(stderr, "ggml_metal_prof: %10s %10s %10s  %s\n", "total ms", "count", "us/call", "op");
+    for (int i = 0; i < g_prof_n_entries; ++i) {
+        const double ms = 1e-6*factor*g_prof_entries[i].ticks;
+        fprintf(stderr, "ggml_metal_prof: %10.3f %10llu %10.2f  %s\n", ms, g_prof_entries[i].count, 1e3*ms/g_prof_entries[i].count, g_prof_entries[i].key);
+    }
+}
+
 struct ggml_metal_command_buffer {
     id<MTLCommandBuffer> obj;
 };
@@ -136,6 +254,11 @@ ggml_metal_t ggml_metal_init(ggml_metal_device_t dev) {
     res->use_fusion      = getenv("GGML_METAL_FUSION_DISABLE") == nil;
     res->use_concurrency = getenv("GGML_METAL_CONCURRENCY_DISABLE") == nil;
 
+    if (ggml_metal_prof_enabled() && g_prof_gpu0 == 0) {
+        [device sampleTimestamps:&g_prof_cpu0 gpuTimestamp:&g_prof_gpu0];
+        GGML_LOG_INFO("%s: per-op profiling enabled (GGML_METAL_PROFILE)\n", __func__);
+    }
+
     {
         const char * val = getenv("GGML_METAL_GRAPH_DEBUG");
         res->debug_graph = val ? atoi(val) : 0;
@@ -188,6 +311,11 @@ ggml_metal_t ggml_metal_init(ggml_metal_device_t dev) {
 
 void ggml_metal_free(ggml_metal_t ctx) {
     GGML_LOG_INFO("%s: deallocating\n", __func__);
+
+    if (ggml_metal_prof_enabled()) {
+        ggml_metal_synchronize(ctx);
+        ggml_metal_prof_dump(ggml_metal_device_get_obj(ctx->dev));
+    }
 
     for (int i = 0; i < GGML_METAL_MAX_COMMAND_BUFFERS; ++i) {
         if (ctx->cmd_bufs[i].obj) {
@@ -692,28 +820,99 @@ void ggml_metal_set_n_cb(ggml_metal_t ctx, int n_cb) {
 
         id<MTLCommandBuffer> cmd_buf = ctx->cmd_bufs[cb_idx].obj;
 
-        ggml_metal_op_t ctx_op = ggml_metal_op_init(
-            ctx->dev,
-            cmd_buf,
-            ctx->gf,
-            idx_start,
-            idx_end,
-            ctx->use_fusion,
-            ctx->use_concurrency,
-            ctx->capture_compute,
-            ctx->debug_graph,
-            ctx->debug_fusion);
+        if (ggml_metal_prof_enabled()) {
+            // one encoder per op so the timestamp samples at the encoder boundaries give per-op GPU time
+            id<MTLDevice> device = ggml_metal_device_get_obj(ctx->dev);
 
-        for (int idx = 0; idx < ggml_metal_op_n_nodes(ctx_op); ++idx) {
-            const int res = ggml_metal_op_encode(ctx_op, idx);
-            if (res == 0) {
-                break;
+            id<MTLCounterSampleBuffer> sb = ggml_metal_prof_new_smpbuf(device);
+            GGML_ASSERT(sb != nil);
+
+            NSMutableArray * keys = [[NSMutableArray alloc] init];
+
+            int raw = idx_start;
+            int k   = 0;
+            while (raw < idx_end && 2*(k + 1) <= GGML_METAL_PROF_MAX_SAMPLES) {
+                ggml_metal_op_t ctx_op = ggml_metal_op_init(
+                    ctx->dev,
+                    cmd_buf,
+                    ctx->gf,
+                    raw,
+                    idx_end,
+                    ctx->use_fusion,
+                    false,
+                    ctx->capture_compute,
+                    ctx->debug_graph,
+                    ctx->debug_fusion,
+                    (void *) sb,
+                    2*k);
+
+                if (ggml_metal_op_n_nodes(ctx_op) == 0) {
+                    ggml_metal_op_free(ctx_op);
+                    break;
+                }
+
+                const int res = ggml_metal_op_encode(ctx_op, 0);
+
+                char key[192];
+                ggml_metal_prof_make_key(ctx->gf->nodes[ggml_metal_op_node_idx(ctx_op, 0)], key, sizeof(key));
+
+                const int raw_last = ggml_metal_op_node_idx(ctx_op, (res > 0 ? res : 1) - 1);
+
+                ggml_metal_op_free(ctx_op);
+
+                [keys addObject:[NSString stringWithUTF8String:key]];
+
+                k  += 1;
+                raw = raw_last + 1;
+
+                if (res == 0) {
+                    break;
+                }
             }
 
-            idx += res - 1;
-        }
+            const int n_ops = k;
 
-        ggml_metal_op_free(ctx_op);
+            [cmd_buf addCompletedHandler:^(id<MTLCommandBuffer> cb) {
+                GGML_UNUSED(cb);
+                NSData * data = [sb resolveCounterRange:NSMakeRange(0, 2*n_ops)];
+                if (data && data.length >= 2*n_ops*sizeof(uint64_t)) {
+                    const uint64_t * ts = (const uint64_t *) data.bytes;
+                    for (int i = 0; i < n_ops; ++i) {
+                        if (ts[2*i] != 0 && ts[2*i + 1] != (uint64_t) -1 && ts[2*i + 1] > ts[2*i]) {
+                            ggml_metal_prof_add([keys[i] UTF8String], ts[2*i + 1] - ts[2*i]);
+                        }
+                    }
+                }
+            }];
+
+            [sb release];
+            [keys release];
+        } else {
+            ggml_metal_op_t ctx_op = ggml_metal_op_init(
+                ctx->dev,
+                cmd_buf,
+                ctx->gf,
+                idx_start,
+                idx_end,
+                ctx->use_fusion,
+                ctx->use_concurrency,
+                ctx->capture_compute,
+                ctx->debug_graph,
+                ctx->debug_fusion,
+                NULL,
+                0);
+
+            for (int idx = 0; idx < ggml_metal_op_n_nodes(ctx_op); ++idx) {
+                const int res = ggml_metal_op_encode(ctx_op, idx);
+                if (res == 0) {
+                    break;
+                }
+
+                idx += res - 1;
+            }
+
+            ggml_metal_op_free(ctx_op);
+        }
 
         if (cb_idx < 2 || ctx->abort_callback == NULL) {
             [cmd_buf commit];
