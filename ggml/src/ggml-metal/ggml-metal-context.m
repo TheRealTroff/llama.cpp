@@ -66,10 +66,11 @@ static void ggml_metal_prof_add(const char * key, uint64_t ticks) {
     [g_prof_lock unlock];
 }
 
-static void ggml_metal_prof_make_key(const struct ggml_tensor * node, char * key, size_t len) {
+static void ggml_metal_prof_make_key(int prof_id, const struct ggml_tensor * node, char * key, size_t len) {
     const struct ggml_tensor * s0 = node->src[0];
     const struct ggml_tensor * s1 = node->src[1];
-    snprintf(key, len, "%-16s %-6s s0=[%lld,%lld,%lld] s1=[%lld,%lld] dst=[%lld,%lld]",
+    snprintf(key, len, "m%d %-16s %-6s s0=[%lld,%lld,%lld] s1=[%lld,%lld] dst=[%lld,%lld]",
+        prof_id,
         ggml_op_desc(node),
         s0 ? ggml_type_name(s0->type) : "-",
         s0 ? s0->ne[0] : 0, s0 ? s0->ne[1] : 0, s0 ? s0->ne[2] : 0,
@@ -197,6 +198,9 @@ struct ggml_metal {
     // error state - set when a command buffer fails during synchronize
     // once set, graph_compute will return GGML_STATUS_FAILED until the backend is recreated
     bool has_error;
+
+    // ordinal for the profiler key - separates per-model rows (target/drafter dims collide)
+    int prof_id;
 };
 
 ggml_metal_t ggml_metal_init(ggml_metal_device_t dev) {
@@ -293,6 +297,9 @@ ggml_metal_t ggml_metal_init(ggml_metal_device_t dev) {
     }
 
     res->has_error = false;
+
+    static int g_prof_next_id = 0;
+    res->prof_id = g_prof_next_id++;
 
     res->gf = nil;
     res->encode_async = nil;
@@ -854,7 +861,7 @@ void ggml_metal_set_n_cb(ggml_metal_t ctx, int n_cb) {
                 const int res = ggml_metal_op_encode(ctx_op, 0);
 
                 char key[192];
-                ggml_metal_prof_make_key(ctx->gf->nodes[ggml_metal_op_node_idx(ctx_op, 0)], key, sizeof(key));
+                ggml_metal_prof_make_key(ctx->prof_id, ctx->gf->nodes[ggml_metal_op_node_idx(ctx_op, 0)], key, sizeof(key));
 
                 const int raw_last = ggml_metal_op_node_idx(ctx_op, (res > 0 ? res : 1) - 1);
 

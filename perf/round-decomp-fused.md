@@ -149,3 +149,37 @@ and g_prof_entries is global across the two Metal contexts. **Next step: add a p
 tag to the profiler key so drafter rows separate; GPU ticks are valid (methodology rule
 applies to CPU components only).** Then decide between attacking the drafter excess
 (~7 ms ceiling ≈ +5% e2e) and the verify slope (1.79x vs oMLX ~1.5x, ~20 ms ceiling).
+
+## Drafter forward attributed per-op (same day)
+
+Added a per-context ordinal to the Metal profiler key (`m<N>` prefix; parser updated to
+split models), unblocking target/drafter attribution despite both being q4_0 with shared
+dims. Log `results/rounddecomp-aug22-tagged-n6.server.log`. Drafter (m2) = 19.76
+ticks/round × 0.827 = 16.34 real ms — matches the 16.43 lattice-sync wall EXACTLY, which
+also means the drafter graph executes near-serially (no concurrency slack; deflated ticks
+= wall, unlike the target where ops hide under bigger ops).
+
+Drafter round (real ms): selector head [5120,248320]@N=7 **3.63** (4440 us/call, ~161 GB/s
+— well under the 273 peak) + TOP_K [248320,7]→16 **1.18** (1444 us/call) + ffn/attn/eh_proj
+big mats ~6.5 (at bandwidth×slope, fine) + small-ne01 starved rows ([5120,1024]×19.5/rd
+@82 us, [5120,1280]×9.9) ~2.0 + elementwise storm (REPEAT/CONCAT/CONT/ADD/FILL, ~19k tiny
+calls/round) ~1.9. The head+top-k lattice pipeline alone is ~30% of the drafter.
+
+**GGML_MV_NC_SMALL=1536 REFUTED for the drafter too** (unprofiled A/B): lattice sync
+16.43 → 16.34 ms, e2e 25.15 → 25.13, sha unchanged — ≤0.1 ms, despite the serial-graph
+argument for why it might translate here. Keep it out of the prod pick.
+
+## Final lever board (end of day)
+
+1. **Verify GPU slope: 130.0 ms at N=7 = 1.79x over the 72.8 floor** vs oMLX implied
+   ~1.5x — ~20 ms ceiling, the only large lever left. Composition per the tables above:
+   big-mat slope (at MLX microbench parity), FA residual 4.5, GDN scan ~4, misc.
+2. **Drafter head + TOP_K ~4.8 ms**: head runs at 161 GB/s (why — skinny shelf at
+   ne01=248320? probe with GGML_FA-style routing sweep), and a fused/partial top-k could
+   cut the 1.2 ms scan. Realistic ~2 ms.
+3. **Copy-elimination tail**: b1 writeback fusion ~1.0 ms/token (floor only), read-side
+   GDN GET_ROWS fusion ~2 ms/round.
+4. Drafter elementwise storm ~1.9 ms — graph-level cleanup of the dflash injection path,
+   diffuse.
+
+CPU anywhere: not a lever (2.7 ms/round total, measured).
