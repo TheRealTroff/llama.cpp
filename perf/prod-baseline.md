@@ -43,6 +43,22 @@ Notes:
 
 ## End-to-end (speculative decode)
 
+> [!WARNING]
+> **This section is a PARTIAL-ENV run and does not measure the prod pick.** It sets only
+> `GGML_MV_NC` and `GGML_MM_SKINNY`, so `GGML_FA_MM_NWG` and `GGML_GDN_FUSE_WB` are at
+> their off-by-default values and the FA mm-split and GDN writeback fusion are both
+> inactive. That is worth 2.9 t/s. The prod pick measures **25.02**, not 22.115 - see
+> [README.md](README.md), which documents the full flag set, and
+> `kvquant-experiments/RUN_PROD_PICK.sh`, which runs it.
+>
+> The numbers below are still valid *as a matched-env comparison* against the 22.18
+> recorded at `f38b3243`, which was taken before either feature existed. A 2026-08-22
+> re-run reproduced this file's 22.115 as 22.111, so the measurement is sound and the
+> -0.29% below is stable rather than noise.
+>
+> Note also that the MTP d1 row is partial-env: at the full flag set MTP d1 is 22.139
+> (+2.7%), so "flat" holds only for the partial config.
+
 8288-token B-tree prompt (`~/play/benchprompt.txt`), n_predict 300, temp 0, ctx 10240,
 f16 KV, uniform Q4_0 target, `GGML_MV_NC=2 GGML_MM_SKINNY=5`. Fresh server per run, 3 runs
 each, no thermal cooldown (head-to-head-cooled.md found cooling changes nothing; pmset
