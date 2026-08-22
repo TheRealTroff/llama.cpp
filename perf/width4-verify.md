@@ -138,11 +138,25 @@ And it only pays under a depth policy that would actually sit at width 4, so
 `adaptive-spec` has to come back off the shelf afterwards - `slope-sweep.md`'s "flattening
 widths 2-5 is the prerequisite" is right, but read it as **"fix width 4"**.
 
-## Licensing note
+## Rule: their kernel is a number to beat, not a source to copy
 
-`dflash_mlx` is **Apache-2.0**; llama.cpp is MIT. Reading it and porting within this private
-fork is fine with attribution, but it is a blocker if anything is ever rebased upstream.
-Treat their kernel as a design reference and write against ggml's own layout - which forces
-a real rewrite anyway: Q4_0 is 32-element blocks with **interleaved** nibbles (byte *j* holds
-value *j* low, *j+16* high) and a scale-only affine, against their gs64 scale-plus-bias with
-sequential nibbles in separate planar arrays.
+**Decided 2026-08-22 by Johan. No code from `dflash_mlx` enters this tree, in any form -
+not copied, not transliterated, not "adapted".** It is Apache-2.0 against llama.cpp's MIT,
+and even inside a private fork that is a licence mismatch we do not want to carry, given
+some of this work may get rebased onto upstream later.
+
+What their kernel *is* for:
+
+- **A performance target.** Their width-4 number is the bar. Measure it, benchmark against
+  it, and treat "we widen 1 -> 4 at +102 us, they do it at +52" as the goal to close.
+- **Evidence that the bar is reachable.** The value of reading it was learning that a 16-
+  accumulator 4x4 tile fits without spilling on this hardware. That fact is what justifies
+  experiment 3; the fact is not their code.
+- **A disassembly reference** (experiment 5). Comparing register allocation via
+  `metal-objdump` is measurement, not reuse.
+
+Everything we write is our own, against ggml's own layout - which would force a full rewrite
+regardless: Q4_0 is 32-element blocks with **interleaved** nibbles (byte *j* holds value *j*
+low, *j+16* high) and a scale-only affine, against their gs64 scale-plus-bias with sequential
+nibbles in separate planar arrays. The algorithm description earlier in this file is here so
+nobody needs to re-read their source; it is not a porting spec.
