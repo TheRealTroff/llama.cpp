@@ -86,4 +86,7 @@ cycle-cost-vs-depth curve. Worth re-running: our curve above is far from flat
 
 Caveat before chasing it: our shallow cycles are not cheap the way theirs are
 (our n4 = 2.15 floors vs their block 4 = 1.36), so adaptive depth alone will not close
-1.33x. The verify slope is still the root cause.
+1.33x. ~~The verify slope is still the root cause.~~ **CORRECTED 2026-08-22: the verify
+slope is dense-matmul width scaling and is not recoverable** (`verify-slope-close.md`). The
+root cause is the one this paragraph already gestures at - their cheap shallow cycle. That
+makes the cost of our own shallow widths the thing to attack, not the slope at width 7.

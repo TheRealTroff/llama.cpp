@@ -45,9 +45,14 @@ Our cycle is 2.05 batch-1 floors (floor re-measured at 13.656 t/s = 73.2 ms in
 `slope-sweep.md`).
 
 **The whole gap is one number.** Matching 29.613 t/s at our own 3.75 committed/round needs
-a **126.6 ms** round against today's 150.0 - a **23.3 ms** cut. `round-decomp-fused.md`
-scopes the verify-slope lever at ~20 ms, i.e. **~86% of the entire remaining gap**.
-Everything else on the lever board is rounding error next to it.
+a **126.6 ms** round against today's 150.0 - a **23.3 ms** cut. ~~`round-decomp-fused.md`
+scopes the verify-slope lever at ~20 ms, i.e. **~86% of the entire remaining gap**.~~
+**CORRECTED 2026-08-22: the verify-slope lever does not exist** (`verify-slope-close.md`) -
+the slope is dense-matmul width scaling and matmul alone fills the entire 1.5x budget, so
+only ~5-7 ms is available there. The 23.3 ms cut has to come from somewhere else, and the
+same file localises it: at matched depth 5 we are the faster engine (23.37 vs 21.82 t/s),
+and their whole edge is a block-4 operating point costing 91.9 ms/cycle that our cost curve
+has no equivalent of.
 
 ## Drafter quality is still not the problem
 
@@ -78,5 +83,7 @@ our n4 cycle is 144.9/73.2 = **1.98 batch-1 floors**, while theirs averages 102.
 one as approximate).
 
 That is why adaptive depth is not a shortcut here. Per `slope-sweep.md`, flattening verify
-widths 2-5 is the prerequisite that would make an adaptive policy pay; the verify-slope
-lever above is the thing that shrinks the gap regardless of policy.
+widths 2-5 is the prerequisite that would make an adaptive policy pay. ~~the verify-slope
+lever above is the thing that shrinks the gap regardless of policy.~~ **CORRECTED: there is
+no such lever** (`verify-slope-close.md`), so widening the cheap end of our own cost curve
+is now the main line rather than the fallback.
