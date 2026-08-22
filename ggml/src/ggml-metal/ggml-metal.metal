@@ -2980,6 +2980,8 @@ kernel void kernel_rwkv_wkv7_f32(
 constant short FC_gated_delta_net_ne20 [[function_constant(FC_GATED_DELTA_NET + 0)]];
 constant short FC_gated_delta_net_ne30 [[function_constant(FC_GATED_DELTA_NET + 1)]];
 constant short FC_gated_delta_net_K    [[function_constant(FC_GATED_DELTA_NET + 2)]];
+// write snapshots directly into the state cache, instead of into dst
+constant bool  FC_gated_delta_net_WB   [[function_constant(FC_GATED_DELTA_NET + 3)]];
 
 #if 1
 template<short NSG>
@@ -2992,6 +2994,7 @@ kernel void kernel_gated_delta_net_impl(
         device const char * b,
         device const char * s,
         device       char * dst,
+        device       char * wb,
         uint3 tgpig[[threadgroup_position_in_grid]],
         uint3 tpitg[[thread_position_in_threadgroup]],
         uint3   ntg[[threads_per_threadgroup]])  {
@@ -3093,7 +3096,9 @@ kernel void kernel_gated_delta_net_impl(
         if (K > 1) {
             const int target_slot = (int)args.ne22 - 1 - (int)t;
             if (target_slot >= 0 && target_slot < (int)K) {
-                device float * dst_state = (device float *) (dst) + attn_size + (uint)target_slot * state_size_per_snap + state_out_base;
+                device float * dst_state = FC_gated_delta_net_WB
+                    ? (device float *) (wb + i23*args.wb_nb1 + (uint64_t) target_slot*args.wb_nb2) + (i21*S_v*S_v + i20*S_v)
+                    : (device float *) (dst) + attn_size + (uint)target_slot * state_size_per_snap + state_out_base;
                 FOR_UNROLL (short j = 0; j < NSG; j++) {
                     const short is = tx*NSG + j;
                     dst_state[is] = ls[j];
@@ -4378,6 +4383,50 @@ kernel void kernel_mul_mv_q4_0_f32_nc4(
     mul_vec_q4_0_nc_f32_impl<4, 4>(args, src0, src1, dst, tgpig, tiisg, sgitg);
 }
 
+kernel void kernel_mul_mv_q4_0_f32_nc5(
+        constant ggml_metal_kargs_mul_mv & args,
+        device const char * src0,
+        device const char * src1,
+        device       char * dst,
+        uint3  tgpig[[threadgroup_position_in_grid]],
+        ushort tiisg[[thread_index_in_simdgroup]],
+        ushort sgitg[[simdgroup_index_in_threadgroup]]) {
+    mul_vec_q4_0_nc_f32_impl<4, 5>(args, src0, src1, dst, tgpig, tiisg, sgitg);
+}
+
+kernel void kernel_mul_mv_q4_0_f32_nc6(
+        constant ggml_metal_kargs_mul_mv & args,
+        device const char * src0,
+        device const char * src1,
+        device       char * dst,
+        uint3  tgpig[[threadgroup_position_in_grid]],
+        ushort tiisg[[thread_index_in_simdgroup]],
+        ushort sgitg[[simdgroup_index_in_threadgroup]]) {
+    mul_vec_q4_0_nc_f32_impl<4, 6>(args, src0, src1, dst, tgpig, tiisg, sgitg);
+}
+
+kernel void kernel_mul_mv_q4_0_f32_nc7(
+        constant ggml_metal_kargs_mul_mv & args,
+        device const char * src0,
+        device const char * src1,
+        device       char * dst,
+        uint3  tgpig[[threadgroup_position_in_grid]],
+        ushort tiisg[[thread_index_in_simdgroup]],
+        ushort sgitg[[simdgroup_index_in_threadgroup]]) {
+    mul_vec_q4_0_nc_f32_impl<4, 7>(args, src0, src1, dst, tgpig, tiisg, sgitg);
+}
+
+kernel void kernel_mul_mv_q4_0_f32_nc8(
+        constant ggml_metal_kargs_mul_mv & args,
+        device const char * src0,
+        device const char * src1,
+        device       char * dst,
+        uint3  tgpig[[threadgroup_position_in_grid]],
+        ushort tiisg[[thread_index_in_simdgroup]],
+        ushort sgitg[[simdgroup_index_in_threadgroup]]) {
+    mul_vec_q4_0_nc_f32_impl<4, 8>(args, src0, src1, dst, tgpig, tiisg, sgitg);
+}
+
 kernel void kernel_mul_mv_q4_0_f32_di(
         constant ggml_metal_kargs_mul_mv & args,
         device const char * src0,
@@ -4904,6 +4953,30 @@ kernel void kernel_mul_mv_ext_q4_f16y_disp(
 }
 
 // contiguous same-type copy: raw 16-byte chunks, grid-strided
+// row-contiguous same-type copy: each row is a raw byte move, outer strides arbitrary
+// (e.g. strided 3D recurrent-state snapshot writebacks). host guarantees nb_row % 16 == 0
+// and 16-byte aligned bases/strides.
+kernel void kernel_cpy_cont_rows(
+        constant ggml_metal_kargs_cpy_cont_rows & args,
+        device const char * src0,
+        device       char * dst,
+        uint3 tgpig[[threadgroup_position_in_grid]],
+        uint3 ntg  [[threadgroups_per_grid]],
+        uint3 tpitg[[thread_position_in_threadgroup]],
+        uint3 ntpg [[threads_per_threadgroup]]) {
+    const int i1 = tgpig.y;
+    const int i2 = tgpig.z % args.ne2;
+    const int i3 = tgpig.z / args.ne2;
+
+    device const uint4 * s = (device const uint4 *)(src0 + i1*args.nb01 + i2*args.nb02 + i3*args.nb03);
+    device       uint4 * d = (device       uint4 *)(dst  + i1*args.nb1  + i2*args.nb2  + i3*args.nb3);
+
+    const uint64_t n16 = args.nb_row/16;
+    for (uint64_t i = (uint64_t) tgpig.x*ntpg.x + tpitg.x; i < n16; i += (uint64_t) ntg.x*ntpg.x) {
+        d[i] = s[i];
+    }
+}
+
 kernel void kernel_cpy_cont(
         constant ggml_metal_kargs_cpy_cont & args,
         device const char * src0,
@@ -7498,6 +7571,7 @@ constant bool FC_flash_attn_ext_bc_mask [[function_constant(FC_FLASH_ATTN_EXT + 
 constant int32_t FC_flash_attn_ext_ns10 [[function_constant(FC_FLASH_ATTN_EXT + 20)]];
 constant int32_t FC_flash_attn_ext_ns20 [[function_constant(FC_FLASH_ATTN_EXT + 21)]];
 constant int32_t FC_flash_attn_ext_nsg  [[function_constant(FC_FLASH_ATTN_EXT + 22)]];
+constant int32_t FC_flash_attn_ext_nwg  [[function_constant(FC_FLASH_ATTN_EXT + 23)]];
 
 // ref: https://arxiv.org/pdf/2307.08691.pdf
 template<
@@ -7543,7 +7617,17 @@ void kernel_flash_attn_ext_impl(
         uint3   tgpig,
         ushort  tiisg,
         ushort  sgitg) {
-    const ushort iq3 = tgpig[2];
+    // NWG splits the KV cache across workgroups. This kernel already shares each cache
+    // chunk across its Q=8 query rows (the simdgroups split queries, not keys), so unlike
+    // the vec kernel it needs no extra traffic to widen the batch -- what it lacked was
+    // parallelism: without a split it dispatches only (ne01/Q, ne02, ne03) threadgroups.
+    // With NWG > 1 each workgroup accumulates over a strided subset of chunks and writes
+    // partial O/S/M, which kernel_flash_attn_ext_vec_reduce then combines (same layout).
+#define NWG (FC_flash_attn_ext_nwg)
+
+    const short  iwg = tgpig[2]%NWG;
+
+    const ushort iq3 = tgpig[2]/NWG;
     const ushort iq2 = tgpig[1];
     const ushort iq1 = tgpig[0]*Q;
 
@@ -7601,6 +7685,10 @@ void kernel_flash_attn_ext_impl(
         const short j = jj*NSG + sgitg;
 
         pm2[jj] = (device const half2 *) ((device const char *) mask + (iq1 + j)*args.nb31 + (iq2%args.ne32)*args.nb32 + (iq3%args.ne33)*args.nb33);
+
+        // these advance one chunk per loop iteration, so they start at this workgroup's
+        // first chunk and step by NWG chunks below
+        pm2[jj] += iwg*NW;
     }
 
     {
@@ -7651,10 +7739,10 @@ void kernel_flash_attn_ext_impl(
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
     float S[NQ] = { [0 ... NQ-1] = 0.0f };
+    // note: M has to outlive the loop when NWG > 1 -- the partial results carry it
+    float M[NQ] = { [0 ... NQ-1] = -FLT_MAX/2 };
 
     {
-        float M[NQ] = { [0 ... NQ-1] = -FLT_MAX/2 };
-
         float slope = 1.0f;
 
         // ALiBi
@@ -7669,7 +7757,7 @@ void kernel_flash_attn_ext_impl(
 
         // loop over the KV cache
         // each simdgroup handles blocks of Q rows and C columns
-        for (int ic0 = 0; ; ++ic0) {
+        for (int ic0 = iwg; ; ic0 += NWG) {
             int ic = ic0*C;
             if (ic >= args.ne11) {
                 break;
@@ -7721,7 +7809,7 @@ void kernel_flash_attn_ext_impl(
 
                 if (blk_cur == 0) {
                     FOR_UNROLL (short jj = 0; jj < NQ; ++jj) {
-                        pm2[jj] += NW;
+                        pm2[jj] += NWG*NW;
                     }
 
                     continue;
@@ -7737,11 +7825,11 @@ void kernel_flash_attn_ext_impl(
                             sm2[j*SH + tiisg] = pm2[jj][tiisg];
                         }
 
-                        pm2[jj] += NW;
+                        pm2[jj] += NWG*NW;
                     }
                 } else if (blk_cur == 2) {
                     FOR_UNROLL (short jj = 0; jj < NQ; ++jj) {
-                        pm2[jj] += NW;
+                        pm2[jj] += NWG*NW;
                     }
                 }
 
@@ -8090,7 +8178,8 @@ void kernel_flash_attn_ext_impl(
             threadgroup_barrier(mem_flags::mem_threadgroup);
         }
 
-        if (FC_flash_attn_ext_has_sinks) {
+        // the sink contributes once per row, not once per workgroup
+        if (FC_flash_attn_ext_has_sinks && iwg == 0) {
             FOR_UNROLL (short jj = 0; jj < NQ; ++jj) {
                 const short j = jj*NSG + sgitg;
 
@@ -8118,22 +8207,45 @@ void kernel_flash_attn_ext_impl(
             break;
         }
 
-        device float4 * dst4 = (device float4 *) dst + ((uint64_t)iq3*args.ne2*args.ne1 + iq2 + (uint64_t)(iq1 + j)*args.ne1)*DV4;
+        const uint64_t rid = (uint64_t)iq3*args.ne2*args.ne1 + iq2 + (uint64_t)(iq1 + j)*args.ne1;
 
-        const float scale = S[jj] == 0.0 ? 0.0f : 1.0f/S[jj];
+        if (NWG == 1) {
+            device float4 * dst4 = (device float4 *) dst + rid*DV4;
 
-        if (DV4 % NW == 0) {
-            FOR_UNROLL (short ii = 0; ii < DV4/NW; ++ii) {
-                const short i = ii*NW + tiisg;
+            const float scale = S[jj] == 0.0 ? 0.0f : 1.0f/S[jj];
 
-                dst4[i] = (float4) so4[j*PV4 + i]*scale;
+            if (DV4 % NW == 0) {
+                FOR_UNROLL (short ii = 0; ii < DV4/NW; ++ii) {
+                    const short i = ii*NW + tiisg;
+
+                    dst4[i] = (float4) so4[j*PV4 + i]*scale;
+                }
+            } else {
+                for (short i = tiisg; i < DV4; i += NW) {
+                    dst4[i] = (float4) so4[j*PV4 + i]*scale;
+                }
             }
         } else {
+            // partial result for this workgroup, interleaved so that
+            // kernel_flash_attn_ext_vec_reduce can consume it unchanged:
+            // O is left unnormalised and S/M travel alongside it
+            const uint64_t nrows = (uint64_t)args.ne3*args.ne2*args.ne1;
+
+            device float4 * htmp4 = (device float4 *) dst + rid*DV4*NWG;
+            device float  * htmp1 = (device float  *) dst + nrows*DV*NWG;
+
             for (short i = tiisg; i < DV4; i += NW) {
-                dst4[i] = (float4) so4[j*PV4 + i]*scale;
+                htmp4[i*NWG + iwg] = (float4) so4[j*PV4 + i];
+            }
+
+            if (tiisg == 0) {
+                htmp1[rid*(2*NWG) + 2*iwg + 0] = S[jj];
+                htmp1[rid*(2*NWG) + 2*iwg + 1] = M[jj];
             }
         }
     }
+
+#undef NWG
 
 #undef NS10
 #undef NS20
@@ -8394,6 +8506,7 @@ constant int32_t FC_flash_attn_ext_vec_ns10 [[function_constant(FC_FLASH_ATTN_EX
 constant int32_t FC_flash_attn_ext_vec_ns20 [[function_constant(FC_FLASH_ATTN_EXT_VEC + 21)]];
 constant int32_t FC_flash_attn_ext_vec_nsg  [[function_constant(FC_FLASH_ATTN_EXT_VEC + 22)]];
 constant int32_t FC_flash_attn_ext_vec_nwg  [[function_constant(FC_FLASH_ATTN_EXT_VEC + 23)]];
+constant int32_t FC_flash_attn_ext_vec_nq   [[function_constant(FC_FLASH_ATTN_EXT_VEC + 24)]];
 
 template<
     typename q4_t,  // query types in shared memory
@@ -8432,15 +8545,23 @@ kernel void kernel_flash_attn_ext_vec(
 
 #define NWG  (FC_flash_attn_ext_vec_nwg)
 #define NSG  (FC_flash_attn_ext_vec_nsg)
+#define NQ   (FC_flash_attn_ext_vec_nq)
 
 #define NS10 (FC_flash_attn_ext_vec_ns10)
 #define NS20 (FC_flash_attn_ext_vec_ns20)
+
+    // NQ query rows share one K/V stream: each cache chunk is fetched once and scored
+    // against all NQ queries, instead of once per query by NQ separate threadgroups.
+    // The repeated pk4/pv4 reads inside the jq loop hit L1; what drops by NQ is the
+    // SLC/global traffic, which is what limits this kernel at wide verify batches.
+    // MAX_NQ only bounds the small per-query register arrays below.
+    constexpr short MAX_NQ = 8;
 
     const short iwg = tgpig[2]%NWG;
 
     const ushort iq3 = tgpig[2]/NWG;
     const ushort iq2 = tgpig[1];
-    const ushort iq1 = tgpig[0];
+    const ushort iq1 = tgpig[0]*NQ;
 
     constexpr short DK4 = DK/4;
     constexpr short DV4 = DV/4;
@@ -8460,19 +8581,22 @@ kernel void kernel_flash_attn_ext_vec(
 
   //const short T = PK + NSG*SH; // shared memory size per query in (half)
 
-  //threadgroup q_t   * sq  = (threadgroup q_t   *) (shmem_f16 +                      0*PK); // holds the query data
-    threadgroup q4_t  * sq4 = (threadgroup q4_t  *) (shmem_f16 +                      0*PK); // same as above but in q4_t
-    threadgroup s_t   * ss  = (threadgroup s_t   *) (shmem_f16 +   sgitg*SH       + NSG*PK); // scratch buffer for attention
-    threadgroup s4_t  * ss4 = (threadgroup s4_t  *) (shmem_f16 +   sgitg*SH       + NSG*PK); // same as above but in s4_t
-    threadgroup half  * sm  = (threadgroup half  *) (shmem_f16 +   sgitg*SH + 2*C + NSG*PK); // scratch buffer for mask
-    threadgroup o4_t  * so4 = (threadgroup o4_t  *) (shmem_f16 + 2*sgitg*PV       + NSG*PK + NSG*SH); // scratch buffer for the results
+    // shared memory is laid out as NQ-strided blocks:
+    //   [ NQ*PK query vectors ][ NSG*NQ scratch blocks of SH ][ NSG*NQ result blocks of 2*PV ]
+    // the per-simdgroup stride is therefore NQ*SH / NQ*2*PV, which the cross-simdgroup
+    // reduction below has to match.
+    threadgroup half * ss_base_h = shmem_f16 + NQ*PK          + sgitg*NQ*SH;
+    threadgroup half * so_base_h = shmem_f16 + NQ*PK + NSG*NQ*SH + 2*sgitg*NQ*PV;
 
-    // store the result for all queries in shared memory (the O matrix from the paper)
-    so4 += tiisg;
+  //threadgroup q_t   * sq  = (threadgroup q_t   *) (shmem_f16 + 0*PK); // holds the query data
+    threadgroup q4_t  * sq4 = (threadgroup q4_t  *) (shmem_f16 + 0*PK); // same as above but in q4_t
+
+#define SS_Q(jq)  ((threadgroup s_t  *) (ss_base_h + (jq)*SH))
+#define SS4_Q(jq) ((threadgroup s4_t *) (ss_base_h + (jq)*SH))
+#define SM_Q(jq)  ((threadgroup half *) (ss_base_h + (jq)*SH + 2*C))
+#define SO4_Q(jq) (((threadgroup o4_t *) (so_base_h + 2*(jq)*PV)) + tiisg)
 
     {
-        q += iq1*args.nb01 + iq2*args.nb02 + iq3*args.nb03;
-
         const short ikv2 = iq2/(args.ne02/args.ne_12_2);
         const short ikv3 = iq3/(args.ne03/args.ne_12_3);
 
@@ -8480,41 +8604,51 @@ kernel void kernel_flash_attn_ext_vec(
         v += ikv2*args.nb22 + ikv3*args.nb23;
     }
 
-    // load heads from Q to shared memory
-    device const float4 * q4 = (device const float4 *) ((device const char *) q);
+    // load heads from Q to shared memory (one vector per query row)
+    for (short jq = 0; jq < NQ; ++jq) {
+        threadgroup q4_t * sq4_j = sq4 + jq*PK4;
 
-    if (iq1 < args.ne01) {
-        for (short i = tiisg; i < PK4; i += NW) {
-            if (i < DK4) {
-                sq4[i] = (q4_t) q4[i];
-            } else {
-                sq4[i] = (q4_t) 0.0f;
+        if (iq1 + jq < args.ne01) {
+            device const float4 * q4 = (device const float4 *) ((device const char *) q +
+                    (iq1 + jq)*args.nb01 + iq2*args.nb02 + iq3*args.nb03);
+
+            for (short i = tiisg; i < PK4; i += NW) {
+                sq4_j[i] = i < DK4 ? (q4_t) q4[i] : (q4_t) 0.0f;
+            }
+        } else {
+            // out-of-range rows must still contribute zeros, never stale shared memory
+            for (short i = tiisg; i < PK4; i += NW) {
+                sq4_j[i] = (q4_t) 0.0f;
             }
         }
-    }
 
-    // zero out so
-    for (short i = 0; i < DV4/NL; ++i) {
-        so4[i*NL] = (o4_t) 0.0f;
-    }
+        // zero out so
+        threadgroup o4_t * so4_j = SO4_Q(jq);
+        for (short i = 0; i < DV4/NL; ++i) {
+            so4_j[i*NL] = (o4_t) 0.0f;
+        }
 
-    // zero out shared memory SH
-    for (short i = tiisg; i < SH/4; i += NW) {
-        ss4[i] = (s4_t) 0.0f;
+        // zero out shared memory SH
+        threadgroup s4_t * ss4_j = SS4_Q(jq);
+        for (short i = tiisg; i < SH/4; i += NW) {
+            ss4_j[i] = (s4_t) 0.0f;
+        }
     }
 
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
     {
-        float S = 0.0f;
-        float M = -FLT_MAX/2;
+        float S[MAX_NQ];
+        float M[MAX_NQ];
+
+        for (short jq = 0; jq < NQ; ++jq) {
+            S[jq] = 0.0f;
+            M[jq] = -FLT_MAX/2;
+        }
 
         // thread indices inside the simdgroup
         const short tx = tiisg%NL;
         const short ty = tiisg/NL;
-
-        // pointer to the mask
-        device const half * pm = (device const half *) (mask + iq1*args.nb31 + (iq2%args.ne32)*args.nb32 + (iq3%args.ne33)*args.nb33);
 
         float slope = 1.0f;
 
@@ -8536,6 +8670,9 @@ kernel void kernel_flash_attn_ext_vec(
                 break;
             }
 
+            bool is_pad  = false;
+            bool pad_oob = false;
+
             // the last partial chunk uses the pad buffer as source
             if (FC_flash_attn_ext_vec_has_kvpad && ic + C > args.ne11) {
                 k    = pad;
@@ -8548,33 +8685,44 @@ kernel void kernel_flash_attn_ext_vec(
                 k += (ikv2 + ikv3*args.ne_12_2)*args.nb11*C;
                 v += (ikv2 + ikv3*args.ne_12_2)*args.nb21*C;
 
-                if (!FC_flash_attn_ext_vec_has_mask) {
-                    if (ic + tiisg >= args.ne11) {
-                        sm[tiisg] = -MAXHALF;
-                    }
-                } else {
-                    pm = (device const half *) (mask) +
-                        iq1*C +
-                        (iq2%args.ne32)*(C*args.ne31) +
-                        (iq3%args.ne33)*(C*args.ne31*args.ne32);
-                }
+                is_pad  = true;
+                pad_oob = ic + tiisg >= args.ne11; // must be captured before ic is rebased
 
                 ic = 0;
             }
 
-            if (FC_flash_attn_ext_vec_has_mask) {
-                sm[tiisg] = pm[ic + tiisg];
-            }
+            for (short jq = 0; jq < NQ; ++jq) {
+                threadgroup const q4_t * sq4_j = sq4 + jq*PK4;
 
-            // skip -INF blocks
-            if (simd_max(sm[tiisg]) <= -MAXHALF) {
-                continue;
-            }
+                threadgroup s_t  * ss  = SS_Q(jq);
+                threadgroup half * sm  = SM_Q(jq);
+                threadgroup o4_t * so4 = SO4_Q(jq);
+
+                if (FC_flash_attn_ext_vec_has_mask) {
+                    device const half * pm = is_pad
+                        ? (device const half *) (mask) +
+                              (iq1 + jq)*C +
+                              (iq2%args.ne32)*(C*args.ne31) +
+                              (iq3%args.ne33)*(C*args.ne31*args.ne32)
+                        : (device const half *) (mask +
+                              (iq1 + jq)*args.nb31 +
+                              (iq2%args.ne32)*args.nb32 +
+                              (iq3%args.ne33)*args.nb33);
+
+                    sm[tiisg] = pm[ic + tiisg];
+                } else if (is_pad && pad_oob) {
+                    sm[tiisg] = -MAXHALF;
+                }
+
+                // skip -INF blocks
+                if (simd_max(sm[tiisg]) <= -MAXHALF) {
+                    continue;
+                }
 
             // Q*K^T
             {
                 device      const k4_t * pk4 = (device const k4_t *) (k + ic*args.nb11);
-                threadgroup const q4_t * pq4 = sq4;
+                threadgroup const q4_t * pq4 = sq4_j;
 
                 pk4 += ty*NS10/4 + tx;
                 pq4 += tx;
@@ -8597,7 +8745,7 @@ kernel void kernel_flash_attn_ext_vec(
 
                             deq_k_t4(pk + i/nl_k, i%nl_k, mk);
 
-                            mqk[cc] += dot((float4) mk, (float4) sq4[i]);
+                            mqk[cc] += dot((float4) mk, (float4) sq4_j[i]);
                         }
                     }
 
@@ -8655,15 +8803,15 @@ kernel void kernel_flash_attn_ext_vec(
 
             // online softmax
             {
-                const float m = M;
+                const float m = M[jq];
                 const float s = ss[tiisg];
 
-                M = simd_max(max(M, s));
+                M[jq] = simd_max(max(M[jq], s));
 
-                const float ms = exp(m - M);
-                const float vs = exp(s - M);
+                const float ms = exp(m - M[jq]);
+                const float vs = exp(s - M[jq]);
 
-                S = S*ms + simd_sum(vs);
+                S[jq] = S[jq]*ms + simd_sum(vs);
 
                 // the P matrix from the paper (Q rows, C columns)
                 ss[tiisg] = vs;
@@ -8755,61 +8903,74 @@ kernel void kernel_flash_attn_ext_vec(
                     }
                 }
             }
+            } // jq
         }
 
         if (FC_flash_attn_ext_vec_has_sinks && sgitg == 0 && iwg == 0) {
-            const float m = M;
-            const float s = tiisg == 0 ? ((device const float *) sinks)[iq2] : -FLT_MAX/2;
+            for (short jq = 0; jq < NQ; ++jq) {
+                threadgroup o4_t * so4 = SO4_Q(jq);
 
-            M = simd_max(max(M, s));
+                const float m = M[jq];
+                const float s = tiisg == 0 ? ((device const float *) sinks)[iq2] : -FLT_MAX/2;
 
-            const float ms = exp(m - M);
-            const float vs = exp(s - M);
+                M[jq] = simd_max(max(M[jq], s));
 
-            S = S*ms + simd_sum(vs);
+                const float ms = exp(m - M[jq]);
+                const float vs = exp(s - M[jq]);
 
-            if ((DV4/NL % NW == 0) || ty == 0) {
-                FOR_UNROLL (short ii = 0; ii < DV4/NL; ++ii) {
-                    so4[ii*NL] *= ms;
+                S[jq] = S[jq]*ms + simd_sum(vs);
+
+                if ((DV4/NL % NW == 0) || ty == 0) {
+                    FOR_UNROLL (short ii = 0; ii < DV4/NL; ++ii) {
+                        so4[ii*NL] *= ms;
+                    }
                 }
             }
         }
 
         // these are needed for reducing the results from the simdgroups (reuse the ss buffer)
         if (tiisg == 0) {
-            ss[0] = (s_t) S;
-            ss[1] = (s_t) M;
+            for (short jq = 0; jq < NQ; ++jq) {
+                threadgroup s_t * ss = SS_Q(jq);
+
+                ss[0] = (s_t) S[jq];
+                ss[1] = (s_t) M[jq];
+            }
         }
     }
-
-    so4 -= tiisg;
 
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
     // parallel reduce
+    // note: the per-simdgroup stride is NQ blocks wide now, for both ss and so4
     for (short r = NSG/2; r > 0; r >>= 1) {
         if (sgitg < r) {
-            const float S0 = ss[           0];
-            const float S1 = ss[r*(SH/2) + 0];
+            for (short jq = 0; jq < NQ; ++jq) {
+                threadgroup s_t  * ss  = SS_Q(jq);
+                threadgroup o4_t * so4 = (threadgroup o4_t *) (so_base_h + 2*jq*PV);
 
-            const float M0 = ss[           1];
-            const float M1 = ss[r*(SH/2) + 1];
+                const float S0 = ss[               0];
+                const float S1 = ss[r*NQ*(SH/2) + 0];
 
-            const float M = max(M0, M1);
+                const float M0 = ss[               1];
+                const float M1 = ss[r*NQ*(SH/2) + 1];
 
-            const float ms0 = exp(M0 - M);
-            const float ms1 = exp(M1 - M);
+                const float M = max(M0, M1);
 
-            const float S = S0*ms0 + S1*ms1;
+                const float ms0 = exp(M0 - M);
+                const float ms1 = exp(M1 - M);
 
-            if (tiisg == 0) {
-                ss[0] = S;
-                ss[1] = M;
-            }
+                const float S = S0*ms0 + S1*ms1;
 
-            // O_0 = diag(ms0)*O_0 + diag(ms1)*O_1
-            for (short i = tiisg; i < DV4; i += NW) {
-                so4[i] = so4[i]*ms0 + so4[i + r*PV4]*ms1;
+                if (tiisg == 0) {
+                    ss[0] = S;
+                    ss[1] = M;
+                }
+
+                // O_0 = diag(ms0)*O_0 + diag(ms1)*O_1
+                for (short i = tiisg; i < DV4; i += NW) {
+                    so4[i] = so4[i]*ms0 + so4[i + r*NQ*PV4]*ms1;
+                }
             }
         }
 
@@ -8819,29 +8980,45 @@ kernel void kernel_flash_attn_ext_vec(
     // final rescale with 1/S and store to global memory
     if (sgitg == 0) {
         const int64_t nrows = args.ne3*args.ne2*args.ne1;
-        const int64_t rid   = iq3*args.ne2*args.ne1 + iq2 + iq1*args.ne1;
 
         device float4 * dst4 = (device float4 *) dst;
         device float  * dst1 = (device float  *) dst + nrows*DV*NWG; // the S and M are stored after the results
 
-        const float S = NWG == 1 ? (ss[0] == 0.0f ? 0.0f : 1.0f/ss[0]) : 1.0f;
+        for (short jq = 0; jq < NQ; ++jq) {
+            if (iq1 + jq >= args.ne01) {
+                break;
+            }
 
-        // interleave the workgroup data
-        for (short i = tiisg; i < DV4; i += NW) {
-            dst4[rid*DV4*NWG + NWG*i + iwg] = (float4) so4[i]*S;
-        }
+            threadgroup s_t  * ss  = SS_Q(jq);
+            threadgroup o4_t * so4 = (threadgroup o4_t *) (so_base_h + 2*jq*PV);
 
-        // store S and M
-        if (NWG > 1) {
-            if (tiisg == 0) {
-                dst1[rid*(2*NWG) + 2*iwg + 0] = ss[0];
-                dst1[rid*(2*NWG) + 2*iwg + 1] = ss[1];
+            const int64_t rid = iq3*args.ne2*args.ne1 + iq2 + (iq1 + jq)*args.ne1;
+
+            const float S = NWG == 1 ? (ss[0] == 0.0f ? 0.0f : 1.0f/ss[0]) : 1.0f;
+
+            // interleave the workgroup data
+            for (short i = tiisg; i < DV4; i += NW) {
+                dst4[rid*DV4*NWG + NWG*i + iwg] = (float4) so4[i]*S;
+            }
+
+            // store S and M
+            if (NWG > 1) {
+                if (tiisg == 0) {
+                    dst1[rid*(2*NWG) + 2*iwg + 0] = ss[0];
+                    dst1[rid*(2*NWG) + 2*iwg + 1] = ss[1];
+                }
             }
         }
     }
 
+#undef SS_Q
+#undef SS4_Q
+#undef SM_Q
+#undef SO4_Q
+
 #undef NWG
 #undef NSG
+#undef NQ
 #undef NS10
 #undef NS20
 }
@@ -9019,11 +9196,15 @@ kernel void kernel_flash_attn_ext_vec_reduce(
 
     device const float  * ss    = (device const float  *) htmp + (uint64_t)args.nrows*DV*NWG;
 
-    float S = ss[rid*(2*NWG) + 2*iwg + 0];
-    float M = ss[rid*(2*NWG) + 2*iwg + 1];
+    // one workgroup per simd lane, so lanes >= NWG have no partial to contribute.
+    // they must feed identities into the reductions below rather than read past the row.
+    const bool valid = iwg < NWG;
+
+    float S = valid ? ss[rid*(2*NWG) + 2*iwg + 0] : 0.0f;
+    float M = valid ? ss[rid*(2*NWG) + 2*iwg + 1] : -FLT_MAX/2;
 
     const float m  = simd_max(M);
-    const float ms = exp(M - m);
+    const float ms = valid ? exp(M - m) : 0.0f;
 
     S = simd_sum(S*ms);
     S = S == 0.0f ? 0.0f : 1.0f/S;
@@ -9034,7 +9215,9 @@ kernel void kernel_flash_attn_ext_vec_reduce(
     device       float4 * dst4  = (device       float4 *) dst  + rid*DV4;
 
     for (short i = sgitg; i < DV4; i += NWG) {
-        const float4 v = simd_sum(htmp4[i*NWG + iwg]*ms);
+        const float4 h = valid ? htmp4[i*NWG + iwg] : float4(0.0f);
+
+        const float4 v = simd_sum(h*ms);
 
         if (iwg == 0) {
             dst4[i] = v*S;

@@ -113,6 +113,8 @@
 #define OP_FLASH_ATTN_EXT_NCPSG 64
 
 #define OP_FLASH_ATTN_EXT_VEC_NQPSG 1
+// upper bound on query rows per threadgroup for the vec kernel; must match MAX_NQ in the shader
+#define OP_FLASH_ATTN_EXT_VEC_MAX_NQ 8
 #define OP_FLASH_ATTN_EXT_VEC_NCPSG 32
 
 #define OP_LIGHTNING_INDEXER_DK    128
@@ -510,6 +512,18 @@ typedef struct {
 typedef struct {
     uint64_t nb; // total bytes
 } ggml_metal_kargs_cpy_cont;
+
+// row-contiguous same-type copy: rows are raw byte moves, outer strides arbitrary
+typedef struct {
+    uint64_t nb_row; // bytes per contiguous row
+    int32_t  ne2;    // rows in dim 2 (dim 3 is folded into grid z)
+    uint64_t nb1;    // dst strides
+    uint64_t nb2;
+    uint64_t nb3;
+    uint64_t nb01;   // src strides
+    uint64_t nb02;
+    uint64_t nb03;
+} ggml_metal_kargs_cpy_cont_rows;
 
 // weight-repack probe: q4_0 -> deinterleaved (per row: [d x nblk][pad16][qs x nblk])
 typedef struct {
@@ -957,6 +971,9 @@ typedef struct {
     uint64_t nb1;
     uint64_t nb2;
     uint64_t nb3;
+    // strides in the state cache, used when the snapshot writeback is fused
+    uint64_t wb_nb1; // per-seq
+    uint64_t wb_nb2; // per-slot
 } ggml_metal_kargs_gated_delta_net;
 
 typedef struct {

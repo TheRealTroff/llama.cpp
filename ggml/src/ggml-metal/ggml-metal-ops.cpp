@@ -13,6 +13,47 @@
 #include <limits>
 #include <cmath>
 
+// max distance in graph nodes between a gated-delta-net op and its snapshot writeback
+#define GGML_METAL_GDN_WB_WINDOW 16
+
+static bool ggml_metal_gdn_wb_enabled(void) {
+    static const bool res = getenv("GGML_GDN_FUSE_WB") ? atoi(getenv("GGML_GDN_FUSE_WB")) != 0 : false;
+    return res;
+}
+
+// if cpy moves the state snapshots of a gated-delta-net op into the recurrent state
+// cache, return that op, else null.
+// the op side and the copy side must agree exactly, or the copy gets dropped while the
+// op still writes dst. so this depends only on the graph: no encoder state, and nothing
+// that differs between the normal encoder and the per-op profiling encoder (which
+// builds one op context per node)
+static const ggml_tensor * ggml_metal_gdn_wb_op(const ggml_tensor * cpy) {
+    if (cpy->op != GGML_OP_CPY || !cpy->src[0]) {
+        return nullptr;
+    }
+
+    const ggml_tensor * op = cpy->src[0]->view_src;
+
+    if (!op || op->op != GGML_OP_GATED_DELTA_NET || ggml_get_op_params_i32(op, 0) <= 1) {
+        return nullptr;
+    }
+
+    if (cpy->src[0]->type != GGML_TYPE_F32 || cpy->type != GGML_TYPE_F32) {
+        return nullptr;
+    }
+
+    if (!ggml_is_contiguous(cpy->src[0]) || cpy->nb[0] != sizeof(float)) {
+        return nullptr;
+    }
+
+    // the snapshots start right after the attention scores in dst
+    if ((size_t) ((char *) cpy->src[0]->data - (char *) op->data) != ggml_nelements(op->src[2])*sizeof(float)) {
+        return nullptr;
+    }
+
+    return op;
+}
+
 static ggml_metal_buffer_id ggml_metal_get_buffer_id(const ggml_tensor * t) {
     if (!t) {
         return { nullptr, 0 };
@@ -36,10 +77,12 @@ struct ggml_metal_op {
         bool use_concurrency,
         bool use_capture,
         int  debug_graph,
-        int  debug_fusion) {
+        int  debug_fusion,
+        void * prof_smpbuf,
+        int  prof_idx0) {
         this->dev             = dev;
         this->lib             = ggml_metal_device_get_library(dev);
-        this->enc             = ggml_metal_encoder_init(cmd_buf, use_concurrency);
+        this->enc             = prof_smpbuf ? ggml_metal_encoder_init_timed(cmd_buf, prof_smpbuf, prof_idx0) : ggml_metal_encoder_init(cmd_buf, use_concurrency);
         this->mem_ranges      = ggml_mem_ranges_init(debug_graph);
         this->idx_start       = idx_start;
         this->idx_end         = idx_end;
@@ -72,9 +115,18 @@ struct ggml_metal_op {
         return idxs.size();
     }
 
+    const ggml_cgraph * graph() const {
+        return gf;
+    }
+
     ggml_tensor * node(int i) const {
         assert(i >= 0 && i < (int) idxs.size());
         return ggml_graph_node(gf, idxs[i]);
+    }
+
+    int node_idx(int i) const {
+        assert(i >= 0 && i < (int) idxs.size());
+        return idxs[i];
     }
 
     bool can_fuse(int i0, const ggml_op * ops, int n_ops) const {
@@ -120,7 +172,9 @@ ggml_metal_op_t ggml_metal_op_init(
         bool use_concurrency,
         bool use_capture,
         int debug_graph,
-        int debug_fusion) {
+        int debug_fusion,
+        void * prof_smpbuf,
+        int prof_idx0) {
     ggml_metal_op_t res = new ggml_metal_op(
         dev,
         cmd_buf,
@@ -131,7 +185,9 @@ ggml_metal_op_t ggml_metal_op_init(
         use_concurrency,
         use_capture,
         debug_graph,
-        debug_fusion);
+        debug_fusion,
+        prof_smpbuf,
+        prof_idx0);
 
     return res;
 }
@@ -142,6 +198,10 @@ void ggml_metal_op_free(ggml_metal_op_t ctx) {
 
 int ggml_metal_op_n_nodes(ggml_metal_op_t ctx) {
     return ctx->n_nodes();
+}
+
+int ggml_metal_op_node_idx(ggml_metal_op_t ctx, int i) {
+    return ctx->node_idx(i);
 }
 
 static bool ggml_metal_op_concurrency_reset(ggml_metal_op_t ctx) {
@@ -179,6 +239,23 @@ static int ggml_metal_op_encode_impl(ggml_metal_op_t ctx, int idx) {
 
     if (ggml_is_empty(node)) {
         return 1;
+    }
+
+    // the gated-delta-net op wrote these snapshots into the cache already
+    if (ggml_metal_gdn_wb_enabled() && node->op == GGML_OP_CPY) {
+        const ggml_tensor * op = ggml_metal_gdn_wb_op(node);
+
+        if (op) {
+            const ggml_cgraph * gf = ctx->graph();
+
+            const int ci = ctx->node_idx(idx);
+
+            for (int j = ci - 1; j >= 0 && j >= ci - GGML_METAL_GDN_WB_WINDOW; j--) {
+                if (gf->nodes[j] == op) {
+                    return 1;
+                }
+            }
+        }
     }
 
     switch (node->op) {
@@ -1835,7 +1912,34 @@ int ggml_metal_op_gated_delta_net(ggml_metal_op_t ctx, int idx) {
     GGML_TENSOR_LOCALS( int32_t, ne,  op,         ne);
     GGML_TENSOR_LOCALS(uint64_t, nb,  op,         nb);
 
-    auto pipeline = ggml_metal_library_get_pipeline_gated_delta_net(lib, op);
+    // the graph writes the K snapshots into dst, then copies them into the state cache.
+    // write them straight to the cache instead, so ggml_metal_op_encode_impl can drop
+    // that copy. the copy sits a few nodes later (the attention output path comes
+    // first), so look for it over the same window the copy side uses
+    const ggml_tensor * cpy = nullptr;
+
+    if (ggml_metal_gdn_wb_enabled()) {
+        const ggml_cgraph * gf = ctx->graph();
+
+        const int gi = ctx->node_idx(idx);
+
+        for (int j = gi + 1; j < gf->n_nodes && j <= gi + GGML_METAL_GDN_WB_WINDOW; j++) {
+            if (ggml_metal_gdn_wb_op(gf->nodes[j]) == op) {
+                cpy = gf->nodes[j];
+                break;
+            }
+        }
+    }
+
+    const bool fuse_wb = cpy != nullptr;
+
+    // the kernel writes the state cache, which is not part of this node's ranges,
+    // so order it against earlier nodes before touching the encoder
+    if (fuse_wb && !ggml_metal_op_concurrency_check(ctx, cpy)) {
+        ggml_metal_op_concurrency_reset(ctx);
+    }
+
+    auto pipeline = ggml_metal_library_get_pipeline_gated_delta_net(lib, op, fuse_wb);
 
     int ida = 0;
 
@@ -1875,6 +1979,8 @@ int ggml_metal_op_gated_delta_net(ggml_metal_op_t ctx, int idx) {
         /*.nb1  =*/ nb1,
         /*.nb2  =*/ nb2,
         /*.nb3  =*/ nb3,
+        /*.wb_nb1 =*/ fuse_wb ? cpy->nb[1] : 0,
+        /*.wb_nb2 =*/ fuse_wb ? cpy->nb[2] : 0,
     };
 
     ggml_metal_encoder_set_pipeline(enc, pipeline);
@@ -1886,10 +1992,15 @@ int ggml_metal_op_gated_delta_net(ggml_metal_op_t ctx, int idx) {
     ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[4]), ida++); // beta
     ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[5]), ida++); // state
     ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         ida++); // dst
+    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(fuse_wb ? cpy : op), ida++); // snapshot writeback
 
     const int nsg = pipeline.nsg;
 
     ggml_metal_encoder_dispatch_threadgroups(enc, op->src[2]->ne[0]/nsg, op->src[2]->ne[1], op->src[2]->ne[3], 32, nsg, 1);
+
+    if (fuse_wb) {
+        ggml_metal_op_concurrency_add(ctx, cpy);
+    }
 
     return 1;
 }
@@ -2112,6 +2223,45 @@ int ggml_metal_op_cpy(ggml_metal_op_t ctx, int idx) {
         ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         2);
 
         ggml_metal_encoder_dispatch_threadgroups(enc, std::max(ntg, 1), 1, 1, 256, 1, 1);
+
+        return 1;
+    }
+
+    // row-contiguous same-type copies with arbitrary outer strides (e.g. the strided 3D
+    // recurrent-state snapshot writebacks) are per-row byte moves; the generic kernel's
+    // scalar indexing runs ~7x below bandwidth on them
+    if (op->src[0]->type == op->type && !ggml_is_quantized(op->type) &&
+        ne00 == ne0 && ne01 == ne1 && ne02 == ne2 && ne03 == ne3 &&
+        nb00 == ggml_type_size(op->type) && nb0 == ggml_type_size(op->type) &&
+        ((uint64_t) ne00*nb00) % 16 == 0 &&
+        (nb01 | nb02 | nb03 | nb1 | nb2 | nb3) % 16 == 0 &&
+        ((uintptr_t) op->src[0]->data % 16) == 0 && ((uintptr_t) op->data % 16) == 0) {
+        auto pipeline_rows = ggml_metal_library_get_pipeline(lib, "kernel_cpy_cont_rows");
+        if (!pipeline_rows.pipeline) {
+            pipeline_rows = ggml_metal_library_compile_pipeline(lib, "kernel_cpy_cont_rows", "kernel_cpy_cont_rows", nullptr);
+        }
+
+        const uint64_t nb_row = (uint64_t) ne00*nb00;
+
+        ggml_metal_kargs_cpy_cont_rows cargs = {
+            /*.nb_row =*/ nb_row,
+            /*.ne2    =*/ ne2,
+            /*.nb1    =*/ nb1,
+            /*.nb2    =*/ nb2,
+            /*.nb3    =*/ nb3,
+            /*.nb01   =*/ nb01,
+            /*.nb02   =*/ nb02,
+            /*.nb03   =*/ nb03,
+        };
+
+        const int ntg = (int) std::min<uint64_t>((nb_row/16 + 255)/256, 1024);
+
+        ggml_metal_encoder_set_pipeline(enc, pipeline_rows);
+        ggml_metal_encoder_set_bytes   (enc, &cargs, sizeof(cargs), 0);
+        ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[0]), 1);
+        ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         2);
+
+        ggml_metal_encoder_dispatch_threadgroups(enc, std::max(ntg, 1), ne1, ne2*ne3, 256, 1, 1);
 
         return 1;
     }
@@ -2472,14 +2622,23 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
     // first try to use small-batch mat-mv kernels
     // these should be efficient for BS [2, ~8]
     // multi-column mv probe (GGML_MV_NC=1): plain-mv structure with an ne11 loop, N=2..4
-    static const int env_mv_nc = getenv("GGML_MV_NC") ? atoi(getenv("GGML_MV_NC")) : 0;
+    // GGML_MV_NC_SMALL=<ne01_max>: small-dst matmuls (ne01 <= ne01_max) route here for
+    // ne11 up to 8, taking precedence over skinny - skinny tiles 32 dst rows per TG, so
+    // small-ne01 dsts dispatch starved (2 TGs for [*,48]) and pay a flat ~80 us at N=7;
+    // the mv structure keeps rows/nr0 parallelism. The NC>=3 fixed spill penalty is paid
+    // per row-group, so small ne01 dodges most of it.
+    static const int env_mv_nc       = getenv("GGML_MV_NC")       ? atoi(getenv("GGML_MV_NC"))       : 0;
+    static const int env_mv_nc_small = getenv("GGML_MV_NC_SMALL") ? atoi(getenv("GGML_MV_NC_SMALL")) : 0;
 
-    if (env_mv_nc > 0 &&
+    const bool mv_nc_route = (ne11 >= 2 && ne11 <= std::min(env_mv_nc, 4)) ||
+                             (env_mv_nc_small > 0 && ne01 <= env_mv_nc_small && ne11 >= 2 && ne11 <= 8);
+
+    if (mv_nc_route &&
         op->src[0]->type == GGML_TYPE_Q4_0 &&
         op->src[1]->type == GGML_TYPE_F32 &&
         !ggml_is_transposed(op->src[0]) &&
         !ggml_is_transposed(op->src[1]) &&
-        ne00 % 32 == 0 && ne11 >= 2 && ne11 <= std::min(env_mv_nc, 4)) {
+        ne00 % 32 == 0) {
         auto pipeline = ggml_metal_library_get_pipeline_mul_mv_nc(lib, op, (int) ne11);
 
         ggml_metal_kargs_mul_mv args = {
@@ -3134,7 +3293,15 @@ bool ggml_metal_op_flash_attn_ext_use_vec(const ggml_tensor * op) {
     const int64_t ne01 = op->src[0]->ne[1]; // batch size
 
     // use vec kernel if the batch size is small and if the head size is supported
-    return (ne01 < 20) && (ne00 % 32 == 0);
+    //
+    // GGML_FA_VEC_MAX overrides the cutoff (default 20). The vec kernel runs one query and
+    // one head per threadgroup, so it re-streams each kv-head's cache ne01*gqa times; the
+    // non-vec kernel batches NQPSG=8 queries per threadgroup and drops the ne01 factor.
+    // Lowering this routes speculative-verify batches to the non-vec path -- a probe for how
+    // much of the redundancy is query-side.
+    static const int64_t vec_max = getenv("GGML_FA_VEC_MAX") ? atoll(getenv("GGML_FA_VEC_MAX")) : 20;
+
+    return (ne01 < vec_max) && (ne00 % 32 == 0);
 }
 
 size_t ggml_metal_op_flash_attn_ext_extra_pad(const ggml_tensor * op) {
@@ -3483,7 +3650,29 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
             /*.logit_softcap =*/ logit_softcap,
         };
 
-        auto pipeline = ggml_metal_library_get_pipeline_flash_attn_ext(lib, op, has_mask, has_sinks, has_bias, has_scap, has_kvpad, nsg);
+        // GGML_FA_MM_NWG splits the KV cache across workgroups for this kernel.
+        //
+        // It already shares every cache chunk across its Q=8 query rows, so unlike the vec
+        // kernel it needs no extra traffic to widen the batch -- what it lacks is
+        // parallelism: at decode it dispatches only (ne01/Q, ne02, ne03) threadgroups, i.e.
+        // 24 for a 24-head model, which is why routing verify batches to it measured no
+        // better than the vec kernel. Splitting the cache gives it both.
+        //
+        // Restricted to ne01 <= 32 because the temp buffer is reserved for
+        // min(ne01, 32)*ne02*ne03 rows -- prefill-sized batches would overflow it, and they
+        // have plenty of threadgroups already.
+        static const int env_fa_mm_nwg = getenv("GGML_FA_MM_NWG") ? atoi(getenv("GGML_FA_MM_NWG")) : 1;
+
+        int32_t nwg = 1;
+        if (env_fa_mm_nwg > 1 && ne01 <= 32) {
+            nwg = std::min<int32_t>(env_fa_mm_nwg, 32);
+
+            // never launch more workgroups than there are cache chunks
+            nwg = std::min<int32_t>(nwg, (ne11 + ncpsg - 1)/ncpsg);
+            nwg = std::max<int32_t>(nwg, 1);
+        }
+
+        auto pipeline = ggml_metal_library_get_pipeline_flash_attn_ext(lib, op, has_mask, has_sinks, has_bias, has_scap, has_kvpad, nsg, nwg);
 
         ggml_metal_encoder_set_pipeline(enc, pipeline);
         ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);
@@ -3494,15 +3683,59 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
         ggml_metal_encoder_set_buffer  (enc, bid_src4, 5);
         ggml_metal_encoder_set_buffer  (enc, bid_pad,  6);
         ggml_metal_encoder_set_buffer  (enc, bid_blk,  7);
-        ggml_metal_encoder_set_buffer  (enc, bid_dst,  8);
+        ggml_metal_encoder_set_buffer  (enc, nwg == 1 ? bid_dst : bid_tmp, 8);
 
         ggml_metal_encoder_set_threadgroup_memory_size(enc, smem, 0);
 
-        ggml_metal_encoder_dispatch_threadgroups(enc, (ne01 + nqptg - 1)/nqptg, ne02, ne03, 32, nsg, 1);
+        ggml_metal_encoder_dispatch_threadgroups(enc, (ne01 + nqptg - 1)/nqptg, ne02, ne03*nwg, 32, nsg, 1);
+
+        if (nwg > 1) {
+            // sanity checks
+            assert(ggml_metal_op_flash_attn_ext_extra_tmp(op) != 0);
+
+            GGML_ASSERT(ne01*ne02*ne03 == ne1*ne2*ne3);
+            GGML_ASSERT((uint64_t)ne1*ne2*ne3 <= (1u << 31));
+
+            // sync the 2 kernels
+            ggml_metal_op_concurrency_reset(ctx);
+
+            // the partials use the same layout as the vec kernel, so the same reduction applies
+            const int32_t nrows = ne1*ne2*ne3;
+
+            ggml_metal_kargs_flash_attn_ext_vec_reduce args0 = {
+                nrows,
+            };
+
+            auto pipeline0 = ggml_metal_library_get_pipeline_flash_attn_ext_vec_reduce(lib, op, ne20, nwg);
+
+            ggml_metal_encoder_set_pipeline(enc, pipeline0);
+            ggml_metal_encoder_set_bytes   (enc, &args0, sizeof(args0), 0);
+            ggml_metal_encoder_set_buffer  (enc, bid_tmp, 1);
+            ggml_metal_encoder_set_buffer  (enc, bid_dst, 2);
+
+            ggml_metal_encoder_dispatch_threadgroups(enc, nrows, 1, 1, 32*nwg, 1, 1);
+        }
 #undef FATTN_SMEM
     } else {
         // half4x4 kernel
-        const int nqptg = OP_FLASH_ATTN_EXT_VEC_NQPSG; // queries per threadgroup
+        //
+        // GGML_FA_NQ sets the query rows per threadgroup (default 1 = upstream behaviour).
+        // The vec kernel otherwise runs one query per threadgroup, so each kv-head's cache
+        // is re-streamed ne01 times per layer; batching the rows lets one threadgroup fetch
+        // a chunk once and score it against all of them. Only exact divisors of ne01 are
+        // used, so no padded query rows are ever scored.
+        static const int env_fa_nq = getenv("GGML_FA_NQ") ? atoi(getenv("GGML_FA_NQ")) : 1;
+
+        int nqptg = OP_FLASH_ATTN_EXT_VEC_NQPSG;       // queries per threadgroup
+        if (env_fa_nq > 1) {
+            for (int c = std::min<int>(env_fa_nq, OP_FLASH_ATTN_EXT_VEC_MAX_NQ); c > 1; --c) {
+                if (ne01 % c == 0) {
+                    nqptg = c;
+                    break;
+                }
+            }
+        }
+
         const int ncpsg = OP_FLASH_ATTN_EXT_VEC_NCPSG; // cache values per simdgroup !! sync with kernel template arguments !!
         const int nhptg = 1;                           // heads per threadgroup
 
@@ -3566,7 +3799,9 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
         // ne20*(nsg)
         // each simdgroup has a full f32 head vector in shared mem to accumulate results
         //
-#define FATTN_SMEM(nsg) (GGML_PAD(((GGML_PAD(ne00, 128) + 4*ncpsg + 2*GGML_PAD(ne20, 128))*(nsg))*(sizeof(float)/2), 16))
+        // with nqptg > 1 the shared memory is NQ-strided: nqptg query vectors, then
+        // nsg*nqptg scratch blocks and nsg*nqptg result blocks
+#define FATTN_SMEM(nsg) (GGML_PAD((((int64_t) GGML_PAD(ne00, 128) + (4*ncpsg + 2*GGML_PAD(ne20, 128))*(nsg))*(nqptg))*(sizeof(float)/2), 16))
 
         int64_t nsg = 1;
 
@@ -3584,6 +3819,20 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
             while (2*nwg*nsg*ncpsg < ne11 && nsg < 4) {
                 nsg *= 2;
             }
+        }
+
+        // GGML_FA_NSG pins simdgroups per threadgroup. With nqptg > 1 each simdgroup keeps
+        // its own K/V chunk in flight, so nsg copies compete for L1 and the per-query
+        // re-reads miss; pinning nsg=1 tests whether the re-reads can be served locally.
+        static const int env_fa_nsg = getenv("GGML_FA_NSG") ? atoi(getenv("GGML_FA_NSG")) : 0;
+        if (env_fa_nsg > 0) {
+            nsg = env_fa_nsg;
+        }
+
+        // batching query rows multiplies the shared-memory footprint -- give back
+        // simdgroups rather than overflow the threadgroup budget
+        while (nsg > 1 && FATTN_SMEM(nsg) > (int64_t) props_dev->max_theadgroup_memory_size) {
+            nsg /= 2;
         }
 
         ggml_metal_kargs_flash_attn_ext_vec args = {
@@ -3621,7 +3870,7 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
             /*.logit_softcap =*/ logit_softcap,
         };
 
-        auto pipeline = ggml_metal_library_get_pipeline_flash_attn_ext_vec(lib, op, has_mask, has_sinks, has_bias, has_scap, has_kvpad, nsg, nwg);
+        auto pipeline = ggml_metal_library_get_pipeline_flash_attn_ext_vec(lib, op, has_mask, has_sinks, has_bias, has_scap, has_kvpad, nsg, nwg, nqptg);
 
         GGML_ASSERT(nsg*32 <= ggml_metal_pipeline_max_theads_per_threadgroup(pipeline));
 

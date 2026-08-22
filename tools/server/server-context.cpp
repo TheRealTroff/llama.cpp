@@ -2763,7 +2763,24 @@ private:
     int64_t n_decode      = 0;
     int64_t n_post_decode = 0;
     int64_t n_sampl       = 0;
-// #define DEBUG_TIMINGS
+    // spec-loop breakdown (single-slot decode rounds)
+    int64_t t_ck_save_pre = 0; // spec_ckpt.update_pos/update_dft before drafting
+    int64_t t_draft_call  = 0; // common_speculative_draft (incl. dft decode)
+    int64_t t_ck_post     = 0; // post-draft: load_dft + seq_rm + update_tgt/update_dft
+    int64_t t_dec_sub_tg  = 0; // llama_decode submit, small batch (<=16 tokens)
+    int64_t t_dec_syn_tg  = 0; // llama_synchronize wait, small batch
+    int64_t t_dec_sub_pp  = 0; // llama_decode submit, large batch
+    int64_t t_dec_syn_pp  = 0; // llama_synchronize wait, large batch
+    int64_t t_accept_blk  = 0; // sampler clone + sample_and_accept_n + rollback
+    int64_t n_ck_save_pre = 0;
+    int64_t n_draft_call  = 0;
+    int64_t n_ck_post     = 0;
+    int64_t n_dec_sub_tg  = 0;
+    int64_t n_dec_syn_tg  = 0;
+    int64_t n_dec_sub_pp  = 0;
+    int64_t n_dec_syn_pp  = 0;
+    int64_t n_accept_blk  = 0;
+#define DEBUG_TIMINGS
 #ifdef DEBUG_TIMINGS
     struct scoped_timer {
         int64_t & t;
@@ -2795,6 +2812,19 @@ private:
             SRV_INF("avg t_decode      = %f ms\n", (double) t_decode / n_decode / 1000.0);
             SRV_INF("avg t_post_decode = %f ms\n", (double) t_post_decode / n_post_decode / 1000.0);
             SRV_INF("avg t_sampl       = %f ms\n", (double) t_sampl / n_sampl / 1000.0);
+            auto dump = [](const char * name, int64_t t, int64_t n) {
+                if (n > 0) {
+                    SRV_INF("spec-prof %-14s n = %6" PRId64 ", avg = %8.3f ms, total = %9.1f ms\n", name, n, (double) t / n / 1000.0, (double) t / 1000.0);
+                }
+            };
+            dump("ck_save_pre", t_ck_save_pre, n_ck_save_pre);
+            dump("draft_call",  t_draft_call,  n_draft_call);
+            dump("ck_post",     t_ck_post,     n_ck_post);
+            dump("dec_sub_tg",  t_dec_sub_tg,  n_dec_sub_tg);
+            dump("dec_syn_tg",  t_dec_syn_tg,  n_dec_syn_tg);
+            dump("dec_sub_pp",  t_dec_sub_pp,  n_dec_sub_pp);
+            dump("dec_syn_pp",  t_dec_syn_pp,  n_dec_syn_pp);
+            dump("accept_blk",  t_accept_blk,  n_accept_blk);
         }
 #endif
 
@@ -3018,6 +3048,8 @@ private:
                     } else {
                         GGML_ASSERT(slot.spec_i_batch.empty());
 
+                        scoped_timer timer_ck(t_ck_save_pre, n_ck_save_pre);
+
                         slot.spec_ckpt.update_pos(
                                 slot.prompt.n_tokens(),
                                 llama_memory_seq_pos_min(llama_get_memory(ctx_tgt), slot.id),
@@ -3050,12 +3082,15 @@ private:
         // generate the actual drafts (if any)
         if (!drafting.empty()) {
             queue_tasks.yield_to_queue([&]() {
+                scoped_timer timer_draft(t_draft_call, n_draft_call);
                 common_speculative_draft(spec.get());
             });
         }
 
         // make checkpoints if needed
         iterate(drafting, [&](server_slot & slot) {
+            scoped_timer timer_ck(t_ck_post, n_ck_post);
+
             auto & draft = slot.spec_draft;
             auto & ckpt  = slot.spec_ckpt;
 
@@ -3686,8 +3721,13 @@ private:
         // note: the sync is done here too, so that the wait is also covered by the yield
         int ret = 0;
         queue_tasks.yield_to_queue([&]() {
-            ret = llama_decode(ctx_tgt, batch_view);
+            const bool is_tg = batch_view.n_tokens <= 16;
+            {
+                scoped_timer timer_sub(is_tg ? t_dec_sub_tg : t_dec_sub_pp, is_tg ? n_dec_sub_tg : n_dec_sub_pp);
+                ret = llama_decode(ctx_tgt, batch_view);
+            }
             if (ret == 0 && has_output) {
+                scoped_timer timer_syn(is_tg ? t_dec_syn_tg : t_dec_syn_pp, is_tg ? n_dec_syn_tg : n_dec_syn_pp);
                 llama_synchronize(ctx_tgt);
             }
         });
@@ -3915,6 +3955,8 @@ private:
 
             // verify and try to accept the draft
             {
+                scoped_timer timer_acc(t_accept_blk, n_accept_blk);
+
                 common_sampler_ptr smpl_save(common_sampler_clone(slot.smpl.get()));
 
                 GGML_ASSERT(slot.spec_i_batch.size() == n_draft + 1);

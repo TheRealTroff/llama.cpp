@@ -28,7 +28,8 @@ bool llama_batch_allocr::init(
         const llama_memory_i * memory,
         uint32_t n_embd,
         uint32_t n_seq_max,
-        bool output_all) {
+        bool output_all,
+        bool pos_gaps_ok) {
     clear();
 
     batch = batch_inp;
@@ -286,7 +287,7 @@ bool llama_batch_allocr::init(
                 }
             }
         }
-    } else {
+    } else if (!pos_gaps_ok) {
         for (uint32_t s = 0; s < n_seq_max; ++s) {
             if (seq_pos[s].empty()) {
                 continue;

@@ -17,12 +17,32 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <map>
 #include <stdexcept>
 #include <string>
 
 //
 // llama_context
 //
+
+// decode-prof: split the CPU cost of small-batch (<=16 token) decodes into
+// apply/reuse/set_inputs/submit/rest, accumulated per context and printed every
+// 64 decodes (env LLAMA_DECODE_PROF=1)
+struct llama_decode_prof {
+    // 0 apply, 1 reuse-check(+build+alloc on miss), 2 set_inputs, 3 compute submit, 4 process total, 5 decode total
+    int64_t t[6] = {};
+    int     n    = 0;
+};
+
+static bool llama_decode_prof_enabled() {
+    static const bool res = getenv("LLAMA_DECODE_PROF") && atoi(getenv("LLAMA_DECODE_PROF")) != 0;
+    return res;
+}
+
+static llama_decode_prof & llama_decode_prof_get(const void * ctx) {
+    static std::map<const void *, llama_decode_prof> m;
+    return m[ctx];
+}
 
 static llm_graph_type ctx_type_to_graph_type(llama_context_type ctx_type) {
     switch (ctx_type) {
@@ -1323,11 +1343,16 @@ bool llama_context::set_adapter_cvec(
 }
 
 llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, llm_graph_type gtype, llama_memory_context_i * mctx, ggml_status & ret) {
+    const bool dprof = llama_decode_prof_enabled() && ubatch.n_tokens <= 16;
+    const int64_t tp0 = dprof ? ggml_time_us() : 0;
+
     if (mctx && !mctx->apply()) {
         LLAMA_LOG_ERROR("%s: failed to apply memory context\n", __func__);
         ret = GGML_STATUS_FAILED;
         return nullptr;
     }
+
+    const int64_t tp1 = dprof ? ggml_time_us() : 0;
 
     auto * res = gf_res_prev.get();
     auto * gf  = res->get_gf();
@@ -1372,6 +1397,8 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         }
     }
 
+    const int64_t tp2 = dprof ? ggml_time_us() : 0;
+
     // set the input data for the input tensors
     {
         //const auto t_start_us = ggml_time_us();
@@ -1382,11 +1409,24 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         //LLAMA_LOG_INFO("graph set inputs time: %.3f ms\n", (ggml_time_us() - t_start_us)/1000.0);
     }
 
+    const int64_t tp3 = dprof ? ggml_time_us() : 0;
+
     const auto status = graph_compute(res->get_gf(), ubatch.n_tokens > 1);
     if (status != GGML_STATUS_SUCCESS) {
         LLAMA_LOG_ERROR("%s: failed to compute graph, compute status: %d\n", __func__, status);
         ret = status;
         return nullptr;
+    }
+
+    if (dprof) {
+        const int64_t tp4 = ggml_time_us();
+
+        auto & prof = llama_decode_prof_get(this);
+        prof.t[0] += tp1 - tp0;
+        prof.t[1] += tp2 - tp1;
+        prof.t[2] += tp3 - tp2;
+        prof.t[3] += tp4 - tp3;
+        prof.t[4] += tp4 - tp0;
     }
 
     ret = GGML_STATUS_SUCCESS;
@@ -1642,6 +1682,8 @@ int llama_context::decode(const llama_batch & batch_inp) {
         return encode(batch_inp);
     }
 
+    const int64_t td0 = llama_decode_prof_enabled() ? ggml_time_us() : 0;
+
     if (batch_inp.n_tokens == 0) {
         LLAMA_LOG_ERROR("%s: n_tokens == 0\n", __func__);
         return -1;
@@ -1691,7 +1733,9 @@ int llama_context::decode(const llama_batch & batch_inp) {
         }
     }
 
-    if (!balloc->init(batch_inp, vocab, memory.get(), n_embd, n_seq_max, output_all)) {
+    const bool pos_gaps_ok = !cparams.causal_attn && batch_inp.token == nullptr;
+
+    if (!balloc->init(batch_inp, vocab, memory.get(), n_embd, n_seq_max, output_all, pos_gaps_ok)) {
         LLAMA_LOG_ERROR("%s: failed to initialize batch\n", __func__);
         return -1;
     }
@@ -2021,6 +2065,20 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
     // wait for the computation to finish (automatically done when obtaining the model output)
     //synchronize();
+
+    if (llama_decode_prof_enabled() && n_tokens_all <= 16) {
+        auto & prof = llama_decode_prof_get(this);
+        prof.t[5] += ggml_time_us() - td0;
+        prof.n++;
+
+        if (prof.n % 64 == 0) {
+            // fprintf: the server filters library-side LLAMA_LOG_INFO by default
+            fprintf(stderr, "decode-prof ctx=%p n=%d avg ms: apply %.3f reuse %.3f set_inputs %.3f submit %.3f rest %.3f decode %.3f\n",
+                    (void *) this, prof.n,
+                    prof.t[0]/1000.0/prof.n, prof.t[1]/1000.0/prof.n, prof.t[2]/1000.0/prof.n,
+                    prof.t[3]/1000.0/prof.n, (prof.t[5] - prof.t[4])/1000.0/prof.n, prof.t[5]/1000.0/prof.n);
+        }
+    }
 
     return 0;
 }
