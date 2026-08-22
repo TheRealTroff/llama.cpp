@@ -40,3 +40,26 @@ Notes:
 - N=1 improved 10%, so part of the gain is not small-batch-specific.
 - The largest relative gain is at N=5 (2.67x), which is consistent with the old bump being
   the thing that got fixed rather than a uniform speedup.
+
+## End-to-end (speculative decode)
+
+Same harness as [head-to-head-cooled.md](head-to-head-cooled.md), llama.cpp side only:
+8288-token B-tree prompt (`~/play/benchprompt.txt`), n_predict 300, temp 0, uniform Q4_0,
+`GGML_MV_NC=2 GGML_MM_SKINNY=5`, `--spec-type draft-mtp --spec-draft-n-max 1`, f16 KV,
+ctx 10240, fresh server per run.
+
+| build | t/s median | mean | sd | runs | acceptance |
+|-------|-----------:|-----:|---:|-----:|-----------:|
+| abb54576 (2026-08-21) | 20.390 | 20.394 | 0.018 | 5 | 86.2% |
+| **prod e15cc590 (1897)** | **21.565** | 21.574 | 0.016 | 3 | 86.2% |
+
+**+5.8%.** 24 commits landed between the two, the FA mm-split (262be3b6) among them.
+
+Deviation from the original harness: 3 runs, and the 180 s/120 s thermal cooldowns dropped,
+on the strength of that file's own finding that cooling changed nothing (-0.01%/+0.05%,
+inside noise). The resulting spread (sd 0.016, 0.07%) matches the cooled runs' 0.07-0.09%,
+so the shortcut cost nothing. Acceptance came out at 86.2% on all three runs, identical to
+the recorded value, which is the check that the config really is like-for-like.
+
+Caveat: only the llama.cpp side was re-run. Against the recorded dflash_mlx 29.55 t/s the
+gap is now 1.370x (was 1.449x), but that assumes their side has not moved.

@@ -5,6 +5,14 @@ M4 Pro. 5 runs each, 120 s between runs, 180 s opening cooldown. Run twice: once
 with the laptop flat on a desk ("hot"), once on a metal grid with airflow
 underneath ("cooled"). Script: /tmp/headtohead.sh (md5 796ff730568c422b0b463ff1c96c3eae).
 
+> **STALE for the llama.cpp side.** This ran at abb54576. prod is now 24 commits
+> past that, including the FA mm-split (262be3b6). Re-measured on prod e15cc590:
+> **21.565 t/s**, not 20.39. See [prod-baseline.md](prod-baseline.md). The dflash
+> side has not been re-run, so the gap figure below is stale too.
+>
+> This file records only a date, no commit. That is why the rot was invisible -
+> always pin the sha and build number, as baseline.md does.
+
 Configs:
 - **llama.cpp**: `~/play/Qwen3.8-27B-uniform-Q4_0.gguf`, `GGML_MV_NC=2
   GGML_MM_SKINNY=5`, `--spec-type draft-mtp --spec-draft-n-max 1`, f16 KV,
