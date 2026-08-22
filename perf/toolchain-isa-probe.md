@@ -385,7 +385,23 @@ requirement for GPU tools to attach. Re-signing a copy with it
 nothing: same warning, same 0 rows. Worth knowing, because it is the first thing anyone
 will suspect.
 
-### The likely reason: on macOS the counters come from replaying a capture
+### SOLVED 2026-08-23: replay the capture. See `skills/metal-gpu-profile`.
+
+Johan replayed a `.gputrace` in the Xcode GUI and it produced everything this section was
+chasing - Shaders, Counters, Cost Graph, per-shader `# SIMD Groups` and
+`# Allocated Registers`. The replay writes ~900 MB to
+`/tmp/com.apple.gputools.profiling/<trace>_stream.gpuprofiler_raw/`, and its `streamData`
+file is an `NSKeyedArchiver` plist that `plistlib` opens directly. **So the numbers are
+headlessly readable after one GUI replay** - `perf/gpuprofiler-stats.py` prints them.
+
+Measured for `kernel_mul_mv_ext_q4_0_f16_r1_4` at the prod config (nr0=2): **73 temporary
+registers**, 32 uniform, **0 spilled bytes**, 453 instructions of which 399 ALU (124 FP32,
+113 INT32, 28 INT16), 8 device loads and 8 device stores, no threadgroup memory.
+
+Everything below this line is the investigation that led there. The `xctrace` route in it
+does **not** work and is kept only so nobody retries it.
+
+### Why xctrace was the wrong mechanism
 
 Instruments' live counter sampling is not how Xcode shows per-kernel counters for a Mac
 app. The Metal Debugger *replays* a `.gputrace` in a separate replayer process and collects
