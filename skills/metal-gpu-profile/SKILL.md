@@ -99,9 +99,11 @@ So there is no CLI to invoke. Headless replay would mean speaking XPC to
   0, 72, 92, 112, **40**, 112, 132, 112, 132, 152, **60**, 122 over about 5 s. It deletes
   and rewrites, so parsing mid-replay yields partial data. Watch until the count holds
   steady (122 files, ~1.7 GB, for a single-kernel capture).
-- **Each replay writes ~1.7 GB to `/tmp`.** It is not cleaned up, and closing Xcode does
-  not remove it - though Xcode does recreate the empty parent directory on exit. Delete
-  `/tmp/com.apple.gputools.profiling` yourself when done.
+- **Each replay writes ~1.7 GB to `/tmp`, and it survives quitting Xcode.** Tested
+  properly: 366 files across three replays before the quit, 366 after, none removed, and
+  the archives still parse. So you can replay several captures, quit, and analyse at
+  leisure. Nothing cleans this up - delete `/tmp/com.apple.gputools.profiling` yourself.
+  Three replays of one small kernel came to 7.8 GB.
 - **Results are reproducible.** Two independent replays of the same capture gave
   byte-identical register counts and instruction mixes, so a surprising number is a real
   finding, not replay noise.
