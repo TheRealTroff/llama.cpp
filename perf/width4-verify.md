@@ -102,11 +102,11 @@ Every number in this file was taken in that state, so treat them as provisional 
 *ratios* are the load-bearing part and are far more robust, since both sides of each
 comparison were measured in the same state minutes apart.
 
-**Re-take caffeinated when the width-4 work starts**, with the depth-3 round decomposition,
-so baseline and change share one discipline. `caffeinate -d` (already in the harnesses'
-`-dimsu`) is the flag that covers this, since it holds the display awake rather than just
-blocking sleep. Cheap way to settle whether it ever mattered: run the `ffn_down` perf case
-screen-on vs screen-off and diff.
+~~**Re-take caffeinated when the width-4 work starts**, with the depth-3 round decomposition,
+so baseline and change share one discipline.~~ **Settled 2026-08-22.** The `ffn_down` sweep was
+re-taken under `caffeinate -dimsu` and reproduces every archived width to within 4%
+(203.3/212.3/325.8/348.1/421.6 -> 212.3/221.1/329.6/347.3/415.5). Display-off throttling was
+never a factor at this shape. The numbers above stand as levels, not just ratios.
 
 ### Two traps in this harness, both cost a run
 
@@ -130,6 +130,11 @@ capture found `custom_kernel_verify_m4`. Together with `mv-nc-cliff-probe.md`'s 
 a win", it is why widths 3-4 were treated as a closed line. Reopen them.
 
 ## Why we are slow at width 4, precisely
+
+> **Refuted 2026-08-22 by run 2 - read that section before this one.** The section below
+> concludes "it is the register tile". We then built their tile (4x4, 16 accumulators, zero
+> spill) and it is *slower* at width 4 than the 2x4 we ship. The parameter analysis below is
+> still accurate as a description of what the kernel does; its *conclusion* is wrong.
 
 **It is not weight traffic.** `mul_mv_ext` already reuses each loaded weight across all
 `r1ptg` columns and streams the matrix exactly once (grid y-dim is 1 at ne11 <= 4). There is
@@ -159,19 +164,132 @@ kernel is latency-bound, not bandwidth-bound.
    nc3/nc4 kernels already compiled, and `GGML_MM_SKINNY`'s floor is 2. A three-arm A/B
    (ext vs mv-nc vs skinny +/- repack) costs one run. Prior evidence says ext wins
    (`mv-nc-cliff-probe.md`, `dflash-vs-mtp-uniform.md:61-74`), so this is confirmation.
-3. **The real one: `nr0` 2 -> 4 at ne11=4.** One line in the heuristic at
-   `ggml-metal-ops.cpp:2805-2809`. `NR0MAX` is already 4, so no new kernel is needed, and it
-   makes our tile exactly their tile shape. The existing "nr0=4 at chpt=2 is a register
-   cliff" note in `results.md` **predates the spill tooling and was never measured**.
-4. **Screen the tile grid offline before building anything.**
-   `skills/metal-kernel-prescreen` + `perf/agx-spill-probe.py` answers "does this shape
-   spill?" in ~0.12 s per point. Sweep `(nr0, r1ptg, chpt, nxpsg)`. Their kernel gives the
-   target: 16 float accumulators, ~45 registers, no spill - so if our tile spills, the cause
-   is addressing overhead, not accumulators. `metal-mv-nc-spill`'s V2 base-pointer rewrite is
-   the known fix (freed ~14 GPRs, nc3 spill 80 B -> 0). **Do not trust in-tree register
-   comments while doing this**: `ggml-metal.metal:4311` is already demonstrated false.
+3. ~~**The real one: `nr0` 2 -> 4 at ne11=4.** One line in the heuristic at
+   `ggml-metal-ops.cpp:2805-2809`.~~ **Done 2026-08-22 - refuted at width 4, see below.**
+   It needed no code at all: `GGML_MV_EXT_NR0` has been a runtime override since the
+   `metal-mv-ext-nr0` work (`ggml-metal-ops.cpp:2791`, `results.md:54`).
+4. ~~**Screen the tile grid offline before building anything.**~~ **Done for this grid, see
+   below.** `skills/metal-kernel-prescreen` + `perf/agx-spill-probe.py`. **Do not trust
+   in-tree register comments while doing this**: `ggml-metal.metal:4311` is already
+   demonstrated false.
 5. **Toolchain, if 3-4 stall:** their kernel compiles standalone with `xcrun metal`, so
    `metal-objdump` / `metal-nm` will diff their register allocation against ours directly.
+
+## Run 1 (2026-08-22, caffeinated): nr0 2 -> 4 is not the lever
+
+Zero code. `GGML_MV_EXT_NR0=4` against default, on the four 27B verify projections at the
+two widths that route to `ext` (n <= 2 is `mul_mv` nc2, n >= 5 is skinny - both unaffected,
+which is the control):
+
+| shape | width | nr0=2 | nr0=4 | delta |
+|---|--:|--:|--:|--:|
+| ffn_gate/up (m=17408) | 3 | 273.90 | 274.84 | +0.3% |
+| ffn_gate/up (m=17408) | 4 | 325.67 | 321.31 | -1.3% |
+| **ffn_down (m=5120,k=17408)** | **3** | 324.38 | 299.29 | **-7.7%** |
+| **ffn_down (m=5120,k=17408)** | **4** | 351.62 | 385.97 | **+9.8%** |
+| gdn_qkv (m=6144) | 3 | 106.82 | 104.37 | -2.3% |
+| gdn_qkv (m=6144) | 4 | 124.90 | 122.60 | -1.8% |
+| attn_q (m=3072) | 3 | 60.87 | 64.15 | +5.4% |
+| attn_q (m=3072) | 4 | 74.09 | 73.81 | -0.4% |
+
+`ffn_gate/up` has ne01 = 17408 >= 8192, so it is *already* nr0=4 in both arms - its +-1.3%
+is the run-to-run noise floor. Only `ffn_down` moves past it, and it moves **both ways**:
+better at width 3, worse at width 4. **Width 4, the target, is the one that regresses.**
+
+### Why, from the spill probe
+
+`kernel_mul_mv_ext_q4_0_f16_r1_{3,4}` at nsg=2, nxpsg=8 (spill bytes/thread):
+
+| kernel | nr0=2 | nr0=4 |
+|---|--:|--:|
+| `r1_3` (width 3) | 0 | **16** |
+| `r1_4` (width 4) | 0 | **32** |
+
+`chpt` is 1 in all four cells (`nr0*r1ptg >= 6`), so this is not the documented chpt=2
+cliff - `results.md:271-272` was right that "nr0=4 only works at chpt=1", and it is not the
+constraint here. The 4x4 tile spills on its own. Width 3 pays 16 B and still nets -7.7%
+because the extra rows/iteration outweigh it; width 4 pays 32 B and loses.
+
+**The cause is addressing, not accumulators**, exactly as experiment 4 pre-registered.
+`ggml-metal.metal:4851-4862` holds `xq[NR0MAX]` *and* `y8[r1ptg]` live as running device
+pointers (`xq[k] += adv` in the inner loop, so they cannot be rematerialized). At
+nr0=4, r1ptg=4 that is 8 live 64-bit pointers = ~16 GPRs of pure addressing, on top of 16
+accumulators and 8 `float4` of `lx`.
+
+## Run 2 (2026-08-22): the spill is fixed, and it does not buy width 4
+
+Branch `metal-mv-ext-spill`. `kernel_mul_mv_ext_q4_f16y_impl_v2` + `GGML_MV_EXT_V2=1`, q4_0
+f16y only. Same idea as `fe0429daf`: one base pointer per operand plus a shared running
+index, instead of the live `xq[nr0]` / `y8[r1ptg]` arrays.
+
+**The prescreen gate passed cleanly** - and the v2 code is *smaller*, so recomputing the row
+offsets costs less code than maintaining the pointer arrays did:
+
+| kernel | v1 text | v1 spill | v2 text | v2 spill |
+|---|--:|--:|--:|--:|
+| `r1_3` nr0=2 | 3226 | 0 | 3034 | 0 |
+| `r1_3` nr0=4 | 5290 | **16** | 4946 | **0** |
+| `r1_4` nr0=2 | 3850 | 0 | 3564 | 0 |
+| `r1_4` nr0=4 | 6300 | **32** | 5824 | **0** |
+
+Correct: 1154/1154 MUL_MAT tests pass on MTL0 at both nr0=2 and nr0=4.
+
+`ffn_down` (5120 x 17408), mean of 3 interleaved reps, within-arm spread < 1%:
+
+| width | v1 nr0=2 | v1 nr0=4 | v2 nr0=2 | v2 nr0=4 |
+|---|--:|--:|--:|--:|
+| 3 | 337.9 | **305.6** | 332.7 | 306.5 |
+| 4 | **358.9** | 391.3 | 357.0 | 363.9 |
+
+**Unspilling did exactly what it was supposed to and it was not enough.** At width 4 it
+recovers most of the nr0=4 penalty (391.3 -> 363.9, so the 32 B spill was worth ~7%), but
+the unspilled 4x4 tile still **loses to the nr0=2 baseline** (363.9 vs 358.9). At width 3
+v2 adds nothing over v1 at nr0=4 (306.5 vs 305.6) - that 16 B spill was costing nothing
+measurable.
+
+### What this refutes
+
+~~"It is the register tile."~~ **Refuted 2026-08-22.** We now have their tile shape - 4x4,
+16 accumulators, zero spill, verified offline - and at width 4 it is *slower* than our 2x4.
+The width-4 gap (they widen 1 -> 4 at +58 us, we at +145) is **not** explained by tile shape
+or by register pressure. Whatever the shelf is, run 2 says it is somewhere else. Do not
+reopen the tile as the explanation without new evidence.
+
+The `nr0=4` win at width 3 is real and reproducible (-9.5%) but it long predates v2, is
+`ffn_down`-only (gdn_qkv flat, attn_q worse), and does not touch the width the controller
+actually sits at.
+
+### v2 itself is a safe, small positive
+
+At the shipping `nr0=2` it is -0.5% to -1.5% across widths 3-4 and never worse, with less
+code and no spill anywhere in the grid. It is worth keeping on its own merits, but it is
+**not** the width-4 answer and should not be sold as one.
+
+### Methodology note: re-baseline per session
+
+Within-session repeats agree to < 1%. *Across* sessions the same arm drifted ~3% (width 3
+`v1 nr0=2` read 324-330 earlier in the day, 337.9 here). Always re-measure the baseline arm
+in the same session as the change; do not diff against a number from another session.
+
+## Superseded plan: port the V2 base-pointer rewrite to `ext`
+
+`metal-mv-nc-spill` commit `fe0429daf` already did this for `mul_mv_nc`: keep one base
+pointer per operand, recompute row/col offsets in the loop. It freed ~14 GPRs and took nc3
+from 80 B spill to 0. The `ext` kernel has the identical anti-pattern, so the same rewrite
+applies almost unchanged.
+
+~~Order, and it is cheap at every step:~~ **All four steps ran - see run 2 above.** The
+prescreen gate passed (spill 0) and the GPU measurement then refuted the premise. Step 4
+(llama-bench) was not run: there is nothing to confirm, since v2 does not beat the width-4
+baseline. The prescreen-before-build discipline is worth keeping regardless; it cost ~8 s to
+prove the rewrite worked before spending a build on it.
+
+**Still open, but the tile is off the table.** Nothing is committed from either run. Prod
+routing, `GGML_MV_EXT_NR0` and `GGML_MV_EXT_V2` defaults are all unchanged, so prod behaves
+exactly as before. What is left to explain the width-4 shelf is *not* the register tile -
+candidates now are the `nxpsg=16` cutoff at `ne11 < 3` (widths 3-4 lose the wide variant
+that makes width 2 nearly free) and the drafter serialization in
+`drafter-pipelining.md`. Pick one and pre-register the bound before measuring.
 
 ## Sizing, honestly
 
@@ -206,7 +324,10 @@ What their kernel *is* for:
   it, and treat "we widen 1 -> 4 at +102 us, they do it at +52" as the goal to close.
 - **Evidence that the bar is reachable.** The value of reading it was learning that a 16-
   accumulator 4x4 tile fits without spilling on this hardware. That fact is what justifies
-  experiment 3; the fact is not their code.
+  experiment 3; the fact is not their code. **Refined 2026-08-22:** it fits in *their*
+  kernel. Ours spills 32 B at the same tile (run 1 above), because our addressing holds 8
+  device pointers live and theirs does not. The tile is reachable; our current addressing is
+  what stops us reaching it.
 - **A disassembly reference** (experiment 5). Comparing register allocation via
   `metal-objdump` is measurement, not reuse.
 
