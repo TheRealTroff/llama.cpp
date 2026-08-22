@@ -139,10 +139,14 @@ against it and reported a bogus +5.8%.
   `sleep 1` and `displaysleep 2`, and these harnesses idle far longer than that in cooldowns
   (`run-head-to-head.sh`: 180 s up front, 120 s between runs). A battery run would have slept
   mid-harness and the next arm would have measured a cold cache and a ramping clock, with no
-  error anywhere. **No recorded number is known to be affected** - `pmset -g log` reports
+  error anywhere. **No recorded number is affected by sleep** - `pmset -g log` reports
   `Total Sleep/Wakes since boot: 0` over the machine's whole uptime - but nothing in the
   harness was enforcing that; it was the AC setting doing it. Verify with that counter, not
   by reasoning about whether the display was on.
+  **Open, and not answered by that counter: throttling with the display off.** Sleep and
+  clock/power dial-down are different mechanisms, and the machine has spent most of its
+  uptime with the screen off. `caffeinate -d` covers it going forward. Whether it ever
+  mattered is untested - the cheap A/B is one perf case run screen-on vs screen-off.
 - **A leftover llama-server answers /health.** The next run then silently measures *that*
   server's config. llama-server ignores SIGTERM during Metal teardown, so killed harnesses
   leave servers behind. Harnesses must abort on a busy port and assert the listener pid is

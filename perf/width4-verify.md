@@ -92,11 +92,21 @@ pronounced than at the 33 MB shape, and this is the shape that matters.
 
 **Caffeination status of these numbers.** Taken with a plain `test-backend-ops` invocation,
 not under `caffeinate` (the `perf/run-*.sh` harnesses only gained it later the same day).
-They are nonetheless sound: `pmset -g log` reports **`Total Sleep/Wakes since boot: 0`** over
-the machine's full 2.5-day uptime, so nothing was ever suspended, and the cold width-1 point
-reproduced its archived value to 1.3% (1185.6 vs 1201.8 us). **Worth re-taking caffeinated
-when the width-4 work starts**, together with the depth-3 round decomposition, so the
-baseline and the change are measured under identical discipline.
+Nothing was *suspended*: `pmset -g log` reports **`Total Sleep/Wakes since boot: 0`** over the
+machine's full 2.5-day uptime, and the cold width-1 point reproduced its archived value to
+1.3% (1185.6 vs 1201.8 us).
+
+**That rules out sleep, and only sleep.** It does not address clock/power throttling with the
+display off, which is a separate mechanism and which the display was, for most of the day.
+Every number in this file was taken in that state, so treat them as provisional levels. The
+*ratios* are the load-bearing part and are far more robust, since both sides of each
+comparison were measured in the same state minutes apart.
+
+**Re-take caffeinated when the width-4 work starts**, with the depth-3 round decomposition,
+so baseline and change share one discipline. `caffeinate -d` (already in the harnesses'
+`-dimsu`) is the flag that covers this, since it holds the display awake rather than just
+blocking sleep. Cheap way to settle whether it ever mattered: run the `ffn_down` perf case
+screen-on vs screen-off and diff.
 
 ### Two traps in this harness, both cost a run
 
