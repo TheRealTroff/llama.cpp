@@ -12,6 +12,10 @@ both drafters, batch-1, and the collapsed d8. Routing and speculation change spe
 The skinny gate (ggml-metal-ops.cpp) is `ne11 >= max(2, GGML_MM_SKINNY) && ne11 <= 8`.
 Depth d verifies d+1 columns, so d=8 is the first depth outside it.
 
+**dflash_mlx counts the other way: their block *b* verifies *b* columns**
+(`spec_epoch.py:2247-2257`). Our depth *d* == their block *d+1*. Never compare an `nN` row
+with a `block N` row - match on the width column instead.
+
 llama-bench ms/pass, f16 KV, `-n 0 -p 1..10 -r 3`:
 
 | N | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | **9** | 10 |
@@ -231,5 +235,25 @@ width:
 
 So the ordering is: adaptive depth is not a lever on its own - `adaptive-spec` was closed
 once as "doesn't beat best-fixed", and our shallow cycles are not cheap the way theirs are
-(our n4 costs 2.15 batch-1 floors vs their block-4 at 1.36). Flattening widths 2-5 is the
-prerequisite that would make the policy worth having, not a follow-up to it.
+(~~our n4 costs 2.15 batch-1 floors vs their block-4 at 1.36~~ **off by one - their block 4
+is width 4, so the partner is our n3 at 1.99 floors; see below**). Flattening widths 2-5 is
+the prerequisite that would make the policy worth having, not a follow-up to it.
+
+> **CORRECTED 2026-08-22 (`mlx-cycle-capture.md`): their block *b* verifies *b* columns, ours
+> *d+1*** (`spec_epoch.py:2247-2257` vs line 13 above). This section's llama-bench figures are
+> already widths and are unaffected; only the `nN`-vs-`block N` comparison above was wrong.
+> Their operating widths are **1, 4 and 5** (`cycles_by_block={1:1, 4:81, 5:17}`), which in
+> our labels is **depths 0, 3 and 4**. So the widths that matter for an adaptive policy are:
+>
+> | width | our depth | our kernel | our ms/round | theirs, pinned |
+> |---|---|---|--:|--:|
+> | 4 | n3 | ext (`nxpsg=8, nr0=2, chpt=1`) | 141.0 | **95.00** (their block 4) |
+> | 5 | n4 | skinny mm | 144.9 | 137.26 (their block 5) |
+> | 7 | **n6 (prod pick)** | skinny mm | 149.8 | - |
+>
+> Two consequences. **Width 5 is already near parity (1.06x); the entire gap is width 4
+> (1.48x)** - so "flatten widths 2-5" is really "fix width 4", and width 3 (our depth 2) is
+> nobody's operating point. **And width 4 is on `ext` while width 5 is on `skinny`**, so the
+> two need different kernel work; an `ext` change cannot reach width 5. Note our own prod
+> pick runs width 7 on skinny, so none of this touches the shipping config - it buys an
+> operating point we do not currently have, and today n3 is our *worst* depth (20.46 t/s).

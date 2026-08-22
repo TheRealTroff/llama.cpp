@@ -95,9 +95,15 @@ against our 144.9. Our curve is flat but high; theirs is steep with a cheap shel
 > (`engine/config.py:21-28` + `spec_epoch.py:2247-2257` vs `slope-sweep.md:13`). So every
 > depth-matched comparison above and in `block4-shelf-probe.md` / `verify-slope-close.md` is
 > **off by one column** - "their block 4 vs our depth 4" is really width 4 vs width 5.
-> Matched by *width*, they are 1.06x at width 5 (137.26 vs 144.9), and **we have no
-> measurement at width 4 at all** (that would be our depth 3). Match by width, not by the
-> depth label.
+> Matched by *width*, they are 1.06x at width 5 (137.26 vs 144.9) and **1.48x at width 4**
+> (95.00 vs our n3 at 141.0). Match by width, not by the depth label.
+>
+> **Corrected 2026-08-22 (second pass), the files the first pass missed:**
+> `slope-sweep.md`, `acceptance-metric-conversion.md` and `round-decomp-fused.md` each
+> compared an `nN` row against a `block N` row. All three now carry strikes.
+> ~~"we have no measurement at width 4 at all"~~ - we do: llama-bench **111.5 ms/pass** and
+> the n3 round at **141.0 ms** (`slope-sweep.md`). What is missing is a *round decomposition*
+> at depth 3. See **`width4-verify.md`**.
 
 ## Two traps that have each cost a day
 
@@ -139,6 +145,14 @@ against it and reported a bogus +5.8%.
 Current state:
 
 - **prod-pick: this file** + `run-prod-pick.sh`
+- **`width4-verify.md` - THE OPEN TASK.** The whole cross-framework gap is one width. Matched
+  by width we are level at 5 (1.06x) and behind only at 4 (1.48x), which is where their
+  controller sits for 82% of cycles and where our routing is weakest. Contains the first
+  kernel-level measurement of their `verify_m4` against our `mul_mv_ext` (they widen 1 -> 4
+  at half our marginal cost), what their kernel does, why ours is slow (register tile, not
+  weight traffic), the experiment order, and an honest ceiling. **Retires
+  `mv-bandwidth-probe.md`'s "at n=4 we are already ahead"** - that benchmarked
+  `mx.quantized_matmul`, which MLX bypasses at M=4.
 - `slope-sweep.md` - the small-batch slope, the ne11=9 skinny cliff, and both depth
   sweeps. Supersedes the "MTP d1 is optimal, don't re-run" note: the optimum is now d6.
   Run it with `run-slope-sweep.sh`.
@@ -149,8 +163,10 @@ Current state:
 - `head-to-head-aug22.md` - both sides re-measured 2026-08-22: 25.004 vs 29.613 = 1.184x,
   and the whole gap is a 23.3 ms cycle-cost cut. Run it with `run-head-to-head.sh`.
 - `acceptance-metric-conversion.md` - drafter quality vs oMLX, denominators reconciled.
-  Drafter quality is not the gap; cycle cost is.
-- **`mlx-cycle-capture.md` - the one open task, now mostly answered from source.** Two of its
+  Drafter quality is not the gap; cycle cost is. **Carries a correction banner: every
+  row-to-row comparison in it is off by one column, and its derived block-4 row (91.9 ms,
+  33.17 t/s) is superseded by the pinned 95.00 ms / 32.556 t/s.**
+- **`mlx-cycle-capture.md` - answered; its open stubs now live in `width4-verify.md`.** Two of its
   three hypotheses are **confirmed without a capture**: (1) their block *b* verifies *b*
   columns, not *b+1*, so every cross-framework depth comparison on record is off by one
   (their block-4 cycle is a **4**-wide verify - full stack, full-vocab lm_head, nothing

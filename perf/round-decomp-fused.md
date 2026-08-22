@@ -92,8 +92,10 @@ CPU submit delta ~2.2.
 
 Verify GPU beyond these is big-mat slope at parity — kernel work there is closed. If
 drafter + submit-delta went to zero the cycle would be ~130 ms = 1.77 floors, still above
-oMLX's 1.36–1.52: the residual is the N=7-vs-block-4 depth difference, i.e. structural
-verify slope, not an inefficiency.
+oMLX's 1.36–1.52: ~~the residual is the N=7-vs-block-4 depth difference~~ **the residual is
+a width difference, not a depth one: N=7 here is verify width 7 (our n6), and their block 4
+is width 4 - three columns apart, not three depths** (`mlx-cycle-capture.md`), i.e.
+structural verify slope, not an inefficiency.
 
 ---
 

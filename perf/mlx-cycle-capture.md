@@ -71,7 +71,7 @@ so a ~151k vocab never routes there.
 
 | verify width | theirs, ms/cycle (draft+verify) | ours, ms/round | ours, llama-bench verify only |
 |---|--:|--:|--:|
-| 4 | 95.00 (their block 4) | **not measured - our depth 3** | 111.5 |
+| 4 | 95.00 (their block 4) | **141.0 (our depth 3)** = 1.48x | 111.5 |
 | 5 | 137.26 (their block 5) | 144.9 (our depth 4) | 119.0 |
 
   So "1.53x at depth 4" was their width-4 against our width-5. At matched width 5 they are
@@ -299,10 +299,13 @@ depth 4. That off-by-one is the whole point of finding 1 above.
 
 ## Open stubs this leaves
 
-1. **Measure our depth 3 (width 4) round cost.** Until that exists there is no like-for-like
-   number against their 95.00 ms block-4 cycle, and the headline "1.53x" is a width-4-vs-
-   width-5 comparison. Cheapest experiment on the board - it is one more arm on
-   `run-slope-sweep.sh`.
+> **These moved 2026-08-22 into `perf/width4-verify.md`, which is now the open task.** It
+> carries stubs 1 and 2 below plus the kernel-level measurement of their `verify_m4`.
+
+1. ~~**Measure our depth 3 (width 4) round cost.**~~ **Partly done**: the n3 row is 141.0
+   ms/round (`slope-sweep.md`), so their block 4 is **1.48x** ahead, not the "1.53x" quoted
+   above at the wrong width. What is still missing is a *round decomposition* at depth 3
+   (verify / drafter / overhead), which is what decides how much of the 46 ms is kernel.
 2. **Re-derive the 1.81x / 1.74x slopes at a stated, matched width** (hypothesis 3). Ours is
    a width-7 ratio; theirs is quoted at "n=5" with the convention unstated, and their
    convention is now known to differ from ours by one. Until this is redone, treat

@@ -4,6 +4,23 @@ Answers "how does acceptance compare to MLX, compensating for the different metr
 Supersedes the ~0.71-vs-0.67 note in `draft-sink-window.md`, which was directionally
 right but used a wrong denominator for the oMLX side.
 
+> **CORRECTED 2026-08-22 (`mlx-cycle-capture.md`). Every row-to-row comparison in this
+> file is off by one column.** Their block *b* verifies *b* columns
+> (`spec_epoch.py:2247-2257`); our depth *d* verifies *d+1* (`slope-sweep.md:13`). So the
+> width-matched partner of their `blk 4` is our **n3**, not our n4, and of their `blk 5` is
+> our **n4**, not our n5. Matched by width the table below reads **their blk 4 (1.36x
+> floors) vs our n3 (1.99x)** and **their blk 5 (2.07x) vs our n4 (2.15x)** - i.e. we are
+> nearly level at width 5 and the whole gap is at width 4, which is what
+> `block4-shelf-probe.md` later measured directly. The acceptance conclusion is unaffected
+> (it compares drafters, not widths); the *cost* ratios at lines 68-72 are all off by one
+> and need re-deriving at a stated width.
+>
+> **Also: their per-block rows here are derived from `adaptive_metrics`, and the block-4 row
+> is superseded by direct measurement.** `block4-shelf-probe.md` pins block 4 and measures
+> **95.00 ms/cycle, 3.0928 tok/cycle, 32.556 +/- 0.007 t/s**, against the 91.9 / 3.049 /
+> 33.17 derived below. The 3.1 ms difference is MLX lazy-eval deferral. **Quote 32.556, not
+> 33.17.**
+
 ## Their metric, verified from raw counters
 
 `.artifacts/dflash/benchmarks/20260821-182712-.../results.json`, run 0 (all 5 runs
@@ -40,8 +57,13 @@ today (`--spec-type none`); theirs 67.66 ms from the cooled head-to-head, not re
 | llama.cpp       | 5       | 4.91    | 49.9%   | 0.710   | 3.448   | 163.0    | 2.22x  | 21.16 |
 | llama.cpp       | 6       | 5.86    | 46.9%   | 0.733   | 3.750   | 169.1    | 2.30x  | 22.17 |
 | llama.cpp       | 7       | 6.83    | 40.3%   | 0.733   | 3.750   | 175.2    | 2.39x  | 21.41 |
-| dflash_mlx      | blk 4   | 4.00    | **51.2%** | 0.672 | 3.049   |  91.9    | 1.36x  | 33.17 |
-| dflash_mlx      | blk 5   | 5.00    | 41.2%   | 0.673   | 3.059   | 140.1    | 2.07x  | 21.83 |
+| dflash_mlx      | blk 4   | 4.00    | **51.2%** | 0.672 | 3.049   |  91.9 [d] | 1.36x | 33.17 [d] |
+| dflash_mlx      | blk 5   | 5.00    | 41.2%   | 0.673   | 3.059   | 140.1 [d] | 2.07x | 21.83 [d] |
+
+[d] = derived from `adaptive_metrics`, **superseded by pinned measurement**
+(`block4-shelf-probe.md`): block 4 is **95.00 ms / 3.0928 tok / 32.556 t/s**, block 5 is
+**137.26 ms / 3.6585 tok / 26.654 t/s**. Their block *b* is width *b*; our `n` rows are
+depth, i.e. width n+1.
 | **dflash_mlx**  | **ALL** | **4.14**| **49.0%** | **0.670** | **3.030** | **102.5** | **1.52x** | **29.55** |
 
 oMLX per-block rows are reconstructed from their own `adaptive_metrics`
@@ -68,15 +90,20 @@ decomposition confirms it (predicted = observed to three decimals):
     matched depth 5:  cycle 1.589x against us  /  committed-per-cycle 1.138x for us  = 1.397x  (obs 1.397x)
     our best n6:      cycle 1.649x against us  /  committed-per-cycle 1.238x for us  = 1.333x  (obs 1.333x)
 
-Sharpest framing: **a speculation cycle costs us 2.15-2.30 batch-1 passes; theirs costs
-1.36-1.52.** We buy roughly the same tokens per cycle, and pay ~1.6x more wall time for them.
+Sharpest framing: ~~**a speculation cycle costs us 2.15-2.30 batch-1 passes; theirs costs
+1.36-1.52.** We buy roughly the same tokens per cycle, and pay ~1.6x more wall time for
+them.~~ **OFF BY ONE - the two ranges are different stretches of curve.** Ours is n4..n7 =
+widths 5..8; theirs is blk 4..5 = widths 4..5. Width-matched, our n3..n4 costs **1.99-2.15**
+floors against their **1.36-2.07**, so we are level at width 5 and behind only at width 4.
 
 ## Lead this re-opens: adaptive depth
 
 Their adaptive controller spent 80/99 cycles at block 4 rather than the requested 5, and
-that is where their throughput lives (their block-4 cycles run at an effective 33.17 t/s
-vs 21.83 at block 5) -- while `tokens_per_cycle` barely moves (3.049 vs 3.059). They get
-the same tokens for a materially cheaper cycle by drafting shallower.
+that is where their throughput lives (~~their block-4 cycles run at an effective 33.17 t/s
+vs 21.83 at block 5~~ **superseded: pinned block 4 measures 32.556 t/s and pinned block 5
+measures 26.654, `block4-shelf-probe.md`; the 21.83 was mode-biased**) -- while
+`tokens_per_cycle` barely moves (3.049 vs 3.059). They get the same tokens for a materially
+cheaper cycle by drafting shallower.
 
 We have `LLAMA_SPEC_ADAPTIVE` (branch `adaptive-spec`, default off), previously judged
 "doesn't beat best-fixed on stable text -- needs heterogeneous-prompt eval". That verdict
@@ -85,7 +112,8 @@ cycle-cost-vs-depth curve. Worth re-running: our curve above is far from flat
 (125.7 ms at n2 to 175.2 at n7), so there is real money in picking depth per cycle.
 
 Caveat before chasing it: our shallow cycles are not cheap the way theirs are
-(our n4 = 2.15 floors vs their block 4 = 1.36), so adaptive depth alone will not close
+(~~our n4 = 2.15 floors vs their block 4 = 1.36~~ **width-matched: our n3 = 1.99 floors vs
+their block 4 = 1.36**), so adaptive depth alone will not close
 1.33x. ~~The verify slope is still the root cause.~~ **CORRECTED 2026-08-22: the verify
 slope is dense-matmul width scaling and is not recoverable** (`verify-slope-close.md`). The
 root cause is the one this paragraph already gestures at - their cheap shallow cycle. That
