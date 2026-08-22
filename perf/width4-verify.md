@@ -344,9 +344,26 @@ width 4 worse. The kernel does not want more work per thread; it wants more thre
 flight. The file's original "at width 4 the kernel is latency-bound, not bandwidth-bound"
 line survives run 2 even though the register-tile conclusion attached to it did not.
 
-Caveat: this explains the *direction*, not the magnitude, and the capture carries no timing
-(see the tooling note). Confirming it needs a real occupancy counter, which is currently
-blocked on `.tracetemplate` configuration.
+**Confirmed 2026-08-23 by replay profiling** (`skills/metal-gpu-profile`), which measures
+the register pressure this argument depends on rather than inferring it. Same kernel, same
+width 4, only `nxpsg` differing:
+
+| | nr0=2 nxpsg=8 | nr0=2 nxpsg=16 |
+|---|--:|--:|
+| Temporary register count | 73 | **73** |
+| Spilled bytes | 0 | 0 |
+| Instruction count | 453 | **477** |
+| FP32 instructions | 124 | 132 |
+| Device loads / stores | 8 / 8 | 8 / 8 |
+
+**Register pressure is identical and the instruction count is slightly *higher*, yet
+`nxpsg=16` is faster.** So the win is positively *not* register pressure or reduced work -
+both are excluded by measurement now, not merely unmeasured. What is left is the dispatch
+geometry: twice the threadgroups, half the serial K chain per thread. The occupancy reading
+stands.
+
+Caveat: this pins the mechanism, not the magnitude. A direct occupancy counter would size
+it; that is still unavailable (see `toolchain-isa-probe.md`).
 
 ### Drift got worse over the session
 

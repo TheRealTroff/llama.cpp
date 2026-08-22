@@ -16,6 +16,14 @@ were never measured. Do NOT use it to predict speed - see "What this does not te
 Harness: `perf/agx-spill-probe.py`. Background and the calibration that validated it:
 `perf/toolchain-isa-probe.md`.
 
+**Validated against ground truth, 2026-08-23.** The spill number comes from an undocumented
+FlatBuffer field, so it was worth checking against the compiler itself. For
+`kernel_mul_mv_ext_q4_0_f16_r1_4` at `nr0=4`, this probe predicts **32 bytes/thread**, and
+the Metal compiler's own `Spilled bytes`, read back via `skills/metal-gpu-profile`, is
+**32** - with 0 predicted and 0 reported at `nr0=2`. The field is the real thing. Where that
+skill needs Xcode and ~1.7 GB per run, this stays a 0.12 s offline answer, so prefer it and
+escalate only when you need register counts or the instruction mix too.
+
 ## Prerequisites
 
 Xcode 26.x with the Metal Toolchain installed (`applegpu-nt` and `metal-arch` live next
