@@ -90,14 +90,18 @@ by a command you can copy:
 There **is** a command-line replay tool -
 `/System/Library/CoreServices/MTLReplayer.app/Contents/MacOS/MTLReplayer archivePath
 [options]`, with `--counters`, `--shader-profiling`, `-collectPipelinePerformanceStatistics`
-and more. **It cannot be used.** It carries the private entitlement
-`com.apple.private.agx.performance-spi`, which is what grants access to the AGX counters
-and cannot be self-signed onto anything of ours. Direct exec dies instantly (`exit 137`,
+and more. **It could not be made to work.** Direct exec dies instantly (`exit 137`,
 launch-constraint kill); `open -a --args` does launch it and argv arrives intact, but it
-then sits at 0.0% CPU for at least 5 minutes, writing nothing, because it expects to be driven over XPC.
+then sits at 0.0% CPU for at least 5 minutes writing nothing, because it expects to be
+driven over XPC rather than run standalone.
 
-**So do not try to automate step 2.** The barrier is a permission boundary, not a missing
-incantation. Full detail in `perf/toolchain-isa-probe.md`.
+The gate for a client is `com.apple.private.gputools.client`, which `gputoolsserviced`
+checks. Note that **Xcode itself has no GPU-tools entitlement** and drives the stack anyway,
+via an entitled helper Apple ships inside its own plugin bundle - so the privileged
+`agx.performance-spi` sits on the *service*, not on callers. Automating step 2 is therefore
+not obviously impossible, just unattacked: it would mean satisfying that client check and
+speaking a bespoke 89-message `DYMessage*` protocol over raw `libxpc` (there is no
+`NSXPCConnection` interface to bind to). Full detail in `perf/toolchain-isa-probe.md`.
 
 ## Gotchas
 

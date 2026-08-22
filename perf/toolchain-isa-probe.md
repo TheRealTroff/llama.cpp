@@ -416,22 +416,38 @@ with exactly the options this work wants - `--counters`, `--derived-counters`,
 `-collectRawCounters`, `-gpuTimelineData`, `-dumpProfileDictionary`, `-outputPath`,
 `--device`, `--frame`, `--last`.
 
-**And it is entitlement-gated.** `codesign -d --entitlements -` on it shows:
+**It is entitlement-gated** - `com.apple.private.agx.performance-spi`,
+`com.apple.private.gputools.client`, library-validation, platform binary.
 
-```
-com.apple.private.agx.performance-spi
-com.apple.private.gputools.client
-com.apple.private.amd.performance-spi
-flags=0x2000(library-validation)   Platform identifier=26
-```
+~~That entitlement cannot be self-signed onto anything of ours, so an unentitled process was
+never going to get counters.~~ **Too broad - corrected below. `MTLReplayer` is both worker
+and client, so reading its entitlements does not tell you what a *client* needs.**
 
-`com.apple.private.agx.performance-spi` is the thing that lets a process talk to the AGX
-performance counters. It is a private Apple entitlement on a platform binary, so it cannot
-be self-signed onto anything of ours. **This one fact explains the whole investigation
-above**: the in-process `AGXGPURawCounterSourceGroup` failure, the xctrace
-"profile is not supported on target device", and why re-signing our own binary with
-`get-task-allow` changed nothing. We were never going to get counters from an unentitled
-process; only Apple-signed binaries can, and Xcode works because it drives them.
+### What each side actually requires
+
+| binary | role | gputools/agx entitlements |
+|---|---|---|
+| `GPUToolsReplayService.xpc` | the service | `agx.performance-spi`, `amd.performance-spi`, `pmp.performance-spi`, `gputools.client`, `gputools.service` |
+| `MTLReplayer` | standalone worker | `agx.performance-spi`, `amd.performance-spi`, `gputools.client` |
+| `gputoolsserviced` | daemon | `gputools.client`, `gputoolstransportd.local` |
+| `GPUToolsAgentService.xpc` | Xcode's transport agent | `gputools.client`, `gputoolstransportd` |
+| **`Xcode`** | the actual driver | **none** |
+| `GPUToolsAgent.app` | standalone agent | **none** |
+
+**Xcode holds no GPU-tools entitlement at all and still drives the whole stack.** So
+`agx.performance-spi` is *not* a client requirement - the service holds it and does the
+privileged work on a caller's behalf, which is the point of XPC privilege separation.
+
+The real client-side gate is **`com.apple.private.gputools.client`**, and `gputoolsserviced`
+enforces it: it contains `GTEntitlementCheckingConnection` and the failure string
+`"Failed to copy com.apple.private.gputools.client entitlement value"`. Xcode gets past it
+by talking through `GPUToolsAgentService.xpc`, an entitled helper Apple ships *inside*
+Xcode's own plugin bundle.
+
+So a process we write is still blocked - it would fail that check - but the barrier is
+narrower than "you need the AGX performance SPI", and it does not explain the earlier
+failures on its own. The in-process `AGXGPURawCounterSourceGroup` error and the xctrace
+counter-profile error are consistent with this gate, but were never traced to it directly.
 
 Two further mechanics, so nobody re-tests them:
 
