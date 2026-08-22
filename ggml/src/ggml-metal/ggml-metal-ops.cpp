@@ -2526,14 +2526,23 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
     // first try to use small-batch mat-mv kernels
     // these should be efficient for BS [2, ~8]
     // multi-column mv probe (GGML_MV_NC=1): plain-mv structure with an ne11 loop, N=2..4
-    static const int env_mv_nc = getenv("GGML_MV_NC") ? atoi(getenv("GGML_MV_NC")) : 0;
+    // GGML_MV_NC_SMALL=<ne01_max>: small-dst matmuls (ne01 <= ne01_max) route here for
+    // ne11 up to 8, taking precedence over skinny — skinny tiles 32 dst rows per TG, so
+    // small-ne01 dsts dispatch starved (2 TGs for [*,48]) and pay a flat ~80 us at N=7;
+    // the mv structure keeps rows/nr0 parallelism. The NC>=3 fixed spill penalty is paid
+    // per row-group, so small ne01 dodges most of it.
+    static const int env_mv_nc       = getenv("GGML_MV_NC")       ? atoi(getenv("GGML_MV_NC"))       : 0;
+    static const int env_mv_nc_small = getenv("GGML_MV_NC_SMALL") ? atoi(getenv("GGML_MV_NC_SMALL")) : 0;
 
-    if (env_mv_nc > 0 &&
+    const bool mv_nc_route = (ne11 >= 2 && ne11 <= std::min(env_mv_nc, 4)) ||
+                             (env_mv_nc_small > 0 && ne01 <= env_mv_nc_small && ne11 >= 2 && ne11 <= 8);
+
+    if (mv_nc_route &&
         op->src[0]->type == GGML_TYPE_Q4_0 &&
         op->src[1]->type == GGML_TYPE_F32 &&
         !ggml_is_transposed(op->src[0]) &&
         !ggml_is_transposed(op->src[1]) &&
-        ne00 % 32 == 0 && ne11 >= 2 && ne11 <= std::min(env_mv_nc, 4)) {
+        ne00 % 32 == 0) {
         auto pipeline = ggml_metal_library_get_pipeline_mul_mv_nc(lib, op, (int) ne11);
 
         ggml_metal_kargs_mul_mv args = {

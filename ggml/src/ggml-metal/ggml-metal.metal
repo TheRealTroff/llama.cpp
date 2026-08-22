@@ -4378,6 +4378,50 @@ kernel void kernel_mul_mv_q4_0_f32_nc4(
     mul_vec_q4_0_nc_f32_impl<4, 4>(args, src0, src1, dst, tgpig, tiisg, sgitg);
 }
 
+kernel void kernel_mul_mv_q4_0_f32_nc5(
+        constant ggml_metal_kargs_mul_mv & args,
+        device const char * src0,
+        device const char * src1,
+        device       char * dst,
+        uint3  tgpig[[threadgroup_position_in_grid]],
+        ushort tiisg[[thread_index_in_simdgroup]],
+        ushort sgitg[[simdgroup_index_in_threadgroup]]) {
+    mul_vec_q4_0_nc_f32_impl<4, 5>(args, src0, src1, dst, tgpig, tiisg, sgitg);
+}
+
+kernel void kernel_mul_mv_q4_0_f32_nc6(
+        constant ggml_metal_kargs_mul_mv & args,
+        device const char * src0,
+        device const char * src1,
+        device       char * dst,
+        uint3  tgpig[[threadgroup_position_in_grid]],
+        ushort tiisg[[thread_index_in_simdgroup]],
+        ushort sgitg[[simdgroup_index_in_threadgroup]]) {
+    mul_vec_q4_0_nc_f32_impl<4, 6>(args, src0, src1, dst, tgpig, tiisg, sgitg);
+}
+
+kernel void kernel_mul_mv_q4_0_f32_nc7(
+        constant ggml_metal_kargs_mul_mv & args,
+        device const char * src0,
+        device const char * src1,
+        device       char * dst,
+        uint3  tgpig[[threadgroup_position_in_grid]],
+        ushort tiisg[[thread_index_in_simdgroup]],
+        ushort sgitg[[simdgroup_index_in_threadgroup]]) {
+    mul_vec_q4_0_nc_f32_impl<4, 7>(args, src0, src1, dst, tgpig, tiisg, sgitg);
+}
+
+kernel void kernel_mul_mv_q4_0_f32_nc8(
+        constant ggml_metal_kargs_mul_mv & args,
+        device const char * src0,
+        device const char * src1,
+        device       char * dst,
+        uint3  tgpig[[threadgroup_position_in_grid]],
+        ushort tiisg[[thread_index_in_simdgroup]],
+        ushort sgitg[[simdgroup_index_in_threadgroup]]) {
+    mul_vec_q4_0_nc_f32_impl<4, 8>(args, src0, src1, dst, tgpig, tiisg, sgitg);
+}
+
 kernel void kernel_mul_mv_q4_0_f32_di(
         constant ggml_metal_kargs_mul_mv & args,
         device const char * src0,
