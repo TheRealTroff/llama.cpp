@@ -128,3 +128,24 @@ ceiling (~1 ms) no longer justifies a run. Remaining levers: **draft_call 17.1 m
 (dflash-prof shows enc 0.87 + inject 0.50 + noise decode 0.67 + drafter submit ~0.3;
 the unattributed ~14.8 ms is drafter GPU wait + lattice CPU — profile that split next)
 and the verify GPU slope itself (1.79x vs oMLX's implied ~1.5x).
+
+## draft_call attributed (same day): it is all drafter GPU wait
+
+Added a timer around the first `llama_get_embeddings_nextn(ctx_dft)` call (which
+synchronizes; commit below) — `dflash-prof lattice sync: avg 16.43 ms` of the 17.13 ms
+draft_call. The "noise decode 0.68 ms" timer only measures the async llama_decode submit.
+So: draft_call = 16.4 drafter GPU forward + 0.7 CPU submit + ~0 lattice walk, and the
+prior "~8 ms CPU/lattice" attribution was wrong (same profiler-era distortion).
+
+Full corrected round: **149.1 ms = 130.0 verify GPU + 16.4 drafter GPU + ~2.7 CPU — the
+engine is ~98% GPU-bound.** e2e 25.15 t/s, sha canonical, timers free.
+
+The drafter forward is ~7 ms above prediction (1033 MiB pure-Q4_0 ≈ 4.4 ms bandwidth-ideal
+× ~2x N=7 slope ≈ 9). Candidates for the excess: its full-vocab selector head (the
+[5120,248320] row shows ~2 calls/round — one is the drafter's, ~3.7 real ms), its FA over
+the full 8.3k KV, small-batch starvation in its tiny layers. Per-op attribution is blocked
+by key collision: drafter and target are both q4_0 with shared dims (5120/17408/248320)
+and g_prof_entries is global across the two Metal contexts. **Next step: add a per-context
+tag to the profiler key so drafter rows separate; GPU ticks are valid (methodology rule
+applies to CPU components only).** Then decide between attacking the drafter excess
+(~7 ms ceiling ≈ +5% e2e) and the verify slope (1.79x vs oMLX ~1.5x, ~20 ms ceiling).

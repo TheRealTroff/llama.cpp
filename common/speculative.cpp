@@ -1364,7 +1364,17 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
 
             if (is_dflash2) {
                 GGML_ASSERT(dp.temperature <= 0.0f || dp.dists);
+                // this call synchronizes, so it carries the drafter's GPU wait
+                const int64_t t_lat0 = ggml_time_us();
                 const float * lattice = llama_get_embeddings_nextn(ctx_dft);
+                {
+                    static int64_t t_lat = 0, n_lat = 0;
+                    t_lat += ggml_time_us() - t_lat0;
+                    if (++n_lat % 32 == 0) {
+                        LOG_INF("dflash-prof lattice sync: n=%lld avg %.3f ms\n",
+                                (long long) n_lat, (double) t_lat / n_lat / 1000.0);
+                    }
+                }
                 GGML_ASSERT(lattice && "DFlash2 selector produced no lattice");
 
                 if (selector_reset[seq_id]) {
