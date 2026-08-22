@@ -3,6 +3,20 @@
 Small-batch Metal decode and speculative-decoding work on Qwen3.8-27B, M4 Pro (20-core
 GPU, 273 GB/s), macOS 26.5.2.
 
+## Only one build is the right build
+
+**`/Users/troff/play/llama.cpp-prod/build`.** Nothing else. `~/play` holds other checkouts
+and several older build directories - as of 2026-08-22, `llama.cpp/build`, `build-perf`,
+`build-metal` and `build2`, all carrying a runnable `llama-bench` and `test-backend-ops`
+built from `metal-mv-wideload`, which is 85 commits behind prod, two of them from June.
+
+This fails the same silent way a forgotten env flag does: the binary runs, the numbers look
+plausible, and they are wrong. The `run-*.sh` harnesses are safe because they hardcode the
+prod path. **Ad-hoc commands are not** - `./build/bin/...` means whatever directory you
+happen to be in. Check `git -C . branch --show-current` before trusting a hand-rolled run,
+and rebuild after switching branches in a worktree: a stale binary from another branch is
+the same trap one level down (it bit the GGML_MV_EXT_V2 work on 2026-08-22).
+
 ## The prod pick
 
 The fastest known configuration. **Every one of these env flags defaults to off/upstream
