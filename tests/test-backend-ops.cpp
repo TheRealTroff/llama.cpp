@@ -10196,6 +10196,34 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
         }
     }
 
+    // cold-streaming matvec: working sets far above the SLC, so the measured rate is
+    // DRAM bandwidth rather than cache bandwidth (33 MB above is partly cache-resident)
+    for (int bs : {1, 2, 3, 4, 5, 6, 7, 8}) {
+        for (ggml_type type_a : {GGML_TYPE_Q4_0}) {
+            test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32, 16384, bs, 32768, {1, 1}, {1, 1}));
+        }
+    }
+    // small, fully cache-resident: probes the kernel's consumption ceiling rather than DRAM
+    for (int bs : {1}) {
+        for (ggml_type type_a : {GGML_TYPE_Q4_0}) {
+            test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32, 2048, bs,  8192, {1, 1}, {1, 1}));
+            test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32, 4096, bs,  8192, {1, 1}, {1, 1}));
+        }
+    }
+
+    // the 27B (qwen35) verify projections, at the widths speculation actually emits.
+    // the cold-streaming case above cannot see the width 3-4 weakness: its ne01 is 16384,
+    // so nr0 selection (ne11 >= 5 || ne01 >= 8192) already gives 4. ffn_down, attn and gdn
+    // have ne01 < 8192 and so land on nr0 = 2, which is the corner. see perf/width4-verify.md
+    for (int bs : {1, 2, 3, 4, 5, 6, 7, 8}) {
+        for (ggml_type type_a : {GGML_TYPE_Q4_0}) {
+            test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32, 17408, bs,  5120, {1, 1}, {1, 1})); // ffn gate/up
+            test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32,  5120, bs, 17408, {1, 1}, {1, 1})); // ffn down
+            test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32,  6144, bs,  5120, {1, 1}, {1, 1})); // gdn qkv
+            test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32,  3072, bs,  5120, {1, 1}, {1, 1})); // attn q
+        }
+    }
+
     // small-ne01 verify shapes from the 27B round decomposition (GDN a/dt, conv, kv, q slices)
     for (int bs : {1, 2, 3, 4, 5, 6, 7, 8}) {
         for (int m : {48, 256, 1024, 1280, 4096}) {

@@ -66,6 +66,43 @@ widen at about half our marginal cost, which is the shelf. Two things this also 
   cheaply than our ext does (+44 us vs our +68 us). Our 3-4 corner is bad independently of
   their kernel.
 
+### Better: the same measurement on a real verify shape (2026-08-22, prod env)
+
+The 33 MB shape above sits at the SLC boundary. `ffn_down` (`m=5120, k=17408`, 50 MB) is one
+of the projections the verify pass actually runs, and it is now a perf case on prod. Under
+**prod routing env** it reproduces the whole-model width curve shape exactly:
+
+| width | ours, us | marginal | our kernel |
+|---|--:|--:|---|
+| 1 | 203.31 | - | `mul_mv` |
+| 2 | 212.31 | +9.0 | `mul_mv` nc2 - nearly free |
+| 3 | 325.75 | **+113.4** | ext `nr0=2, chpt=1` - **the cliff** |
+| 4 | 348.11 | +22.4 | ext `nr0=2, chpt=1` |
+| 5 | 421.58 | +73.5 | skinny mm |
+| 6 | 419.58 | -2.0 | skinny mm |
+| 7 | 424.80 | +5.2 | skinny mm |
+| 8 | 427.01 | +2.2 | skinny mm |
+
+Same signature as llama-bench's 73.0 / 73.8 / 101.5 / 111.5 / 119.0 / 120.9 / 123.1 / 124.1:
+free at 2, cliff at 3, flat from 5. **So this one shape is a valid, ~2 minute proxy for the
+whole-model curve** - iterate on it, confirm on llama-bench.
+
+Widening 1 -> 4 at this shape: **ours +144.8 us, their `verify_m4` +58.1 us = 2.49x.** More
+pronounced than at the 33 MB shape, and this is the shape that matters.
+
+### Two traps in this harness, both cost a run
+
+- **`test-backend-ops` does not read the prod env by default.** With no env it routes
+  everything to `ext` and the curve is a *different shape* (widths 5-8 keep climbing:
+  399/515/637/638 instead of flattening). Always run it as
+  `GGML_MV_NC=2 GGML_MM_SKINNY=5 ./build/bin/test-backend-ops perf -o MUL_MAT -b MTL0 -p ...`
+  or the numbers are not comparable to anything in this directory.
+- **The 302 MB cold-streaming case cannot see the width 3-4 weakness.** Its `ne01` is 16384,
+  so `nr0 = (ne11 >= 5 || ne01 >= 8192) ? 4 : 2` already gives **4** - verified from the
+  pipeline names (`..._r1_3_nsg=2_nxpsg=8_nr0=4`). It is the right instrument for absolute
+  DRAM bandwidth (width 1 measures 254.7 GB/s = 93% of peak) and the wrong one for this
+  investigation. Use the model shapes.
+
 ### This retires a stale claim
 
 ~~`mv-bandwidth-probe.md` (branch `metal-mv-wideload`, 2026-08-21): "at n=4 we are already
