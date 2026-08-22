@@ -5,17 +5,19 @@ GPU, 273 GB/s), macOS 26.5.2.
 
 ## Only one build is the right build
 
-**`/Users/troff/play/llama.cpp-prod/build`.** Nothing else. `~/play` holds other checkouts
-and several older build directories - as of 2026-08-22, `llama.cpp/build`, `build-perf`,
-`build-metal` and `build2`, all carrying a runnable `llama-bench` and `test-backend-ops`
-built from `metal-mv-wideload`, which is 85 commits behind prod, two of them from June.
+**`/Users/troff/play/llama.cpp-prod/build`.** It is now the only llama.cpp build directory
+under `~/play`, and it should stay that way.
 
-This fails the same silent way a forgotten env flag does: the binary runs, the numbers look
-plausible, and they are wrong. The `run-*.sh` harnesses are safe because they hardcode the
-prod path. **Ad-hoc commands are not** - `./build/bin/...` means whatever directory you
-happen to be in. Check `git -C . branch --show-current` before trusting a hand-rolled run,
-and rebuild after switching branches in a worktree: a stale binary from another branch is
-the same trap one level down (it bit the GGML_MV_EXT_V2 work on 2026-08-22).
+On 2026-08-22 there were four others - `llama.cpp/build`, `build-perf`, `build-metal` and
+`build2` - each with a runnable `llama-bench` and `test-backend-ops` built from
+`metal-mv-wideload`, 85 commits behind prod, two of them from June. They were deleted.
+A stale build fails the same silent way a forgotten env flag does: the binary runs, the
+numbers look plausible, and they are wrong.
+
+The `run-*.sh` harnesses are safe because they hardcode the prod path. **Ad-hoc commands
+are not** - `./build/bin/...` means whatever directory you happen to be in. Rebuild after
+switching branches in a worktree, too: a stale binary from another branch is the same trap
+one level down, and it bit the `GGML_MV_EXT_V2` work on 2026-08-22.
 
 ## The prod pick
 
