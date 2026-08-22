@@ -110,6 +110,48 @@ tokens a round, and still lose.
 
 Prior record was 10.29 t/s on the older stack; the collapse is milder now but still total.
 
+## Which widths a run actually hits
+
+A fixed-depth run is not a single kernel path, but it is close to one. From the per-op
+profiles (`rounddecomp-aug22-tagged-n6`, plus the untagged pre/post-fusion pair), counting
+MUL_MAT calls by the second dim of s1. One full target forward pass = **496** matmul calls
+(calibrated on prefill: 8288 tokens = exactly 16 passes at width 512 plus one remainder
+pass, and batch-1 generation = 299.6 passes at width 1 for 300 tokens).
+
+dflash n6, per run:
+
+| verify width | passes | kernel |
+|---|--:|---|
+| 7 | 77 | skinny |
+| 6 | 1 | skinny |
+| 3 | 1 | **ext** |
+
+This reconciles exactly with the sweep counters: 77*6 + 5 + 2 = **469 drafted over 79
+rounds = 5.86/round**, which is what the n6 row reports. The two odd rounds are almost
+certainly the first round after prefill (no lattice yet) and the last round truncated by
+the n_predict boundary. **Only one pass per run - the width-3 one - lands on a different
+kernel than the rest.**
+
+Two things that look like narrow rounds and are not:
+
+- **Widths 2 and 4 are server startup, not verification.** They appear with identical call
+  counts (992 and 496 = exactly 2 and 1 passes) in the batch-1 `--spec-type none` profile,
+  which drafts nothing at all. Fixed per-run cost, present in every config, contaminating
+  no comparison.
+- **The drafter's width-16 row** (395 calls) is its lattice/top-k shape, not a verify batch.
+
+**The mixture is deterministic.** The pre-fusion and post-fusion n6 profiles have
+byte-identical width histograms (`{1:83, 2:1039, 3:508, 4:507, 6:508, 7:42829}`), and the
+tagged run's per-model split sums to the untagged totals on every width (38269 + 4560 =
+42829, 992 + 47 = 1039, ...). So the path mix is reproducible across runs and across a code
+change, and is **not** a source of the 0.51% run-to-run spread - that is pure timing.
+
+Consequence for debugging: because that single width-3 pass straddles a kernel boundary and
+skinny/ext/mv-nc are not bit-identical, a routing change can flip the output sha while
+changing throughput by nothing. That is the same mechanism as the `GGML_FA_VEC_MAX=4`-vs-`5`
+trap in `flash-attn-mm-split.md`. **An unexpected sha change is not automatically a bug** -
+check whether the routing of a rare narrow pass moved before assuming corruption.
+
 ## Consequences
 
 1. **Effective depth must stay <= 7** for any speculation type on this kernel set. dflash
@@ -151,5 +193,39 @@ dflash_mlx's 29.55 t/s at that same committed/round needs a **126.9 ms** round, 
 two numbers agreeing is the case for that lever being the whole remaining game.
 2. **MTP d6 is worth re-testing in any config where dflash is unavailable** - it is only
    1.0 t/s behind the prod pick and drafts better.
-3. The N=3/N=4 gap is the one remaining structural dip inside the window. Both routes into
-   it are closed lines, so this is a note, not a lever.
+3. The N=3/N=4 gap is the one remaining structural dip inside the window. At fixed depth
+   both routes into it are closed lines, so it is a note, not a lever - **but see below,
+   because that is only true while we run one width.**
+
+## Prerequisite if we ever go adaptive
+
+At fixed depth, **the only point on the slope curve that matters is the width we actually
+run** - 97.5% of rounds at width 7, one stray pass at 3. Everything else on the curve is
+decoration, which is why the N=3/N=4 dip is currently harmless and why several kernel lines
+were closed as "parity, not a win".
+
+Adaptive speculation inverts that. A controller that shortens low-acceptance blocks visits
+the whole curve, so **every width becomes hot and each one has to be driven as low as it
+goes** before the policy can pay. dflash_mlx already works this way: `verify_mode` defaults
+to adaptive and its archived counters spread over `cycles_by_block={1:1, 4:81, 5:17}`,
+average depth 4.14 - i.e. it spends 80% of its cycles at a width we have never optimised.
+
+Two closed lines would have to be reopened, and both were closed *because* we only run one
+width:
+
+- **The mv-nc NC>=3 cliff** (`mv-nc-cliff-probe.md`). Width 2 costs 73.8 ms - only 0.8 over
+  batch-1, essentially free - because mv-nc2 covers it. Width 3 costs 101.5. The whole
+  N=2->N=3 step is mv-nc's structure not extending past 2 columns. It was closed as "fixing
+  it yields parity with ext, not a win", which is correct at fixed depth 7 and irrelevant
+  under a controller that lives at widths 2-5.
+- **`GGML_MV_NC_V2`** (branch `metal-mv-nc-spill`). `prod-baseline.md` measured +0.79% with
+  disjoint ranges at MTP d1 (width 2) and nothing at dflash n6 (width 7), and concluded it
+  "brings nothing to the config that actually ships". Under adaptive, width 2 *is* a
+  shipping width. Note it was only ever A/B'd at `GGML_MV_NC=2`; **whether V2's lower
+  register pressure also relieves the NC>=3 spill penalty is untested**, and that is the
+  experiment that would decide whether widths 3-4 can be brought near width 2's cost.
+
+So the ordering is: adaptive depth is not a lever on its own - `adaptive-spec` was closed
+once as "doesn't beat best-fixed", and our shallow cycles are not cheap the way theirs are
+(our n4 costs 2.15 batch-1 floors vs their block-4 at 1.36). Flattening widths 2-5 is the
+prerequisite that would make the policy worth having, not a follow-up to it.
