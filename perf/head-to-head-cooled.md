@@ -5,13 +5,19 @@ M4 Pro. 5 runs each, 120 s between runs, 180 s opening cooldown. Run twice: once
 with the laptop flat on a desk ("hot"), once on a metal grid with airflow
 underneath ("cooled"). Script: /tmp/headtohead.sh (md5 796ff730568c422b0b463ff1c96c3eae).
 
-> **STALE for the llama.cpp side.** This ran at abb54576. prod is now 24 commits
-> past that, including the FA mm-split (262be3b6). Re-measured on prod e15cc590:
-> **21.565 t/s**, not 20.39. See [prod-baseline.md](prod-baseline.md). The dflash
-> side has not been re-run, so the gap figure below is stale too.
+> **STALE - superseded twice.** This ran at abb54576, and both sides of the table
+> below are out of date.
 >
-> This file records only a date, no commit. That is why the rot was invisible -
-> always pin the sha and build number, as baseline.md does.
+> The 20.39 llama.cpp figure was already re-measured at **21.53/21.57** by
+> [drafter-quant-routing.md](drafter-quant-routing.md) (f38b3243, a descendant of
+> this commit), which then moved the prod pick off MTP d1 entirely to **dflash n6
+> at 22.18**. Current prod measures 22.115 on that config - see
+> [prod-baseline.md](prod-baseline.md). The dflash_mlx side has not been re-run at
+> all, so the 1.45x gap is stale in both directions.
+>
+> This file records only a date, no commit, which is why the rot was invisible.
+> Pin the sha and build number, as baseline.md does - and before comparing against
+> any recorded number, check `git log` for a later measurement of the same config.
 
 Configs:
 - **llama.cpp**: `~/play/Qwen3.8-27B-uniform-Q4_0.gguf`, `GGML_MV_NC=2

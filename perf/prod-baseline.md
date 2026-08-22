@@ -43,23 +43,44 @@ Notes:
 
 ## End-to-end (speculative decode)
 
-Same harness as [head-to-head-cooled.md](head-to-head-cooled.md), llama.cpp side only:
-8288-token B-tree prompt (`~/play/benchprompt.txt`), n_predict 300, temp 0, uniform Q4_0,
-`GGML_MV_NC=2 GGML_MM_SKINNY=5`, `--spec-type draft-mtp --spec-draft-n-max 1`, f16 KV,
-ctx 10240, fresh server per run.
+8288-token B-tree prompt (`~/play/benchprompt.txt`), n_predict 300, temp 0, ctx 10240,
+f16 KV, uniform Q4_0 target, `GGML_MV_NC=2 GGML_MM_SKINNY=5`. Fresh server per run, 3 runs
+each, no thermal cooldown (head-to-head-cooled.md found cooling changes nothing; pmset
+reported no thermal or performance warning during these runs).
 
-| build | t/s median | mean | sd | runs | acceptance |
-|-------|-----------:|-----:|---:|-----:|-----------:|
-| abb54576 (2026-08-21) | 20.390 | 20.394 | 0.018 | 5 | 86.2% |
-| **prod e15cc590 (1897)** | **21.565** | 21.574 | 0.016 | 3 | 86.2% |
+| config | recorded | prod e15cc590 | delta |
+|--------|---------:|--------------:|------:|
+| MTP d1 (`--spec-type draft-mtp --spec-draft-n-max 1`) | 21.53, 21.57 | 21.565 | flat |
+| **dflash n6** (`-md ...pureQ4_0.gguf --spec-type draft-dflash --spec-draft-n-max 6`) | 22.17, 22.18, 22.21 | **22.115** | -0.29% |
 
-**+5.8%.** 24 commits landed between the two, the FA mm-split (262be3b6) among them.
+dflash n6 is the prod pick and remains so. Output sha 9ad7e023c6ab on every run, matching
+the archived value, so nothing drifted numerically.
 
-Deviation from the original harness: 3 runs, and the 180 s/120 s thermal cooldowns dropped,
-on the strength of that file's own finding that cooling changed nothing (-0.01%/+0.05%,
-inside noise). The resulting spread (sd 0.016, 0.07%) matches the cooled runs' 0.07-0.09%,
-so the shortcut cost nothing. Acceptance came out at 86.2% on all three runs, identical to
-the recorded value, which is the check that the config really is like-for-like.
+**Correction.** An earlier version of this file claimed MTP d1 improved +5.8% against the
+20.39 in head-to-head-cooled.md. That was wrong: drafter-quant-routing.md (f38b3243) is a
+descendant of head-to-head-cooled.md (abb54576) and had already re-measured MTP d1 at
+21.53/21.57. Comparing to 20.39 compared against a superseded number. MTP d1 on prod is
+flat, and prod has no e2e gain to report over the last recorded state.
 
-Caveat: only the llama.cpp side was re-run. Against the recorded dflash_mlx 29.55 t/s the
-gap is now 1.370x (was 1.449x), but that assumes their side has not moved.
+The -0.29% on dflash n6 is small but is a decrease, not an increase, and is outside the
+run-to-run spread (sd 0.004). Unexplained. Candidates: session-to-session variance not
+captured by within-session sd, or a real small regression from commits merged after
+f38b3243. Worth a bisect before anyone treats 22.18 as still current.
+
+### GGML_MV_NC_V2 (branch metal-mv-nc-spill)
+
+| config | V2 off | V2 on | verdict |
+|--------|-------:|------:|---------|
+| MTP d1 | 21.565 (range 21.560-21.596) | 21.736 (range 21.728-21.737) | **+0.79%, disjoint** |
+| dflash n6 | 22.115 (range 22.114-22.123) | 22.108 (range 22.104-22.147) | no effect, ranges overlap |
+
+At MTP d1 the gain is real and the ranges do not overlap, which was a surprise: with
+`GGML_MV_NC=2` only ne11=2 dispatches to mv-nc, and nc2 does not spill in either version.
+So v2 is buying occupancy from lower register pressure *below* the spill threshold - which
+the offline spill probe cannot see. That is a real blind spot in the metric.
+
+At dflash n6 there is nothing, as the dispatch predicts: the drafter emits its whole block
+in one decode at ne11=6-7, which is skinny's window, and mv-nc is gated to ne11 <= min(NC,4).
+
+**So the branch brings nothing to the config that actually ships.** Its +0.79% lands only
+on MTP d1, which dflash n6 superseded.
