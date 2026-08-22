@@ -49,10 +49,17 @@ a **126.6 ms** round against today's 150.0 - a **23.3 ms** cut. ~~`round-decomp-
 scopes the verify-slope lever at ~20 ms, i.e. **~86% of the entire remaining gap**.~~
 **CORRECTED 2026-08-22: the verify-slope lever does not exist** (`verify-slope-close.md`) -
 the slope is dense-matmul width scaling and matmul alone fills the entire 1.5x budget, so
-only ~5-7 ms is available there. The 23.3 ms cut has to come from somewhere else, and the
-same file localises it: at matched depth 5 we are the faster engine (23.37 vs 21.82 t/s),
-and their whole edge is a block-4 operating point costing 91.9 ms/cycle that our cost curve
-has no equivalent of.
+only ~5-7 ms is available there. The 23.3 ms cut has to come from somewhere else, and
+`block4-shelf-probe.md` localises it by measuring their side at fixed depth: their block-4
+cycle costs **95.00 ms** against our n4's 144.9, while at depth 5 the two are only 7% apart
+(137.26 vs 147.5). Their edge is one operating point, not a slope.
+
+**Also: 29.613 is not their best config.** It is their adaptive default, and pinning block 4
+measures **32.556 t/s** - 9.7% faster. So the 1.184x above compares our best against a
+suboptimal config of theirs; **best-vs-best is 25.04 vs 32.56 = 1.302x.** (An earlier
+correction here claimed we were faster at matched depth 5. That was derived from the
+adaptive run's own block-5 rows, which are the cycles where acceptance had already gone bad;
+measured fixed block 5 is 26.654 t/s against our 23.371. Retracted.)
 
 ## Drafter quality is still not the problem
 

@@ -121,11 +121,24 @@ gives 100.0 ms/cycle against 102.7 ms of wall per cycle - agreement to **2.7%**,
 | 5 | 17 | 140.2 | 3.059 | n5 | 147.5 | 3.45 |
 | - | - | - | - | n6 | 149.9 | 3.75 |
 
+> **CORRECTION 2026-08-22 (later), from direct measurement in `block4-shelf-probe.md`:**
+> the block-4 row is right (derived 91.9, measured **95.00** pinned), but **the block-5 row
+> is not representative and point 1 below is WRONG.** Adaptive only enters block 5 when
+> acceptance is already poor - those cycles accept 41.2%/draft against 53.2% at true fixed
+> block 5 - so the 140.2 / 3.059 / 21.82 t/s figures describe bad cycles, not block 5.
+> Measured fixed block 5 is **137.26 ms/cycle, 3.6585 tok/cycle, 26.654 t/s**, which is
+> **faster than our n5's 23.37**, not slower. What survives is the cycle *cost* comparison:
+> 137.26 vs our 147.5 is only 7% apart, so the two engines are near level at depth 5 and
+> their whole advantage is the block-4 shelf. Deriving per-block behaviour from an adaptive
+> run's own rows is not safe; the controller's choice of when to escalate is confounded
+> with the thing being measured.
+
 Two things fall out, and they reframe the comparison:
 
-1. **At matched depth 5 we are faster than they are.** Their block-5 cycle yields 21.82 t/s;
-   our n5 yields 23.37. We commit more per cycle (3.45 vs 3.06) at a similar cost (147.5 vs
-   140.2 ms). Our n6 at 25.04 beats their block 5 by 15%.
+1. ~~**At matched depth 5 we are faster than they are.** Their block-5 cycle yields 21.82
+   t/s; our n5 yields 23.37.~~ **REFUTED by measurement - see the correction above.** At
+   matched depth 5 they are 1.14x faster (26.654 vs 23.371); what is true is that our
+   *cycle cost* is within 7% of theirs there (147.5 vs 137.26).
 2. **Their entire 1.184x edge is a cheap shelf at block 4** that our curve does not have:
    91.9 ms vs our 144.9 at the same depth, and their controller sits there for 82% of
    cycles. Their block 4 -> 5 step costs **+48.3 ms**; our own width 5 -> 6 step costs

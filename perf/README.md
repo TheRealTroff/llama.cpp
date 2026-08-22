@@ -80,8 +80,14 @@ llama.cpp 25.004 +/- 0.015 vs dflash_mlx 29.613 +/- 0.060 = **1.184x**
 to +0.2%. The entire gap is cycle cost: matching them at our own 3.75 committed/round needs
 a 126.6 ms round against today's 150.0, a 23.3 ms cut. **That cut is not available from the
 verify slope** - see `verify-slope-close.md`, which retires the "~20 ms verify-slope lever"
-this file used to quote. At matched depth 5 we are the faster engine; their whole edge is
-one cheap operating point (block 4) that our cost curve does not have.
+this file used to quote.
+
+**Both sides re-measured at fixed depth 2026-08-22 (`block4-shelf-probe.md`), and the
+headline above understates the gap.** 29.613 is their *adaptive default*, which is not their
+best config: pinning block 4 gives **32.556 t/s**, 9.7% faster. Best-vs-best is therefore
+**25.04 vs 32.56 = 1.302x**. Their advantage is one operating point - at matched depth 5
+their cycle costs 137.26 ms against our 147.5, only 7% apart - and at block 4 it costs 95.00
+against our 144.9. Our curve is flat but high; theirs is steep with a cheap shelf.
 
 ## Two traps that have each cost a day
 
@@ -134,8 +140,11 @@ Current state:
   and the whole gap is a 23.3 ms cycle-cost cut. Run it with `run-head-to-head.sh`.
 - `acceptance-metric-conversion.md` - drafter quality vs oMLX, denominators reconciled.
   Drafter quality is not the gap; cycle cost is.
-- **`block4-shelf-probe.md` - the one open task.** Is their cheap block-4 cycle real or a
-  lazy-eval artifact? One fixed-block run on their side decides which programme is left.
+- **`mlx-cycle-capture.md` - the one open task.** Their block-4 cycle runs a drafter *and* a
+  verify in 95 ms; our 5-column verify alone costs 126. A GPU capture (no sudo needed) says
+  whether they skip work, overlap the drafter, or just have a better small-batch kernel.
+- `block4-shelf-probe.md` - both sides at fixed depth. The shelf is real (95.00 ms/cycle
+  measured), their adaptive default is 9.7% off their own best, and best-vs-best is 1.302x.
 - `verify-slope-close.md` - the verify slope is dense-matmul width scaling, not overhead:
   matmul alone fills the entire 1.5x budget, so there is no ~20 ms to remove. Also the
   first measured read of oMLX's own cost curve, and the one run that decides what is left.
