@@ -401,6 +401,49 @@ registers**, 32 uniform, **0 spilled bytes**, 453 instructions of which 399 ALU 
 Everything below this line is the investigation that led there. The `xctrace` route in it
 does **not** work and is kept only so nobody retries it.
 
+### Why the GUI step cannot currently be automated: it is an entitlement
+
+Traced to the end on 2026-08-23. The replay engine is a real command-line tool:
+
+```
+/System/Library/CoreServices/MTLReplayer.app/Contents/MacOS/MTLReplayer
+usage: MTLReplayer archivePath [options]
+```
+
+with exactly the options this work wants - `--counters`, `--derived-counters`,
+`--collect-xcode-derived-counters`, `--shader-profiling`,
+`--performShaderProfilingAnalysis`, `-collectPipelinePerformanceStatistics`,
+`-collectRawCounters`, `-gpuTimelineData`, `-dumpProfileDictionary`, `-outputPath`,
+`--device`, `--frame`, `--last`.
+
+**And it is entitlement-gated.** `codesign -d --entitlements -` on it shows:
+
+```
+com.apple.private.agx.performance-spi
+com.apple.private.gputools.client
+com.apple.private.amd.performance-spi
+flags=0x2000(library-validation)   Platform identifier=26
+```
+
+`com.apple.private.agx.performance-spi` is the thing that lets a process talk to the AGX
+performance counters. It is a private Apple entitlement on a platform binary, so it cannot
+be self-signed onto anything of ours. **This one fact explains the whole investigation
+above**: the in-process `AGXGPURawCounterSourceGroup` failure, the xctrace
+"profile is not supported on target device", and why re-signing our own binary with
+`get-task-allow` changed nothing. We were never going to get counters from an unentitled
+process; only Apple-signed binaries can, and Xcode works because it drives them.
+
+Two further mechanics, so nobody re-tests them:
+
+- **Direct exec is killed instantly** - `exit 137` in 0.01 s, a launch-constraint kill, not
+  a hang or a timeout.
+- **`open -a ... --args <trace> --replay --shader-profiling` does launch it**, and the argv
+  arrives intact (verified with `ps`). But it then idles indefinitely and writes nothing:
+  it is an `LSUIElement` app that expects to be driven over XPC, not run standalone.
+
+So the GUI step in `skills/metal-gpu-profile` stays manual. It is not a gap in our
+knowledge any more; it is a permission boundary.
+
 ### Why xctrace was the wrong mechanism
 
 Instruments' live counter sampling is not how Xcode shows per-kernel counters for a Mac

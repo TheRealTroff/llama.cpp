@@ -87,10 +87,17 @@ by a command you can copy:
   with arch suffix `-b1` and `/tmp/unixsocketipc_test`). Those are shader-compiler helpers.
 - **No process anywhere receives the `.gputrace` path in argv.** It travels over XPC.
 
-So there is no CLI to invoke. Headless replay would mean speaking XPC to
-`GPUToolsReplayService`, or loading `GPUToolsShaderProfiler.framework` in-process the way
-`perf/gputrace-dump.py` already loads the archive reader. Neither is done.
-**Do not go hunting for a command-line replay tool - there isn't one.**
+There **is** a command-line replay tool -
+`/System/Library/CoreServices/MTLReplayer.app/Contents/MacOS/MTLReplayer archivePath
+[options]`, with `--counters`, `--shader-profiling`, `-collectPipelinePerformanceStatistics`
+and more. **It cannot be used.** It carries the private entitlement
+`com.apple.private.agx.performance-spi`, which is what grants access to the AGX counters
+and cannot be self-signed onto anything of ours. Direct exec dies instantly (`exit 137`,
+launch-constraint kill); `open -a --args` does launch it and argv arrives intact, but it
+then idles forever because it expects to be driven over XPC.
+
+**So do not try to automate step 2.** The barrier is a permission boundary, not a missing
+incantation. Full detail in `perf/toolchain-isa-probe.md`.
 
 ## Gotchas
 
