@@ -323,6 +323,31 @@ tile.
 `nr0=4` does not stack with it: at width 3 `nxpsg=16` alone gets ~320 and adding `nr0=4`
 gets ~314 (inside drift), and at width 4 `nr0=4` still costs ~12 us on top. `nr0` is done.
 
+### Why `nxpsg=16` wins: it is occupancy, from the capture
+
+Confirmed structurally by pointing our own GPU capture at the kernel for the first time
+(`toolchain-isa-probe.md`, on-device section). Dispatch geometry at `ffn_down` width 4:
+
+| config | threadgroups | threads/threadgroup | K iterations per thread |
+|---|--:|--:|---|
+| `nxpsg=8` (prod) | **320** | 64 | stride `chpt*nxpsg` = 8 |
+| `nxpsg=16` | **640** | 64 | stride 16, so **half** |
+
+`r0ptg = nypsg*nsg*nr0` and `nypsg = 32/nxpsg`, so doubling `nxpsg` halves rows per
+threadgroup and doubles the grid: 5120/16 = 320 against 5120/8 = 640. Threads per
+threadgroup is **unchanged at 64**. Same total work, twice the independent work units, and
+each thread's serial K chain cut in half.
+
+**That is the shape of a parallelism/latency limit, not a compute or register limit** - and
+it is exactly consistent with run 2, where giving the kernel a *bigger* per-thread tile made
+width 4 worse. The kernel does not want more work per thread; it wants more threads in
+flight. The file's original "at width 4 the kernel is latency-bound, not bandwidth-bound"
+line survives run 2 even though the register-tile conclusion attached to it did not.
+
+Caveat: this explains the *direction*, not the magnitude, and the capture carries no timing
+(see the tooling note). Confirming it needs a real occupancy counter, which is currently
+blocked on `.tracetemplate` configuration.
+
 ### Drift got worse over the session
 
 `ffn_down` width 3 at the prod config read 336, 340, 362 and 363 across four blocks tonight,

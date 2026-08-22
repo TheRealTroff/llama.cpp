@@ -210,3 +210,64 @@ its own LLVM with a separate cl::opt registry), and `-mtranslator` is a closed w
 that rejects every stats option tried. `AGX3_TEMP_REG_LIMIT` and `AGX3_FLAG_REG_LIMIT`
 exist as env vars but are ignored by the offline tool (byte-identical output across the
 whole range), so they are read by the in-driver runtime compiler only.
+
+## On-device: capture and counters, pointed at our own kernels (2026-08-22)
+
+The offline path above is static. This section is the device-side complement, and it was
+tried on our kernels for the first time on 2026-08-22. Both instruments run headless.
+
+### GPU capture works on ggml, and it is free
+
+`GGML_METAL_CAPTURE_COMPUTE=<n>` is already in the tree
+(`ggml-metal-context.m:293`): it captures the n-th `graph_compute` and writes
+`/tmp/perf-metal-<pid>.gputrace`. `MTL_CAPTURE_ENABLED=1` must also be set. Then
+`perf/gputrace-dump.py` (built for the MLX capture, never before aimed at us) reads it with
+no Xcode GUI:
+
+```sh
+MTL_CAPTURE_ENABLED=1 GGML_METAL_CAPTURE_COMPUTE=2 GGML_MV_NC=2 GGML_MM_SKINNY=5 \
+  ./build/bin/test-backend-ops perf -o MUL_MAT -b MTL0 -p "m=5120,n=4,k=17408,"
+DYLD_FRAMEWORK_PATH=/Applications/Xcode.app/Contents/SharedFrameworks \
+  ~/play/.venv-convert/bin/python3 perf/gputrace-dump.py /tmp/perf-metal-<pid>.gputrace out.txt
+```
+
+**What it gives: structure, not time.** Pipeline identity, buffer bindings and offsets,
+dispatch order, and the dispatch geometry, which reads as
+`(null)(<enc>, {<threadgroups>}, {<threadsPerThreadgroup>})`. Selector names come out
+`(null)` in this build, so read by shape. There is **no** timing, duration or counter field
+anywhere in the dump - a `.gputrace` document is a command-stream capture; Xcode derives
+counters by replaying it under its profiler, which the headless dumper does not do.
+
+### Metal System Trace records headless, but the default template has no counters
+
+```sh
+xcrun xctrace record --template "Metal System Trace" --output /tmp/mst.trace \
+  --launch -- ./build/bin/test-backend-ops perf -o MUL_MAT -b MTL0 -p "..."
+xcrun xctrace export --input /tmp/mst.trace --toc
+```
+
+The schema list is exactly what this work wants: `gpu-counter-info`, `gpu-counter-value`,
+`gpu-shader-profiler-interval`, `gpu-shader-profiler-sample`, `graphics-compiler-spill-events`,
+`metal-application-encoders-list`. **The data is not.** On a width-4 `ffn_down` run:
+
+| table | rows | why |
+|---|--:|---|
+| `gpu-counter-value` | 403958 | all samples of **one** counter |
+| `gpu-counter-info` | **1** | and it is `RT Unit Active` - raytracing, useless here |
+| `gpu-shader-profiler-sample` | 0 | shader timeline off |
+| `metal-application-encoders-list` | 45 | real, and usable |
+
+The recording settings in the TOC say why: `Counter Set: (null)` and
+`Shader Timeline: Disabled`. The template selects no counter set, so no ALU/occupancy/
+limiter counter is sampled, and no per-line attribution is collected.
+
+**The blocker, precisely.** `xctrace record` takes `--template <path|name>`,
+`--instrument <name>` and `--package <file>`, and has **no** option to choose a counter set
+or enable the shader timeline. Those are per-instrument settings that live inside a
+`.tracetemplate`. So the next step is a hand-authored or GUI-saved `.tracetemplate` with a
+real counter set and the shader timeline on, passed via `--template <path>`. Until then,
+Metal System Trace gives encoder-level timing and nothing about *why* a kernel is slow.
+
+**Do not confuse this with the offline blocker.** Two independent walls, same question:
+the AGX3 static model (previous section) is blocked by a closed option registry; the device
+counters are blocked by template configuration. The template one looks far more tractable.
