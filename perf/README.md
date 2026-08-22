@@ -89,6 +89,16 @@ best config: pinning block 4 gives **32.556 t/s**, 9.7% faster. Best-vs-best is 
 their cycle costs 137.26 ms against our 147.5, only 7% apart - and at block 4 it costs 95.00
 against our 144.9. Our curve is flat but high; theirs is steep with a cheap shelf.
 
+> **READ THIS BEFORE QUOTING ANY CROSS-FRAMEWORK DEPTH NUMBER (2026-08-22,
+> `mlx-cycle-capture.md`).** The two frameworks count depth differently: **their block *b*
+> verifies *b* columns; our depth *d* verifies *d+1***
+> (`engine/config.py:21-28` + `spec_epoch.py:2247-2257` vs `slope-sweep.md:13`). So every
+> depth-matched comparison above and in `block4-shelf-probe.md` / `verify-slope-close.md` is
+> **off by one column** - "their block 4 vs our depth 4" is really width 4 vs width 5.
+> Matched by *width*, they are 1.06x at width 5 (137.26 vs 144.9), and **we have no
+> measurement at width 4 at all** (that would be our depth 3). Match by width, not by the
+> depth label.
+
 ## Two traps that have each cost a day
 
 **1. n_predict is not comparable across harnesses.** Generation grows the KV cache, so
@@ -140,9 +150,34 @@ Current state:
   and the whole gap is a 23.3 ms cycle-cost cut. Run it with `run-head-to-head.sh`.
 - `acceptance-metric-conversion.md` - drafter quality vs oMLX, denominators reconciled.
   Drafter quality is not the gap; cycle cost is.
-- **`mlx-cycle-capture.md` - the one open task.** Their block-4 cycle runs a drafter *and* a
-  verify in 95 ms; our 5-column verify alone costs 126. A GPU capture (no sudo needed) says
-  whether they skip work, overlap the drafter, or just have a better small-batch kernel.
+- **`mlx-cycle-capture.md` - the one open task, now mostly answered from source.** Two of its
+  three hypotheses are **confirmed without a capture**: (1) their block *b* verifies *b*
+  columns, not *b+1*, so every cross-framework depth comparison on record is off by one
+  (their block-4 cycle is a **4**-wide verify - full stack, full-vocab lm_head, nothing
+  skipped); (2) their drafter is **overlapped** - the next cycle's draft is launched with
+  `async_launch=True` at `spec_epoch.py:2490`, and that prefetch is gated `if not
+  profile_cycles`, so **their own profiler switches the overlap off**. Ours is 16.4 ms
+  serialized. Pipelining our drafter under the verify is now the best-supported lever on the
+  board and needs no kernel change. Still open: re-derive the 1.81x/1.74x slopes at a stated
+  matched width, and measure our depth 3. **The capture was then taken and read**: their
+  block-4 verify runs almost entirely on `custom_kernel_verify_m4_ksplit_np_kp{2,4}_gs64_bf16`
+  - a **bespoke M=4 kernel**, not `qmv_fast` and not `qmm_t` (`qmm` appears 3 times in 95 MB
+  of trace) - plus **vector** SDPA. ~545 pipeline refs/cycle vs our 496 MUL_MAT per pass, so
+  they do run a full pass. Their operating point (width 4) sits exactly in our worst-covered
+  routing region (widths 3-4 fall through to `ext`; the N=3 step alone is +27.7 ms).
+  Tooling: `capture-mlx-cycle.py` (capture, no sudo) and **`gputrace-dump.py`** - dumps a
+  `.gputrace` to text **headlessly via Xcode's private frameworks, no GUI needed**.
+- **`drafter-pipelining.md` (on branch `drafter-pipelining`, not prod) - open, but DEMOTED
+  to the secondary lever.** Two corrections
+  landed the same day it was written. **Step 1 is dead**: measured at +0.38% (`inject+sync`
+  0.517 -> 0.117 ms), because it aimed at `process()` where only 0.52 ms lives - the 16.5 ms
+  is the lattice sync in `draft()`, which cannot be dropped. **And "their drafter overlaps the
+  verify" was overstated**: their prefetch runs *after* acceptance and is consumed by the next
+  verify, so their draft->verify chain is serial on GPU too; the async launch hides host work.
+  Using their block-1 cycle as a no-draft baseline, their draft + 3 extra verify columns costs
+  **22.6 ms against our 55.0** - so even a free drafter would not explain the gap. **The gap is
+  the width-2..4 verify kernels.** Also note both `llama_context`s share one `MTLCommandQueue`
+  (`ggml-metal-context.m:227-228`), which is load-bearing for correctness, not just perf.
 - `block4-shelf-probe.md` - both sides at fixed depth. The shelf is real (95.00 ms/cycle
   measured), their adaptive default is 9.7% off their own best, and best-vs-best is 1.302x.
 - `verify-slope-close.md` - the verify slope is dense-matmul width scaling, not overhead:

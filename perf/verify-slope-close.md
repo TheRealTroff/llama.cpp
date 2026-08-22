@@ -141,9 +141,18 @@ Two things fall out, and they reframe the comparison:
    *cycle cost* is within 7% of theirs there (147.5 vs 137.26).
 2. **Their entire 1.184x edge is a cheap shelf at block 4** that our curve does not have:
    91.9 ms vs our 144.9 at the same depth, and their controller sits there for 82% of
-   cycles. Their block 4 -> 5 step costs **+48.3 ms**; our own width 5 -> 6 step costs
-   **+1.9 ms** (llama-bench 119.0 -> 120.9). One of the two curves has a cliff, and it is
+   cycles. ~~Their block 4 -> 5 step costs **+48.3 ms**; our own width 5 -> 6 step costs
+   **+1.9 ms** (llama-bench 119.0 -> 120.9).~~ One of the two curves has a cliff, and it is
    not ours.
+
+   > **CORRECTED 2026-08-22 (`mlx-cycle-capture.md`): wrong widths.** Their block *b*
+   > verifies *b* columns, ours *d+1* (`spec_epoch.py:2247-2257` vs `slope-sweep.md:13`).
+   > Their block 4 -> 5 is a **width 4 -> 5** step, so it must be compared against **our
+   > width 4 -> 5 step, +7.5 ms** (llama-bench 111.5 -> 119.0), not our width 5 -> 6 (+1.9).
+   > Likewise "buys 4 extra verify columns for 19.5 ms where we pay 46.0 for the same four"
+   > is really **3** extra columns, and our like-for-like figure is **38.5 ms**
+   > (73.0 -> 111.5). The asymmetry (+42.3 vs +7.5) and the conclusion both survive; only
+   > the cliff's location moves, to between width 4 and 5.
 
 So "their slope is 1.5x and ours is 1.79x" was the wrong framing twice over: the number is
 1.81x, and we are at or ahead of parity everywhere on the curve we have measured. They have

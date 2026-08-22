@@ -43,6 +43,15 @@ already going badly. This is why the earlier arithmetic predicting fixed block 5
 **3. At matched depth 5 the two engines are nearly level - the advantage is all at
 block <= 4.**
 
+> **CORRECTED 2026-08-22 (`mlx-cycle-capture.md`): the table below is off by one column.**
+> Their block *b* verifies *b* columns (`spec_epoch.py:2247-2257`); our depth *d* verifies
+> *d+1* (`slope-sweep.md:13`). So each row compares their width *b* against our width *b+1*.
+> Matched by width: their block 5 (width 5, 137.26) vs our depth 4 (width 5, 144.9) =
+> **1.06x**, and their block 4 is a **width-4** cycle for which **we have no measurement** -
+> that would be our depth 3. The "1.53x at depth 4" below is width 4 vs width 5. The
+> qualitative reading - flat-but-high vs cheap-shelf-below-a-cliff - survives; their cliff
+> just sits between width 4 and 5, not 5 and 6.
+
 | depth | their ms/cycle | our ms/round | ratio | their tok | our tok |
 |---|--:|--:|--:|--:|--:|
 | 4 | 95.00 | 144.9 | **1.53x** | 3.0928 | 3.19 |
