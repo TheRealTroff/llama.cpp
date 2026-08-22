@@ -752,7 +752,10 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_nc(ggml_m
     static const int env_nsg = getenv("GGML_MV_NC_NSG") ? atoi(getenv("GGML_MV_NC_NSG")) : 0;
     const int nsg = env_nsg > 0 ? env_nsg : 2;
 
-    snprintf(base, 256, "kernel_mul_mv_%s_%s_nc%d", ggml_type_name(op->src[0]->type), ggml_type_name(op->src[1]->type), nc);
+    // v2 = base-pointer addressing, no live ax[]/yb[] arrays (no spill at nc3)
+    static const int env_v2 = getenv("GGML_MV_NC_V2") ? atoi(getenv("GGML_MV_NC_V2")) : 0;
+
+    snprintf(base, 256, "kernel_mul_mv_%s_%s_nc%d%s", ggml_type_name(op->src[0]->type), ggml_type_name(op->src[1]->type), nc, env_v2 ? "_v2" : "");
     snprintf(name, 256, "%s_nsg=%d_ne12=%d_r2=%d_r3=%d", base, nsg, ne12, r2, r3);
 
     ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
