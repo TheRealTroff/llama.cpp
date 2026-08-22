@@ -261,13 +261,42 @@ The recording settings in the TOC say why: `Counter Set: (null)` and
 `Shader Timeline: Disabled`. The template selects no counter set, so no ALU/occupancy/
 limiter counter is sampled, and no per-line attribution is collected.
 
-**The blocker, precisely.** `xctrace record` takes `--template <path|name>`,
-`--instrument <name>` and `--package <file>`, and has **no** option to choose a counter set
-or enable the shader timeline. Those are per-instrument settings that live inside a
-`.tracetemplate`. So the next step is a hand-authored or GUI-saved `.tracetemplate` with a
-real counter set and the shader timeline on, passed via `--template <path>`. Until then,
-Metal System Trace gives encoder-level timing and nothing about *why* a kernel is slow.
+### The templates are findable and editable. The counters are still not there.
 
-**Do not confuse this with the offline blocker.** Two independent walls, same question:
-the AGX3 static model (previous section) is blocked by a closed option registry; the device
-counters are blocked by template configuration. The template one looks far more tractable.
+Xcode ships 32 `.tracetemplate` files; the GPU ones are in
+`Instruments.app/Contents/Packages/GPU.instrdst/Contents/Templates/` (Metal System Trace,
+Game Performance, Game Performance Overview, Game Memory). They are **Apple binary property
+lists**, so `plutil -convert xml1` opens them, and the relevant keys are right there and
+unset: `counterprofile`, `counterscounterprofile`, `shaderprofiler`, `countersshaderprofiler`,
+`gpuperformancestate`. `xctrace record --template <path>` accepts a file, so a hand-edited
+copy is a legitimate route.
+
+Two facts kill the easy version of that plan:
+
+- **Neither stock GPU template helps.** `Game Performance` yields the same single
+  `RT Unit Active`; `Game Performance Overview` yields zero counters. There is no
+  shipped template to just borrow.
+- **The device exposes one counter set, and it is useless for this.** Asked directly
+  (`MTLDevice.counterSets`), an M4 Pro on macOS 26.6.2 reports exactly **one** set,
+  `timestamp`, containing exactly one counter, `GPUTimestamp`. No ALU utilization, no
+  occupancy, no memory limiter. So the **public** Metal counter API cannot answer "why is
+  this kernel slow" at all, and `RT Unit Active` is arriving over Instruments' private
+  path, not over `MTLCounterSet`.
+
+The templates are also NSKeyedArchiver archives (`CF$UID` indirection into `$objects`), so
+editing a value means fixing up object references, not a one-line plist poke.
+
+**Corrected assessment.** An earlier note in this file called the template route "far more
+tractable" than the AGX3 static-model wall. That was too optimistic. Both are gated by
+Apple: the offline model behind a closed option registry, the device counters behind a
+private counter-profile mechanism that the public API does not expose. The template edit is
+still the cheaper of the two to *try*, and the keys to try are named above, but the
+one-counter-set enumeration means it may be gated at the driver and not by configuration.
+
+**What is actually usable today**, and it is not nothing: dispatch geometry from the GPU
+capture (above), `GPUTimestamp` for precise GPU-side timing, and the offline spill probe.
+Structure and timing, yes. Attribution, no.
+
+Also checked and not useful: `metal-application-encoders-list` carries only
+`Event Type = Encoding`, which is CPU-side encode duration, and its 45 rows do not include
+the labelled `MUL_MAT` compute encoders.
