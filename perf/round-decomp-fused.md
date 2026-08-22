@@ -5,6 +5,16 @@ Re-derivation of round-decomp-post-fa-split.md at the current prod pick, now WIT
 and production encoders execute the same work (the per-op profiling encoder derives the
 fusion decision from the graph, same as the normal path).
 
+> **CORRECTION 2026-08-22 (later) - read before using this file.** Two things below are
+> wrong. **(1) Lever 1 of the Final lever board is REFUTED.** `verify-slope-close.md` shows
+> the verify slope is dense-matmul width scaling, not removable overhead: target-only
+> MUL_MAT alone is 106-108 real ms of the N=7 pass against the 108.08 ms that a 1.5x slope
+> would allow, so the "~20 ms ceiling" is not there to take. What is left on the verify side
+> is a 5-7 ms copy/FA/gather tail worth ~+4%. **(2) Every wall number here is from the 12:31
+> session.** At the 16:02 build (prod `7788371f`) the same code - verified byte-identical by
+> diff - reads b1 **72.053** and N=7 **130.637**, slope **1.813x**, not 72.8 / 130.0 / 1.79x.
+> Use `slope-aug22-*.server.log` for anchors that match the headline numbers in `README.md`.
+
 **Headline: the two prior levers are spent (small-ne01 refuted, GDN writeback landed), and
 the remaining recoverable costs are exactly two: CPU submit (~9.6 ms/round, and ~7.4
 ms/token at the batch-1 floor) and the drafter round cost (18.0 ms). Verify GPU is now
@@ -149,6 +159,8 @@ and g_prof_entries is global across the two Metal contexts. **Next step: add a p
 tag to the profiler key so drafter rows separate; GPU ticks are valid (methodology rule
 applies to CPU components only).** Then decide between attacking the drafter excess
 (~7 ms ceiling ≈ +5% e2e) and the verify slope (1.79x vs oMLX ~1.5x, ~20 ms ceiling).
+**That choice is settled: the verify slope is not a lever (`verify-slope-close.md`), and
+the oMLX "~1.5x" it is measured against was never measured on their side.**
 
 ## Drafter forward attributed per-op (same day)
 
@@ -171,9 +183,12 @@ argument for why it might translate here. Keep it out of the prod pick.
 
 ## Final lever board (end of day)
 
-1. **Verify GPU slope: 130.0 ms at N=7 = 1.79x over the 72.8 floor** vs oMLX implied
-   ~1.5x — ~20 ms ceiling, the only large lever left. Composition per the tables above:
-   big-mat slope (at MLX microbench parity), FA residual 4.5, GDN scan ~4, misc.
+1. ~~**Verify GPU slope: 130.0 ms at N=7 = 1.79x over the 72.8 floor** vs oMLX implied
+   ~1.5x — ~20 ms ceiling, the only large lever left.~~ **REFUTED, see
+   `verify-slope-close.md`.** The composition named here does not survive: strike the closed
+   (big-mat at MLX parity) and refuted (small-ne01) items and there is no 20 ms left. Matmul
+   alone fills the entire 1.5x budget, so the target is unreachable by removing overhead.
+   Real remainder: FA 6.65 + mask copies 2.60 + read-side GDN GET_ROWS 2.55 ms/round.
 2. **Drafter head + TOP_K ~4.8 ms**: head runs at 161 GB/s (why — skinny shelf at
    ne01=248320? probe with GGML_FA-style routing sweep), and a fused/partial top-k could
    cut the 1.2 ms scan. Realistic ~2 ms.

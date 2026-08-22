@@ -189,8 +189,12 @@ interior, and the cliff sits past the point where extra depth stops paying.
 
 Concretely for the prod pick: dflash n6 commits 3.75 tokens in a 149.8 ms round. Matching
 dflash_mlx's 29.55 t/s at that same committed/round needs a **126.9 ms** round, i.e. cutting
-**22.9 ms**. The verify-slope lever in `round-decomp-fused.md` is scoped at ~20 ms. Those
-two numbers agreeing is the case for that lever being the whole remaining game.
+**22.9 ms**. ~~The verify-slope lever in `round-decomp-fused.md` is scoped at ~20 ms. Those
+two numbers agreeing is the case for that lever being the whole remaining game.~~
+**CORRECTED 2026-08-22: that lever does not exist** (`verify-slope-close.md`). The slope is
+dense-matmul width scaling - matmul alone fills the whole 1.5x budget - so the 22.9 ms is
+not available there. The verify side is worth ~5-7 ms; the rest of the gap is their cheap
+block-4 operating point, and the adaptive prerequisite below is now the live question.
 2. **MTP d6 is worth re-testing in any config where dflash is unavailable** - it is only
    1.0 t/s behind the prod pick and drafts better.
 3. The N=3/N=4 gap is the one remaining structural dip inside the window. At fixed depth
