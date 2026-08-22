@@ -435,11 +435,15 @@ process; only Apple-signed binaries can, and Xcode works because it drives them.
 
 Two further mechanics, so nobody re-tests them:
 
-- **Direct exec is killed instantly** - `exit 137` in 0.01 s, a launch-constraint kill, not
-  a hang or a timeout.
+- **Direct exec is killed instantly** - `exit 137` **in 0.01 s**. Time it before believing
+  anything else: under `timeout N`, a SIGKILLed child also reports 137, which reads exactly
+  like "the timeout fired after N seconds" and is how this was first misdiagnosed as the
+  tool doing work. It is a launch-constraint kill, not a hang.
 - **`open -a ... --args <trace> --replay --shader-profiling` does launch it**, and the argv
-  arrives intact (verified with `ps`). But it then idles indefinitely and writes nothing:
-  it is an `LSUIElement` app that expects to be driven over XPC, not run standalone.
+  arrives intact (verified with `ps`). It then sits at **0.0% CPU for at least 5 minutes**
+  and writes nothing - measured, not inferred from absence of output. The idle CPU is the
+  tell: it is not working, it is blocked. It is an `LSUIElement` app that expects to be
+  driven over XPC, not run standalone.
 
 So the GUI step in `skills/metal-gpu-profile` stays manual. It is not a gap in our
 knowledge any more; it is a permission boundary.

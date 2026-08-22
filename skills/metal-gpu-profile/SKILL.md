@@ -94,7 +94,7 @@ and more. **It cannot be used.** It carries the private entitlement
 `com.apple.private.agx.performance-spi`, which is what grants access to the AGX counters
 and cannot be self-signed onto anything of ours. Direct exec dies instantly (`exit 137`,
 launch-constraint kill); `open -a --args` does launch it and argv arrives intact, but it
-then idles forever because it expects to be driven over XPC.
+then sits at 0.0% CPU for at least 5 minutes, writing nothing, because it expects to be driven over XPC.
 
 **So do not try to automate step 2.** The barrier is a permission boundary, not a missing
 incantation. Full detail in `perf/toolchain-isa-probe.md`.
