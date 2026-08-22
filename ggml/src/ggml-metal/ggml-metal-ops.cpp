@@ -36,12 +36,10 @@ struct ggml_metal_op {
         bool use_concurrency,
         bool use_capture,
         int  debug_graph,
-        int  debug_fusion,
-        void * prof_smpbuf,
-        int  prof_idx0) {
+        int  debug_fusion) {
         this->dev             = dev;
         this->lib             = ggml_metal_device_get_library(dev);
-        this->enc             = prof_smpbuf ? ggml_metal_encoder_init_timed(cmd_buf, prof_smpbuf, prof_idx0) : ggml_metal_encoder_init(cmd_buf, use_concurrency);
+        this->enc             = ggml_metal_encoder_init(cmd_buf, use_concurrency);
         this->mem_ranges      = ggml_mem_ranges_init(debug_graph);
         this->idx_start       = idx_start;
         this->idx_end         = idx_end;
@@ -127,9 +125,7 @@ ggml_metal_op_t ggml_metal_op_init(
         bool use_concurrency,
         bool use_capture,
         int debug_graph,
-        int debug_fusion,
-        void * prof_smpbuf,
-        int prof_idx0) {
+        int debug_fusion) {
     ggml_metal_op_t res = new ggml_metal_op(
         dev,
         cmd_buf,
@@ -140,9 +136,7 @@ ggml_metal_op_t ggml_metal_op_init(
         use_concurrency,
         use_capture,
         debug_graph,
-        debug_fusion,
-        prof_smpbuf,
-        prof_idx0);
+        debug_fusion);
 
     return res;
 }
