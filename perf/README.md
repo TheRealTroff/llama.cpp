@@ -167,6 +167,17 @@ Current state:
   weight traffic), the experiment order, and an honest ceiling. **Retires
   `mv-bandwidth-probe.md`'s "at n=4 we are already ahead"** - that benchmarked
   `mx.quantized_matmul`, which MLX bypasses at M=4.
+  **Runs 1 and 2 are in (2026-08-22), and they refute the file's own core hypothesis.**
+  Run 1: `nr0` 2 -> 4 costs +9.8% at width 4 on ffn_down; it needed no code, since
+  `GGML_MV_EXT_NR0` is already a runtime knob. The spill probe explained it - our `ext` tile
+  spills 32 B at nr0=4/r1ptg=4, from 8 live device pointers. Run 2 (branch
+  `metal-mv-ext-spill`, `GGML_MV_EXT_V2`) ported the V2 base-pointer rewrite and **took the
+  spill to 0**, verified offline and 1154/1154 correct - **and width 4 still loses to the
+  nr0=2 baseline** (363.9 vs 358.9 us). So **"it is the register tile" is refuted**: we built
+  their 4x4 tile and it is slower than our 2x4. Look elsewhere for the width-4 shelf.
+  Two side findings: the caffeination caveat is settled (caffeinated numbers reproduce the
+  archived ones to within 4%), and cross-session drift is ~3% while within-session repeats
+  agree to <1%, so always re-baseline in the same session.
 - `slope-sweep.md` - the small-batch slope, the ne11=9 skinny cliff, and both depth
   sweeps. Supersedes the "MTP d1 is optimal, don't re-run" note: the optimum is now d6.
   Run it with `run-slope-sweep.sh`.
