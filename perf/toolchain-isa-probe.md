@@ -286,16 +286,55 @@ Two facts kill the easy version of that plan:
 The templates are also NSKeyedArchiver archives (`CF$UID` indirection into `$objects`), so
 editing a value means fixing up object references, not a one-line plist poke.
 
-**Corrected assessment.** An earlier note in this file called the template route "far more
-tractable" than the AGX3 static-model wall. That was too optimistic. Both are gated by
-Apple: the offline model behind a closed option registry, the device counters behind a
-private counter-profile mechanism that the public API does not expose. The template edit is
-still the cheaper of the two to *try*, and the keys to try are named above, but the
-one-counter-set enumeration means it may be gated at the driver and not by configuration.
+~~**Corrected assessment.** ... the one-counter-set enumeration means it may be gated at the
+driver and not by configuration.~~ **Wrong. Retracted the same day - see below.**
 
-**What is actually usable today**, and it is not nothing: dispatch geometry from the GPU
-capture (above), `GPUTimestamp` for precise GPU-side timing, and the offline spill probe.
-Structure and timing, yes. Attribution, no.
+### The counters do exist. All 486 of them.
+
+`MTLDevice.counterSets` returning only `timestamp` says what an **app** may sample itself.
+It says nothing about what Instruments collects, which goes over a private path. The proof
+was already sitting in the trace: `RT Unit Active` is not in the public set, so the public
+set was never the binding constraint. Chasing that string finds the catalogue:
+
+`Instruments.app/Contents/PlugIns/GPUPlugin.xrplugin/Contents/Resources/GPUCounterGraph.plist`
+
+A plain XML plist - no NSKeyedArchiver indirection - defining **486 counters** in 13 groups
+(`GPU`, **`Performance Limiters`**, `Memory`, `Compute Kernel`, `Shader Core`, `Texture`,
+`Ray Tracing`, and the raster stages) plus 49 `timelineGroups`. Each entry maps a friendly
+name to the driver-level `vendorCounters`, e.g.
+
+```
+Compute SIMD Groups Inflight per Core:
+  counterType    Occupancy
+  vendorCounters ["Compute Simdgroups Inflight Per Shader Core"]
+  description    average number of simdgroups running concurrently per shader core
+```
+
+The ones this investigation has been asking for, by name:
+
+| counter | answers |
+|---|---|
+| `Compute SIMD Groups Inflight per Core` | **occupancy** - directly tests run 3's nxpsg finding |
+| `Top Occupancy Target Influence` | **what is capping occupancy** - registers? threadgroup memory? |
+| `ALU Limiter`, `ALU Utilization` | are we compute bound |
+| `Address Generation Limiter` / `Utilization` | the addressing-overhead theory, measured |
+| `Buffer Read/Write Limiter`, `Buffer L1 Miss Rate` | memory side |
+| `Compute Shader Launch Limiter` | launch/dispatch bound |
+| `Average Kernel SIMD Group Latency` | latency per simdgroup |
+
+`timelineGroups` includes `Occupancy`, `Occupancy Manager`, `Occupancy Target Influences`,
+`Instruction Throughput`, `Shader Launch Limiter`, `Bandwidth`, `ALU`.
+
+**So the templates do serve a purpose** - selecting which profile gets sampled - and the
+stock GPU ones simply select none (`Counter Set: (null)`). That is a configuration gap, not
+a driver wall. The `counterprofile` / `countersshaderprofiler` keys named above are the
+lever, and the group names here are the values they are choosing between.
+
+**Still untested:** actually setting one and getting rows back. That is the next step, and
+it is now a well-posed one.
+
+**What is usable today** without any of that: dispatch geometry from the GPU capture,
+`GPUTimestamp` for GPU-side timing, and the offline spill probe.
 
 Also checked and not useful: `metal-application-encoders-list` carries only
 `Event Type = Encoding`, which is CPU-side encode duration, and its 45 rows do not include
