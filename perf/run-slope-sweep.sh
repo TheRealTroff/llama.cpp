@@ -18,6 +18,14 @@
 # is stock routing, not the prod pick. Both are measured here.
 set -u
 
+# Keep the machine awake for the whole harness. These runs spend more wall time idle in
+# cooldowns than measuring, and on battery pmset is `sleep 1` / `displaysleep 2`, so a
+# 120-180 s cooldown would idle-sleep the machine mid-run and the next arm would measure
+# a cold cache and a ramping clock. On AC `sleep` is 0 and this is a no-op.
+if [ -z "${CAFFEINATED:-}" ]; then
+    exec env CAFFEINATED=1 caffeinate -dimsu "$0" "$@"
+fi
+
 B=/Users/troff/play/llama.cpp-prod
 BIN=$B/build/bin
 M=/Users/troff/play/Qwen3.8-27B-uniform-Q4_0.gguf

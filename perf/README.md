@@ -133,6 +133,16 @@ against it and reported a bogus +5.8%.
 - **Keep `GGML_METAL_PROFILE` out of A/B harnesses unless it is the variable.** Running
   the failing case profiled and the fixes unprofiled once made three different "fixes"
   each look correct when the only variable was the profiler.
+- **Harnesses must hold the machine awake, and until 2026-08-22 none of them did.** All four
+  `perf/run-*.sh` now re-exec themselves under `caffeinate -dimsu` (set `CAFFEINATED=1` to
+  skip). This is a no-op on AC, where `pmset sleep` is 0 - but on **battery** the settings are
+  `sleep 1` and `displaysleep 2`, and these harnesses idle far longer than that in cooldowns
+  (`run-head-to-head.sh`: 180 s up front, 120 s between runs). A battery run would have slept
+  mid-harness and the next arm would have measured a cold cache and a ramping clock, with no
+  error anywhere. **No recorded number is known to be affected** - `pmset -g log` reports
+  `Total Sleep/Wakes since boot: 0` over the machine's whole uptime - but nothing in the
+  harness was enforcing that; it was the AC setting doing it. Verify with that counter, not
+  by reasoning about whether the display was on.
 - **A leftover llama-server answers /health.** The next run then silently measures *that*
   server's config. llama-server ignores SIGTERM during Metal teardown, so killed harnesses
   leave servers behind. Harnesses must abort on a busy port and assert the listener pid is

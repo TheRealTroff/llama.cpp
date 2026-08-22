@@ -90,6 +90,14 @@ whole-model curve** - iterate on it, confirm on llama-bench.
 Widening 1 -> 4 at this shape: **ours +144.8 us, their `verify_m4` +58.1 us = 2.49x.** More
 pronounced than at the 33 MB shape, and this is the shape that matters.
 
+**Caffeination status of these numbers.** Taken with a plain `test-backend-ops` invocation,
+not under `caffeinate` (the `perf/run-*.sh` harnesses only gained it later the same day).
+They are nonetheless sound: `pmset -g log` reports **`Total Sleep/Wakes since boot: 0`** over
+the machine's full 2.5-day uptime, so nothing was ever suspended, and the cold width-1 point
+reproduced its archived value to 1.3% (1185.6 vs 1201.8 us). **Worth re-taking caffeinated
+when the width-4 work starts**, together with the depth-3 round decomposition, so the
+baseline and the change are measured under identical discipline.
+
 ### Two traps in this harness, both cost a run
 
 - **`test-backend-ops` does not read the prod env by default.** With no env it routes
