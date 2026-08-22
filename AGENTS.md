@@ -2,6 +2,22 @@
 
 > [!IMPORTANT]
 >
+> **This checkout is a personal fork - read this block before the upstream rules below.**
+>
+> This is Johan's fork (`TheRealTroff/llama.cpp`). It is public, but it is a private working fork in the sense that section uses: nothing here is submitted to `ggml-org/llama.cpp`, and he is the only consumer of the code. Everything below is written for people sending PRs upstream. Where his instructions and the upstream contributor rules disagree, **his instructions win** - the upstream text itself says private forks are exempt.
+>
+> For work in this fork:
+> - Commit and push when he asks. No per-commit approval ritual, and no re-asking for something he already approved this session.
+> - **Write the commit message yourself.** Do not defer it to him, do not ask him to reword it, and do not flag AI-written commit messages as a concern - that rule is upstream's and does not apply here. Trailer convention is his call, not a rule to enforce.
+> - Do not pause for confirmation just because a change is large or introduces a new pattern. Experimental kernel and scheduling work is the entire point of this fork. Still pause for genuinely risky or ambiguous things: destructive operations, history rewrites, or a design decision that is really his to make.
+> - Branch hygiene: one branch per experiment, branched from `prod`. `prod` is the integration branch and holds the winners. Do not accumulate unrelated experiments on one branch.
+>
+> Keep following the **Code and Commit Standards** below (ASCII only, concise comments, match the surrounding code). Those keep diffs readable and individual commits cherry-pickable, which matters here because some of this work may get rebased onto upstream later.
+>
+> Unchanged and non-negotiable, because it touches the upstream project and his standing in it: do not create pull requests, issues, or comments on `ggml-org/llama.cpp` by any means.
+
+> [!IMPORTANT]
+>
 > AI-generated code is allowed. What is **not** allowed is submitting code you do not understand. You are 100% responsible for every line, however it was produced.
 >
 > Read more: [CONTRIBUTING.md](CONTRIBUTING.md)
@@ -44,7 +60,7 @@ AI-generated code is acceptable if you (1) fully understand it, (2) can debug it
 
 ### Prohibited AI Usage (results in immediate PR closure)
 
-- AI-written PR descriptions, commit messages, or reviewer responses
+- AI-written PR descriptions or reviewer responses
 - Implementing features without understanding the codebase
 - Automated commits or PR submissions (may result in contributor ban)
 
@@ -87,7 +103,7 @@ Common mistakes that AI agents usually make:
 
 ### Prohibited Actions
 
-- Do NOT write PR descriptions, commit messages, or reviewer responses
+- Do NOT write PR descriptions or reviewer responses
 - Do NOT commit or push without explicit human approval for each action. If the user explicitly asks you to commit on their behalf, use `Assisted-by: <assistant name>` in the commit message, do NOT use `Co-authored-by:`
 - Do NOT implement features the contributor does not fully understand
 - Do NOT generate changes too extensive for the contributor to fully review
@@ -190,9 +206,6 @@ ggml_tensor * inp_pos = build_inp_pos();
 Commit message:
 
 ```
-// BEST: Let the user write the commit
-
-
 // GOOD: Write a concise commit
 
 llama : fix KV being cleared during context shift
