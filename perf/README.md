@@ -280,8 +280,8 @@ Current state:
   and it tracks
   threadgroup count (1.6 TG/core -> 5.8x above roofline; 388 TG/core -> 1.6x). Ceiling
   restated: **54 ms of MUL_MAT per round at `max(stream, arith)`**, not the 15 ms the file
-  opened with. Next step is `NR0`/`nsg` as function constants on the skinny kernel plus a
-  sweep. **Run 1 also closes `occupancy-next.md`'s open "measure MMA utilization at
+  opened with. ~~Next step is `NR0`/`nsg` as function constants on the skinny kernel plus a
+  sweep.~~ **Done and refuted the same day - see `skinny-nr0-refuted.md`.** **Run 1 also closes `occupancy-next.md`'s open "measure MMA utilization at
   `ne11` = 4, 5, 7, 8" item**, behaviourally, since gen 16 has no MXU counter - the
   tile-waste account is confirmed and the fix is a narrow-tile kernel, not a tuning flag.
   It corrects one thing there: width 7 is not where the 8-wide tile is "nearly full", it
@@ -293,6 +293,21 @@ Current state:
   the K-split included - is about a kernel the prod pick never executes.** Tools:
   `perf/skinny-width-util.py` (utilization vs width, per kernel),
   `perf/skinny-roofline.py` (both roofs, `--sweep-m`, `--roof-tflops`).
+- **`skinny-nr0-refuted.md` - CLOSED, refuted, and it decides the next move.** `NR0` is now a
+  function constant on both `mul_mm_skinny` variants (`GGML_MM_SKINNY_NR0`, branch
+  `metal-mm-skinny-nr0`, unmerged, 1154/1154 correct at 16/32/64/128). **NR0=32 was already
+  the optimum.** Doubling `ffn_down`'s threadgroups is flat (431.9 vs 434.3) and doubling
+  `ffn_gate/up`'s is 4% worse, so **dispatch geometry is not the lever** and
+  `ffn-utilization.md` run 2b's threadgroup correlation is confounded, not causal - **total
+  simdgroup count is invariant under `NR0`**, the loader pins rows per simdgroup at 16. The
+  same sweep kills the other candidate: **activation re-read is 89.1 MB against 50.1 MB of
+  weights** (ratio 1.78, structural on every shape), and doubling it to 178.3 MB moves
+  `ffn_down` -1.3% while the config with the *fewest* re-reads is the *slowest*. With tuning
+  and traffic both excluded, what is left is the design - the
+  `dequant -> threadgroup -> simdgroup_load` round trip and two barriers per K slice, paid to
+  feed a primitive that lowers to ordinary FMAs on hardware with no matrix unit. **The next
+  step is the register-tile kernel at width 4**, which is `occupancy-next.md`'s narrow-tile
+  item and `width4-skinny-ab.md`'s conclusion reached from the other side.
 - **`ksplit-width34.md` - OPEN, and the best result of 2026-08-23.** Splits K across
   simdgroups (`GGML_MV_EXT_KP`, new `_ks` kernel on branch `metal-mv-ext-ksplit`, unmerged),
   which is the one structural feature of their `verify_m4` we had never tried. **-5.4% /

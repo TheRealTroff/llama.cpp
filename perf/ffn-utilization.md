@@ -4,7 +4,9 @@ Status: **open. Runs 1-2 are in (2026-08-23) and they CORRECT this file's own di
 The pass really does cost ~2x, and the FFN really is half the round - but it is not a memory
 utilization failure. `kernel_mul_mm_skinny` is at ~50% of the memory roof and ~50% of the
 **arithmetic** roof at the same time, because its fixed 8-column tile makes arithmetic a
-first-class cost and the kernel does not overlap the two. Measured at prod `e5c08dd94`,
+first-class cost and the kernel does not overlap the two. **The follow-up is in and it is a
+refutation: `skinny-nr0-refuted.md` closes dispatch geometry AND activation re-read as the
+mechanism, so the remaining answer is a register-tile kernel, not a tuning flag.** Measured at prod `e5c08dd94`,
 clean tree, build 2026-08-23 20:13, `test-backend-ops perf` on MTL0, caffeinated.
 Tools added: `perf/skinny-width-util.py`, `perf/skinny-roofline.py`.
 
@@ -168,6 +170,15 @@ weaker.** Nothing here depends on picking the right TFLOPS number.
 
 ## Run 2b: the overlap that does exist tracks threadgroup count
 
+> **REFUTED AS A MECHANISM 2026-08-23, same day, see `skinny-nr0-refuted.md`.** The
+> correlation below is real; the causation is not. `NR0` was made a function constant and
+> swept, and doubling `ffn_down`'s threadgroups (160 -> 320, 8 -> 16 per core) is **flat**:
+> 431.9 us against 434.3. The reason is that **total simdgroup count is invariant under
+> `NR0`** - the loader pins rows per simdgroup at 16, so the knob only repacks the same
+> simdgroups into different threadgroups. Total work covaries with `ne01` in the sweep below,
+> which is noted as a caveat there and turns out to be the whole story. **Threadgroup count
+> is not the lever.**
+
 Same probe, `k` fixed at 5120, sweeping `ne01` - so the shape's arithmetic intensity is
 constant and only the dispatch changes. `perf/skinny-roofline.py --width 7 --sweep-m ...`:
 
@@ -264,27 +275,36 @@ about the scaffolding. Those are compatible, and only the second one is still op
 
 ## Experiment order (revised)
 
-1. **`NR0` and `nsg` as function constants on `mul_mm_skinny`, then sweep.** This is the
-   file's old experiment 2, promoted, with a mechanism and a prediction. `ffn_down` at
-   `NR0=8` would dispatch 640 threadgroups (32/core, what `ffn_gate/up` has today) instead
-   of 160. **A tile is read once either way and B is ~1% of traffic, so this buys
-   parallelism at almost no traffic cost.** Prediction from run 2b: `ffn_down` moves from
-   112% of sum toward ~95%, i.e. 438 -> ~370 us, about -4.4 ms/round. Prescreen offline the
-   way `ext` was. This is also the confound-free version of run 2b.
-2. **Overlap directly: more simdgroups per threadgroup, or fewer barriers per K slice.**
-   Two threadgroup barriers per 64-element slice with 2 simdgroups is the serialization
-   site. Raising `nsg` at fixed `NR0` gives each core more independent MAC work to sit under
-   the A-tile loads. Cheap to try alongside 1 since it is the same function constant.
-3. **A 4-column tile variant for widths <= 4.** Halves the arithmetic where prod is not,
-   but where their controller sits 82% of the time. Only worth it after 1-2 say how much of
-   the arithmetic is actually exposed. Note widths 3-4 currently route to `ext`, not skinny.
+1. ~~**`NR0` and `nsg` as function constants on `mul_mm_skinny`, then sweep.** Prediction
+   from run 2b: `ffn_down` moves from 112% of sum toward ~95%, i.e. 438 -> ~370 us, about
+   -4.4 ms/round.~~ **DONE AND REFUTED same day, `skinny-nr0-refuted.md`.** Built, correct at
+   1154/1154 for NR0 = 16/32/64/128, and **NR0=32 was already the optimum**. Doubling
+   threadgroups is flat on `ffn_down` and 4% worse on `ffn_gate/up`; total simdgroup count is
+   invariant under the knob. That run also refutes the activation-re-read reading below:
+   doubling B re-read to 178.3 MB at identical weight traffic moves `ffn_down` -1.3%, and the
+   config with the *fewest* re-reads is the *slowest*. **There is no tuning win in this
+   kernel**, which is the useful half - it was cheap and it closes the last alternative to
+   rewriting.
+2. ~~**Overlap directly: more simdgroups per threadgroup, or fewer barriers per K slice.**~~
+   The `nsg` half is dead with 1 - it is the same function constant and it moves nothing.
+   The **barriers** half is not a tuning question and survives only inside 3.
+3. **THE ONE LEFT: the register-tile kernel.** No `simdgroup_matrix`, inline dequant, never
+   staged to threadgroup memory, K-split, narrow column tile. With 1-2 dead, dispatch geometry
+   and activation re-read are both excluded and the design itself is what is left - the
+   `dequant -> threadgroup -> simdgroup_load` round trip plus two barriers per K slice, paid
+   to feed a primitive that lowers to ordinary FMAs on hardware with no matrix unit. This is
+   `occupancy-next.md`'s narrow-tile item and `width4-skinny-ab.md`'s conclusion, and it is
+   the shape of their `verify_m4`. **Read it, benchmark it, do not copy it.** Target width 4,
+   not 7: that is where the arithmetic waste is 102 us of 205 rather than 26, where the stated
+   goal is, and where ~32 ms of the 46 ms cross-framework gap sits in the FFN roofline.
 4. **Price `verify_m4`'s arithmetic against ours.** We have the capture
    (`mlx-cycle-capture.md`). Their M=4 tile at their block 4 vs our 8-column tile at width 5
    is a 2x arithmetic difference on the same bytes, and this file's model says arithmetic is
    half the cost. If that survives contact with their trace it explains a large part of the
    95.00 vs 141.0 shelf.
-5. **K-split for skinny**, still open, and now motivated as an overlap lever rather than a
-   lane-count one. Do it after 1-2, since `NR0`/`nsg` reach the same resource more cheaply.
+5. **K-split**, still open, but as a feature *of* the kernel in 3 rather than a patch to
+   skinny. `NR0` reached the same resource more cheaply and found nothing, so there is little
+   reason to bolt K-split onto a design that is being replaced.
 
 Dropped from the old order: "read the batch-1 kernel for what it does right". Run 2 answers
 it - it does 1/8 the arithmetic. There is no transferable trick there.
