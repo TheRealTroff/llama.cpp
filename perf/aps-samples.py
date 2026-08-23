@@ -17,27 +17,35 @@ a run of **64-byte records**:
            48   u64      sample index   0,1,2,... within the blob
            56   u64      slot           matches the list(5) position
 
-REFUTED 2026-08-23 - THIS IS NOT THE GPU COUNTER STREAM. Keep this script only as the
-record of a dead end. See perf/aps-counters.md "Round 5". In short:
+REFUTED 2026-08-23 - THIS IS NOT THE GPU COUNTER STREAM, and the framing below is wrong.
+Keep this script only as the record of a dead end. See perf/aps-counters.md "Round 5".
 
-  * The series count is 19 on w5-ffn_down-skinny and 22 on w3-ffn_down-ext-nx8, against a
-    GRC counter set of 35 that is byte-identical across all ten captures. A fixed counter
-    set cannot give a varying series count.
-  * `field3` only ever takes 0..6, so it cannot index per-source counter lists of 10, 13,
-    10 and 2. It is a record kind, not a counter id.
-  * The entry holding `Derived Counter Sample Data` has an EMPTY `Derived Counters Info
-    Data`, and its `Counter Info` has 215 keys, not 35.
+  * Series count is 19 on w5-ffn_down-skinny and 22 on w3-ffn_down-ext-nx8, against a GRC set
+    of 35 that is byte-identical across all ten captures.
+  * `field3` only takes 0..6, so it cannot index per-source lists of 10, 13, 10 and 2.
+  * The entry holding `Derived Counter Sample Data` has an EMPTY `Derived Counters Info Data`
+    and a `Counter Info` with 215 keys, not 35.
+  * Records are NOT a uniform 64 bytes. The stride is constant within a blob but differs
+    between blobs - 64, 128 or 352 - because the header can be followed by a payload (36 u64
+    for the 352-byte records, 8 u64 for the 128-byte ones). The magic check stops this script
+    inventing records, so its series are real, but it drops every payload.
 
-AND THE FRAMING BELOW IS WRONG. Records are not a uniform 64 bytes. The stride is constant
-within a blob but differs between blobs - 64, 128 or 352 - because the 64-byte header can be
-followed by a payload (36 u64 for the 352-byte records, 8 u64 for the 128-byte ones). The
-magic check stops this script inventing records, so the series it prints are real, but it
-drops every payload silently.
+Real USC counter values come from perf/aps-usc-values.py. The same GPRWCNTR framing IS correct
+for the RDE_0 / BMPR_RDE_0 blobs, which perf/aps-dram-bandwidth.py reads for DRAM bandwidth.
 
-Real counter values come from perf/aps-usc-values.py, out of Counters_f_<n>.raw.
+WHAT IS KNOWN: the layout above, and that (slot, field3) gives 23 distinct series on this
+capture. Slot 4 / field3 6 carries ~96k samples with a mean of 8961.6 in one arm and 8962.3
+in the other - flat to 0.008%, so it is a clock or a fixed-rate tick, not a workload counter.
 
-WHAT WAS KNOWN AND STILL HOLDS: slot 4 / field3 6 carries ~96k samples with a mean of 8961.6
-in one arm and 8962.3 in the other - flat to 0.008%, so it is a clock or a fixed-rate tick.
+WHAT IS NOT KNOWN, and do not let the tables below imply otherwise:
+
+  * Which counter any (slot, field3) IS. The names in the file are hashed and unresolved
+    (aps-counters.md). Nothing here is `Compute SIMD Groups Inflight per Core` until that
+    mapping exists.
+  * Whether cross-arm means are comparable. The two arms return very different sample
+    counts for the same series (e.g. 244 vs 81), so the aggregation windows differ and a
+    ratio of means is NOT a ratio of the underlying quantity. Treat every ratio this prints
+    as a lead to investigate, not a measurement.
 
 Usage:
   aps-samples.py <streamData>                 # per-series stats for one capture

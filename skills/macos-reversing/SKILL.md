@@ -82,6 +82,111 @@ formats leak their producer through the names they create.
 > *Example:* grepping every binary under an app bundle for `Counters_f_` and
 > `.gpuprofiler_raw` located `GTShaderProfiler.framework` as the writer.
 
+## Look for the C library under the ObjC wrapper
+
+A private ObjC class is often a shell over a C library statically linked into the same binary
+and **left fully exported**. Check before reverse-engineering the wrapper:
+
+```sh
+nm -gU <binary> | grep "^.* T _<prefix>_" | awk '{print $3}' | sort
+```
+
+Calling the C API is strictly better: no `objc_msgSend` prototyping, no init chain, no config
+dictionary, and the function names document the data model for free. Read a wrapper method in
+`otool -tV` mainly to learn **the order and arguments of the C calls it makes**.
+
+> *Example:* `XRGPUAPSDataProcessor` looked like the only way to counter names. `nm -gU` found
+> 384 exported `agxps_*` symbols in the same binary; two of them answered in one call what two
+> sessions had failed to get out of `-loadCounters:`.
+
+**Such libraries usually need an explicit init before any accessor returns anything.** If a
+whole family of getters returns NULL or 0, look for the init the wrapper calls before them,
+not for a bug in your call shape.
+
+## Resolve cfstring constants yourself - `otool` will not
+
+`otool -tV` prints `Objc cfstring ref: @"bad cfstring ref"` for every string in a binary with
+chained fixups, which is all of them now. The address in the `adrp`/`add` pair is still
+correct, so read the `__cfstring` entry directly: 32 bytes of `{isa, flags, char *data, len}`,
+where `data` is a chained pointer whose **low 36 bits are the target vmaddr**.
+
+A method doing five `objectForKeyedSubscript:` calls then tells you the exact schema of the
+dictionary it wants - faster and safer than swizzling `NSDictionary` to log keys.
+
+Constant *paths* fall out the same way, and are worth collecting even when absent: finding a
+path under `/AppleInternal/` is what proves a route is a dead end on a shipping machine.
+
+## Read the validator instead of sweeping the input space
+
+When a factory returns NULL with no error, disassemble its argument checks before trying
+values. Two arm64 idioms worth recognising:
+
+- `sub w9,w8,#1 ; eor w10,w8,w9 ; cmp w10,w9 ; b.ls fail` is a **power-of-two test**
+  (`x ^ (x-1) > x-1` holds only for powers of two, and rejects 0).
+- `sub w8,w8,#LO ; cmn w8,#K ; b.lo fail` is a **range check** via one wrapping subtraction -
+  read it as `LO-K <= x <= LO`.
+
+> *Example:* `agxps_aps_parser_create` returned NULL for every GPU generation, which read as
+> "stubbed in the shipping build". ~50 instructions gave all four rules exactly, and one field
+> was defaulting to 0. Sweeping blind would have been thousands of runs.
+
+**Then measure which inputs actually change the output.** Hash the result for each legal
+value: fields that gate the call but do not affect the data are ones you can stop worrying
+about, and fields that silently truncate the output are the ones that would otherwise have
+produced a quiet wrong answer.
+
+## A boolean return can carry no information
+
+Check what a function returns on its failure path before believing it.
+
+> *Example:* `-parseData:length:uscIndex:` returns the *length argument* as its BOOL on one
+> failure path. For a 10,559,488-byte buffer that is `0x00A11000 & 0xff` = 0, so it reported
+> NO for a reason unrelated to parsing. A session read that NO as "the format is wrong".
+
+Corollary: prefer the entry point that reports an error code. The C layer under that wrapper
+had `agxps_aps_parser_parse(..., uint32_t *err)` and an `agxps_aps_parse_error_type_to_string`.
+
+## ctypes cannot pass an arm64 indirect result (x8)
+
+A C function returning a large struct by value takes a hidden pointer in **x8**, not x0.
+ctypes cannot set x8, so calling one writes through whatever garbage x8 held.
+
+Find code that already built the struct and borrow its copy - ObjC wrappers almost always
+cache one in an ivar.
+
+> *Example:* `agxps_aps_descriptor_create` is uncallable from ctypes. `-setConfig:` calls it
+> and keeps the result at `self + 0x20`, so passing `proc + 0x20` to the next C function
+> worked and needed no struct definition at all.
+
+## An opaque identifier may be a key, not a digest
+
+Before spending a session on "what hash is this", ask what the *producer* would need the
+string for. A 64-hex identifier appearing in both a driver's output and a profiling library's
+tables is far more likely a shared **lookup key** than a digest.
+
+- **Does the same accessor family expose it next to something readable?** Enumerate every
+  getter for the object and print all of them, not just the one you wanted.
+- **Where else on disk does the string appear?** Search the *driver*, not just the tool.
+  `/System/Library/Extensions/*.bundle/Contents/Resources` is where Apple GPU drivers keep
+  their counter databases, and it is not where anyone looks when the tool is Xcode.
+
+> *Example:* three rounds tried sha1/sha256/md5/blake2 of 535 names under 8 variants, 0 hits,
+> and concluded no mapping existed. They were GRC enable keys;
+> `agxps_counter_get_grc_enable_str(ident)` returns them verbatim beside the plaintext name.
+
+## The same concept can be numbered differently in two layers
+
+A field named `gpuGeneration` in a tool's file format is that *tool's* enum. The library
+underneath will have its own, and they need not agree.
+
+> *Example:* `streamData` records `gpuGeneration = 2` for an M4 Pro whose Metal plugin is
+> `AGXMetalG16X`. The library numbers it generation **16**, variant 5. Passing 2 built a
+> processor whose GPU handle was NULL - read as "the API needs a config we do not have" for a
+> whole session.
+
+**Identify the device by properties, not by the label.** Match on something physical - 20
+USCs, 2 mGPUs and 4 MB of L2 is an M4 Pro and nothing else.
+
 ## Prefer the file format to the API
 
 Apple's archives are very often `NSKeyedArchiver` plists, sometimes nested several deep. If

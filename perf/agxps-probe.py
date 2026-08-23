@@ -1,25 +1,23 @@
 #!/usr/bin/env python3
 """Name the counters in a replay's APSCounterData by driving libagxps directly.
 
-Round 2 chased `-loadCounters:` on `XRGPUAPSDataProcessor` because that ObjC method is what
-returns counter names. It is a thin wrapper. The engine under it is a C library, statically
-linked into GTShaderProfiler and **fully exported** - 384 `agxps_*` symbols in `nm -gU`. No
-config dictionary and no `-loadCounters:` are needed to get the names.
+`XRGPUAPSDataProcessor` is a thin shell over a C library, statically linked into
+GTShaderProfiler and fully exported: `nm -gU` lists 384 `agxps_*` symbols, callable straight
+from ctypes.
 
-The join, which is the whole point (all measured, see perf/aps-counters.md "Round 4"):
+The join, all measured (see perf/aps-counters.md "Round 4"):
 
-  - `agxps_counter_get_name(ident)` gives the RAW counters obfuscated names, and the DERIVED
-    counters plaintext ones: "Compute Simdgroups Inflight Per Shader Core" and friends.
+  - `agxps_counter_get_name(ident)` gives raw counters an obfuscated name and DERIVED counters
+    a plaintext one: "Compute Simdgroups Inflight Per Shader Core" and friends.
   - `agxps_counter_get_grc_enable_str(raw_ident)` returns exactly the `_<64 hex>` string that
-    `Limiter Counter List Map` in streamData lists per hardware source. **That is the join.**
-    The hashes never had to be cracked; they are GRC enable-strings, and the library hands
-    them out beside the names.
+    `Limiter Counter List Map` in streamData lists per hardware source. That is the join. The
+    hashes never had to be cracked; they are GRC enable strings.
   - `agxps_counter_get_raw_counters_used_by_derived_counters` gives, per derived counter, the
     raw counters it needs - so `(source, index)` in the file maps to named counters.
 
-The GPU is `gen=16, variant=5, rev=1` on this M4 Pro (20 USCs, 2 mGPUs, 4 MB L2), **not**
+The GPU is gen=16, variant=5, rev=1 on this M4 Pro (20 USCs, 2 mGPUs, 4 MB L2), NOT
 gpuGeneration=2 from the streamData root - that is a different enum, and passing it gives a
-processor whose `-agxpsGPU` is NULL, which is why round 2's `-loadCounters:` could not work.
+processor whose `-agxpsGPU` is NULL.
 
 Needs DYLD_FRAMEWORK_PATH=/Applications/Xcode.app/Contents/SharedFrameworks and a non-SIP
 python - see skills/macos-reversing.
@@ -46,10 +44,8 @@ FRAMEWORKS = [
 GTSP = (f"{X}/PlugIns/GPUDebugger.ideplugin/Contents/Frameworks/"
         f"GTShaderProfiler.framework/GTShaderProfiler")
 
-# M4 Pro. See --gpus; variant is the die width (4=10 USC, 5=20, 6=40, 7=80).
 GEN, VARIANT, REV = 16, 5, 1
 
-# Every counter group the library exposes derived counters for.
 GROUPS = [b"One Pass", b"One Pass GT", b"Thread Occupancy", b"Utilizations", b"Limiters",
           b"Statistics", b"Director", b"MXU", b"Cache Misses", b"L1 Occupancy",
           b"L1 Access Ratios", b"Memory Bandwidth", b"System Memory Bandwidth",
@@ -82,13 +78,13 @@ gpu_create = fn("agxps_gpu_create", P, [U32, U32, U32, BOOL])
 gpu_uscs = fn("agxps_gpu_get_num_physical_uscs", U64, [P])
 gpu_mgpus = fn("agxps_gpu_get_num_physical_mgpus", U64, [P])
 gpu_l2 = fn("agxps_gpu_get_l2_cache_size", U64, [P])
+gpu_dram = fn("agxps_gpu_get_peak_dram_bandwidth", ctypes.c_double, [P])
 c_ident = fn("agxps_counter_get_ident", U64, [P, CS])
 c_name = fn("agxps_counter_get_name", CS, [U64])
 c_doc = fn("agxps_counter_get_doc_string", CS, [U64])
 c_grc = fn("agxps_counter_get_grc_enable_str", CS, [U64])
 c_ngroups = fn("agxps_counter_get_num_groups", U64, [U64])
 c_group = fn("agxps_counter_get_group", CS, [U64, U64])
-c_is_derived = fn("agxps_counter_is_derived", BOOL, [U64])
 c_is_norm = fn("agxps_counter_is_normalized", BOOL, [U64])
 group_derived = fn("agxps_counter_group_get_derived_counters", BOOL,
                    [P, CS, ctypes.POINTER(PU64), ctypes.POINTER(SZ)])
@@ -124,7 +120,6 @@ def raw_inputs(gpu, ident):
     return {s(c_grc(arr[i])) for i in range(n.value) if c_grc(arr[i])}
 
 
-# ---------------------------------------------------------------- the capture side
 def keyed(objects, node, depth=0):
     i = node.data if isinstance(node, plistlib.UID) else None
     o = objects[i] if i is not None else node
@@ -188,8 +183,9 @@ def main():
     for src, lst in groups.items():
         for i, h in enumerate(lst):
             where[h] = (src, i)
-    print("gpu gen=%d variant=%d rev=%d  %d USCs, %d mGPUs, %d B L2"
-          % (GEN, VARIANT, REV, gpu_uscs(gpu), gpu_mgpus(gpu), gpu_l2(gpu)))
+    print("gpu gen=%d variant=%d rev=%d  %d USCs, %d mGPUs, %d B L2, peak DRAM %.1f GB/s"
+          % (GEN, VARIANT, REV, gpu_uscs(gpu), gpu_mgpus(gpu), gpu_l2(gpu),
+             gpu_dram(gpu) / 1e9))
     print("%s\n%d GRC counters enabled in this capture: %s\n"
           % (path, len(where), {k: len(v) for k, v in groups.items()}))
 
@@ -217,7 +213,7 @@ def main():
     if "--json" in sys.argv:
         out = sys.argv[sys.argv.index("--json") + 1]
         json.dump({"gpu": {"gen": GEN, "variant": VARIANT, "rev": REV,
-                           "uscs": gpu_uscs(gpu)},
+                           "uscs": gpu_uscs(gpu), "peak_dram_bytes_per_s": gpu_dram(gpu)},
                    "enabled": groups, "counters": reachable},
                   open(out, "w"), indent=1)
         print("\nwrote %s" % out)

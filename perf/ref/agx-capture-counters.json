@@ -3,7 +3,8 @@
   "gen": 16,
   "variant": 5,
   "rev": 1,
-  "uscs": 20
+  "uscs": 20,
+  "peak_dram_bytes_per_s": 238.9
  },
  "enabled": {
   "Firmware": [

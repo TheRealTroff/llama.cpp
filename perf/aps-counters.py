@@ -16,14 +16,20 @@ APS = Apple Performance Statistics. Layout:
   APSCounterData[1..]    samples - one per (Source, SourceIndex, RingBufferIndex), each with
                                    a raw `ShaderProfilerData` payload
 
-STATUS: the container is decoded and the names are resolved; the payload is not decoded.
+STATUS: the container is decoded, the payload is not. Two things are still open, and this
+script exists so the next session starts from here rather than from Instruments again:
 
-  1. RESOLVED 2026-08-23. The `_<64 hex>` strings this script prints are NOT hashes - they
-     are GRC enable strings, the identifiers the GPU register config uses to switch a
-     counter on. `agxps_counter_get_grc_enable_str` in libagxps returns them beside the
-     plaintext counter names, so `Limiter Counter List Map` joins to the named catalogue on
-     (source, index) with no digest to crack. Run perf/agxps-probe.py on the same streamData
-     to get the names, and read perf/aps-counters.md "Round 4".
+  1. RESOLVED 2026-08-23: those `_<64 hex>` strings are NOT hashes - they are GRC enable
+     strings, and agxps_counter_get_grc_enable_str returns them beside the plaintext counter
+     names. Run perf/agxps-probe.py on the same streamData to name them, and read
+     perf/aps-counters.md "Round 4". The stale text below is kept so nobody retries the
+     digests: Counter names are hashed - `_<64 hex>`, 35 of them. They are NOT sha256/sha1/md5/sha512
+     of the `vendorCounters` strings in Instruments' GPUCounterGraph.plist (534 names, all
+     variants tried, 0 hits), and no mapping table exists on disk anywhere under
+     GPUDebugger.ideplugin, Instruments.app or the GPUTools frameworks. Resolution is
+     therefore a runtime step. `GTMioCounterData -name` and
+     `GTMioNonOverlappingCounters -encoderCounterNames` return resolved names, so building
+     that object graph is the way in - see perf/gtcounter-classdump.py.
   2. `ShaderProfilerData` is a raw sample buffer, not an archive. `GTMioTraceData
      +traceDataFromURL:error:` rejects the sibling Counters_f_*.raw / Timeline_f_*.raw /
      Profiling_f_*.raw with NSCocoaErrorDomain 4864 (not a keyed archive), so those are raw
@@ -89,8 +95,8 @@ def main():
     for g, lst in sorted(groups.items()):
         print('   %-38s %d counters' % (g, len(lst)))
 
-    print('\n=== GRC enable strings, by hardware source ===')
-    print('   (the join key - perf/agxps-probe.py turns these into names)')
+    print('\n=== hashed counter names, by hardware source ===')
+    print('   (unresolved - see the STATUS block in this file)')
     for g, lst in sorted(groups.items()):
         print('   %s:' % g)
         for h in lst:
@@ -114,9 +120,8 @@ def main():
     print('\n   buffers per source: %s' % dict(per_source))
     print('   total payload:      %.1f MB' % (total / 1e6))
 
-    grc = [h for h in sampled if re.fullmatch(r'_[0-9a-f]{64}', str(h))]
-    print('\n%d/%d sampled counters are GRC enable strings; run perf/agxps-probe.py on this'
-          '\nsame file to name them.' % (len(grc), len(sampled)))
+    unresolved = [h for h in sampled if re.fullmatch(r'_[0-9a-f]{64}', str(h))]
+    print('\n%d/%d counter names still unresolved.' % (len(unresolved), len(sampled)))
 
 
 if __name__ == '__main__':
