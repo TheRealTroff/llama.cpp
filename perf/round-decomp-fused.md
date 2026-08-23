@@ -207,8 +207,15 @@ Two things this makes visible that the op-class table above cannot:
 - **The FFN is half the round.** 73.1 of 120.5 ms of MUL_MAT, and MUL_MAT is 76% of verify
   ticks in a round whose verify is 87%. Nothing else is close: the next projection is 10.9.
 - **Every projection runs at 42-58% of the memory roof**, against 87-90% for the same weights
-  at batch 1, and each reads its matrix exactly once per call either way. That is the verify
-  slope stated as utilization, and it is now its own open task: **`ffn-utilization.md`**.
+  at batch 1, and each reads its matrix exactly once per call either way. That is now its own
+  open task: **`ffn-utilization.md`**.
+  ~~That is the verify slope stated as utilization.~~ **CORRECTED 2026-08-23
+  (`ffn-utilization.md` runs 1-2): it is not a utilization statement.** Achieved bandwidth is
+  only a utilization number when arithmetic is negligible, which holds for a batch-1 mv call
+  and not for `kernel_mul_mm_skinny`, which computes a fixed 8-column tile at every width and
+  so does 8x the MACs. Measured against a 6.96 TFLOPS arithmetic roof, every shape in this
+  table is at ~50% of the memory roof **and** ~50% of the arithmetic roof at once, and lands
+  at 85-118% of `stream + arith` done back to back. The lever is overlap, not traffic.
 
 ## Final lever board (end of day)
 

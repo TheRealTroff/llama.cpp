@@ -381,8 +381,18 @@ something deliberately repetitive as a high-acceptance control.
 
 ### Open, and deliberately not yet attempted
 
-- Measure MMA utilization at `ne11` = 4, 5, 7, 8 on the skinny kernel. If it tracks `nr1/8`,
-  the tile-waste account is confirmed and the fix is a narrow-tile kernel, not a tuning flag.
+- ~~Measure MMA utilization at `ne11` = 4, 5, 7, 8 on the skinny kernel. If it tracks
+  `nr1/8`, the tile-waste account is confirmed and the fix is a narrow-tile kernel, not a
+  tuning flag.~~ **DONE 2026-08-23, `ffn-utilization.md` run 1 - and it is confirmed.** Not
+  by an MMA counter, which gen 16 does not have (`width4-limiter.md`), but behaviourally:
+  skinny costs **362 to 371 us on `ffn_gate/up` across widths 2-8** and 415 to 441 on
+  `ffn_down`, i.e. flat. The grid is `((ne11+7)/8, (ne01+31)/32, 1)` and neither the K loop
+  nor the MACs read `ne11`, so the full 8 columns are issued at every width and `nr1/8`
+  tracks discarded MMA exactly. **The fix is a narrow-tile kernel, not a tuning flag**, as
+  this item predicted. One correction to the hypothesis above: width 7 is not where the tile
+  is "nearly full" - it costs exactly what width 2 costs. Priced there at ~205 us of
+  arithmetic per `ffn_gate/up` call, so the 3 discarded columns at width 5 are ~77 us/call,
+  about 10 ms/round.
 - Cost a no-`simdgroup_matrix` width-4 kernel in the shape of theirs (register tile, inline
   dequant, K-split). **Read it, benchmark it, do not copy it** - see the fork rule.
 - **Decompose a width-4 round. Nobody ever has.** Every round decomposition on disk is at

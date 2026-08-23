@@ -136,6 +136,13 @@ that latency, in order to emit the same FMAs a register-tile kernel issues direc
 "no `simdgroup_matrix`" is not a stylistic alternative - on this hardware it is the correct
 choice.
 
-Repack is evidence for that reading: it changes the weight **load pattern** and no arithmetic
-whatsoever, and it is worth 9.3% e2e. An arithmetic-limited kernel would barely notice.
-INFERRED - the limiter counters (`width4-limiter.md`, in progress) are the measurement.
+~~Repack is evidence for that reading: it changes the weight **load pattern** and no
+arithmetic whatsoever, and it is worth 9.3% e2e. An arithmetic-limited kernel would barely
+notice.~~ **CORRECTED 2026-08-23 (`ffn-utilization.md` run 2): the repack win is not evidence
+against an arithmetic component.** Skinny is limited by both, and it pays them **additively**
+rather than overlapped - every projection lands at 85-118% of `stream + arith` done back to
+back, with the two within 10% of each other. When the costs are additive the stream half
+keeps its full leverage, so a load-pattern change still pays exactly as measured. The
+conclusion above is unaffected - the shmem round trip still buys nothing on hardware with no
+matrix unit - only this one inference from it is. On `ffn_gate/up` at width 7 the stream half
+is 187 us of a 368 us call, which is also the bound on what repack can be worth per shape.

@@ -264,17 +264,35 @@ Current state:
   nxpsg reading at width 3 as well as 4 (registers identical, instruction count slightly
   *higher* at nxpsg=16, so the win is grid geometry) and measure f16y halving device loads
   16 -> 8.
-- **`ffn-utilization.md` - OPEN, and on today's evidence the largest lever on the board.**
-  Every projection in the verify pass reads its weights exactly once per call, so achieved
-  bandwidth is a utilization number - and at the prod width **nothing exceeds 58% of peak
-  (ffn_down 42%, ffn_gate/up 51%) while batch 1 hits 87-90% on the same bytes**. The width-7
-  pass costs about twice what streaming the matrix requires. The two FFN projections are
-  73.1 of the 120.5 ms of MUL_MAT per round, so **the FFN is roughly half the round** and a
-  20% cut there is ~15 ms of the 23.3 ms cross-framework gap. Compatible with
-  `verify-slope-close.md`, which refuted overhead *beside* the matmuls; this is about the
-  matmuls themselves. **Note before starting: at width 7 the FFN runs on
-  `kernel_mul_mm_skinny`, so every kernel result from the width-3/4 investigation - the
-  K-split included - is about a kernel the prod pick never executes.**
+- **`ffn-utilization.md` - OPEN, and on today's evidence the largest lever on the board.
+  Runs 1-2 are in (2026-08-23) and they correct the file's own diagnosis - read its Status
+  block first.** The width-7 pass really does cost ~2x and the FFN really is ~half the round
+  (73.1 of 120.5 ms of MUL_MAT), but ~~achieved bandwidth is a utilization number~~ **it is
+  not a memory-utilization failure**. `kernel_mul_mm_skinny` computes a **fixed 8-column tile
+  at every width 1..8** - the grid is `(ne11+7)/8` and neither the K loop nor the MACs read
+  `ne11` - so it is flat in width (362-371 us across widths 2-8) and its arithmetic is not
+  negligible the way a batch-1 mv's is. Against a **measured 6.96 TFLOPS** arithmetic roof
+  (M4 has no matrix hardware - **already on record**, `width4-skinny-ab.md` /
+  `m4-verify-kernel-proposal.md`, with the counter-catalogue proof in `width4-limiter.md`;
+  this file prices it, it does not establish it), every projection sits at **~50% of the
+  memory roof and ~50% of the arithmetic roof simultaneously**, and every one lands at
+  **85-118% of `stream + arith` done back to back**. The lever is **overlap, not traffic**,
+  and it tracks
+  threadgroup count (1.6 TG/core -> 5.8x above roofline; 388 TG/core -> 1.6x). Ceiling
+  restated: **54 ms of MUL_MAT per round at `max(stream, arith)`**, not the 15 ms the file
+  opened with. Next step is `NR0`/`nsg` as function constants on the skinny kernel plus a
+  sweep. **Run 1 also closes `occupancy-next.md`'s open "measure MMA utilization at
+  `ne11` = 4, 5, 7, 8" item**, behaviourally, since gen 16 has no MXU counter - the
+  tile-waste account is confirmed and the fix is a narrow-tile kernel, not a tuning flag.
+  It corrects one thing there: width 7 is not where the 8-wide tile is "nearly full", it
+  costs exactly what width 2 costs. **Read the file's "What was already known" section
+  first** - it was opened without reconciling against three notes that had already reached
+  most of the way, which is the mistake it now documents. Compatible with `verify-slope-close.md`, which refuted overhead *beside* the
+  matmuls; this is about the matmuls themselves. **Note before starting: at width 7 the FFN
+  runs on `kernel_mul_mm_skinny`, so every kernel result from the width-3/4 investigation -
+  the K-split included - is about a kernel the prod pick never executes.** Tools:
+  `perf/skinny-width-util.py` (utilization vs width, per kernel),
+  `perf/skinny-roofline.py` (both roofs, `--sweep-m`, `--roof-tflops`).
 - **`ksplit-width34.md` - OPEN, and the best result of 2026-08-23.** Splits K across
   simdgroups (`GGML_MV_EXT_KP`, new `_ks` kernel on branch `metal-mv-ext-ksplit`, unmerged),
   which is the one structural feature of their `verify_m4` we had never tried. **-5.4% /
