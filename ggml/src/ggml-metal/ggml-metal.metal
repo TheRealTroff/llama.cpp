@@ -4551,6 +4551,36 @@ kernel void kernel_mul_mv_q4_0_f32_nc4_v2(
         ushort sgitg[[simdgroup_index_in_threadgroup]]) {
     mul_vec_q4_0_nc_f32_impl_v2<4, 4>(args, src0, src1, dst, tgpig, tiisg, sgitg);
 }
+kernel void kernel_mul_mv_q4_0_f32_nc4_v2_nr1(
+        constant ggml_metal_kargs_mul_mv & args,
+        device const char * src0,
+        device const char * src1,
+        device       char * dst,
+        uint3  tgpig[[threadgroup_position_in_grid]],
+        ushort tiisg[[thread_index_in_simdgroup]],
+        ushort sgitg[[simdgroup_index_in_threadgroup]]) {
+    mul_vec_q4_0_nc_f32_impl_v2<1, 4>(args, src0, src1, dst, tgpig, tiisg, sgitg);
+}
+kernel void kernel_mul_mv_q4_0_f32_nc4_v2_nr2(
+        constant ggml_metal_kargs_mul_mv & args,
+        device const char * src0,
+        device const char * src1,
+        device       char * dst,
+        uint3  tgpig[[threadgroup_position_in_grid]],
+        ushort tiisg[[thread_index_in_simdgroup]],
+        ushort sgitg[[simdgroup_index_in_threadgroup]]) {
+    mul_vec_q4_0_nc_f32_impl_v2<2, 4>(args, src0, src1, dst, tgpig, tiisg, sgitg);
+}
+kernel void kernel_mul_mv_q4_0_f32_nc4_v2_nr3(
+        constant ggml_metal_kargs_mul_mv & args,
+        device const char * src0,
+        device const char * src1,
+        device       char * dst,
+        uint3  tgpig[[threadgroup_position_in_grid]],
+        ushort tiisg[[thread_index_in_simdgroup]],
+        ushort sgitg[[simdgroup_index_in_threadgroup]]) {
+    mul_vec_q4_0_nc_f32_impl_v2<3, 4>(args, src0, src1, dst, tgpig, tiisg, sgitg);
+}
 kernel void kernel_mul_mv_q4_0_f32_nc5_v2(
         constant ggml_metal_kargs_mul_mv & args,
         device const char * src0,
