@@ -84,9 +84,54 @@ All three need `DYLD_FRAMEWORK_PATH=/Applications/Xcode.app/Contents/SharedFrame
 non-SIP python (`~/play/.venv-convert/bin/python3`); `/usr/bin/python3` has `DYLD_*`
 stripped. `aps-counters.py` alone needs neither - it is pure `plistlib`.
 
+## Round 2 (2026-08-23, same day): the resolver is reachable, the last link is not
+
+Everything below is measured, so nobody re-runs it.
+
+**Works.** `XRGPUAPSDataProcessor -initWithGPUGeneration:variant:rev:config:options:` returns
+a live processor (`gpuGeneration` is in the `streamData` root and is **2** on this M4 Pro -
+not 16, despite `metalPluginName` being `AGXMetalG16X`). On it,
+`-loadCounterGraphConfig` returns the **full named catalogue**: 456 counters with `name`,
+`description`, `unit`, `vendorCounters`, `counterType`. Saved as
+`perf/ref/agx-counter-graph.json` - it includes the two this investigation wants:
+
+```
+Compute SIMD Groups Inflight per Core   vendor: Compute Simdgroups Inflight Per Shader Core
+Kernel Occupancy                        vendor: ShaderCoreComputeUtilization / ComputeOccupancy
+```
+
+**Does not work yet.** `-loadCounters:<n>` returns NO for n = 0..5 at both gpuGeneration 2
+and 16, and `numAPSRawCounters` / `numAPSDerivedCounters` stay 0, so `-apsRawCounterNames`
+and `-apsDerivedCounters` come back empty. The processor needs a config it has not been
+given; `-setConfig:`, `-counterConfigForGRC:counterSet:` and
+`-loadAPSCounters:counterSet:` are the untried levers.
+
+**Ruled out this round, each measured:**
+
+- `XRGPUAPSDataContainer +fromData:error:` rejects all 41 `APSCounterData` blobs (nil, no
+  error object). The blobs are not a serialised container.
+- `-initWithConfig:baseFolder:` takes a **dictionary**, not a name - passing an NSString
+  throws `-[NSTaggedPointerString objectForKeyedSubscript:]` from
+  `+configVariantFromConfig:`. Passing entry 0's unarchived dictionary returns nil, so the
+  schema in the file is not the config this expects.
+- `XRGPUAPSDataContainer` alloc/init then `-loadInstrumentsConfig` returns YES, but `-config`
+  stays nil, so it loads nothing usable on its own. `-loadGTAConfig` and `-loadATRCConfig`
+  return NO.
+- **The hashes are still unmatched, and now against the runtime catalogue too.** 535
+  `vendorCounters` strings x 8 case/separator variants x 7 digests (sha1/224/256/384,
+  md5, blake2b, blake2s): zero hits. The counter-graph config contains no `_<64 hex>`
+  strings at all, so it is not the mapping either. Whatever those hashes key, it is an
+  internal driver namespace, not the friendly or vendor names.
+
 ## Next
 
-Build the object graph so `-name` resolves, starting from
+Two live threads, in order of promise:
+
+1. **Feed the processor a config so `-loadCounters:` succeeds.** Everything else on
+   `XRGPUAPSDataProcessor` already works, including the named catalogue. Find what
+   `+configVariantFromConfig:` reads out of the dictionary - that one key is the blocker -
+   then hand the same shape to `-setConfig:` or `-initWithConfig:`.
+2. **The GTMio path**, unchanged from round 1: build the object graph so `-name` resolves, starting from
 `GTShaderProfilerStreamData +dataFromArchivedDataURL:` (works, verified) and looking for the
 constructor that turns its `archivedAPSCounterData` into `GTMioTimelineCounters` /
 `GTMioNonOverlappingCounters`. If the graph needs a `GTMioTraceData` that only the plugin can
