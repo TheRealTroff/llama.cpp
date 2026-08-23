@@ -29,6 +29,7 @@ python (the venv one works). Xcode does NOT need to be running.
 
 import ctypes
 import os
+import plistlib
 import sys
 import time
 
@@ -52,7 +53,10 @@ KIND_FUNC_STOP = 4106
 KIND_END_DEBUG = 4104
 KIND_APP_READY = 4096
 KIND_DERIVED_COUNTERS = 4118
+KIND_QUERY_SHADER_INFO = 4117
+KIND_STREAM_NOTIFY = 4124
 KIND_APS_DATA = 4130
+PROFDIR = "/tmp/com.apple.gputools.profiling"
 
 P = ctypes.c_void_p
 objc = ctypes.CDLL("/usr/lib/libobjc.A.dylib")
@@ -170,6 +174,76 @@ def payload_bytes(m):
     b = msg(P, [])(pl, sel("bytes"))
     n = msg(ctypes.c_ulonglong, [])(pl, sel("length"))
     return ctypes.string_at(b, n) if (b and n) else None
+
+
+def keyed(objects, node, depth=0):
+    """Walk one NSKeyedArchiver graph. UID only - plistlib.Data also has .data."""
+    i = node.data if isinstance(node, plistlib.UID) else None
+    o = objects[i] if i is not None else node
+    if isinstance(o, dict) and depth < 20:
+        if "NS.string" in o:
+            return keyed(objects, o["NS.string"], depth + 1)
+        if "NS.keys" in o:
+            return {keyed(objects, k, depth + 1): keyed(objects, v, depth + 1)
+                    for k, v in zip(o["NS.keys"], o["NS.objects"])}
+        if "NS.objects" in o:
+            return [keyed(objects, v, depth + 1) for v in o["NS.objects"]]
+        if "NS.data" in o:
+            return o["NS.data"]
+    return o
+
+
+def decode(raw):
+    """A DY payload -> a python object, unwrapping a keyed archive if that is what it is."""
+    if not raw or raw[:8] != b"bplist00":
+        return None
+    try:
+        d = plistlib.loads(raw)
+    except Exception:
+        return None
+    if isinstance(d, dict) and "$objects" in d:
+        try:
+            return keyed(d["$objects"], d["$top"]["root"])
+        except Exception:
+            return d
+    return d
+
+
+def wait_for_stream_end(r, timeout=180.0):
+    """Pump until the 4124 'End Streaming Data' lands and the written file stops growing."""
+    path, last, stable = None, -1, 0
+    deadline = time.time() + timeout
+    ended = False
+    while time.time() < deadline:
+        r.drain(1)
+        for e in r.inbox:
+            d = decode(e[3])
+            if isinstance(d, dict):
+                if "Profiler Raw" in d:
+                    path = d["Profiler Raw"]
+                if d.get("End Streaming Data"):
+                    ended = True
+        sz = os.path.getsize(path) if (path and os.path.exists(path)) else -1
+        if ended and sz > 0 and sz == last:
+            stable += 1
+            if stable >= 3:
+                break
+        else:
+            stable = 0
+        last = sz
+    return path
+
+
+def aps_entry_count(stream_data_path):
+    """How many APSCounterData records the replay wrote. 0 headless, 41 for a real click."""
+    try:
+        d = plistlib.load(open(stream_data_path, "rb"))
+        objs = d["$objects"]
+        aps = keyed(objs, objs[d["$top"]["root"].data].get("APSCounterData"))
+        return len(aps) if hasattr(aps, "__len__") else aps
+    except Exception as e:
+        return "unreadable: %s" % e
+
 
 
 class Replayer(object):
@@ -348,17 +422,34 @@ def main():
     print("4106 DebugFuncStop sent=%s err=%s reply=%s in %.1fs"
           % (ok, err, got[0] if got else None, time.time() - t0), flush=True)
 
-    for kind, label in ((KIND_DERIVED_COUNTERS, "DerivedCounterData"), (KIND_APS_DATA, "APSData")):
+    # ask for a profiling pass. 4117 and 4130 are interchangeable triggers: whichever runs
+    # first does ~12 s of real work (the replay service logs 16 passes of RDE counter
+    # collection) and answers {"Streaming APS Data": True}; the second is a no-op repeat.
+    # The payload is inert - see perf/headless-replay-probe.md, "what does not gate it".
+    for kind, label in ((KIND_QUERY_SHADER_INFO, "QueryShaderInfo"),
+                        (KIND_APS_DATA, "APSData"),
+                        (KIND_DERIVED_COUNTERS, "DerivedCounterData")):
         empty = call(cls("NSMutableDictionary"), "dictionary")
         m = msg(P, [ctypes.c_int, P, P])(cls("DYTransportMessage"),
                                          sel("messageWithKind:attributes:objectPayload:"),
                                          kind, None, empty)
-        ok, err, got = r.send(m, wait=120)
-        print("%d %s sent=%s reply=%s payload=%s"
+        t0 = time.time()
+        ok, err, got = r.send(m, wait=600)
+        print("%d %s sent=%s reply=%s payload=%s in %.1fs"
               % (kind, label, ok, got[0] if got else None,
-                 len(got[2]) if (got and got[2]) else 0), flush=True)
+                 len(got[2]) if (got and got[2]) else 0, time.time() - t0), flush=True)
         if outdir and got and got[2]:
             open(os.path.join(outdir, "reply-%d.bin" % kind), "wb").write(got[2])
+
+    # the replay side answers with 4124 notifications; one carries the path it wrote
+    raw_path = wait_for_stream_end(r)
+    print("profiler raw: %s" % raw_path, flush=True)
+    if raw_path and os.path.exists(raw_path):
+        print("  %d bytes; APSCounterData entries: %s"
+              % (os.path.getsize(raw_path), aps_entry_count(raw_path)), flush=True)
+        if outdir:
+            import shutil
+            shutil.copy2(raw_path, os.path.join(outdir, os.path.basename(raw_path)))
 
     m = msg(P, [ctypes.c_int])(cls("DYTransportMessage"), sel("messageWithKind:"), KIND_END_DEBUG)
     r.send(m, wait=30)

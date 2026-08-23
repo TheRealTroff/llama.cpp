@@ -82,6 +82,65 @@ formats leak their producer through the names they create.
 > *Example:* grepping every binary under an app bundle for `Counters_f_` and
 > `.gpuprofiler_raw` located `GTShaderProfiler.framework` as the writer.
 
+## Reading a binary you cannot dlopen
+
+Some of what you need lives in an app plugin that drags in the whole IDE. You do not have to
+load it to read its class list, its method names or its constants.
+
+```sh
+TC=/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin
+$TC/llvm-objdump --macho --objc-meta-data <binary>     # class/method tables, with imp names
+$TC/llvm-objdump -d --macho <binary>                   # disassembly, selectors symbolised
+```
+
+- **`otool -oV` prints nothing on a modern arm64e binary.** Use `llvm-objdump --macho
+  --objc-meta-data` from the Xcode toolchain instead.
+- **`llvm-objdump --disassemble-symbols=...` silently ignores the filter on Mach-O** and dumps
+  the whole binary. Dump once to a file and slice it with `awk`/`sed` by method label.
+- llvm-objdump symbolises `objc_msgSend$<selector>` stubs and cfstring references, so a
+  disassembly reads almost like source. It resolves the strings `otool -tV` gives up on as
+  `@"bad cfstring ref"`, so try it before hand-walking `__cfstring`.
+- **Protocol constants fall out of the immediate loaded just before the send**: scan for
+  `mov w2, #0x1002` immediately preceding `_objc_msgSend$messageWithKind:...` and you have
+  recovered which message every method sends, for the whole binary, in one pass.
+
+  > *Example:* that scan over `GPUDebugger.ideplugin` produced a complete map of the GPU trace
+  > replay protocol - which of 30 message kinds each method sends and with what payload
+  > constructor - without loading a single framework.
+
+- **Some binaries have no method labels at all**, so the disassembly is a wall of addresses.
+  Bridge from the live runtime instead: `class_getMethodImplementation(cls, sel)` minus
+  `_dyld_get_image_vmaddr_slide(i)` for that image is exactly the vmaddr printed in the
+  disassembly, so you can jump straight to any method by name.
+- **A protocol that is only referenced is not registered.** `objc_getProtocol` returns nil for
+  a delegate protocol no loaded image defines, so its selectors have to be read out of the
+  caller's disassembly.
+
+## Plugin bundles load themselves once you ask for one
+
+A class you cannot find in any framework on disk may live in a plugin the framework loads
+lazily. Calling the one factory method is enough to pull the whole bundle into your process,
+after which every class in it is live and reachable through the runtime.
+
+> *Example:* `DYPMTLShaderProfiler_iOS` is in no Xcode framework. One call to
+> `+[DYPPluginManager metalPlugin]` loaded
+> `.../iPhoneOS.platform/Developer/Library/GPUToolsPlatform/PlugIns/GPUToolsPlatformSupport-iOS.gtpplugin_ios`
+> and made it, and 100 sibling classes, available.
+
+Walk `_dyld_get_image_name` over `_dyld_image_count` *after* the call to find out what
+appeared and where it came from - that is also the path you then disassemble.
+
+## A/B the input before believing a theory about it
+
+A strong prior about which field gates a behaviour is cheap to test and expensive to assume.
+Vary the input and compare the **output byte-for-byte**; identical output sizes across
+genuinely different inputs refute the prior outright, and that is a result worth writing down
+so nobody pays for it twice.
+
+> *Example:* three different request payloads - empty, one with the suspected period field,
+> one with an explicit destination URL - each produced a 52,801-byte output file. Same size,
+> same reply, same path. Three runs turned a plausible three-day theory into a closed question.
+
 ## Prefer the file format to the API
 
 Apple's archives are very often `NSKeyedArchiver` plists, sometimes nested several deep. If
@@ -136,6 +195,18 @@ timestamps announce themselves, and finding one usually gives you the whole reco
   > 178 MB.
 - **Selectors only.** No arguments, no return values, no dictionary keys. It answers "which
   code path", never "which value".
+- **Trace your own reimplementation the same way and diff it against the app's.** This is how
+  you find the setup call you did not know existed. Run your probe under
+  `NSObjCMessageLoggingEnabled=YES`, line up the two logs at the same entry point, and read
+  down until they diverge. The divergence is usually a one-line static registration the host
+  app made minutes earlier, somewhere you would never have looked.
+
+  > *Example:* our replayer launch hung with no error. Both logs reached
+  > `-[DYDesktopLaunchStrategy performLaunch:connectFuture:timeout:]` identically and then ours
+  > simply waited. The missing piece was
+  > `+[DYDesktopDeviceManager registerLocalhostIdentifier:@"127.0.0.1:25182"]`, called **once**
+  > in 97 million sends, which is what marks the local device local; without it the transport
+  > is built for a remote address and never connects.
 
 ## Check what the target's signature allows before planning injection
 
@@ -147,6 +218,23 @@ codesign -d -vvvv <binary> | grep -i constraint
 
 `library-validation` refuses `DYLD_INSERT_LIBRARIES` outright, which is why message logging
 is the tool of choice - libobjc reads that variable itself, so no injection is needed.
+
+## Handing a file to a sandboxed helper
+
+If the private API you are driving passes work to a sandboxed XPC service, that service cannot
+read your file, and the client is expected to mint the permission itself:
+
+```python
+libc.sandbox_extension_issue_file.restype = ctypes.c_char_p
+tok = libc.sandbox_extension_issue_file(b"com.apple.app-sandbox.read", path.encode(), 0)
+```
+
+The token is an ASCII string you put in the request next to the absolute path. It is in
+libSystem, so ctypes reaches it directly, and an unsandboxed process can always issue one.
+
+> *Example:* the GPU replay service loads a `.gputrace` from
+> `{"path": <abs path>, "sandbox_extensions": <token>}`. Guessing at a shared "archives
+> directory" wasted time; the real design is path plus token.
 
 ## Reading failure as information
 
@@ -166,6 +254,24 @@ is the tool of choice - libobjc reads that variable itself, so no injection is n
   Nothing logged anywhere is evidence *against* a policy denial.
 - **`NSCocoaErrorDomain 4864`** means "not a keyed archive" - stop pointing keyed-archive
   readers at that file.
+- **A future/promise `-result` blocks.** Apple's internal promise types (`DYFuture` here) wait
+  in `-waitUntilResolved` when you read the result. Calling it on the thread that is pumping
+  the runloop deadlocks the whole process with a stack that looks like a hang, not a bug. Poll
+  `-resolved` first and only then read `-result`, or register a completion handler.
+- **An async private API can hang with no error and no log line at all.** Silence is a real
+  outcome, not a tooling failure: if the call is waiting on a connection future, nothing
+  reports the wait. `sample <pid>` names the exact frame in seconds and is the fastest way to
+  tell "hung waiting" from "returned and did nothing".
+- **An unrecognized-selector exception names the ivar you set, not just the type.** Passing a
+  `DYDeviceInfo` to a `_setDeviceInfo:` moved the failure to
+  `-[DYCaptureSessionInfo initWithCaptureStore:]` sending `metadataValueForKey:` to it - which
+  says that ivar is a *capture store*, and that the setter is misleadingly named. Read the
+  receiver in the exception, not only the selector.
+- **A private service will often log its own progress once you know its process name.**
+  `log show --last 2m --info --debug --predicate 'process == "<name>"'` turned an opaque
+  0.1-second reply into a visible 16-pass counter collection. Check this before concluding a
+  call did nothing - and note that a service logging happily while producing nothing is
+  evidence of a missing *input*, not of a refusal.
 
 ## Housekeeping that has already bitten
 
