@@ -200,6 +200,12 @@ arms read flat.
    round. Needs: the `ne00 % 256` guard kept, a rule that excludes the `attn_k/v` case (what
    distinguishes it from `ssm_alpha/beta` is not yet known - both are f32-y), and an e2e arm
    built on that rule rather than on a global `GGML_MV_EXT_NXPSG`, which is not shippable.
+   **Sized 2026-08-23 with `perf/weighted-round.py --width 4 --vs GGML_MV_EXT_NXPSG=32`:
+   -3.33 ms of matmul per round (-3.4%), or -2.75 ms after the measured 1.21x hiding
+   factor - but -1.03 ms of that is small rows, which historically translate at 0%.** So the
+   defensible expectation is about **-1.7 ms on a ~140 ms round, ~1.2%**, not the -16%
+   headline that `ffn_down` at width 3 suggests in isolation. Worth doing, worth not
+   overselling.
 2. **`kp` for the f32-y kernel**, so `attn_q` and anything else below the f16y gate can use it
    at all. Today it is f16y-only, which is why `attn_q` is a control here rather than a
    candidate.

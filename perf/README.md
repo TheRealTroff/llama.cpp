@@ -347,6 +347,19 @@ Superseded, kept for history - do not quote numbers from these:
 
 Tooling, not an experiment:
 
+- **`weighted-round.py` - "where does a round go", in seconds.** Runs each real projection
+  once and multiplies by how often the engine actually runs it (weights from the tagged
+  profile, cross-checked against the GGUF). **Calibrated 2026-08-23: the weighted sum is
+  118.1 ms against the engine's own 120.3 ms of MUL_MAT per round, a 1.8% agreement**, and
+  per shape the six large projections agree to 1-8%. Use it to rank kernel work and to A/B a
+  routing flag across the whole inventory (`--vs "GGML_MV_EXT_NXPSG=32"`) without a server
+  run. **Its two biases are measured and printed**: the sum of parts is not the wall (all-op
+  serialized ticks 157.9 against a 130.0 ms wall = 1.21x hiding under concurrent dispatch),
+  and small rows are wrong in both directions - isolated measurement understates their
+  in-engine per-call cost by ~21%, and they are also the ops that hide, which is the
+  small-ne01 trap (2.3x per call, 0.0% e2e). It reports the small-row share of any delta
+  separately for exactly that reason.
+
 - **`occupancy-next.md` - START HERE for the counter work.** Routing stub with four options
   (unlock the names via the processor config; identify counters by behaviour without names;
   automate the replay over DY; or drop the counter and attack the shelf directly), each with

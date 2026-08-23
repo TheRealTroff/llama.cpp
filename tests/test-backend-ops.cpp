@@ -10229,6 +10229,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
             test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32, 10240, bs,  5120, {1, 1}, {1, 1})); // attn_qkv            x48
             test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32,  6144, bs,  5120, {1, 1}, {1, 1})); // attn_gate           x48
             test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32, 12288, bs,  5120, {1, 1}, {1, 1})); // attn_q              x16
+            test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32, 248320, bs, 5120, {1, 1}, {1, 1})); // output (lm_head)    x1
             // attn_k/v (5120,1024) x32 is already covered by the small-ne01 block below
         }
     }
