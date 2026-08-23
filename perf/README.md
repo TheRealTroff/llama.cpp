@@ -200,15 +200,21 @@ Current state:
   win is dispatch geometry, not register pressure). Run 4: the width 3-4 path encodes **two**
   dispatches - the f16y convert plus the matmul - and only widths 3-4 take it under prod
   routing, but it is a **win, not a tax** (`GGML_MV_EXT_F16Y=0` costs +17.3% at width 4).
-  Run 5: the f16y size gate is keyed on `ne00*ne01` when the mechanism scales with `ne01`
-  alone, which is why `attn_q` gains nothing from it. Run 6: extending `nxpsg=16` to widths
+  **Run 5 is RETRACTED** - the f16y gate for q4_0 is 16.78M elements, not the 8M that run
+  assumed (`(is_t4 ? 16 : 8)*1024*1024`, and q4_0 is t4), so the "band where f16y does
+  nothing" was just the gate working correctly, and `attn_q` at 15.7M sits *below* it and
+  never had f16y at all. Caught by the replay counters. The gate is NOT known-bad. Run 6: extending `nxpsg=16` to widths
   3-4 (branch `metal-mv-ext-nxpsg-w34`, `GGML_MV_EXT_NXPSG16_MAX`) is worth **-1.5% to
   -1.7%** on a pass, a third of what the per-shape tables implied. **Two cautions from run
   6**: `ne00 % 256 == 0` is a *correctness* guard (forcing `nxpsg=16` past it gives NaN), and
   the **e2e arm of that run is invalid - its n6 control failed at -6.1%** on a byte-identical
   workload, so quote no e2e number from 2026-08-23. **None of this moves the prod pick**,
   which sits at n6 / width 7 / skinny where widths 3-4 never occur.
-  Ten captures spanning the cliff are archived at `~/play/kvquant-experiments/traces/aug23/`.
+  Ten captures spanning the cliff are archived at `~/play/kvquant-experiments/traces/aug23/`,
+  **all ten now replayed**, with counters under `traces/aug23/replays/`. Those confirm the
+  nxpsg reading at width 3 as well as 4 (registers identical, instruction count slightly
+  *higher* at nxpsg=16, so the win is grid geometry) and measure f16y halving device loads
+  16 -> 8.
 - `slope-sweep.md` - the small-batch slope, the ne11=9 skinny cliff, and both depth
   sweeps. Supersedes the "MTP d1 is optimal, don't re-run" note: the optimum is now d6.
   Run it with `run-slope-sweep.sh`.

@@ -16,8 +16,11 @@ Where it stands after runs 4-6 (2026-08-23), so a new session does not re-run th
   at -6.1% on a byte-identical workload. Do not quote an e2e number from that run.
 - **None of this can move the prod pick**, which sits at n6 / width 7 / skinny. See the last
   section of run 6.
-- New since run 3: `attn_q` is inert to f16y and loses on `nxpsg`, and run 5 shows why - the
-  f16y gate is keyed on `ne00*ne01` when the mechanism scales with `ne01` alone.
+- **Run 5 is retracted** (same day, by the replay counters): the f16y gate for q4_0 is
+  **16.78M**, not 8M, so the "band where f16y does nothing" was just the gate working. The
+  wrong-dimension hypothesis is untested, not refuted - do not treat the gate as known-bad.
+  `attn_q` is below that gate, so it never had f16y and its run-4 row is a control. It does
+  still lose on `nxpsg=16`, and that remains unexplained.
 - Ten captures spanning the cliff are archived at
   `~/play/kvquant-experiments/traces/aug23/` with headless dumps, waiting on replay clicks.
   Replay output is auto-archived by `perf/watch-replays.sh` - do not let it die in `/tmp`
@@ -474,12 +477,49 @@ cliff component.
 One arm is soft: width 4 ffn_gate/up at f16y=0 read 379.39 / 378.38 / 354.93, so its +4.9%
 is really nearer +7.5% with one outlier rep. Every other cell has under 1% within-arm spread.
 
-**What survives is `attn_q`**: +0.6% at width 4, inside noise, while ffn_down and gdn_qkv
+~~**What survives is `attn_q`**: +0.6% at width 4, inside noise, while ffn_down and gdn_qkv
 take +17.3% and +16.7%. It passes the size gate comfortably (ne00*ne01 = 5120*3072 = 15.7M
 against a gate of 8M). It is also the one shape that *loses* on `nxpsg=16` (+8.3%, run 3).
-Same shape, both levers, no explanation on record. Run 5 is that explanation.
+Same shape, both levers, no explanation on record. Run 5 is that explanation.~~
 
-## Run 5 (2026-08-23): the f16y size gate is keyed on the wrong dimension
+> **CORRECTED 2026-08-23 by the replay counters - the gate is 16M for q4_0, not 8M.**
+> `(int64_t) ne00*ne01 >= (is_t4 ? 16 : 8)*1024*1024` (`:2799-2800`), and q4_0 **is** t4
+> (`is_t4` excludes only the K-quants and IQ4_XS), so the threshold is **16.78M**. attn_q is
+> 15.7M and therefore sits **below** it: f16y was never active for that shape, in either arm.
+> Caught by the capture, which shows attn_q on `kernel_mul_mv_ext_q4_0_f32_r1_4` with no
+> `kernel_cpy_f32_f16` next to it, and confirmed by compiling both shapes.
+>
+> So the attn_q row is **a control, not a treated cell**, and its +0.6% measures nothing
+> about f16y - it is two identical kernels being compared, which is exactly why it reads
+> flat. There is no attn_q anomaly here and nothing for run 5 to explain. The three real
+> treated shapes are ffn_gate/up, ffn_down and gdn_qkv, all above 16.78M, and they win.
+>
+> attn_q losing on `nxpsg=16` (run 3) is untouched by this and remains unexplained.
+
+## Run 5 (2026-08-23): ~~the f16y size gate is keyed on the wrong dimension~~ RETRACTED
+
+> **RETRACTED the same day, by the replay counters. The conclusion below is wrong and the
+> data below is fine.** The premise was that the gate admits shapes that gain nothing. It
+> does not: the gate for q4_0 is **16.78M**, not the 8M this section assumed
+> (`ne00*ne01 >= (is_t4 ? 16 : 8)*1024*1024`, and q4_0 is t4). At ne00 = 5120 that is
+> ne01 >= 3277.
+>
+> Look at where the step lands: **+0.3% at ne01 3072, +14.5% at ne01 4096.** 3277 sits
+> between them. **The step is the gate**, doing exactly what it was written to do - f16y is
+> *off* at 3072 and *on* at 4096, so the "step" is just the treatment switching on. Verified
+> by compiling both: m=3072 gives `kernel_mul_mv_ext_q4_0_f32_r1_4` alone, m=4096 gives
+> `kernel_cpy_f32_f16` + `kernel_mul_mv_ext_q4_0_f16_r1_4`.
+>
+> So this run measured the gate boundary, not a flaw in it, and **three of its five rows are
+> controls rather than two**. That is a clean confirmation that the gate is where the source
+> says it is, and nothing more.
+>
+> **The wrong-dimension hypothesis is untested, not refuted.** The reasoning under it still
+> stands on its own, but this sweep cannot test it: ne00 was held fixed, so ne01 and the
+> product move together and the two hypotheses are indistinguishable. Testing it needs ne00
+> and ne01 varied *independently at a fixed product* - e.g. (ne00 5120, ne01 4096) against
+> (ne00 20480, ne01 1024), both 21M. If the win tracks ne01, the second should win less.
+> Neither shape is a perf case today. **Do not treat the gate as known-wrong.**
 
 Pre-registered from run 4, then measured (`perf/run-f16y-ne01-sweep.sh`). Hold ne00 at 5120
 and sweep ne01, because:
@@ -493,28 +533,31 @@ ratio          ~ ne01              ne00 cancels
 so a gate on `ne00*ne01` (`:2799-2800`) is wrong-dimensioned. Prediction: the win tracks
 ne01 and is near zero at small ne01 whatever ne00 is.
 
-| ne01 | ne00*ne01 | w3 f16y=1 | w3 f16y=0 | delta | w4 f16y=1 | w4 f16y=0 | delta |
-|---|--:|--:|--:|--:|--:|--:|--:|
-| 1024 | 5.2M (below gate) | 27.90 | 27.71 | -0.7% | 32.50 | 32.50 | +0.0% |
-| 1280 | 6.6M (below gate) | 28.39 | 28.40 | +0.0% | 32.80 | 32.91 | +0.3% |
-| 3072 | 15.7M | 61.72 | 62.55 | +1.4% | 75.02 | 75.25 | **+0.3%** |
-| 4096 | 21.0M | 76.65 | 81.95 | +6.9% | 88.87 | 101.80 | **+14.5%** |
-| 6144 | 31.5M | 108.33 | 117.15 | +8.1% | 126.96 | 147.63 | +16.3% |
+| ne01 | ne00*ne01 | f16y? gate 16.78M | w3 f16y=1 | w3 f16y=0 | delta | w4 f16y=1 | w4 f16y=0 | delta |
+|---|--:|---|--:|--:|--:|--:|--:|--:|
+| 1024 | 5.2M | **off - control** | 27.90 | 27.71 | -0.7% | 32.50 | 32.50 | +0.0% |
+| 1280 | 6.6M | **off - control** | 28.39 | 28.40 | +0.0% | 32.80 | 32.91 | +0.3% |
+| 3072 | 15.7M | **off - control** | 61.72 | 62.55 | +1.4% | 75.02 | 75.25 | +0.3% |
+| 4096 | 21.0M | on | 76.65 | 81.95 | +6.9% | 88.87 | 101.80 | **+14.5%** |
+| 6144 | 31.5M | on | 108.33 | 117.15 | +8.1% | 126.96 | 147.63 | **+16.3%** |
+|  |  |  |  |  |  |  |  |  |
 
-**Held.** The two below-gate rows are controls - f16y is inactive in both arms there - and
-they read flat, so the harness is measuring f16y and not drift. Above the gate the win is
-monotone in ne01 and **steps hard between ne01 3072 and 4096**: +0.3% then +14.5% at width
-4. At ne00 = 5120 the gate admits everything from ne01 = 1638 up, so it passes a whole band
-where f16y does nothing, and `attn_q` (ne01 = 3072) sits in it. That is the run 4 anomaly.
+Read correctly: **three controls, all flat, and two treated rows, both winning.** The gate
+column is what the retraction above adds - the original table called ne01 3072 "above gate",
+and that was the error.
 
-**This is a characterisation, not a win.** f16y at ne01 = 3072 is neutral, not harmful, so
-raising the gate would save a dispatch and a scratch allocation and buy no measurable time.
-Its value is the mechanism: f16y's benefit scales with how many output rows the shape has,
-which is the same axis `nxpsg` moves. Nothing is committed; the gate is unchanged.
+~~**Held.** ... At ne00 = 5120 the gate admits everything from ne01 = 1638 up, so it passes
+a whole band where f16y does nothing, and `attn_q` (ne01 = 3072) sits in it.~~ **Wrong, see
+the retraction at the top of this run.** The gate admits from ne01 = 3277; ne01 3072 is
+below it; the step is the treatment switching on.
 
-Do not over-fit these to a fixed-overhead model - gross-saving-minus-constant does not fit
-the three above-gate points (it predicts +3.6 us at ne01 3072 against +0.85 measured), so
-the collapse at small ne01 is sharper than that model allows.
+What the run does establish, and it is worth keeping:
+
+- **The gate boundary is exactly where the source puts it**, confirmed by measurement and
+  by compiling both sides of it.
+- **f16y is worth +14.5% to +16.3% at width 4** on the two shapes that qualify, which is
+  consistent with run 4's ffn_down and gdn_qkv and independent of them.
+- **Three controls read flat**, so the harness is measuring f16y and not drift.
 
 ## The capture set, and what widths 1-2 were doing all along
 
@@ -554,6 +597,50 @@ Two cautions for anyone reading these dumps:
   the baseline arms hold 63 across anywhere from 141 to 561 dispatches - so do not count
   barriers per iteration.
 - There is still no timing and no counter anywhere in a dump (`toolchain-isa-probe.md:237`).
+
+## Replay counters for the whole cliff (2026-08-23) - all ten captures
+
+Johan clicked through all ten; `perf/watch-replays.sh` archived them. This is the first time
+the cliff has been profiled at anything other than width 4. Spill is 0 everywhere, so it is
+dropped from the table.
+
+| capture | kernel | reg | instr | dev ld/st |
+|---|---|--:|--:|--:|
+| w1 ffn_down | `mul_mv_q4_0_f32` | 59 | 389 | 12/4 |
+| w2 ffn_down | `mul_mv_q4_0_f32_nc2` | 77 | 664 | 16/8 |
+| **w3 ffn_down nxpsg=8** | `mul_mv_ext_q4_0_f16_r1_3` | **64** | **379** | 7/6 |
+| **w3 ffn_down nxpsg=16** | `mul_mv_ext_q4_0_f16_r1_3` | **64** | **397** | 7/6 |
+| w4 ffn_down nxpsg=8 | `mul_mv_ext_q4_0_f16_r1_4` | 73 | 453 | 8/8 |
+| w4 ffn_down nxpsg=16 | `mul_mv_ext_q4_0_f16_r1_4` | 73 | 477 | 8/8 |
+| w4 ffn_down f16y=0 | `mul_mv_ext_q4_0_f32_r1_4` | 79 | 457 | **16**/8 |
+| w4 attn_q nxpsg=8 | `mul_mv_ext_q4_0_f32_r1_4` | 79 | 457 | **16**/8 |
+| w4 attn_q nxpsg=16 | `mul_mv_ext_q4_0_f32_r1_4` | 79 | 483 | **16**/8 |
+| w5 ffn_down | `mul_mm_skinny_q4_0_f32` | 60 | 507 | 10/1 |
+
+Three things fall out, none of them previously measured:
+
+- **The nxpsg result replicates at width 3, which is where the cliff actually is.** Registers
+  identical at 64, spill 0 both ways, and the instruction count *higher* at nxpsg=16 (397 vs
+  379) - the same signature run 3 found at width 4 (73/73, 477 vs 453). Two widths, same
+  pattern: `nxpsg=16` wins while doing measurably *more* work per thread with *identical*
+  register pressure. Register pressure and instruction count are both excluded by
+  measurement now, at both widths. What is left is the grid, which the captures show
+  doubling from 320 to 640.
+- **f16y halves the device loads, exactly as designed** - 16 down to 8 on `r1_4`
+  (`results.md:281` says "reading 8 contiguous elements per 16B uint4 load"; this is that
+  claim measured). It costs 6 registers (79 -> 73) and one extra dispatch, and run 4 shows it
+  wins by up to 17.3% anyway.
+- **`w4 attn_q nxpsg=8` and `w4 ffn_down f16y=0` are the same kernel with identical counters**
+  (79 reg, 457 instr, 16/8). That is what exposed the gate error: attn_q was never on the
+  f16y path. Two shapes, one kernel, and the "attn_q anomaly" of run 4 dissolves.
+
+Raw `streamData` plus `--all` dumps are under
+`~/play/kvquant-experiments/traces/aug23/replays/`. Only `streamData` is kept - the rest of
+each `.gpuprofiler_raw` directory is ~1 GB of `Profiling_f_*.raw` frame data that
+`gpuprofiler-stats.py` never reads, and archiving it whole cost 7.9 GB in four clicks before
+that was noticed. Note also that Xcode writes each replay **twice**, at
+`ROOT/<name>_stream.gpuprofiler_raw` and `ROOT/gtshaderprofiler/<name>.gputrace.gpuprofiler_raw`,
+identical apart from the path - dedup on `traceName`, not on path.
 
 ## Run 6 (2026-08-23): the nxpsg cutoff, aggregated - and two invalid attempts first
 

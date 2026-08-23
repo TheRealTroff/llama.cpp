@@ -12,15 +12,18 @@
 # capture it came from and the clicks can happen in any order.
 #
 # Run it in the background, then click through the traces. One line per archived replay.
+#
+# NOTE: macOS ships bash 3.2, which has no associative arrays. State lives in files under
+# $DEST/.state instead - `declare -A` here exits the script instantly under `set -u`, which
+# is exactly what happened the first time this was run.
 set -u
 
 B=/Users/troff/play/llama.cpp-prod
 PY=python3
 ROOT=/tmp/com.apple.gputools.profiling
 DEST=${DEST:-/Users/troff/play/kvquant-experiments/traces/aug23/replays}
-mkdir -p "$DEST"
-
-declare -A seen sized
+STATE=$DEST/.state
+mkdir -p "$DEST" "$STATE"
 
 echo "watching $ROOT -> $DEST (click 'Profile GPU Trace' in Xcode; ctrl-c to stop)"
 
@@ -28,35 +31,44 @@ while true; do
     # both nesting depths the stats reader knows about
     for sd in "$ROOT"/*.gpuprofiler_raw/streamData "$ROOT"/*/*.gpuprofiler_raw/streamData; do
         [ -f "$sd" ] || continue
-        [ -n "${seen[$sd]:-}" ] && continue
+
+        key=$(echo "$sd" | shasum | cut -c1-16)
+        [ -e "$STATE/$key.done" ] && continue
 
         # the skill's oscillation gotcha: wait for the file to stop growing before reading
         sz=$(stat -f%z "$sd" 2>/dev/null || echo 0)
-        if [ "$sz" = "0" ] || [ "${sized[$sd]:-}" != "$sz" ]; then
-            sized[$sd]=$sz
-            continue
-        fi
+        prev=$(cat "$STATE/$key.size" 2>/dev/null || echo "")
+        echo "$sz" > "$STATE/$key.size"
+        { [ "$sz" = "0" ] || [ "$prev" != "$sz" ]; } && continue
 
         # traceName comes out of the archive itself, so the replay names its own capture
         dump=$("$PY" "$B/perf/gpuprofiler-stats.py" --all "$sd" 2>/dev/null)
-        [ -z "$dump" ] && { sized[$sd]=""; continue; }
+        [ -z "$dump" ] && continue
 
         name=$(echo "$dump" | sed -n 's/^trace:  *//p' | head -1 \
                | sed 's/\.gputrace$//' | tr -c 'A-Za-z0-9._-' '_' | sed 's/_*$//')
         [ -z "$name" ] && name="unknown"
 
+        # Xcode writes the SAME replay twice - ROOT/<name>_stream.gpuprofiler_raw and
+        # ROOT/gtshaderprofiler/<name>.gputrace.gpuprofiler_raw - so dedup on traceName,
+        # not on path, or every click archives two identical copies.
         out="$DEST/$name"
-        i=1; while [ -e "$out" ]; do out="$DEST/$name.$i"; i=$((i+1)); done
+        if [ -e "$out/stats-all.txt" ]; then
+            touch "$STATE/$key.done"
+            continue
+        fi
         mkdir -p "$out"
 
-        # the raw archive, so a later session can re-read fields nobody thought to print
-        cp -R "$(dirname "$sd")" "$out/" 2>/dev/null
+        # streamData ONLY (~24 MB). The rest of the .gpuprofiler_raw dir is Profiling_f_*.raw
+        # frame data, ~1 GB per replay, which gpuprofiler-stats.py never reads. Copying the
+        # whole dir cost 7.9 GB in the first four clicks.
+        cp "$sd" "$out/streamData" 2>/dev/null
         echo "$dump" > "$out/stats-all.txt"
         "$PY" "$B/perf/gpuprofiler-stats.py" "$sd" > "$out/stats-summary.txt" 2>/dev/null
 
-        seen[$sd]=1
+        touch "$STATE/$key.done"
         k=$(grep -c '^=== ' "$out/stats-all.txt" 2>/dev/null || echo 0)
-        echo "archived: $name  ($k pipelines, $(du -sh "$out" | cut -f1)) -> $out"
+        echo "archived: $name  ($k pipelines, $(du -sh "$out" | cut -f1 | tr -d ' ')) -> $out"
     done
     sleep 5
 done
