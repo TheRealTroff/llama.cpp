@@ -31,6 +31,14 @@ And a third reading is now on the table, because it follows from the same number
 is saturated in any capture.** That points at latency and dependency stalls rather than at
 either throughput ceiling. See "What the numbers actually say".
 
+> **CONFIRMED BEHAVIOURALLY 2026-08-23 (`ksplit-width34.md`), without a counter.** If the
+> kernel is stalled rather than throughput-limited, giving it more independent work along K
+> should pay - and it does: cost at widths 3-4 falls as a function of **total K lanes**
+> (`nxpsg*kp`), 340 -> 273 us on ffn_down at width 3, saturating at 32-64 lanes and
+> regressing at 128. Weight and activation traffic are identical in every cell, so the only
+> variable is parallelism. That is the latency reading paying out; it does not tell us
+> *which* stall, which is still what the counters are for.
+
 ## The kernels each capture ran
 
 This decides which comparisons are legitimate, so it is worth stating plainly. Read out of

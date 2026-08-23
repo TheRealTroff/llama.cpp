@@ -19,6 +19,15 @@ same day:
 - **D (attack width 4 without the counter): SUPERSEDED**, see below - it is downstream, not an
   alternative.
 
+> **2026-08-23, and it changes what an occupancy number would be worth:**
+> `ksplit-width34.md` gave the kernel more parallelism along K directly (a new `_ks` kernel,
+> `kp` simdgroups per row block) and measured the response: cost tracks **total K lanes**
+> regardless of which axis supplies them, saturates at 32-64 lanes, and regresses at 128, with
+> traffic held identical. So the "more independent work units" reading now has a measured
+> dose-response curve and a measured ceiling. **The remaining question for the counters is
+> narrower than "is it occupancy": it is what the kernel stalls on between 8 and 32 lanes,
+> and why the ceiling sits where it does.**
+
 **What the counters then said: it is not occupancy and it is not bandwidth.** Occupancy is
 flat between width 3 and 4; DRAM sits at 47% of peak at width 4 against 92% at batch 1
 (`width4-limiter.md`). Nothing is saturated, which is a latency/stall signature nobody has yet
