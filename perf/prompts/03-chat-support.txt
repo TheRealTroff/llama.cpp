@@ -1,0 +1,6 @@
+You are a support agent. Continue the conversation naturally.
+
+Customer: hi, my order #48812 was supposed to arrive tuesday and it still hasn't shown up
+Agent: I'm sorry about that. Let me take a look at #48812 for you.
+Customer: thanks. i already tried the tracking link and it just says "in transit" since friday
+Agent:

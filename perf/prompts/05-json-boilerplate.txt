@@ -1,0 +1,6 @@
+Emit a JSON array of 40 objects. Each object has exactly these fields, in this order:
+"id" (integer, starting at 1001 and incrementing by 1), "name" (a short lowercase
+identifier), "status" (always "active"), "retries" (always 0), "region" (always
+"us-west-2"). Output only the JSON array, no prose.
+
+[

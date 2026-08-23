@@ -8,9 +8,11 @@ Where it stands after runs 4-6 (2026-08-23), so a new session does not re-run th
 - **The shelf is still unexplained.** Three candidate causes are now measured and dead: the
   register tile (run 2), `nr0` (run 1), and the f16y convert dispatch (run 4). The tile is
   off the table, `ext` is the right family (run 3), and the convert is a win, not a tax.
-- **`nxpsg=16` at widths 3-4 is the one live lever**, worth **-1.5% to -1.7%** on a
+- **`nxpsg=16` at widths 3-4 is the one live *tuning* lever**, worth **-1.5% to -1.7%** on a
   `llama-bench` pass at N=3/N=4 (run 6) - about a third of what run 3's per-shape table
-  implied. It needs the `ne00 % 256 == 0` guard kept; that condition is correctness, not a
+  implied. ~~the one live lever~~ **Re-scoped 2026-08-23: it is a tuning lever against a
+  1.48x deficit, so it cannot close the gap on its own.** See "The tile does not fit the
+  width" below and the new section in `occupancy-next.md`. It needs the `ne00 % 256 == 0` guard kept; that condition is correctness, not a
   heuristic (run 6). Code lives on branch `metal-mv-ext-nxpsg-w34`, unmerged.
 - **The e2e question is open and its 2026-08-23 attempt is invalid** - the n6 control failed
   at -6.1% on a byte-identical workload. Do not quote an e2e number from that run.
@@ -61,6 +63,29 @@ single template parameter `T`, no MLX dependency in the body, and **no `simdgrou
 - Routing: `m == 4` exactly, bits == 4, `N % 4 == 0`, `K % 32 == 0`, `N < 100_000`
   (`verify_linear.py:55-88`, `verify_qmm.py:30-31`). Only M=4 and M=16 have custom kernels;
   every other M falls to stock `mx.quantized_matmul`.
+
+## The tile does not fit the width (INFERRED 2026-08-23, not measured)
+
+Read from source, not from a run - label it as such until the counters land.
+
+`kernel_mul_mm_skinny` (`ggml-metal.metal:11880`) accumulates into `simdgroup_half8x8`, so
+its column tile is fixed at 8 by the hardware instruction: `sb` is `NK x 8`, `NR1 = 8`. At
+`ne11 = 4` the kernel clamps `nr1 = 4` but still issues full 8x8
+`simdgroup_multiply_accumulate`, and the dispatch is `((ne11 + 7)/8)`
+(`ggml-metal-ops.cpp:2723`) - **we pay for 8 columns to compute 4, so half of every MMA is
+discarded.** That is the likely reason `GGML_MM_SKINNY=5` excludes width 4 at all: at 4 the
+alternative is `mul_mv_ext`, which loses weight reuse instead. **Both of our width-4 paths
+are wrong-shaped**, and our prod pick sits at width 7 because that is where the 8-wide tile
+is nearly full - the width choice is a workaround for the tile, not a property of the model.
+
+Theirs routes on `m == 4` **exactly** and uses **no `simdgroup_matrix`**: 4x4 float register
+tile, reuse 4 on both operands, dequant inline in registers. An exact fit for the width their
+controller wants.
+
+If this is right it predicts MMA utilization tracks `nr1/8` at `ne11` = 4, 5, 7, 8 - which is
+a measurement, and is what the counter work exists to take. It also predicts the fix is a
+narrow-tile width-4 kernel, not a flag. **Do not copy their kernel** - read it, benchmark it
+(fork rule). Nothing here is confirmed; do not quote it as a finding.
 
 ## Kernel-level measurement, 2026-08-22 (new)
 
