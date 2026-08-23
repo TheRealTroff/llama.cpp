@@ -268,6 +268,20 @@ Superseded, kept for history - do not quote numbers from these:
 - `flash-attn-scoping.md` - its proposed fix was refuted; its model facts are still good.
 - `baseline.md`, `mtp-kv-results.md`, `dflash-vs-mtp-uniform.md` - earlier configs.
 
+Tooling, not an experiment:
+
+- **`headless-replay-probe.md`** - removing the one manual step in
+  `skills/metal-gpu-profile` (the "Profile GPU Trace" click). **Status open, but the
+  blocking question is answered:** an unentitled process loads
+  `GPUToolsTransportAgents.framework`, opens a `DYXPCTransport`, and launchd **spawns the
+  entitled `GPUToolsAgentService` for it** - measured, second agent pid next to Xcode's.
+  **This retracts `toolchain-isa-probe.md`'s "it is a permission boundary" conclusion**,
+  and its "89-message protocol" figure: the replay path is six messages and the kind
+  values are recoverable (`kDYMessageReplayerReplayArchive` = 4098). Left to do is the
+  payload shape. Probes: `xpc-connect-probe.py`, `dymessage-kinds.py`. Refuted en route -
+  the `GPUDebugger.ReplayOnOpen` / `ProfileOnTraceLoad` defaults are inert, and the
+  "Replay GPU Frame Capture" menu command does not appear in the UI.
+
 Unrelated to this investigation: `sharp-template.md`.
 
 ## Convention

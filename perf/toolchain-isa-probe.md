@@ -401,7 +401,20 @@ registers**, 32 uniform, **0 spilled bytes**, 453 instructions of which 399 ALU 
 Everything below this line is the investigation that led there. The `xctrace` route in it
 does **not** work and is kept only so nobody retries it.
 
-### Why the GUI step cannot currently be automated: it is an entitlement
+### ~~Why the GUI step cannot currently be automated: it is an entitlement~~
+
+> **RETRACTED 2026-08-23. This whole section's conclusion is wrong.** An ordinary
+> unentitled process *can* drive the stack: loading `GPUToolsTransportAgents.framework`
+> makes launchd resolve the bundle-scoped `GPUToolsAgentService`, and `DYXPCTransport
+> -connect` then makes launchd **spawn that entitled agent for us** (measured: a second
+> agent pid appears next to Xcode's). We never need `gputools.client` ourselves - the agent
+> holds it and acts on our behalf, exactly as it does for Xcode. The "89-message protocol"
+> below is also wrong: that is the entire GPU tools vocabulary, and the replay path is six
+> messages whose kind values are recoverable by calling the exported
+> `GTMessageKindAsString()`. See `perf/headless-replay-probe.md`. The factual material
+> below (entitlement table, MTLReplayer launch-constraint behaviour) is still good; only
+> the conclusion is retracted.
+
 
 Traced to the end on 2026-08-23. The replay engine is a real command-line tool:
 
@@ -461,8 +474,10 @@ Two further mechanics, so nobody re-tests them:
   tell: it is not working, it is blocked. It is an `LSUIElement` app that expects to be
   driven over XPC, not run standalone.
 
-So the GUI step in `skills/metal-gpu-profile` stays manual. It is not a gap in our
-knowledge any more; it is a permission boundary.
+~~So the GUI step in `skills/metal-gpu-profile` stays manual. It is not a gap in our
+knowledge any more; it is a permission boundary.~~ **Retracted - see the banner above. It
+is not a permission boundary, and the two mechanics in this bullet list are still the
+correct reasons not to drive `MTLReplayer` standalone.**
 
 ### Why xctrace was the wrong mechanism
 
@@ -483,7 +498,13 @@ over a capture we already have, rather than making Instruments sample counters l
 **Do not re-derive any of the above.** Ranked leads: (1) drive the replayer /
 `GPUToolsShaderProfiler` over an existing `.gputrace`; (2) get the instrument to select
 profile enum 3; (3) find the service path that lets `AGXGPURawCounterSourceGroup`
-instantiate. Until one lands, GPU counters are unavailable here.
+instantiate. ~~Until one lands, GPU counters are unavailable here.~~
+
+**Lead (1) is live as of 2026-08-23** and is no longer speculative: the transport connects
+and the entitled agent spawns on our behalf. Work it in `perf/headless-replay-probe.md`,
+not here. Note that GPU counters were never actually blocked - registers, spill and
+instruction mix have been available all along via a GUI replay; what was blocked was doing
+it without the click.
 
 **What is usable today** without any of that: dispatch geometry from the GPU capture,
 `GPUTimestamp` for GPU-side timing, and the offline spill probe.

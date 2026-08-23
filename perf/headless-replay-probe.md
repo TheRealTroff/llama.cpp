@@ -1,0 +1,227 @@
+# Driving the GPU trace replay without the Xcode GUI
+
+Status: **open**, but the blocking question is **answered**: the replay stack is reachable
+from an ordinary unentitled process. `toolchain-isa-probe.md`'s "it is a permission
+boundary" conclusion is **wrong** and is struck there. What is left is the message
+sequence, not a permission fight.
+
+Motivation: step 2 of `skills/metal-gpu-profile` is the only manual step, and one click
+pins the whole workflow to a machine you are sitting at.
+
+---
+
+## THE RESULT: an unentitled process can make launchd spawn the entitled agent
+
+Measured 2026-08-23, from a plain venv python, no entitlements, no Accessibility grant,
+no SIP change, Xcode running but not driven:
+
+```
+loaded: GPUToolsCore + GPUToolsTransportAgents
+DYXPCTransport init -> <DYXPCTransport 0x600002df6a30>
+connect   -> True
+CONNECTED after ~0.1s
+connected -> True     invalid -> False     error -> (nil)
+agent pids: ['67688'] -> ['67688', '69326']      <- 69326 is OURS
+```
+
+`67688` is Xcode's agent. **`69326` was spawned for us.** That is
+`GPUToolsAgentService.xpc`, which holds `com.apple.private.gputools.client` and
+`com.apple.private.gputoolstransportd` - exactly the entitlements the earlier note said we
+could never get behind. We do not need them: the agent holds them and works on our behalf,
+which is the whole point of the privilege split, and is precisely how Xcode (itself
+entitlement-free) drives the stack.
+
+Probe: `perf/xpc-connect-probe.py`.
+
+### How we differ from Xcode: we do not, at this layer
+
+The one axis that mattered was **XPC service name resolution**, and it is not a wall:
+
+| probe | bare python | after dlopen of `GPUToolsTransportAgents.framework` |
+|---|---|---|
+| `com.apple.gputools.GPUToolsAgentService` | Connection **invalid** | Connection **interrupted** |
+| `com.apple.gputools.GPUToolsCompatService` | Connection **invalid** | Connection **interrupted** |
+| `com.apple.gputools.service` (mach, the daemon) | Connection interrupted | Connection interrupted |
+
+`invalid` = the name does not resolve. `interrupted` = it resolved, we connected, the peer
+hung up. Loading the framework flips the bundle-scoped services from one to the other, so
+**launchd will resolve an XPCService buried in Xcode's plugin bundle for any process that
+loads the owning framework.** Xcode itself loads `GPUDebugger.ideplugin` lazily at runtime,
+so it is doing the same thing we are.
+
+Read the raw-libxpc `interrupted` results as a **red herring**, not a rejection: that probe
+sent an unframed `{probe: 1}` dictionary to services that expect DY framing. Using the real
+client (`DYXPCTransport`) instead, the connection succeeds and stays up with `error == nil`.
+
+Other things checked, so nobody re-checks them:
+
+- `GPUToolsAgentService` has **no launch constraints** (`codesign -d -vvvv` -> `flags=0x0(none)`).
+  That is what killed direct exec of `MTLReplayer` (`exit 137`); it does not apply here.
+- Its `Info.plist` declares `ServiceType = Application`.
+- **No crash reports** were produced by any of this, and the only gputools name registered
+  in `gui/$UID` is `com.apple.gputools.service` - the bundled ones are resolved by bundle,
+  not by the global namespace.
+- System-side binaries (`GPUToolsReplay`, `GPUToolsDeviceServices`) are in the **dyld shared
+  cache**, only resources on disk. Anything on the service side needs cache extraction.
+  Xcode-side frameworks are real files, which is why this was tractable.
+
+## The client stub was in the tree all along
+
+`GPUToolsCore.framework` in `Xcode.app/Contents/SharedFrameworks` - on disk, and already
+loaded by `perf/gputrace-dump.py`. Enumerated live through the ObjC runtime:
+
+```
+DYXPCTransport      -initWithAMDIdentifier:  -connect  -connected  -_sendMessage:error:
+DYTransport         -send:error:  -send:error:replyQueue:timeout:handler:
+                    -sendNewMessage:error:replyQueue:timeout:handler:  -invalidate
+DYTransportMessage  +messageWithKind:payload:  (+ attributes/plist/string/object/bool variants)
+```
+
+`-connect` is **asynchronous**: it returns YES immediately and `connected` stays NO until
+the handshake lands. Pump a runloop and it flips in ~0.1 s. Tearing the transport down
+straight after `-connect` reads as failure and is not.
+
+## The protocol is six messages, not 89
+
+The "bespoke 89-message protocol" in `toolchain-isa-probe.md` counted the entire GPU tools
+vocabulary - capture, guest-app lifecycle, breakpoints, overlays, thumbnails, file
+streaming. The replay path is a handful, and the kind values are exact: they come from
+`GPUToolsCore`'s exported `GTMessageKindAsString()`, which can just be called in a loop
+(`perf/dymessage-kinds.py`). 94 kinds recovered; the ones that matter:
+
+| kind | message | role |
+|--:|---|---|
+| 1290 | `kDYMessageGPUToolsVersionQuery` | harmless two-way handshake test |
+| 4096 | `kDYMessageReplayerAppReady` | replayer announces itself |
+| 4116 | `kDYMessageReplayerArchivesDirectoryPath` | where archives live |
+| 4114 | `kDYMessageReplayerLoadArchives` | load the `.gputrace` |
+| **4098** | **`kDYMessageReplayerReplayArchive`** | **the top-level action** |
+| 4100 | `kDYMessageReplayerReplayFinished` | completion |
+| 1541 | `kDYMessageGuestAppProfilingData` | the payload coming back |
+
+Kinds are banded: 256 capture, 512 breakpoints, 1024 resources, 1280 daemon, 1536 guest
+app, 4096 replayer.
+
+## Two-way messaging works, and the agent is NOT the replayer
+
+Measured 2026-08-23 with `perf/dy-send-probe.py`. Sent
+`kDYMessageGPUToolsVersionQuery` (1290) over the agent transport:
+
+```
+send:error:                  -> True   err: (nil)
+send-with-reply              -> True   err: (nil)
+reply kind=1290, payload 314 bytes starting "bplist00"
+```
+
+Decoded, the payload is an **NSKeyedArchiver** archive of an NSDictionary - not a bare
+plist:
+
+```
+{'interpose_version_metal': 0, 'interpose_version': 1572864}
+```
+
+So the payload convention is a keyed archive; `DYTransportMessage` has
+`archiver:willEncodeObject:` to match, and `+messageWithKind:objectPayload:` is the
+constructor to reach for rather than `plistPayload:`.
+
+**The replayer kinds do not work on this transport.** 4096 `ReplayerAppReady`,
+4115 `ReplayerQueryLoadedArchivesInfo` and 4116 `ReplayerArchivesDirectoryPath` all
+returned `sent=True, err=nil` and then fired the handler with a **nil reply**. The agent
+accepts and drops them. Note the banding: 1290 is in the 1280 *daemon* band and works
+here; 4096+ is the *replayer* band and needs the replayer's own endpoint.
+
+That endpoint is reachable. Same differential as before:
+
+| name | bare | frameworks loaded |
+|---|---|---|
+| `com.apple.gputools.GPUToolsReplayService` | Connection **invalid** | Connection **interrupted** |
+
+So `GPUToolsReplayService.xpc` resolves for us too once the owning frameworks are loaded.
+`GPUToolsDeviceServices.framework` dlopens fine straight out of the shared cache, though
+`objc_copyClassNamesForImage` reports 0 classes at that path, so its client classes (if
+any) need finding another way.
+
+### Call ABI, recovered from type encodings
+
+```
+DYTransportMessage +messageWithKind:                 @20@0:8i16      kind is int
+DYTransportMessage +messageWithKind:payload:         @28@0:8i16@20
+DYTransportMessage -kind                             i16@0:8
+DYTransport -send:error:                             B32@0:8@16^@24
+DYTransport -send:error:replyQueue:timeout:handler:  B56@0:8@16^@24@32Q40@?48
+```
+
+The reply variant is `(message, NSError**, dispatch_queue_t, uint64 timeout, block)`. The
+handler block is `void (^)(DYTransportMessage *)`; a nil argument means no reply arrived.
+
+## Do not hand-roll DY messages: there is a modern object API
+
+The DY message layer is the **legacy** path (hence the `GPUDebugger.useLegacyReplayer`
+default). The current one lives in `/System/Library/PrivateFrameworks/GPUToolsTransport.framework`
+- 177 classes, a `GT<Service>XPCProxy` / `XPCDispatcher` pair per service. It dlopens from
+the shared cache like the others. The replay proxy is the top-level action the whole
+investigation was looking for:
+
+```
+GTMTLReplayServiceXPCProxy   [GPUToolsTransport]
+  -initWithConnection:serviceInfo:        @32@0:8@16@24
+  -load:error:                            B32@0:8^@24      <- load the archive
+  -profile:                               @24@0:8@16       <- THE ACTION
+  -query:  -fetch:  -fetchInto:  -decode:  -update:  -display:
+  -pause:  -resume:  -cancel:  -shaderdebug:  -raytrace:
+  -registerObserver:  -deregisterObserver:  -serviceProperties  -processInfo
+```
+
+and the bootstrap chain around it is equally explicit:
+
+```
+GTLocalXPCConnection
+  -initWithXPCConnection:messageQueue:            wrap a raw xpc_connection_t
+  -activateWithMessageHandler:andErrorHandler:
+  -sendMessageWithReplySync:error:  -sendMessage:replyHandler:  -registerDispatcher:
+
+GTLaunchServiceXPCProxy
+  -launchReplayService:error:                     <- launches the replayer
+  -resumeService:error:  -foregroundService:error:  -processStateForService:completionHandler:
+
+GTServiceProviderXPCProxy
+  -waitForService:error:  -waitForService:completionHandler:  -allServices
+  -registerService:forProcess:
+```
+
+`GTReplayConfiguration` is a codable options object (`enableValidation`, `enableCapture`,
+`enableHUD`, `forceWaitUntilCompleted`, `enableStopOnError`, ...) and is presumably what
+`-profile:` or `-load:` is configured with. Request/response types are the `GTReplay*`
+family (`GTReplayRequest`, `GTReplayRequestBatch`, `GTReplayResponse`,
+`GTReplayQuerySessionInfo`, `GTReplayFetch*`, ...).
+
+## What is left
+
+1. Assemble the chain: xpc connection -> `GTLocalXPCConnection` -> `GTLaunchServiceXPCProxy
+   -launchReplayService:error:` -> service info via `GTServiceProviderXPCProxy
+   -waitForService:error:` -> `GTMTLReplayServiceXPCProxy -initWithConnection:serviceInfo:`
+   -> `-load:error:` -> `-profile:`. Every step is a named method; none of it needs DY
+   framing or hand-built messages.
+2. Work out the payload for `ReplayArchive` (4098) - a keyed-archived dictionary, with
+   `ArchivesDirectoryPath` (4116) suggesting the archive is addressed by directory plus
+   name rather than by full path.
+3. Drive it against a capture we already produce headlessly, then poll
+   `/tmp/com.apple.gputools.profiling` until the file count holds steady (the skill's
+   oscillation gotcha applies) and run `perf/gpuprofiler-stats.py`.
+
+## Refuted along the way - do not retry
+
+- **The `GPUDebugger.ReplayOnOpen` / `ProfileOnTraceLoad` user defaults do nothing.** Both
+  set true (with `ProfileAfterReplay` already true), trace opened and untouched: no
+  replayer process, **zero** files under `/tmp/com.apple.gputools.profiling` after 180 s,
+  Xcode idle at ~1.4% CPU. The keys are read by the binary but not honoured on the
+  file-open path. **Both keys have since been deleted** (2026-08-23, Xcode closed so the
+  delete would stick); `ProfileAfterReplay` is left set, it predates this work and is
+  wanted. To re-test them: `defaults write com.apple.dt.Xcode <key> -bool YES` with Xcode
+  closed, since Xcode rewrites its prefs on quit.
+- **There is no menu item to click.** `GPUDebugger.CmdDefinition.ReplayCapture` ("Replay
+  GPU Frame Capture", action `GPUDebugger_replayCapture:`) is declared against the
+  Quicklook subeditor's Editor menu and **does not appear in the UI** on a loaded trace.
+- The accessibility route (click the "Profile GPU Trace" button by AX title) is untried and
+  now a distant fallback: it needs a one-time Accessibility grant to Terminal.app, and the
+  XPC route above does not.

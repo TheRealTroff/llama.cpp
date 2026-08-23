@@ -35,9 +35,18 @@ a whole model pass writes gigabytes; one perf case writes ~50 MB.
 open /tmp/perf-metal-<pid>.gputrace
 ```
 
-Xcode replays it and populates **Shaders**, **Counters**, **Cost Graph** and **Heat Map**.
-The replay - not the capture - is what produces the statistics. Nothing further is needed
-in the GUI; the data is on disk from this point.
+~~Xcode replays it and populates Shaders, Counters, Cost Graph and Heat Map. Nothing
+further is needed in the GUI; the data is on disk from this point.~~ **Corrected
+2026-08-23: `open` alone does nothing.** Measured - a trace left open and untouched for
+180 s spawned no replayer and wrote zero profiling files, with Xcode idle at ~1.4% CPU.
+
+You must **click "Profile GPU Trace"** in the loaded trace. That click is the replay, and
+the replay - not the capture - is what produces the statistics. It populates **Shaders**,
+**Counters**, **Cost Graph** and **Heat Map**; nothing further is needed in the GUI after
+it, and the data is on disk from that point.
+
+This click is the one manual step in the workflow and the reason it cannot be run from
+away from the machine. `perf/headless-replay-probe.md` has what has been tried.
 
 ## Step 3 - Read it (headless)
 
@@ -102,6 +111,25 @@ via an entitled helper Apple ships inside its own plugin bundle - so the privile
 not obviously impossible, just unattacked: it would mean satisfying that client check and
 speaking a bespoke 89-message `DYMessage*` protocol over raw `libxpc` (there is no
 `NSXPCConnection` interface to bind to). Full detail in `perf/toolchain-isa-probe.md`.
+
+**Two cheaper shortcuts were tried on 2026-08-23 and both failed** - do not retry them,
+see `perf/headless-replay-probe.md`:
+
+- The plugin reads `GPUDebugger.ReplayOnOpen` and `GPUDebugger.ProfileOnTraceLoad` (and
+  `GPUDebugger.ProfileAfterReplay`, already on). Setting them changes nothing: `open`ing a
+  trace with all three true produced **no replayer process and zero profiling files in
+  180 s**. The keys are read by the binary but not honoured on the file-open path.
+- The plugin also declares a command "Replay GPU Frame Capture", but **that menu item does
+  not appear in the UI** on a loaded trace, so there is nothing for AppleScript to click.
+
+The live lead is **XPC**, and it is much further along than the section above implies.
+An unentitled process can load `GPUToolsTransportAgents.framework`, open a
+`DYXPCTransport`, and have launchd **spawn the entitled agent for it** - measured, with a
+second agent pid appearing next to Xcode's. The replay path is six messages with known
+kind values (`kDYMessageReplayerReplayArchive` = 4098). What is not yet worked out is the
+payload shape. Track it in `perf/headless-replay-probe.md`; the accessibility route (click
+the button by AX title, needs a one-time Accessibility grant to Terminal.app) is now only
+a fallback.
 
 ## Gotchas
 
