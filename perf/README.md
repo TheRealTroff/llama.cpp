@@ -302,6 +302,14 @@ Current state:
   confounded** - acceptance is a property of the generated text, and the two head builds simply
   swapped acceptance between n_predict 300 and 600 (46.9/40.3 then 41.3/47.1), flipping the
   t/s delta from -15.5% to +3.2%. Use batch-1 for any cross-model speed claim.
+  **Agreement on each model's OWN greedy output (2026-08-24, `run-agreement.sh`)**: q8_0
+  accepts **94.85%** of uniform-Q4_0's tokens and **95.08%** of the q6K head's - a difference
+  that is **not significant (0.4 sigma)** even though wikitext showed +1.23 pp at ~5 sigma.
+  So **top-token agreement saturates on self-generated text** and KLD is the statistic there
+  (mean -47%, 99% -59%); on wikitext it was the reverse. No statistic is safe on every corpus.
+  Headline: both builds stay identical to q8_0 for a **median of ~13 tokens** before
+  diverging, and the head upgrade does not change that. Divergence is not degradation -
+  nothing here says which path is better.
   **`ffn-utilization.md`'s worry is resolved in Q4_0's favour: a register-tile kernel targeting
   Q4_0 does not bake in a lobotomy** - the body format is worth ~1.45 pp, not the bulk of the
   gap. Harness: `perf/run-quant-kld.sh` (M/MD overridable, ARMS filter added to

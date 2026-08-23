@@ -18,7 +18,10 @@ fi
 
 B=/Users/troff/play/llama.cpp-prod
 BIN=$B/build/bin
-W=/Users/troff/play/kvquant-experiments/data/wikitext-2-raw/wiki.test.raw
+# W is the scoring corpus. Overridable so the same machinery can score model-GENERATED
+# text instead of wikitext - see run-agreement.sh, which is what makes 'Same top p'
+# read as a greedy acceptance rate rather than a teacher-forced wikitext statistic.
+W=${W:-/Users/troff/play/kvquant-experiments/data/wikitext-2-raw/wiki.test.raw}
 REF=${REF:-/Users/troff/play/Qwen3.8-27B-conv-q8_0.gguf}
 CHUNKS=${CHUNKS:-24}
 CTX=${CTX:-2048}

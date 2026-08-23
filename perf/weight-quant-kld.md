@@ -192,6 +192,77 @@ Q4_0-targeted kernel does not lock in a lobotomy.
   +1.45 pp more agreement and a worse extreme tail, while giving up the fast paths the whole
   speculative stack is built on.
 
+## Agreement on the model's OWN generated text (2026-08-24)
+
+Everything above is teacher-forced on wikitext, which cannot see autoregressive compounding
+and is not the domain this model is used in. `perf/run-agreement.sh` closes both gaps without
+needing the two models co-resident (which would take **42.1 GiB against a 37.4 GiB Metal
+working set** - see the sizing in that file's header).
+
+The trick is that **at temperature 0 the token a model emits IS its argmax**. So generate a
+corpus with model Q, then score it with the existing KLD harness against reference P: the
+`Same top p` statistic is then exactly **the fraction of Q's own tokens that P would have
+accepted** - a greedy acceptance rate on Q's real trajectory. Each model is scored on the
+corpus **it generated**, using the 5 workloads from `acceptance-by-prompt.md`.
+
+| | wikitext (teacher-forced) | Q4_0 own traj. | q6K head own traj. |
+|---|--:|--:|--:|
+| **Same top token** | 90.746 +/- 0.185% | **94.852 +/- 0.399%** | **95.080 +/- 0.390%** |
+| Median KLD | 0.02049 | 0.00303 | **0.00062** |
+| Mean KLD | 0.05397 | 0.06642 | **0.03504** |
+| 90% KLD | 0.08562 | 0.14535 | **0.10014** |
+| 99% KLD | 0.45398 | 0.83153 | **0.34137** |
+| RMS `dp` | 6.294% | 10.215% | **7.560%** |
+| reference PPL on corpus | 6.153 | 1.288 | 1.212 |
+
+### Self-generated text has the opposite shape to wikitext
+
+Agreement is **higher** (94.9% vs 90.7%) and the **median** token is far more agreed-on
+(KLD 0.0030 vs 0.0205, 6.8x lower) - but the **disagreements are worse** (99% KLD 0.83 vs
+0.45, RMS `dp` 10.2% vs 6.3%). Greedy self-generated text is long easy stretches punctuated
+by genuine branch points; the models part company at the branch points, and harder, because
+the text has already committed to Q's path.
+
+**Neither corpus is "the truth" - they are biased in opposite directions.** Wikitext
+over-samples ambiguous positions where any model wavers; self-generated over-samples
+confident positions the generator just committed to. The real per-token agreement is
+somewhere between 90.7% and 94.9%.
+
+### The headline: both builds leave q8_0 inside a sentence
+
+At these rates, greedy output stays identical to q8_0 for a **median of ~13 tokens**
+(`ln 0.5 / ln p`): 13.1 for uniform-Q4_0, 13.7 for the q6K head, 7.1 at the wikitext rate.
+**The head upgrade does not meaningfully change how fast you leave q8_0's trajectory.**
+
+**Divergence is not degradation.** q8_0 is the higher-precision reference, not ground truth
+for quality; a different token is not necessarily a worse one. Nothing measured here says
+which path is better. That needs a task benchmark or a human read.
+
+### Methodological: top-token agreement SATURATES on self-generated text
+
+This corrects the emphasis earlier in this file. On wikitext the q6K head showed up in
+**top-token agreement** (+1.23 pp, ~5 sigma) and that is what the recommendation leaned on.
+On own-trajectory text the same comparison is **+0.228 pp with a combined 1-sigma of 0.558 -
+0.4 sigma, not significant** - while every distributional statistic moves hard (mean KLD
+-47%, median -80%, 99% -59%, RMS `dp` -26%).
+
+Both instruments agree on the **ordering**; they disagree about which statistic reveals it.
+The reason is the same bias as above: on its own trajectory the model sits at high-confidence
+positions, so the argmax rarely flips whatever the head does, while the *probabilities* it
+assigns are much better calibrated. **On self-generated text use KLD; top-token agreement is
+dominated by easy positions.** Which is the mirror image of the PPL lesson - no statistic
+here is safe on every corpus.
+
+### Confound, stated
+
+Each model generated its **own** corpus, which is the right design for "how far is this model
+from the reference on its own output" but makes the cross-model column comparison impure: the
+q6K corpus is more predictable (reference PPL 1.212 vs 1.288), and more predictable text
+scores lower KLD regardless of model. **Some unknown share of the -47% is corpus difficulty.**
+Deconfounding needs both models scored on one corpus, which necessarily puts one of them
+off-trajectory - the tension is not resolvable within a single measurement. The per-model
+numbers are each valid on their own; the ratio between columns is not.
+
 ## Methodology finding: cross-model speculative t/s is confounded
 
 **Two models that emit different text cannot be compared on speculative t/s.** Acceptance is a
