@@ -17,22 +17,29 @@ Load its frameworks into your process and make it do the work, rather than reimp
 
 The single most expensive mistake available here is spending a session on an API that
 nothing actually calls. Before building on any private API, confirm it is on the live path:
-trace the real app doing the real thing (see "Tracing what the app actually does"). One
-session concluded `-launchReplayService:` was a security boundary because it refused; the
-trace later showed Xcode **never calls it** - 97,196,011 message sends, zero occurrences.
-The door was not locked, it was the wrong door.
+trace the real app doing the real thing (see "Tracing what the app actually does"). A
+private API that exists, is well-named, and returns a plausible error can still be dead
+code; its refusal then tells you nothing about permissions.
+
+> *Example:* a session concluded `-launchReplayService:` was a security boundary because it
+> refused instantly. Tracing a real, successful run showed the app **never calls it** -
+> zero occurrences in 97,196,011 message sends. The door was not locked, it was the wrong
+> door.
 
 ## Setup that is not optional
 
+- **Use a non-SIP python.** `/usr/bin/python3` has `DYLD_*` stripped by SIP, so framework
+  loading silently fails with no useful error. Any venv/homebrew/conda python works.
+- **Point `DYLD_FRAMEWORK_PATH` at the directory holding the frameworks**, so their
+  inter-dependencies resolve. Frameworks inside an app bundle rarely load without it.
+- **ctypes, not pyobjc.** No dependency, and you need raw control of `objc_msgSend`
+  prototyping anyway (below).
+
 ```sh
+# example: Xcode's shared frameworks, with a conda python
 DYLD_FRAMEWORK_PATH=/Applications/Xcode.app/Contents/SharedFrameworks \
   ~/play/.venv-convert/bin/python3 your-probe.py
 ```
-
-- **Use a non-SIP python.** `/usr/bin/python3` has `DYLD_*` stripped by SIP, so framework
-  loading silently fails. A venv/homebrew/conda python works.
-- **ctypes, not pyobjc.** No dependency, and you need raw control of `objc_msgSend`
-  prototyping anyway (below).
 
 ## objc_msgSend must be re-prototyped per call shape
 
@@ -53,7 +60,8 @@ as `B32@0:8@16^@24` is `-(BOOL)foo:(id)a error:(NSError**)b`.
 
 ## Enumerating what is actually there
 
-`perf/gtcounter-classdump.py` is the working version. Two traps:
+Two traps, both of which produce a silent empty result rather than an error
+(`perf/gtcounter-classdump.py` in this repo is a working implementation):
 
 - **`objc_copyClassNamesForImage` wants the path dyld recorded**, which for a versioned
   bundle is `.../Versions/A/Name`, not the `.../Name` symlink you dlopen'd. Resolve it via
@@ -65,11 +73,14 @@ Finding candidates before you load anything:
 
 ```sh
 nm -gU <binary> | grep -oE "_OBJC_CLASS_\$_[A-Za-z0-9_]+" | sed 's/_OBJC_CLASS_\$_//'
-strings -a <binary> | grep -E "^[a-z][A-Za-z0-9_]*Replay[A-Za-z0-9_:]*$"   # selectors
+strings -a <binary> | grep -E "^[a-z][A-Za-z0-9_]*<Keyword>[A-Za-z0-9_:]*$"   # selectors
 ```
 
-To find *who writes a file format*, grep binaries for a filename constant it uses
-(`Counters_f_`, `.gpuprofiler_raw`). That is how `GTShaderProfiler` was located.
+**To find who writes a file format, grep binaries for a filename constant it uses.** File
+formats leak their producer through the names they create.
+
+> *Example:* grepping every binary under an app bundle for `Counters_f_` and
+> `.gpuprofiler_raw` located `GTShaderProfiler.framework` as the writer.
 
 ## Prefer the file format to the API
 
@@ -96,10 +107,12 @@ def keyed(objects, node, depth=0):
 Test `isinstance(x, plistlib.UID)` specifically. `hasattr(x, 'data')` also matches
 `plistlib.Data` and indexes `$objects` with bytes.
 
-**Binary blobs inside are often still structured.** Look for a magic string before assuming
-opacity: a 64-byte record beginning `GPRWCNTR` gave up timestamp/value/id/sequence fields to
-a stride scan. Scan candidate strides for monotonically increasing u64s - timestamps
-announce themselves.
+**Binary blobs inside are often still structured.** Check the first bytes for a magic before
+assuming opacity, then scan candidate record strides for monotonically increasing u64s -
+timestamps announce themselves, and finding one usually gives you the whole record layout.
+
+> *Example:* an opaque-looking sample buffer turned out to be 64-byte records behind a
+> `GPRWCNTR` magic, yielding timestamp, value, counter id, sequence and slot fields.
 
 ## Tracing what the app actually does
 
@@ -110,11 +123,17 @@ announce themselves.
 - **Verify the variable empirically.** `OBJC_LOG_MESSAGE_SENDS` does nothing;
   `NSObjCMessageLoggingEnabled` works. Foundation is in the dyld shared cache, so `strings`
   cannot check - run a throwaway process and look for the file.
-- **`open` does not pass your environment.** It hands off to LaunchServices. Exec the binary
-  directly: `NSObjCMessageLoggingEnabled=YES /Applications/Xcode.app/Contents/MacOS/Xcode &`.
-- **Expect ~18 MB/s and a 10-100x slowdown.** A slow app is the confirmation it took. Budget
-  disk, `zstd` the result (25x on this kind of log), and extract a focused window rather than
-  keeping the raw file.
+- **`open` does not pass your environment.** It hands the launch to LaunchServices, which
+  does not inherit your shell, so the variable silently never arrives. Exec the bundle's
+  binary directly instead: `VAR=YES /Applications/Foo.app/Contents/MacOS/Foo &`. A launch
+  done this way is also not registered with LaunchServices, so a later `open <document>`
+  may fail with `-600` until the app finishes coming up.
+- **Expect a 10-100x slowdown and a very large log.** A sluggish app is the confirmation the
+  variable took. Budget disk, `zstd` the result, and extract a focused window rather than
+  keeping the raw file - these logs compress enormously because they are so repetitive.
+
+  > *Example:* tracing Xcode ran ~18 MB/s, 4.5 GB over one interaction, zstd'ing 25x to
+  > 178 MB.
 - **Selectors only.** No arguments, no return values, no dictionary keys. It answers "which
   code path", never "which value".
 
@@ -131,9 +150,14 @@ is the tool of choice - libobjc reads that variable itself, so no injection is n
 
 ## Reading failure as information
 
-- **A crash names the parameter type.** Passing an `NSString` where a config dict was wanted
-  threw `-[NSTaggedPointerString objectForKeyedSubscript:]` from
-  `+configVariantFromConfig:`, which settled the type in one shot. Run risky probes in a
+- **A crash names the parameter type.** An unrecognized-selector exception tells you what
+  the callee tried to do with your argument, which identifies the type it wanted in one
+  shot. Deliberately passing the wrong type is a cheap probe.
+
+  > *Example:* passing an `NSString` where a config dictionary was wanted threw
+  > `-[NSTaggedPointerString objectForKeyedSubscript:]`, naming the type immediately.
+
+  Run risky probes in a
   subprocess so one abort does not take the session with it, and **flush stdout** or the
   output dies with it.
 - **Distinguish shapes of failure.** A `nil` return with no error is a rejected input. A
@@ -147,8 +171,12 @@ is the tool of choice - libobjc reads that variable itself, so no injection is n
 
 - **Nothing in `/tmp` survives.** A previous session's entire replay output and a 95 MB
   capture were gone by morning, leaving eight hand-transcribed fields. Archive as it lands.
-- **Copy only what you need.** Those replay directories are ~1 GB each, almost all
-  `Profiling_f_*.raw` frame data no reader touches; the 24 MB `streamData` was the payload.
-  Check composition before copying wholesale.
+- **Check composition before copying wholesale.** Tool output directories are often
+  dominated by bulk data no reader ever touches, with the payload a small fraction of it.
+  Measure what is actually there, and archive the part something parses.
+
+  > *Example:* replay directories were ~1 GB each, almost entirely `Profiling_f_*.raw` frame
+  > data; the 24 MB `streamData` beside it held everything that mattered. Copying them whole
+  > cost 7.9 GB in four clicks before that was noticed.
 - **macOS ships bash 3.2**: no `declare -A`. Under `set -u` it exits instantly, so a watcher
   script silently does nothing. Use a state directory instead.
