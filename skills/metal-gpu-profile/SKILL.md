@@ -122,14 +122,17 @@ see `perf/headless-replay-probe.md`:
 - The plugin also declares a command "Replay GPU Frame Capture", but **that menu item does
   not appear in the UI** on a loaded trace, so there is nothing for AppleScript to click.
 
-The live lead is **XPC**, and it is much further along than the section above implies.
+The XPC route was worked to the end on 2026-08-23 and is **closed**, though not for the
+reason the section above gives.
 An unentitled process can load `GPUToolsTransportAgents.framework`, open a
 `DYXPCTransport`, and have launchd **spawn the entitled agent for it** - measured, with a
 second agent pid appearing next to Xcode's. The replay path is six messages with known
-kind values (`kDYMessageReplayerReplayArchive` = 4098). What is not yet worked out is the
-payload shape. Track it in `perf/headless-replay-probe.md`; the accessibility route (click
-the button by AX title, needs a one-time Accessibility grant to Terminal.app) is now only
-a fallback.
+kind values, and the modern object API is `GTMTLReplayServiceXPCProxy -load:`/`-profile:`.
+**But `GTLaunchServiceXPCProxy -launchReplayService:error:` is refused instantly for an
+unentitled caller**, so the replay service never starts. Full detail, and the six things
+ruled out before calling it a refusal, in `perf/headless-replay-probe.md`. The remaining
+route is accessibility: click the button by AX title, after a one-time Accessibility grant
+to the terminal app.
 
 ## Gotchas
 

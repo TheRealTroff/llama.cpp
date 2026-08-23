@@ -277,8 +277,11 @@ Tooling, not an experiment:
   entitled `GPUToolsAgentService` for it** - measured, second agent pid next to Xcode's.
   **This retracts `toolchain-isa-probe.md`'s "it is a permission boundary" conclusion**,
   and its "89-message protocol" figure: the replay path is six messages and the kind
-  values are recoverable (`kDYMessageReplayerReplayArchive` = 4098). Left to do is the
-  payload shape. Probes: `xpc-connect-probe.py`, `dymessage-kinds.py`. Refuted en route -
+  values are recoverable. **But the privileged step is refused**: `-launchReplayService:`
+  fails instantly for an unentitled caller (0.00 s, agent survives, nothing logged), so the
+  replayer never starts and the click stays. The old note's verdict was right, its
+  mechanism wrong. Probes: `xpc-connect-probe.py`, `dymessage-kinds.py`,
+  `dy-send-probe.py`, `gt-replay-chain.py`. Refuted en route -
   the `GPUDebugger.ReplayOnOpen` / `ProfileOnTraceLoad` defaults are inert, and the
   "Replay GPU Frame Capture" menu command does not appear in the UI.
 

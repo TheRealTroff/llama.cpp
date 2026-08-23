@@ -403,17 +403,22 @@ does **not** work and is kept only so nobody retries it.
 
 ### ~~Why the GUI step cannot currently be automated: it is an entitlement~~
 
-> **RETRACTED 2026-08-23. This whole section's conclusion is wrong.** An ordinary
-> unentitled process *can* drive the stack: loading `GPUToolsTransportAgents.framework`
+> **PARTLY RETRACTED 2026-08-23 - the mechanism below is wrong, the outcome is right.**
+> Corrected again the same day after the chain was actually built: the "it is a permission
+> boundary" verdict **stands**, but this section gets the boundary in the wrong place. An
+> ordinary unentitled process *can* connect and read: loading `GPUToolsTransportAgents.framework`
 > makes launchd resolve the bundle-scoped `GPUToolsAgentService`, and `DYXPCTransport
 > -connect` then makes launchd **spawn that entitled agent for us** (measured: a second
 > agent pid appears next to Xcode's). We never need `gputools.client` ourselves - the agent
 > holds it and acts on our behalf, exactly as it does for Xcode. The "89-message protocol"
 > below is also wrong: that is the entire GPU tools vocabulary, and the replay path is six
 > messages whose kind values are recoverable by calling the exported
-> `GTMessageKindAsString()`. See `perf/headless-replay-probe.md`. The factual material
-> below (entitlement table, MTLReplayer launch-constraint behaviour) is still good; only
-> the conclusion is retracted.
+> `GTMessageKindAsString()`. **But the privileged step is genuinely refused**:
+> `GTLaunchServiceXPCProxy -launchReplayService:error:` fails instantly (0.00 s, agent
+> survives, nothing logged) for an unentitled caller, so the replay service never starts
+> and the GUI step does stay manual. See `perf/headless-replay-probe.md` for exactly what
+> was ruled out. The factual material below (entitlement table, MTLReplayer
+> launch-constraint behaviour) is still good.
 
 
 Traced to the end on 2026-08-23. The replay engine is a real command-line tool:
@@ -474,10 +479,10 @@ Two further mechanics, so nobody re-tests them:
   tell: it is not working, it is blocked. It is an `LSUIElement` app that expects to be
   driven over XPC, not run standalone.
 
-~~So the GUI step in `skills/metal-gpu-profile` stays manual. It is not a gap in our
-knowledge any more; it is a permission boundary.~~ **Retracted - see the banner above. It
-is not a permission boundary, and the two mechanics in this bullet list are still the
-correct reasons not to drive `MTLReplayer` standalone.**
+So the GUI step in `skills/metal-gpu-profile` stays manual. It is not a gap in our
+knowledge any more; it is a permission boundary. **This sentence survives, but read it with
+the banner above: the boundary is not "you cannot talk to the stack" - you can, and you are
+trusted - it is that you cannot ask it to launch the replay service.**
 
 ### Why xctrace was the wrong mechanism
 
@@ -500,9 +505,10 @@ over a capture we already have, rather than making Instruments sample counters l
 profile enum 3; (3) find the service path that lets `AGXGPURawCounterSourceGroup`
 instantiate. ~~Until one lands, GPU counters are unavailable here.~~
 
-**Lead (1) is live as of 2026-08-23** and is no longer speculative: the transport connects
-and the entitled agent spawns on our behalf. Work it in `perf/headless-replay-probe.md`,
-not here. Note that GPU counters were never actually blocked - registers, spill and
+**Lead (1) was worked to the end on 2026-08-23 and is closed**: the transport connects and
+the entitled agent spawns on our behalf, but `launchReplayService:` is refused, so the
+replayer never starts. Details and everything ruled out are in
+`perf/headless-replay-probe.md`. Do not reopen it without a new idea about that one call. Note that GPU counters were never actually blocked - registers, spill and
 instruction mix have been available all along via a GUI replay; what was blocked was doing
 it without the click.
 

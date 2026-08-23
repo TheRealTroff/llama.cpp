@@ -1,9 +1,11 @@
 # Driving the GPU trace replay without the Xcode GUI
 
-Status: **open**, but the blocking question is **answered**: the replay stack is reachable
-from an ordinary unentitled process. `toolchain-isa-probe.md`'s "it is a permission
-boundary" conclusion is **wrong** and is struck there. What is left is the message
-sequence, not a permission fight.
+Status: **closed for now - there IS a permission boundary, but not where the old note put
+it.** An unentitled process can connect, is trusted, and can read the entire service
+registry. It **cannot launch the replay service**: `launchReplayService:` is refused
+instantly. `toolchain-isa-probe.md` was wrong about the *mechanism* (we do not need the
+entitlement to talk, and there is no 89-message wire protocol to implement) and right about
+the *outcome*. The practical fallback is the accessibility route, or the click.
 
 Motivation: step 2 of `skills/metal-gpu-profile` is the only manual step, and one click
 pins the whole workflow to a machine you are sitting at.
@@ -195,9 +197,68 @@ GTServiceProviderXPCProxy
 family (`GTReplayRequest`, `GTReplayRequestBatch`, `GTReplayResponse`,
 `GTReplayQuerySessionInfo`, `GTReplayFetch*`, ...).
 
-## What is left
+## WHERE IT STOPS: launchReplayService: is refused
 
-1. Assemble the chain: xpc connection -> `GTLocalXPCConnection` -> `GTLaunchServiceXPCProxy
+The chain assembles cleanly right up to the privileged call, all from an unentitled venv
+python (`perf/gt-replay-chain.py`):
+
+```
+xpc connection to com.apple.gputools.GPUToolsAgentService   ok
+GTLocalXPCConnection -initWithXPCConnection:messageQueue:   ok
+  -isTrusted                                                True
+GTServiceProperties -initWithProtocol:GTLaunchService       ok
+GTLaunchServiceXPCProxy -initWithConnection:remoteProperties: ok
+GTServiceProviderXPCProxy -allServices                      ok - 12 services listed
+GTLaunchServiceXPCProxy -launchReplayService:error:         FALSE
+    Error Domain=com.apple.gputools.transport Code=7
+    "Encountered an XPC error: Connection interrupted"
+```
+
+The registry reads fine and names every service on the local device UDID
+`00006040-000A08AE3C89801C`: `GTLaunchService` port 1, `GTDeviceCapabilities` 2,
+`GTURLAccessProvider` 3, `GTLoopbackService` 4, `GTErrorReportService` 5, plus capture,
+telemetry, file-writer and device-browser in the 100s. **`GTMTLReplayService` is absent** -
+it only appears once launched, which is the step we cannot take.
+
+### Why this is a refusal and not a bug on our side
+
+Ruled out, each measured:
+
+- **Not a timeout.** The call returns in **0.00 s**. The agent does have a
+  `Replayer launch timed out` path; this is not it.
+- **Not a crash.** The agent pid is identical before and after all three attempts, and no
+  crash report is generated.
+- **Not a malformed request.** Tried with the correct `deviceUDID` taken from the live
+  registry, with `preferXPCService` both true and false, and `disableDisplay` both ways.
+  All six combinations fail identically. Earlier shape errors failed *differently* and
+  informatively (`-[GTServiceProperties environment]`, then `-[GTProcessInfo sessionUUID]`,
+  which is how `GTLaunchRequest` was identified as the right parameter type), so the API
+  does report shape problems distinctly.
+- **Not the connection.** `allServices` succeeds on the same connection immediately after
+  the refusal.
+- **Nothing is logged.** `GPUToolsAgentService` and `gputoolsserviced` emit nothing to the
+  unified log for any of this, so there is no denial message to quote.
+
+So: read paths are open to an unentitled caller, the privileged launch is closed. That is a
+coherent security boundary and it should be treated as one.
+
+## Not pursued, and deliberately so
+
+`gputoolsserviced` exposes `launchReplayServiceApp:error:` and
+`launchReplayServiceXPC:error:`, and the agent knows the env switches
+`MTLREPLAYER_DISABLE_REPLAY_SERVICE`, `GPUToolsReplayerPreferXPCService`, `GT_LAUNCH_UUID`,
+plus a `GPUDebugger.ReplayerEnvironment` default and an `MTLReplayerTrampoline.app` that is
+not present on this system. These are switches Xcode sets on a launch it is *already
+permitted* to make; none of them grants permission. Getting past the refusal would mean
+attacking the boundary itself - injecting into Xcode, forging entitlements, or disabling
+SIP - which is out of scope for a perf investigation.
+
+## If this is picked up again
+
+1. The accessibility route: click "Profile GPU Trace" by AX title. Needs a one-time
+   Accessibility grant to the terminal app; that is a per-machine setup cost, not a
+   per-trace one. This is the only remaining route that does not attack the boundary.
+2. ~~Assemble the chain:~~ xpc connection -> `GTLocalXPCConnection` -> `GTLaunchServiceXPCProxy
    -launchReplayService:error:` -> service info via `GTServiceProviderXPCProxy
    -waitForService:error:` -> `GTMTLReplayServiceXPCProxy -initWithConnection:serviceInfo:`
    -> `-load:error:` -> `-profile:`. Every step is a named method; none of it needs DY
