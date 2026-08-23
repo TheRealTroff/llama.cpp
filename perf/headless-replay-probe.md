@@ -1,8 +1,17 @@
 # Driving the GPU trace replay without the Xcode GUI
 
-Status: **open**. Reopened 2026-08-23 and largely answered - see "RESOLVED" below. There is
+Status: **open, but the click is gone**. Updated 2026-08-23 (third pass). The DY path has now
+been driven end to end from a script with no Xcode and no human: the replayer launches, loads
+a `.gputrace`, replays it, and the replay service collects hardware counters. See
+"HEADLESS REPLAY WORKS" below for what is measured and `perf/dy-replayer-launch.py` for the
+driver. Still open because the collected counter data is not yet pulled back to disk: the
+counter-query messages answer, but with empty results, and the request payload is built by
+`DYMTLShaderProfiler` through a delegate protocol we have not implemented. That is the one
+remaining gap and it is named precisely at the bottom of this file.
+
+~~Status: **open**. Reopened 2026-08-23 and largely answered - see "RESOLVED" below. There is
 no evidence of a permission boundary; we were calling an API Xcode never uses. Open because
-the DY path it points at has not been driven end to end yet.
+the DY path it points at has not been driven end to end yet.~~
 
 ~~Status: closed for now - there IS a permission boundary, but not where the old note put
 it.~~ An unentitled process can connect, is trusted, and can read the entire service
@@ -147,6 +156,12 @@ So `GPUToolsReplayService.xpc` resolves for us too once the owning frameworks ar
 `objc_copyClassNamesForImage` reports 0 classes at that path, so its client classes (if
 any) need finding another way.
 
+> **Superseded 2026-08-23 (third pass): connecting to that XPC name directly is not how it is
+> done, and is not needed.** The replayer is launched as a *guest app* over the agent
+> transport (`1280 kDYMessageLaunchGuestApp`), and the session's own `DYXPCTransport`
+> - `<host>::com.apple.DesktopReplayer` - is the replayer endpoint. The banding hypothesis in
+> the paragraph above was correct; see "HEADLESS REPLAY WORKS" below for the working chain.
+
 ### Call ABI, recovered from type encodings
 
 ```
@@ -201,7 +216,7 @@ GTServiceProviderXPCProxy
 family (`GTReplayRequest`, `GTReplayRequestBatch`, `GTReplayResponse`,
 `GTReplayQuerySessionInfo`, `GTReplayFetch*`, ...).
 
-## WHERE IT STOPS: launchReplayService: is refused
+## ~~WHERE IT STOPS: launchReplayService: is refused~~ (wrong door, kept for the record)
 
 The chain assembles cleanly right up to the privileged call, all from an unentitled venv
 python (`perf/gt-replay-chain.py`):
@@ -336,22 +351,211 @@ permitted* to make; none of them grants permission. Getting past the refusal wou
 attacking the boundary itself - injecting into Xcode, forging entitlements, or disabling
 SIP - which is out of scope for a perf investigation.
 
+## HEADLESS REPLAY WORKS: measured 2026-08-23
+
+`perf/dy-replayer-launch.py`, run from a plain venv python with **Xcode not running**, no
+entitlements, no Accessibility grant, no SIP change, zero human interaction:
+
+```
+profiling: traceMode=1 sendPeriod=200000000 flags=0x1f1
+replayer up after 0.21s
+  <- 1280   kDYMessageLaunchGuestApp
+  <- 1539   kDYMessageGuestAppTimebase
+  <- 1536   kDYMessageInferiorLaunched        pid=76861 GPUToolsReplayService.xpc
+  <- 1796   kDYMessageTraceModeChanged
+  <- 4096   kDYMessageReplayerAppReady
+streamArchive resolved=True
+4103 BeginDebugArchive sent=True err=(nil) reply=4105
+4106 DebugFuncStop    sent=True err=(nil) reply=4105  (payload: True)
+4118 DerivedCounterData sent=True reply=4118 payload=42 bytes
+4130 APSData           sent=True reply=4130 payload=68 bytes
+```
+
+and the replay service's own unified log for that run:
+
+```
+GPUToolsReplayService [com.apple.gputools.replay:] Pre-playing for profiling
+GPUToolsReplayService [com.apple.gputools.replay:] Rewinding for profiling
+GPUToolsReplayService [com.apple.gputools.replay:] playTo - currentIndex: 0 targetIndex: 1
+GPUToolsReplayService (GPUToolsReplay) Total RDE Counter Data for pass 0..15 ~600-800 kB each
+GPUToolsReplayService (GPUToolsReplay) Total RDE Counter Data 12761 kB
+```
+
+So the trace is replayed **and hardware counters are collected**, 16 passes, 12.7 MB, with
+nobody at the machine. That is the multiplier the stub asked for on the launch side.
+
+### The one line that was missing
+
+```objc
+[DYDesktopDeviceManager registerLocalhostIdentifier:@"127.0.0.1:25182"];
+```
+
+Without it `-[DYDesktopDevice createTransport]` takes its non-local branch
+(`initWithAMDIdentifier:connectionAddress` instead of `initWithAMDIdentifier:nil`), the
+transport never completes its handshake, and `-[DYDesktopLaunchStrategy
+performLaunch:connectFuture:timeout:]` blocks forever on `[connectFuture boolResult]` with
+**no error, no log line and no timeout**. The device manager's `-init` creates its localhost
+device with connection info `@"127.0.0.1:25182"` and `-_deviceForConnectionInfo:` compares that
+against the registered identifier to decide `localhost:YES`. Xcode calls
+`registerLocalhostIdentifier:` exactly once (1 occurrence in the 97 M-send click trace) and it
+is invisible unless you diff your own message log against the app's.
+
+### The chain, in the order it must be driven
+
+Every step is measured, and matches the click trace one for one:
+
+| step | call / message | result |
+|---|---|---|
+| 1 | `+[DYDesktopDeviceManager registerLocalhostIdentifier:@"127.0.0.1:25182"]` | required, see above |
+| 2 | `+sharedDesktopDeviceManager` -> `-allDevices` | one `DYDesktopDevice`, ~0.1 s |
+| 3 | `-[DYDesktopDevice desktopReplayerGuestAppWithDeviceRegistryID:]` | `DYDesktopApp`, bundle id `com.apple.DesktopReplayer`, `shouldLoadReplayer=1` |
+| 4 | `-[DYMTLGuestAppSession initWithGuestApp:device:deferLaunch:NO]` | session; `-transport` is a `DYXPCTransport` named `<host>::com.apple.DesktopReplayer` |
+| 5 | `-[DYGuestAppSession launch]` | `DYFuture` resolves True in ~0.1 s; launchd starts `GPUToolsReplayService.xpc` |
+| 6 | inbound `4096 kDYMessageReplayerAppReady` | replayer is up |
+| 7 | `-[DYDesktopDevice streamArchiveAtURL:destinationName:]` | resolves True immediately for a local device |
+| 8 | `4103 kDYMessageReplayerBeginDebugArchive` | reply `4105 kDYMessageReplayerDebugStatus` with the device capability dictionary |
+| 9 | `4106 kDYMessageReplayerDebugFuncStop` | reply `4105`, keyed-archive payload `True` |
+| 10 | `4104 kDYMessageReplayerEndDebugArchive` | fire and forget |
+
+`-launch` is **not** `NSTask`. `performLaunch:connectFuture:timeout:` waits on the connect
+future and then sends `1280 kDYMessageLaunchGuestApp` (kind `0x500`,
+`messageWithKind:attributes:plistPayload:`) over the agent transport; launchd spawns the
+service and the reply carries `final environment`, `error domain`, `error code`,
+`error description`. The launch dictionary we produce is byte-for-byte the shape Xcode's is:
+
+```
+{ "bundle identifier" = "com.apple.DesktopReplayer"; platformPrefix = macos;
+  shouldLoadReplayer = 1; shouldLoadCapture = 1; uuid = <GT_LAUNCH_UUID>;
+  environment = { GPUTOOLS_XCODE_DEVELOPER_PATH, GT_LAUNCH_UUID, METAL_LOAD_INTERPOSER = 1,
+                  MTLCAPTURE_DESTINATION_DEVELOPER_TOOLS_ENABLE = 1,
+                  MTLREPLAYER_ALLOW_PROGRAM_ADDRESS_TABLES = 1,
+                  MTLREPLAYER_OVERRIDE_DEVICE_REGISTRY_ID = <MTLDevice.registryID> } }
+```
+
+### How the replayer is given the trace: a sandbox extension, not a directory
+
+`4103` is what actually loads the archive, and it does it by **absolute path plus a sandbox
+extension token**, which is why `ArchivesDirectoryPath` (4116) was a red herring - the plugin
+never sends it. From `-[GPUTraceReplayController sendDebugBeginMessage:]`:
+
+```
+attrs = { "path": <absolute path to the .gputrace>,
+          "sandbox_extensions": sandbox_extension_issue_file(APP_SANDBOX_READ, path, 0) }
+stringPayload = [path lastPathComponent]
+kind = 0x1007 (4103)
+```
+
+`sandbox_extension_issue_file` is in libSystem and callable straight from ctypes. Our
+unsandboxed python can issue the token, and the sandboxed replay service reads the trace
+through it. This is the general trick for handing a file to any sandboxed Apple helper.
+
+### The replayer-band kinds DO answer - on the replayer's own transport
+
+The lead in `occupancy-next.md` section C was right. Same kinds, same process, different
+endpoint:
+
+| kind | on the **agent** transport (previous session) | on the **replayer session** transport |
+|--:|---|---|
+| 1290 `GPUToolsVersionQuery` | reply, 314 B keyed archive | reply, same |
+| 4096 `ReplayerAppReady` | `sent=True`, **nil reply** | arrives inbound as an event |
+| 4103 `BeginDebugArchive` | not tried | reply `4105` + capability dict |
+| 4106 `DebugFuncStop` | not tried | reply `4105`, payload `True` |
+| 4117 `QueryShaderInfo` | not tried | reply after **40.6 s** of real shader analysis |
+| 4118 `DerivedCounterData` | not tried | reply `4118`, 42 B = `{}` |
+| 4130 (APS data, unnamed in the enum) | not tried | reply `4130`, 68 B = `{"Streaming APS Data": false}` |
+| 4115 `QueryLoadedArchivesInfo` | `sent=True`, nil reply | still no reply |
+| 4098 `ReplayerReplayArchive` | not tried | `sent=True`, **no reply, ever** |
+
+Two things worth keeping:
+
+- **4098 is not the debugger replay.** It is only sent by
+  `-[GPUTraceReplayController replayWithExperiment:baseCaptureArchivePath:playbackMessageHandler:]`,
+  which has no caller anywhere in `GPUDebugger.ideplugin` - it is the experiments path. The
+  live replay is `4103` then `4106`. Sending 4098 with the archive name as `stringPayload` is
+  accepted and silently dropped, exactly as the disassembly says it would be built.
+- **4117 taking 40 s is the proof the replayer is doing real work for us**, not just parsing.
+
+### Where the counters go, and why they are not on disk yet
+
+`/tmp/com.apple.gputools.profiling/<trace>_stream.gpuprofiler_raw/` (the `streamData` +
+`Counters_f_*.raw` layout `perf/gpuprofiler-stats.py` and `perf/aps-*.py` read) is written by
+**`GTShaderProfiler.framework`, on the Xcode side**, not by the replay service - the only
+binary anywhere under the bundle that contains the literal `/tmp/com.apple.gputools.profiling`.
+So a bare DY replay produces counter data inside the replay service and nothing on disk.
+
+Pulling it back is a request whose payload we do not yet know how to build. The chain, all of
+it named:
+
+```
+GPUDebuggerController -_profileFrame:progressDigest:
+  -> DYMTLShaderProfiler -profileFrameAtConsistentState:(unsigned int)   [MTLToolsShaderProfiler]
+       -> -_constructPayload
+       -> -_queryStreamingAPSData:forDelegate:forFuture:forGPUTimelineFuture:
+       -> -_queryDerivedCounterDataWithDelegate:withShaderInfoResult:forPayload:...
+            calls back through <DYShaderProfilerDelegate> into
+            GPUDebuggerController -queryAPSDataWithPayload:      -> kind 0x1022 (4130)
+            GPUDebuggerController -derivedCounterInfo:           -> kind 0x1016 (4118)
+            GPUDebuggerController -queryShaderInfoWithPayload:   -> kind 0x1015 (4117)
+```
+
+`DYMTLShaderProfiler` is in `Xcode.app/Contents/SharedFrameworks/MTLToolsShaderProfiler.framework`
+and dlopens fine; `+newShaderProfilerWithDelegate:` and `-profileFrameAtConsistentState:` are
+its whole entry point. The delegate protocol `<DYShaderProfilerDelegate>` is **not registered
+with the runtime** (`objc_getProtocol` returns nil), so its selectors have to be read out of
+`MTLToolsShaderProfiler`'s disassembly and the delegate synthesised with
+`objc_allocateClassPair` / `class_addMethod`. That is the next session's job and it is bounded.
+
+**Furthest point reached, precisely:** `4106 kDYMessageReplayerDebugFuncStop` returns `True`
+and the replay service logs `Total RDE Counter Data 12761 kB`; `4130` then answers
+`{"Streaming APS Data": false}` and `4118` answers `{}` because we send an empty request
+payload.
+
+### Reproducing
+
+```sh
+DYLD_FRAMEWORK_PATH=/Applications/Xcode.app/Contents/SharedFrameworks \
+  ~/play/.venv-convert/bin/python3 perf/dy-replayer-launch.py \
+  ~/play/kvquant-experiments/traces/aug23/w4-attn_q-ext-nx16.gputrace /tmp/out
+```
+
+Watch the replay service with:
+
+```sh
+log show --last 2m --style compact --info --debug \
+  --predicate 'process == "GPUToolsReplayService"' | grep -E "profiling|RDE|playTo"
+```
+
+The replay service keeps profiling in a loop while the session lives (`traceMode=1`,
+`sendPeriod=200 ms` come from `DYInvestigatorConfig`, mirroring
+`-[GPUMTLDebuggerController setupGuestAppSession:]`), and dies with the driving process.
+
 ## If this is picked up again
 
-1. The accessibility route: click "Profile GPU Trace" by AX title. Needs a one-time
-   Accessibility grant to the terminal app; that is a per-machine setup cost, not a
-   per-trace one. This is the only remaining route that does not attack the boundary.
-2. ~~Assemble the chain:~~ xpc connection -> `GTLocalXPCConnection` -> `GTLaunchServiceXPCProxy
+1. **Build the `<DYShaderProfilerDelegate>` shim** and call
+   `-[DYMTLShaderProfiler profileFrameAtConsistentState:]`. Recover the selectors from
+   `MTLToolsShaderProfiler`'s objc metadata (`llvm-objdump --macho --objc-meta-data`), then
+   `objc_allocateClassPair` a delegate that forwards `queryAPSDataWithPayload:`,
+   `derivedCounterInfo:` and `queryShaderInfoWithPayload:` onto the live transport as
+   4130 / 4118 / 4117. Everything below that line already works.
+2. Cheaper cross-check first: send 4130 with a **non-empty** payload. The reply key is
+   literally `Streaming APS Data`, so the request almost certainly carries the same key plus a
+   frame/pass selector. One `-[DYMTLShaderProfiler _constructPayload]` disassembly settles it.
+3. `GTShaderProfiler` has a `/tmp/com.apple.gputools.profiling/gtstandalone_` prefix and a
+   `generateGTStandaloneConfigFromStreamDataOnly` option - there may be a standalone entry
+   point that skips the delegate entirely. Not looked at.
+4. ~~The accessibility route: click "Profile GPU Trace" by AX title.~~ Not needed for the
+   launch any more. It would only be a way to make Xcode itself do step 1-3 for us.
+5. ~~Assemble the chain:~~ xpc connection -> `GTLocalXPCConnection` -> `GTLaunchServiceXPCProxy
    -launchReplayService:error:` -> service info via `GTServiceProviderXPCProxy
    -waitForService:error:` -> `GTMTLReplayServiceXPCProxy -initWithConnection:serviceInfo:`
    -> `-load:error:` -> `-profile:`. Every step is a named method; none of it needs DY
    framing or hand-built messages.
-2. Work out the payload for `ReplayArchive` (4098) - a keyed-archived dictionary, with
+6. ~~Work out the payload for `ReplayArchive` (4098) - a keyed-archived dictionary, with
    `ArchivesDirectoryPath` (4116) suggesting the archive is addressed by directory plus
-   name rather than by full path.
-3. Drive it against a capture we already produce headlessly, then poll
-   `/tmp/com.apple.gputools.profiling` until the file count holds steady (the skill's
-   oscillation gotcha applies) and run `perf/gpuprofiler-stats.py`.
+   name rather than by full path.~~ Refuted: 4098 is the experiments path and has no caller;
+   4116 is never sent; the archive is addressed by absolute path in the 4103 attributes.
+7. Once counter data lands, poll `/tmp/com.apple.gputools.profiling` until the file count
+   holds steady (the skill's oscillation gotcha applies) and run `perf/gpuprofiler-stats.py`.
 
 ## Refuted along the way - do not retry
 
