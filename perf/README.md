@@ -291,6 +291,11 @@ Superseded, kept for history - do not quote numbers from these:
 
 Tooling, not an experiment:
 
+- **`occupancy-next.md` - START HERE for the counter work.** Routing stub with four options
+  (unlock the names via the processor config; identify counters by behaviour without names;
+  automate the replay over DY; or drop the counter and attack the shelf directly), each with
+  cost, payoff and a concrete first step, plus a do-not-repeat list. It also asks the
+  question worth asking first: whether an occupancy number would change any decision.
 - **`aps-counters.md` - the runtime GPU counters are in the replay output.** Four sessions
   chased them through Instruments/xctrace (0 rows, "counter profile is not supported on
   target device"). They are in `streamData` under `APSCounterData`, in the same file
