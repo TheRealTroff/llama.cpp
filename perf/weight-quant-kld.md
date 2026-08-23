@@ -79,16 +79,40 @@ file just showed to be blind to the effect. Struck there.
 
 ### The trade, sized
 
-| head format | head bytes | model | vs today | est. t/s cost |
+**Size the trade against streamed bytes, not file size.** `token_embd.weight` is another
+715.2 MB of Q4_0 in this file, but it is a `GET_ROWS` gather - a handful of rows per token,
+not a streamed tensor - so it does not belong in a bandwidth denominator. `output.weight`
+does: it is a full MUL_MAT over the 248320-row vocab, read end to end every token.
+
+```
+file on disk          14.331 GiB
+  token_embd.weight    0.666 GiB   gather, NOT streamed
+  output.weight        0.666 GiB   streamed in full every token
+streamed per token    13.665 GiB = 14.673 GB   <- the bandwidth denominator
+  head share               4.87%
+```
+
+| head format | head bytes | file | **streamed/token** | vs today |
 |---|--:|--:|--:|--:|
-| q4_0 (today) | 715 MB | 14.32 GiB | - | - |
-| q6_K | ~1.04 GB | ~14.63 GiB | +2.2% | ~-2% |
-| q8_0 | ~1.35 GB | ~14.92 GiB | +4.3% | ~-4% |
+| q4_0 (today) | 715.2 MB | 14.331 GiB | **13.665 GiB** | - |
+| q6_K | 1042.9 MB | 14.637 GiB | **13.970 GiB** | **+2.23%** |
+| q8_0 | 1350.9 MB | 14.923 GiB | **14.257 GiB** | **+4.33%** |
+
+That bandwidth cost is a floor, not an estimate: at q6_K the head also leaves the Q4_0 fast
+path, so its per-byte cost rises too. Measure it rather than predicting it.
 
 The head is **one tensor and one call per round** - 4.6 ms of 112.5 ms of MUL_MAT
 (`ffn-utilization.md`). The Q4_0 fast-path gates are per-tensor, so a q6_K head simply routes
 that one call to a different kernel; **nothing else in the stack changes and skinny still
 covers every FFN and attention projection.**
+
+### Correcting the batch-1 bandwidth figures quoted on 2026-08-23
+
+The same `token_embd` mistake inflated two achieved-bandwidth numbers taken the same day.
+With the correct streamed denominator: **uniform-Q4_0 runs at 201.9 GB/s = 74% of the 273
+peak** (not 77%), and **the q8_0 target at 226.8 GB/s = 83%** (not 87%). The comparison holds
+- q8_0 does stream more efficiently per byte, having less dequant ALU - but both figures were
+~3 points high.
 
 ## Next
 

@@ -56,8 +56,11 @@ the drafter must be the pure-Q4_0 requant. Both fast paths are hard-gated on
 > 1% of tokens above KLD 0.45 and 0.1% above 4.39. PPL alone hides this and is what our own
 > notes used to justify the recipe. **First thing to try: our `output.weight` is Q4_0 at
 > 715 MB** where standard recipes use q6_K; the head is one tensor and one call per round, the
-> fast-path gates are per-tensor, so upgrading it costs ~2% of bandwidth and changes nothing
-> else in the stack. Speculation itself is lossless (byte-identical output across configs), so
+> fast-path gates are per-tensor, so upgrading it costs **+2.23% of streamed bytes** (q6_K)
+> and changes nothing else in the stack. **Size that against streamed bytes, not file size**:
+> `token_embd.weight` is another 715 MB in the file but is a `GET_ROWS` gather, so the real
+> denominator is **13.665 GiB, not 14.33** - which also puts batch-1 at **74% of the 273 peak,
+> not 77%**. Speculation itself is lossless (byte-identical output across configs), so
 > the weight format is the only place in this stack where speed is bought with quality.
 
 **Depth must stay <= 7.** Skinny routes `ne11 <= 8` and depth d verifies d+1 columns, so
