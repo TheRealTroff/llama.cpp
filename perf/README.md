@@ -298,8 +298,13 @@ Tooling, not an experiment:
   `BMPR_RDE_0` / `Firmware`, `Uarch Enabled` true, 40 sample buffers, ~16 MB per replay,
   readable with plain `plistlib`. **This retracts `toolchain-isa-probe.md`'s "unreachable"
   verdict for the replay path** (it stands for Instruments). Still open: the 35 names are
-  hashed with no on-disk table, and the sample payload is undecoded. `aps-counters.py`,
-  `gtcounter-classdump.py`, `gtcounter-probe.py`.
+  hashed with no on-disk table (tested against 535 vendor names x 8 variants x 7 digests).
+  **The sample format IS decoded** (round 3): 64-byte `GPRWCNTR` records carrying timestamp,
+  value, counter id, sequence and slot - 99,478 of them parse out of one capture, and
+  `XRGPUAPSDataProcessor -loadCounterGraphConfig` yields the 456-counter named catalogue
+  (saved at `perf/ref/agx-counter-graph.json`). The one missing link is `-loadCounters:`,
+  which needs a config the processor has not been given. `aps-counters.py`,
+  `aps-samples.py`, `aps-decode.py`, `gtcounter-classdump.py`, `gtcounter-probe.py`.
 
 - **`watch-replays.sh` - run this before clicking "Profile GPU Trace".** Xcode writes replay
   statistics into `/tmp/com.apple.gputools.profiling`, and on 2026-08-23 an entire session's
@@ -309,20 +314,21 @@ Tooling, not an experiment:
   dumps it both ways. Matching is automatic - the archive records its own `traceName`.
   **Corollary for captures: never leave a `.gputrace` in `/tmp` either.**
   `run-capture-set.sh` archives to `~/play/kvquant-experiments/traces/<date>/`.
-- **`headless-replay-probe.md`** - removing the one manual step in
-  `skills/metal-gpu-profile` (the "Profile GPU Trace" click). **Status open, but the
-  blocking question is answered:** an unentitled process loads
-  `GPUToolsTransportAgents.framework`, opens a `DYXPCTransport`, and launchd **spawns the
-  entitled `GPUToolsAgentService` for it** - measured, second agent pid next to Xcode's.
-  **This retracts `toolchain-isa-probe.md`'s "it is a permission boundary" conclusion**,
-  and its "89-message protocol" figure: the replay path is six messages and the kind
-  values are recoverable. **But the privileged step is refused**: `-launchReplayService:`
-  fails instantly for an unentitled caller (0.00 s, agent survives, nothing logged), so the
-  replayer never starts and the click stays. The old note's verdict was right, its
-  mechanism wrong. Probes: `xpc-connect-probe.py`, `dymessage-kinds.py`,
-  `dy-send-probe.py`, `gt-replay-chain.py`. Refuted en route -
-  the `GPUDebugger.ReplayOnOpen` / `ProfileOnTraceLoad` defaults are inert, and the
-  "Replay GPU Frame Capture" menu command does not appear in the UI.
+- **`headless-replay-probe.md` - OPEN, and the most actionable thread here.** Removing the
+  "Profile GPU Trace" click, which is no longer a convenience: it gates the entire GPU
+  counter path (`aps-counters.md`), so every counter measurement costs a human at the
+  machine. **2026-08-23: Xcode never calls `-launchReplayService:`.** Traced with
+  `NSObjCMessageLoggingEnabled=YES` over a real click - 97,196,011 message sends, and
+  `launchReplayService` / `GTLaunchService` / `GTMTLReplayService` / `GTLocalXPCConnection`
+  / `MTLReplayerTrampoline` all appear **zero** times, against 268 `DYXPCTransport`. The
+  launch is `GPUTraceSession -setupAndStartReplayer:` over the **legacy DY path**. So the
+  earlier "it is a permission boundary" verdict is dead - we were testing an API nobody
+  uses - and so is the missing-trampoline theory. Still open: driving DY end to end, since
+  replayer-band kinds (4096+) return nil on the *agent* transport and the replayer's own endpoint
+  is the target. Probes: `xpc-connect-probe.py`, `dymessage-kinds.py`, `dy-send-probe.py`,
+  `gt-replay-chain.py`, `replay-trace-capture.sh`. Refuted en route: the
+  `GPUDebugger.ReplayOnOpen` / `ProfileOnTraceLoad` defaults are inert, and the "Replay GPU
+  Frame Capture" menu command does not appear in the UI.
 
 Unrelated to this investigation: `sharp-template.md`.
 

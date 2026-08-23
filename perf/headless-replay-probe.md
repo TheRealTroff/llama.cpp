@@ -1,7 +1,8 @@
 # Driving the GPU trace replay without the Xcode GUI
 
-Status: **REOPENED and largely answered 2026-08-23 - see "RESOLVED" below. There is no
-evidence of a permission boundary; we were calling an API Xcode never uses.**
+Status: **open**. Reopened 2026-08-23 and largely answered - see "RESOLVED" below. There is
+no evidence of a permission boundary; we were calling an API Xcode never uses. Open because
+the DY path it points at has not been driven end to end yet.
 
 ~~Status: closed for now - there IS a permission boundary, but not where the old note put
 it.~~ An unentitled process can connect, is trusted, and can read the entire service
