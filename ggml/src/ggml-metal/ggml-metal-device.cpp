@@ -752,7 +752,20 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_nc(ggml_m
     static const int env_nsg = getenv("GGML_MV_NC_NSG") ? atoi(getenv("GGML_MV_NC_NSG")) : 0;
     const int nsg = env_nsg > 0 ? env_nsg : 2;
 
-    snprintf(base, 256, "kernel_mul_mv_%s_%s_nc%d", ggml_type_name(op->src[0]->type), ggml_type_name(op->src[1]->type), nc);
+    // v2 = base-pointer addressing, no live ax[]/yb[] arrays (no spill at nc3)
+    static const int env_v2 = getenv("GGML_MV_NC_V2") ? atoi(getenv("GGML_MV_NC_V2")) : 0;
+
+    // GGML_MV_NC_NR0=<n>: rows per simdgroup. Default 4 spills 80 B/thread at nc4; NR0=3 is
+    // spill-free there (12 outputs/SG), measured offline with perf/agx-spill-probe.py against
+    // the v2 map in toolchain-isa-probe.md. Only instantiated for nc4 (_nr1/_nr2/_nr3).
+    static const int env_nr0 = getenv("GGML_MV_NC_NR0") ? atoi(getenv("GGML_MV_NC_NR0")) : 0;
+    const int nr0 = (env_v2 && nc == 4 && env_nr0 >= 1 && env_nr0 <= 3) ? env_nr0 : 4;
+
+    char nrsuf[16] = "";
+    if (nr0 != 4) {
+        snprintf(nrsuf, sizeof(nrsuf), "_nr%d", nr0);
+    }
+    snprintf(base, 256, "kernel_mul_mv_%s_%s_nc%d%s%s", ggml_type_name(op->src[0]->type), ggml_type_name(op->src[1]->type), nc, env_v2 ? "_v2" : "", nrsuf);
     snprintf(name, 256, "%s_nsg=%d_ne12=%d_r2=%d_r3=%d", base, nsg, ne12, r2, r3);
 
     ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
@@ -769,7 +782,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_nc(ggml_m
         ggml_metal_cv_free(cv);
     }
 
-    res.nr0  = 4;
+    res.nr0  = nr0;
     res.nr1  = nc;
     res.nsg  = nsg;
     res.smem = 0;
