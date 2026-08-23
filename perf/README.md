@@ -55,6 +55,28 @@ d=8 drops onto mul_mm and the round cost doubles. dflash clamps itself to 7 via 
 drafter's block size; **MTP does not** - `--spec-draft-n-max 8` is accepted and lands at
 11.9 t/s, slower than not speculating at all (slope-sweep.md).
 
+### GGML_MV_REPACK is worth +9.3% and is NOT in the pick above (2026-08-23)
+
+**Measured, clean controls (0.29% spread): dflash n6 + `GGML_MV_REPACK=1` is 27.07 t/s
+against a 24.74 same-run control** - round cost 151.5 -> 138.5 ms at identical
+committed/rd. See `width4-skinny-ab.md`. That is better than every number in this file.
+
+**The pick is deliberately unchanged for now**, because repack still doubles Q4_0 weight
+residency (+15 GB on the 27B). The owner's position (2026-08-23) is that the duplication is
+fixable with a load-time transform that replaces rather than duplicates the weights, and
+that the flag should be probed meanwhile. **Do not quietly adopt it into the pick without
+resolving residency; do not quietly ignore it either.**
+
+Note what went wrong here, because it is a repeatable failure: `a559a52d9` filed repack as a
+**negative result** and `mtp-kv-results.md` excluded it as "+15 GB for ~0.4 t/s". Both were
+fair when written - at MTP d4, on a stack without the skinny kernel, the GDN writeback fusion
+or the FA mm-split. Each of those flattened the verify curve and changed what repack competes
+against. **A negative result is the easiest number to stop re-checking. Check its date and
+its config before trusting it.**
+
+Repack is not a general win - it pays only where the kernel reads the deinterleaved `_di`
+copy. At width 4 it *hurts* ext (146.6 -> 161.9 ms/round) and *helps* skinny (148.8 -> 135.3).
+
 ### Current number
 
 **25.02 t/s** (dflash n6, `n_predict` 300). prod `9f477ae5`, clean tree, build 2026-08-22
