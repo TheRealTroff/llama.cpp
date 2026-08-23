@@ -194,6 +194,21 @@ Current state:
   Two side findings: the caffeination caveat is settled (caffeinated numbers reproduce the
   archived ones to within 4%), and cross-session drift is ~3% while within-session repeats
   agree to <1%, so always re-baseline in the same session.
+  **Runs 3-6 are in. Read the file's Status block first - it lists what is now dead.**
+  Run 3: `ext` is the right family at widths 3-4 (nc +43%, skinny +16%), and **`nxpsg=16` is
+  the live lever**, confirmed by replay-measured register counts (identical at 73, so the
+  win is dispatch geometry, not register pressure). Run 4: the width 3-4 path encodes **two**
+  dispatches - the f16y convert plus the matmul - and only widths 3-4 take it under prod
+  routing, but it is a **win, not a tax** (`GGML_MV_EXT_F16Y=0` costs +17.3% at width 4).
+  Run 5: the f16y size gate is keyed on `ne00*ne01` when the mechanism scales with `ne01`
+  alone, which is why `attn_q` gains nothing from it. Run 6: extending `nxpsg=16` to widths
+  3-4 (branch `metal-mv-ext-nxpsg-w34`, `GGML_MV_EXT_NXPSG16_MAX`) is worth **-1.5% to
+  -1.7%** on a pass, a third of what the per-shape tables implied. **Two cautions from run
+  6**: `ne00 % 256 == 0` is a *correctness* guard (forcing `nxpsg=16` past it gives NaN), and
+  the **e2e arm of that run is invalid - its n6 control failed at -6.1%** on a byte-identical
+  workload, so quote no e2e number from 2026-08-23. **None of this moves the prod pick**,
+  which sits at n6 / width 7 / skinny where widths 3-4 never occur.
+  Ten captures spanning the cliff are archived at `~/play/kvquant-experiments/traces/aug23/`.
 - `slope-sweep.md` - the small-batch slope, the ne11=9 skinny cliff, and both depth
   sweeps. Supersedes the "MTP d1 is optimal, don't re-run" note: the optimum is now d6.
   Run it with `run-slope-sweep.sh`.
@@ -270,6 +285,14 @@ Superseded, kept for history - do not quote numbers from these:
 
 Tooling, not an experiment:
 
+- **`watch-replays.sh` - run this before clicking "Profile GPU Trace".** Xcode writes replay
+  statistics into `/tmp/com.apple.gputools.profiling`, and on 2026-08-23 an entire session's
+  worth was gone by morning along with the 95 MB oMLX capture: only eight fields that had
+  been hand-transcribed into `width4-verify.md` survived, and `gpuprofiler-stats.py --all`
+  had never been run on them. The watcher copies each replay out of `/tmp` as it lands and
+  dumps it both ways. Matching is automatic - the archive records its own `traceName`.
+  **Corollary for captures: never leave a `.gputrace` in `/tmp` either.**
+  `run-capture-set.sh` archives to `~/play/kvquant-experiments/traces/<date>/`.
 - **`headless-replay-probe.md`** - removing the one manual step in
   `skills/metal-gpu-profile` (the "Profile GPU Trace" click). **Status open, but the
   blocking question is answered:** an unentitled process loads

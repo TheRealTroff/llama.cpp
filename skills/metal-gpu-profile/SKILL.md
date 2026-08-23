@@ -55,6 +55,12 @@ python3 perf/gpuprofiler-stats.py            # newest replay
 python3 perf/gpuprofiler-stats.py --all      # every field
 ```
 
+**Start `perf/watch-replays.sh` before step 2 and this happens by itself**, archived out of
+`/tmp` and dumped both ways. Do it: the replay output lives in
+`/tmp/com.apple.gputools.profiling` and does not survive. On 2026-08-23 a whole session of it
+was gone by morning and only eight hand-transcribed fields were left, with `--all` never run.
+The same applies to the `.gputrace` itself - move it somewhere durable before you rely on it.
+
 Real output, `mul_mv_ext` at nr0=2 on an M4 Pro:
 
 ```

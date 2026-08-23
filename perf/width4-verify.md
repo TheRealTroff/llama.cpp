@@ -3,6 +3,26 @@
 Status: **open**. Opened 2026-08-22 from `mlx-cycle-capture.md` open stubs 1 and 2, plus a
 new kernel-level measurement taken the same day (below).
 
+Where it stands after runs 4-6 (2026-08-23), so a new session does not re-run these:
+
+- **The shelf is still unexplained.** Three candidate causes are now measured and dead: the
+  register tile (run 2), `nr0` (run 1), and the f16y convert dispatch (run 4). The tile is
+  off the table, `ext` is the right family (run 3), and the convert is a win, not a tax.
+- **`nxpsg=16` at widths 3-4 is the one live lever**, worth **-1.5% to -1.7%** on a
+  `llama-bench` pass at N=3/N=4 (run 6) - about a third of what run 3's per-shape table
+  implied. It needs the `ne00 % 256 == 0` guard kept; that condition is correctness, not a
+  heuristic (run 6). Code lives on branch `metal-mv-ext-nxpsg-w34`, unmerged.
+- **The e2e question is open and its 2026-08-23 attempt is invalid** - the n6 control failed
+  at -6.1% on a byte-identical workload. Do not quote an e2e number from that run.
+- **None of this can move the prod pick**, which sits at n6 / width 7 / skinny. See the last
+  section of run 6.
+- New since run 3: `attn_q` is inert to f16y and loses on `nxpsg`, and run 5 shows why - the
+  f16y gate is keyed on `ne00*ne01` when the mechanism scales with `ne01` alone.
+- Ten captures spanning the cliff are archived at
+  `~/play/kvquant-experiments/traces/aug23/` with headless dumps, waiting on replay clicks.
+  Replay output is auto-archived by `perf/watch-replays.sh` - do not let it die in `/tmp`
+  again.
+
 **Read the width convention first.** Their block *b* verifies *b* columns; our depth *d*
 verifies *d+1* (`spec_epoch.py:2247-2257` vs `slope-sweep.md:13`). Everything here is stated
 in **width**. Their block 4 == our depth 3.
@@ -375,8 +395,268 @@ floor, not a bound.
 
 ### Next
 
-Confirm on llama-bench before touching the gate - the per-shape split means the net effect
-is an aggregation question that arithmetic over these tables will not settle honestly.
+~~Confirm on llama-bench before touching the gate - the per-shape split means the net effect
+is an aggregation question that arithmetic over these tables will not settle honestly.~~
+**Done 2026-08-23, see run 6.** The first attempt at it was invalid; read run 6 before
+quoting any aggregate number for `nxpsg=16`.
+
+## Measurement conditions for runs 4-6 (2026-08-23) - read before quoting a level
+
+**The machine was standing in direct sun for all of these runs**, on AC and caffeinated.
+Johan flagged it mid-session and moved it afterwards, so nothing here was taken in a
+controlled thermal state. Two things follow, and the second is the one that matters:
+
+- **Every absolute number in runs 4-6 is provisional.** The size of it: the n6 e2e control
+  reproduced the archived prod-pick output sha (`3776c0adb7ee`) and acceptance (41.3%)
+  *exactly* while running **4.5% slower** than the archived 22.899 t/s. Identical work,
+  identical output, slower machine. That is the drift, measured rather than assumed.
+- **The ratios are load-bearing and are built to survive it.** Every A/B here alternates its
+  arms inside one block, and every one carries controls that must read flat - widths 1, 2, 5
+  in run 4, the two below-gate ne01 rows in run 5, six control cells in run 6, n6 in the e2e.
+  A thermal excursion that moved a verdict would have to move the treated cells without
+  moving the controls sitting minutes away from them.
+
+This is the same levels-vs-ratios split the "Caffeination status" note above draws, with a
+stronger reason for it. When these get re-taken in a controlled state, expect the levels to
+shift by a few percent and the deltas to hold.
+
+## Run 4 (2026-08-23): the width 3-4 path encodes two dispatches, and the second one pays
+
+Found by dumping the one capture that survived the previous session,
+`/private/tmp/perf-metal-67662.gputrace` (50 MB, width 4 `ffn_down`, prod config).
+**Everything else that session produced was in `/tmp` and is gone**: the replay output under
+`/tmp/com.apple.gputools.profiling` and the 95 MB oMLX capture `/tmp/dflash-b4.gputrace`.
+Only the eight SUMMARY fields transcribed into run 3 survive, and `gpuprofiler-stats.py
+--all` was never run on them. That is why run 4's capture set is archived out of `/tmp`.
+
+The dump shows each MUL_MAT node encoding **two** dispatches, not one:
+
+```
+"MUL_MAT" +- kernel_cpy_f32_f16               {272,1,1} x {256,1,1}
+          +- kernel_mul_mv_ext_q4_0_f16_r1_4  {320,1,1} x {32,2,1}
+```
+
+272 = `nw0*ne11` = (17408/256)*4. It is the f16y activation convert
+(`ggml-metal-ops.cpp:2856-2896`) with a `ggml_metal_op_concurrency_reset` between the two,
+which is a real `memoryBarrier` (`:207-216`). The design is deliberate and documented at
+`results.md:279-287`, size gate included.
+
+What was **not** on record is the routing consequence. `use_f16y` needs `ne11 >= 2`, and
+under prod env widths 1-2 go to `mul_mv`/`nc` and widths 5+ to skinny, so only widths 3-4
+reach the ext f16y path at all. Measured, not inferred (`perf/run-f16y-ab.sh` logs it):
+
+| width | ffn_down pipelines under prod env |
+|---|---|
+| 1 | `kernel_mul_mv_q4_0_f32_nsg` |
+| 2 | `kernel_mul_mv_q4_0_f32_nc2_nsg` |
+| **3** | **`kernel_cpy_f32_f16`** + `kernel_mul_mv_ext_q4_0_f16_r1_3_nsg=2_nxpsg=8_nr0=2` |
+| **4** | **`kernel_cpy_f32_f16`** + `kernel_mul_mv_ext_q4_0_f16_r1_4_nsg=2_nxpsg=8_nr0=2` |
+| 5 | `kernel_mul_mm_skinny_q4_0_f32_ne12` |
+
+So the convert is a width-3/4-only mechanism in the shipping config, sitting exactly on the
+cliff. Pre-registered as a possible hidden tax on it, bounded at under 20 us.
+
+**Refuted, and in the direction the design predicted.** `GGML_MV_EXT_F16Y=0` against the
+default, prod env, 3 interleaved reps, arms alternating inside one block:
+
+| shape | w3 f16y=1 | w3 f16y=0 | delta | w4 f16y=1 | w4 f16y=0 | delta |
+|---|--:|--:|--:|--:|--:|--:|
+| ffn_gate/up | 279.39 | 307.69 | +10.1% | 353.44 | 370.90 | +4.9% |
+| **ffn_down** | 336.73 | 338.96 | +0.7% | **359.61** | **421.82** | **+17.3%** |
+| gdn_qkv | 108.94 | 117.85 | +8.2% | 126.28 | 147.42 | +16.7% |
+| **attn_q** | 65.51 | 66.06 | +0.8% | **75.19** | **75.62** | **+0.6%** |
+
+Controls - widths 1, 2 and 5, all four shapes, both arms - every cell within +-1.5%, which
+is the single-rep noise floor. **The convert is not a tax on the cliff.** It is worth up to
+62 us at width 4 `ffn_down` and removing it makes widths 3-4 worse. Do not reopen it as a
+cliff component.
+
+One arm is soft: width 4 ffn_gate/up at f16y=0 read 379.39 / 378.38 / 354.93, so its +4.9%
+is really nearer +7.5% with one outlier rep. Every other cell has under 1% within-arm spread.
+
+**What survives is `attn_q`**: +0.6% at width 4, inside noise, while ffn_down and gdn_qkv
+take +17.3% and +16.7%. It passes the size gate comfortably (ne00*ne01 = 5120*3072 = 15.7M
+against a gate of 8M). It is also the one shape that *loses* on `nxpsg=16` (+8.3%, run 3).
+Same shape, both levers, no explanation on record. Run 5 is that explanation.
+
+## Run 5 (2026-08-23): the f16y size gate is keyed on the wrong dimension
+
+Pre-registered from run 4, then measured (`perf/run-f16y-ne01-sweep.sh`). Hold ne00 at 5120
+and sweep ne01, because:
+
+```
+convert cost   ~ ne00*ne11         one pass over the activations, independent of ne01
+matmul saving  ~ ne01*ne00*ne11    halved y-loads, once per output row
+ratio          ~ ne01              ne00 cancels
+```
+
+so a gate on `ne00*ne01` (`:2799-2800`) is wrong-dimensioned. Prediction: the win tracks
+ne01 and is near zero at small ne01 whatever ne00 is.
+
+| ne01 | ne00*ne01 | w3 f16y=1 | w3 f16y=0 | delta | w4 f16y=1 | w4 f16y=0 | delta |
+|---|--:|--:|--:|--:|--:|--:|--:|
+| 1024 | 5.2M (below gate) | 27.90 | 27.71 | -0.7% | 32.50 | 32.50 | +0.0% |
+| 1280 | 6.6M (below gate) | 28.39 | 28.40 | +0.0% | 32.80 | 32.91 | +0.3% |
+| 3072 | 15.7M | 61.72 | 62.55 | +1.4% | 75.02 | 75.25 | **+0.3%** |
+| 4096 | 21.0M | 76.65 | 81.95 | +6.9% | 88.87 | 101.80 | **+14.5%** |
+| 6144 | 31.5M | 108.33 | 117.15 | +8.1% | 126.96 | 147.63 | +16.3% |
+
+**Held.** The two below-gate rows are controls - f16y is inactive in both arms there - and
+they read flat, so the harness is measuring f16y and not drift. Above the gate the win is
+monotone in ne01 and **steps hard between ne01 3072 and 4096**: +0.3% then +14.5% at width
+4. At ne00 = 5120 the gate admits everything from ne01 = 1638 up, so it passes a whole band
+where f16y does nothing, and `attn_q` (ne01 = 3072) sits in it. That is the run 4 anomaly.
+
+**This is a characterisation, not a win.** f16y at ne01 = 3072 is neutral, not harmful, so
+raising the gate would save a dispatch and a scratch allocation and buy no measurable time.
+Its value is the mechanism: f16y's benefit scales with how many output rows the shape has,
+which is the same axis `nxpsg` moves. Nothing is committed; the gate is unchanged.
+
+Do not over-fit these to a fixed-overhead model - gross-saving-minus-constant does not fit
+the three above-gate points (it predicts +3.6 us at ne01 3072 against +0.85 measured), so
+the collapse at small ne01 is sharper than that model allows.
+
+## The capture set, and what widths 1-2 were doing all along
+
+`perf/run-capture-set.sh` takes ten captures across the cliff, archives them **out of
+`/tmp`** (`~/play/kvquant-experiments/traces/aug23`, 424 MB) and dumps each headlessly.
+Captures are free and need no GUI; the replay click is the expensive step, so keeping them
+is what makes a click worth spending later.
+
+Dispatch geometry at `ffn_down` (ne01 = 5120), threadgroups x threads:
+
+| width | route | matmul grid | threads/tg | convert grid |
+|---|---|--:|--:|---|
+| 1 | `mul_mv` | **640** | 64 | - |
+| 2 | `mul_mv` nc2 | **640** | 64 | - |
+| 3 | ext nxpsg=8 | **320** | 64 | 204 x 256 |
+| 4 | ext nxpsg=8 | **320** | 64 | 272 x 256 |
+| 3 | ext nxpsg=16 | **640** | 64 | 204 x 256 |
+| 4 | ext nxpsg=16 | **640** | 64 | 272 x 256 |
+| 4 | ext, f16y=0 | 320 | 64 | - (single dispatch) |
+| 5 | skinny | {1,160,1} | 64 | - |
+
+**Widths 1-2 already run 640 threadgroups. Crossing to width 3 halves the grid to 320, and
+`nxpsg=16` puts it back to 640.** Run 3 saw 320 vs 640 within width 4 only and read it as
+occupancy; the captures show 640 is what the cheap widths were doing all along, so the
+width-3 cliff coincides with a 2x grid collapse rather than with a new kernel that merely
+happens to be narrow. Arithmetic: ext `r0ptg = (32/nxpsg)*nsg*nr0` is 16 at nxpsg=8 and 8 at
+16, and 5120/16 = 320, 5120/8 = 640.
+
+`attn_q` (ne01 = 3072) runs 192 threadgroups at nxpsg=8 and 384 at 16 - the smallest grid in
+the set, and the one shape that loses on the lever.
+
+Two cautions for anyone reading these dumps:
+
+- Selector names come out `(null)` in this build, so read by shape. `memoryBarrierWithScope:`
+  reads as `(null)(<enc>, 1ul)`; the f16y arm records 127 of them against 63 in every other
+  arm, consistent with the extra barrier the convert inserts. It is **not** one per node -
+  the baseline arms hold 63 across anywhere from 141 to 561 dispatches - so do not count
+  barriers per iteration.
+- There is still no timing and no counter anywhere in a dump (`toolchain-isa-probe.md:237`).
+
+## Run 6 (2026-08-23): the nxpsg cutoff, aggregated - and two invalid attempts first
+
+Run 3's `### Next`. Branch `metal-mv-ext-nxpsg-w34` adds `GGML_MV_EXT_NXPSG16_MAX` (default
+3, the shipping cutoff) so one binary runs both arms:
+
+```
+ne00 % 256 == 0 && ne11 < env_nx16_max     ggml-metal-ops.cpp:2769-2777
+```
+
+**Attempt 1 was invalid and its numbers must not be quoted.** It used the pre-existing
+`GGML_MV_EXT_NXPSG=16`, which forces nxpsg for every ext call and thereby also bypasses the
+`ne00 % 256 == 0` condition. That condition is **correctness, not a heuristic**: forced,
+MUL_MAT fails with NaN on `kernel_mul_mv_ext_f16_f32_r1_2` at ne00 = 128 (two cases,
+`type_a=f16`, m=64 and m=83 - `MTL0=nan CPU=-4.979980`). The harness that did this has been
+deleted rather than struck: a note that is wrong can carry a correction, but a runnable
+script that silently measures a NaN-producing kernel is a trap. Both arms of the real
+experiment pass the full MUL_MAT suite, 3/3 backends, 0 failing cases.
+
+**Attempt 2 was confounded.** It ran max=3 then max=5 in every rep, so the machine warming
+inside a rep was charged to whichever arm ran second: the N=1 control - bit-identical
+routing in both arms, so it must read flat - came out +2.1% while the N=2 control read
+-0.3%. Alternating the arm order between reps fixes it and the controls then agree.
+
+### Pass cost, 4 reps, arm order alternating
+
+`llama-bench -n 0 -p 1..8`, prod-pick env, `perf/run-nxpsg-gate.sh`:
+
+| N | max=3 (ship) | max=5 | delta | role |
+|---|--:|--:|--:|---|
+| 1 | 77.14 | 76.44 | -0.9% | control, identical routing |
+| 2 | 78.13 | 77.91 | -0.3% | control, identical routing |
+| **3** | **105.22** | **103.40** | **-1.7%** | affected |
+| **4** | **116.13** | **114.36** | **-1.5%** | affected |
+| 5 | 122.48 | 122.97 | +0.4% | control, skinny |
+| 6 | 125.06 | 125.32 | +0.2% | control, skinny |
+| 7 | 126.70 | 126.67 | -0.0% | control, skinny |
+| 8 | 127.39 | 127.75 | +0.3% | control, skinny |
+
+Six control cells inside +-0.9%, so that is the floor and the N=3/N=4 signal is about twice
+it. Routing was logged, not assumed: at max=5 widths 3-4 load
+`..._nsg=2_nxpsg=16_nr0=2` and widths 1, 2, 5 are untouched.
+
+**The pre-registered bound was wrong and in the optimistic direction.** Weight-bytes
+reasoning over run 3's per-shape table (-5.0%/-3.2% on ffn_down, -7.4%/+0.1% on
+ffn_gate/up) predicted -3% to -5%. Measured: **-1.5% to -1.7%.** The per-shape wins dilute
+by roughly a factor of three once everything else in a pass - attention, GDN, norms, FA, and
+the `attn_q`-class shapes that lose - is included. This is exactly what run 3 refused to
+settle by arithmetic over those tables, and it was right to refuse.
+
+### The e2e arm is INVALID - its control failed
+
+**No end-to-end number from 2026-08-23 should be quoted.** The design was: A/B at dflash n3
+(depth 3 = width 4, the affected point and oMLX's operating point) with dflash n6 (width 7,
+skinny) as a control that must read flat. `perf/run-nxpsg-e2e.sh`, n_predict 600, warmup
+discarded, arms alternating.
+
+| config | max=3 | max=5 | delta | arms overlap? |
+|---|--:|--:|--:|---|
+| n3, width 4 (affected) | 18.463 | 18.667 | +1.1% | yes |
+| **n6, width 7 (CONTROL)** | **21.818** | **20.479** | **-6.1%** | **no** |
+
+**The control moved six times further than the treated cell, and in the wrong direction.**
+`GGML_MV_EXT_NXPSG16_MAX` cannot reach width 7 - skinny does not consult `nxpsg`, and the
+n6 runs emit a byte-identical output sha and an identical 41.3% acceptance in both arms, so
+they are provably doing the same work. The -6.1% is the machine, not the flag. Raw n6
+readings across roughly ten minutes on that byte-identical workload: 21.600, 20.540, 20.418,
+22.035 - a **7.9% spread**. The laptop was in direct sun.
+
+**Why the pass-cost half survived the same conditions and this did not.** `llama-bench`
+measures N=1..8 inside one invocation, so the controls (N=1,2,5..8) and the treated cells
+(N=3,4) share whatever the machine is doing at that moment; drift between invocations moves
+all eight together and the controls bound it. The e2e harness produces **one number per
+server invocation**, so between-invocation drift *is* the measurement and no amount of
+alternating fixes it. ABBA cancels a linear trend and is maximally confounded with a
+non-monotone one, which is what the n6 block looks like (outer pair high, inner pair low).
+
+Redo this in a controlled thermal state, with more reps, and keep the n6 control. Until it
+reads flat, the e2e question is open.
+
+### What the e2e run did establish
+
+- **The two n3 arms produce different text, deterministically.** All four `max=3` runs give
+  sha `a08f1b87121c` (2246 B) and all four `max=5` runs give `3776c0adb7ee` (2249 B), across
+  the whole session. `nxpsg` changes the reduction order along the row, one near-tie flips,
+  and the divergence is inside a degenerate repetition loop in the tail ("This is a" vs
+  "This is"). Benign, but it means the arms run different accepted-token sequences, so e2e
+  t/s is not comparing identical work even once the thermals are fixed.
+- **Output identity is a within-depth invariant, not a cross-kernel one.** README's "all
+  runs emit byte-identical text regardless of speculation config" holds for the flags tested
+  there; it does not survive a kernel change that reorders a reduction. `3776c0adb7ee` is
+  the archived n_predict-600 reference and n6 reproduces it exactly in both arms.
+- **Acceptance is exactly reproducible per arm** - 60.2% / 59.7% / 41.3% every time - which
+  is how the arms were confirmed to be doing the work they were supposed to.
+
+### And none of this can move the prod pick
+
+Worth stating plainly, because a -1.7% pass-cost win reads like a prod improvement and is
+not one. **The prod pick is dflash n6, which verifies 7 columns and routes to
+`mul_mm_skinny`. Widths 3-4 do not occur in it.** This lever only matters if width 4 becomes
+a viable operating point, and today n3 is our *worst* depth (20.462 t/s at n_predict 300
+against 25.038 at n6, `slope-sweep.md:56`). The width-4 work is about reaching oMLX's
+operating point, not about speeding up ours.
 
 ## Superseded plan: port the V2 base-pointer rewrite to `ext`
 
