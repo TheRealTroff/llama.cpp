@@ -183,6 +183,33 @@ calls/round) ~1.9. The head+top-k lattice pipeline alone is ~30% of the drafter.
 16.43 → 16.34 ms, e2e 25.15 → 25.13, sha unchanged — ≤0.1 ms, despite the serial-graph
 argument for why it might translate here. Keep it out of the prod pick.
 
+## MUL_MAT by projection (2026-08-23) - the decomposition this file was missing
+
+Per-round cost of each real projection at the prod width, weights checked against the GGUF's
+tensor list and counts against this file's own tagged profile. Regenerate with
+`perf/weighted-round.py --width 7`; it reproduces the 120.3 ms total to 1.8%.
+
+| projection | x/round | us/call | ms/round | share of MUL_MAT | GB/s | % of peak |
+|---|--:|--:|--:|--:|--:|--:|
+| `ffn_gate` + `ffn_up` | 128 | 354.7 | 45.4 | 37.7% | 139 | 51% |
+| `ffn_down` | 64 | 433.1 | 27.7 | 23.0% | 116 | 42% |
+| `attn_qkv` | 48 | 227.1 | 10.9 | 9.1% | 129 | 47% |
+| `attn_output` + `ssm_out` | 64 | 158.8 | 10.2 | 8.4% | 121 | 44% |
+| `ssm_alpha` + `ssm_beta` | 96 | 80.7 | 7.7 | 6.4% | - | - |
+| `attn_gate` | 48 | 148.2 | 7.1 | 5.9% | 125 | 46% |
+| `output` (lm_head) | 1 | 4458.8 | 4.5 | 3.7% | 158 | 58% |
+| `attn_q` | 16 | 264.6 | 4.2 | 3.5% | 132 | 48% |
+| `attn_k` + `attn_v` | 32 | 87.3 | 2.8 | 2.3% | - | - |
+| **total** | | | **120.5** | | | |
+
+Two things this makes visible that the op-class table above cannot:
+
+- **The FFN is half the round.** 73.1 of 120.5 ms of MUL_MAT, and MUL_MAT is 76% of verify
+  ticks in a round whose verify is 87%. Nothing else is close: the next projection is 10.9.
+- **Every projection runs at 42-58% of the memory roof**, against 87-90% for the same weights
+  at batch 1, and each reads its matrix exactly once per call either way. That is the verify
+  slope stated as utilization, and it is now its own open task: **`ffn-utilization.md`**.
+
 ## Final lever board (end of day)
 
 1. ~~**Verify GPU slope: 130.0 ms at N=7 = 1.79x over the 72.8 floor** vs oMLX implied

@@ -143,7 +143,7 @@ against our 144.9. Our curve is flat but high; theirs is steep with a cheap shel
 > the n3 round at **141.0 ms** (`slope-sweep.md`). What is missing is a *round decomposition*
 > at depth 3. See **`width4-verify.md`**.
 
-## Three traps that have each cost a day
+## Four traps that have each cost a day
 
 **1. n_predict is not comparable across harnesses.** Generation grows the KV cache, so
 the same config reads ~25 t/s at `n_predict` 300 and ~23 at 600. `RUN_GDN_FUSE.sh` and
@@ -164,7 +164,14 @@ real projections, each carrying its calls-per-round from the tagged profile so a
 result can be weighted before it is believed. Read shapes out of the GGUF
 (`gguf-py`, `GGUFReader`) or out of a tagged profile - not out of a comment.
 
-**3. Record a commit sha with every number.** head-to-head-cooled.md recorded a date and
+**3. Some flags are silently inert in `test-backend-ops`, and a flat A/B there is not a
+refutation.** `GGML_MV_REPACK` needs `src0->buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS`,
+and `test_mul_mat` only overrides the one-argument `build_graph(ctx)`, so its src0 never
+reaches `ctx_weights` and the buffer is never marked. The flag then does nothing and the
+arms read flat. **The pipeline name is the tell** - repack routes to a `_di` kernel, so if
+the compiled name has no `_di`, the flag did not engage. Check the name, not just the number.
+
+**4. Record a commit sha with every number.** head-to-head-cooled.md recorded a date and
 no sha, 24 commits landed under it, and the rot stayed invisible until someone compared
 against it and reported a bogus +5.8%.
 
@@ -257,6 +264,17 @@ Current state:
   nxpsg reading at width 3 as well as 4 (registers identical, instruction count slightly
   *higher* at nxpsg=16, so the win is grid geometry) and measure f16y halving device loads
   16 -> 8.
+- **`ffn-utilization.md` - OPEN, and on today's evidence the largest lever on the board.**
+  Every projection in the verify pass reads its weights exactly once per call, so achieved
+  bandwidth is a utilization number - and at the prod width **nothing exceeds 58% of peak
+  (ffn_down 42%, ffn_gate/up 51%) while batch 1 hits 87-90% on the same bytes**. The width-7
+  pass costs about twice what streaming the matrix requires. The two FFN projections are
+  73.1 of the 120.5 ms of MUL_MAT per round, so **the FFN is roughly half the round** and a
+  20% cut there is ~15 ms of the 23.3 ms cross-framework gap. Compatible with
+  `verify-slope-close.md`, which refuted overhead *beside* the matmuls; this is about the
+  matmuls themselves. **Note before starting: at width 7 the FFN runs on
+  `kernel_mul_mm_skinny`, so every kernel result from the width-3/4 investigation - the
+  K-split included - is about a kernel the prod pick never executes.**
 - **`ksplit-width34.md` - OPEN, and the best result of 2026-08-23.** Splits K across
   simdgroups (`GGML_MV_EXT_KP`, new `_ks` kernel on branch `metal-mv-ext-ksplit`, unmerged),
   which is the one structural feature of their `verify_m4` we had never tried. **-5.4% /
