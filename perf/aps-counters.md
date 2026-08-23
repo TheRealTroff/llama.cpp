@@ -1,6 +1,6 @@
 # The runtime GPU counters are in the replay output, not behind Instruments
 
-Status: **open, and much closer than it was.** The counter data four sessions chased through
+Status: **open. Container decoded, sample format decoded, names still unresolved.** The counter data four sessions chased through
 Instruments/xctrace has been sitting in the replay output the whole time. The container is
 decoded and readable in pure Python with no GUI, no Instruments, no entitlement and no ObjC.
 Two things remain: the 35 counter names are hashed, and the sample payload is not decoded.
@@ -57,11 +57,13 @@ Xcode replay collects them anyway and writes them next to the compile statistics
    counter values, which is exactly the shape this investigation wants. Enumerate with
    `perf/gtcounter-classdump.py`.
 
-2. **`ShaderProfilerData` is a raw sample buffer**, not an archive, so it needs a format.
-   The sibling `Counters_f_*.raw` / `Timeline_f_*.raw` / `Profiling_f_*.raw` are the same
-   data unarchived: `GTMioTraceData +traceDataFromURL:error:` rejects all three with
-   `NSCocoaErrorDomain 4864` (not a keyed archive). Do not spend time pointing keyed-archive
-   readers at them.
+2. ~~**`ShaderProfilerData` is a raw sample buffer**, not an archive, so it needs a
+   format.~~ **Format cracked - see "Round 3".** Still true and worth keeping: the sibling
+   `Counters_f_*.raw` / `Timeline_f_*.raw` / `Profiling_f_*.raw` are not keyed archives
+   (`GTMioTraceData +traceDataFromURL:error:` -> `NSCocoaErrorDomain 4864`), so do not point
+   keyed-archive readers at them. **They are referenced by name from the archive**: the 20
+   `APS_USC` records carry `APSTraceDataFile: Counters_f_<n>.raw` instead of an inline
+   payload, which is why those files must be archived alongside `streamData`.
 
 ## Why this matters for width4-verify.md
 
@@ -122,6 +124,47 @@ given; `-setConfig:`, `-counterConfigForGRC:counterSet:` and
   md5, blake2b, blake2s): zero hits. The counter-graph config contains no `_<64 hex>`
   strings at all, so it is not the mapping either. Whatever those hashes key, it is an
   internal driver namespace, not the friendly or vendor names.
+
+## Round 3 (2026-08-23): the sample format, cracked
+
+Johan's observation - that the shape of the contents should give away the identity of a
+counter - is what prompted this, and it got the format open even though it has not yet
+produced a name.
+
+The samples are in the one `APSCounterData` entry carrying `Derived Counter Sample Data`
+(a `list(16)` of `list(5)` of `list(1)` of bytes). Every byte blob is a run of **64-byte
+records** behind an 8-byte magic:
+
+```
+ 0   char[8]  "GPRWCNTR"
+ 8   u64      timestamp     strictly increasing within a blob
+16   u64      value         the reading
+24   u64      field3        small, 0..6 - candidate counter id within a slot
+32   u64      sequence      +1 across the whole stream
+40   u64      timestamp2    a second, coarser clock
+48   u64      sample index  0,1,2,... within the blob
+56   u64      slot          matches the list(5) position
+```
+
+99,478 records parse cleanly out of `w3-ffn_down-ext-nx8` with the magic checking on every
+one. `(slot, field3)` gives **23 distinct series**. `perf/aps-samples.py` does this in pure
+`plistlib` + `struct` - no frameworks, no GUI.
+
+One series identifies itself by shape already: **slot 4 / field3 6** carries ~96k samples
+and reads 8961.6 in the nxpsg=8 arm against 8962.3 in the nxpsg=16 arm - flat to 0.008%
+across a change that moves wall-clock by 5%. That is a clock or fixed-rate tick, not a
+workload counter.
+
+**What this does NOT yet support, and the script says so in its own output.** The two arms
+return very different sample counts for the same series (244 vs 81 on several), so the
+aggregation windows differ and a ratio of means is *not* a ratio of the underlying
+quantity. Several series do move a lot - `(2,3)` 0.405, `(1,3)` 0.449, `(3,3)` 0.524, and
+`(1,5)` 2.505 - and a counter that halves when the grid doubles is exactly what a
+per-threadgroup quantity would do, but with unequal sampling and no names that is a lead,
+not a measurement. `aps-samples.py` flags every unsafe ratio rather than printing it plain.
+
+So: still no occupancy number. What changed is that the values are now in hand, which makes
+the identification problem a data problem rather than a reverse-engineering one.
 
 ## Next
 
