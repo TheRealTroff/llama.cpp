@@ -28,8 +28,12 @@ fi
 
 B=/Users/troff/play/llama.cpp-prod
 BIN=$B/build/bin
-M=/Users/troff/play/Qwen3.8-27B-uniform-Q4_0.gguf
-MD=/Users/troff/play/Qwen3.8-27B-DFlash2-pureQ4_0.gguf
+# M/MD are overridable so this harness can measure a different target without anyone
+# hand-rolling a server invocation - that is the trap the whole file exists to prevent.
+# ARMS filters which labels run (substring match, space separated); default is all of them.
+M=${M:-/Users/troff/play/Qwen3.8-27B-uniform-Q4_0.gguf}
+MD=${MD:-/Users/troff/play/Qwen3.8-27B-DFlash2-pureQ4_0.gguf}
+ARMS=${ARMS:-}
 PORT=8093
 OUT=/Users/troff/play/kvquant-experiments/results
 TAG=${TAG:-prodpick-$(date +%m%d-%H%M)}
@@ -45,6 +49,8 @@ MTP_SPEC=(--spec-type draft-mtp --spec-draft-n-max 1)
 BASE_SPEC=(--spec-type none)
 
 echo "=== prod pick benchmark: $TAG ==="
+echo "target : $M"
+echo "drafter: $MD"
 echo "repo   : $B"
 echo "commit : $(cd "$B" && git rev-parse --short HEAD) on $(cd "$B" && git rev-parse --abbrev-ref HEAD) ($(cd "$B" && git status --porcelain | wc -l | tr -d ' ') files dirty)"
 echo "binary : $(date -r "$BIN/llama-server" '+%Y-%m-%d %H:%M')"
@@ -55,6 +61,9 @@ echo
 # label, n_predict, env-array-name, spec-array-name
 run_one() {
   local label=$1 npred=$2 envname=$3 specname=$4
+  if [ -n "$ARMS" ]; then
+    case " $ARMS " in *" $label "*) ;; *) return 0 ;; esac
+  fi
   local slog="$OUT/$TAG-$label.server.log"
   local -a envv specv
   eval "envv=(\"\${$envname[@]}\")"

@@ -50,6 +50,16 @@ Model files are not interchangeable: the target must be the byte-uniform Q4_0 bu
 the drafter must be the pure-Q4_0 requant. Both fast paths are hard-gated on
 `GGML_TYPE_Q4_0`, so a K-quant drafter silently misses them (drafter-quant-routing.md).
 
+> **That gate is a quality decision made by a performance constraint, and it is now priced -
+> `weight-quant-kld.md` (2026-08-23).** Against q8_0 reference logits, uniform-Q4_0 costs
+> **+2.5% PPL** but agrees on the top token only **90.75%** of the time - 1 argmax in 11 - with
+> 1% of tokens above KLD 0.45 and 0.1% above 4.39. PPL alone hides this and is what our own
+> notes used to justify the recipe. **First thing to try: our `output.weight` is Q4_0 at
+> 715 MB** where standard recipes use q6_K; the head is one tensor and one call per round, the
+> fast-path gates are per-tensor, so upgrading it costs ~2% of bandwidth and changes nothing
+> else in the stack. Speculation itself is lossless (byte-identical output across configs), so
+> the weight format is the only place in this stack where speed is bought with quality.
+
 **Depth must stay <= 7.** Skinny routes `ne11 <= 8` and depth d verifies d+1 columns, so
 d=8 drops onto mul_mm and the round cost doubles. dflash clamps itself to 7 via the
 drafter's block size; **MTP does not** - `--spec-draft-n-max 8` is accepted and lands at
@@ -264,6 +274,16 @@ Current state:
   nxpsg reading at width 3 as well as 4 (registers identical, instruction count slightly
   *higher* at nxpsg=16, so the win is grid geometry) and measure f16y halving device loads
   16 -> 8.
+- **`weight-quant-kld.md` - OPEN, and it is about the actual goal rather than about kernels.**
+  What the Q4_0 gate costs, measured against q8_0 logits: +2.5% PPL, mean KLD 0.054, and
+  **90.75% same top token**. The tail is heavy (99% KLD 0.454, 99.9% 4.386, max 24.1) and PPL
+  is blind to it, which retires `mtp-kv-results.md`'s "premium tensors bought nothing
+  measurable". Next step is a **q6_K output head** requantized from the q8_0 intermediate we
+  already have, re-measured against the kept reference logits (~12 min): our `output.weight`
+  is Q4_0 at 715 MB, a quantized head produces top-token disagreement specifically, and the
+  fix costs ~2% of bandwidth. Harness: `perf/run-quant-kld.sh` (M/MD overridable, ARMS filter
+  added to `run-prod-pick.sh` the same day). **Read this before building any kernel that
+  hard-gates on Q4_0.**
 - **`ffn-utilization.md` - OPEN, and on today's evidence the largest lever on the board.
   Runs 1-2 are in (2026-08-23) and they correct the file's own diagnosis - read its Status
   block first.** The width-7 pass really does cost ~2x and the FFN really is ~half the round

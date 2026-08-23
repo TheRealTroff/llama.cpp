@@ -261,10 +261,22 @@ conversion. File: ~/play/Qwen3.8-27B-uniform-Q4_0.gguf.
 | acceptance at d4 | 60% | 58% |
 | PPL wikitext 30ch | 6.5879 +/- 0.094 | **6.5286 +/- 0.091** |
 
-The recipe's premium tensors bought nothing measurable on wikitext and cost
+~~The recipe's premium tensors bought nothing measurable on wikitext and cost
 ~2.1 ms/token of weight bytes — confirmed end-to-end, and quality did not
 regress (if anything the fresh-from-bf16 quantization is marginally better
-than unsloth's despite the q8_0 intermediate).
+than unsloth's despite the q8_0 intermediate).~~
+
+**CORRECTED 2026-08-23, see `weight-quant-kld.md`. Both claims were PPL-only
+judgements and PPL is the wrong instrument for a quant decision.** Measured
+against q8_0 reference logits, uniform-Q4_0 costs +2.5% PPL — which is what
+the row above sees and waves through — but only **90.75% same top token**,
+i.e. 1 argmax in 11 differs from q8_0, with 1% of tokens above KLD 0.45 and
+0.1% above 4.39. The comparison in this table is Q4_0 against Q4_0, so it
+establishes that our recipe is not worse than unsloth's; it says nothing
+about what the format costs. The one premium tensor that most likely does
+buy something is the one this recipe dropped: **our `output.weight` is Q4_0
+at 715 MB**, where unsloth's is q6_K, and a quantized output head produces
+top-token disagreement specifically. Untested; it is next step 1 there.
 
 Floor scoreboard (ms/token batch-1): 79 this morning -> 72.7 (CPY fast path)
 -> 69.6 (uniform file). oMLX: ~66. Remaining ~5%: GET_ROWS tuning, gs64-class
