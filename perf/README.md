@@ -328,12 +328,24 @@ Tooling, not an experiment:
   / `MTLReplayerTrampoline` all appear **zero** times, against 268 `DYXPCTransport`. The
   launch is `GPUTraceSession -setupAndStartReplayer:` over the **legacy DY path**. So the
   earlier "it is a permission boundary" verdict is dead - we were testing an API nobody
-  uses - and so is the missing-trampoline theory. Still open: driving DY end to end, since
+  uses - and so is the missing-trampoline theory. ~~Still open: driving DY end to end, since
   replayer-band kinds (4096+) return nil on the *agent* transport and the replayer's own endpoint
-  is the target. Probes: `xpc-connect-probe.py`, `dymessage-kinds.py`, `dy-send-probe.py`,
+  is the target.~~ **2026-08-23, third pass: the DY path now runs end to end with no human.**
+  `dy-replayer-launch.py` launches `GPUToolsReplayService.xpc` as a guest app, loads a
+  `.gputrace` (`4103` + a `sandbox_extension_issue_file` token), replays it (`4106` -> True)
+  and the replay service logs `Total RDE Counter Data 12761 kB` over 16 passes. The
+  replayer-band kinds DO answer on the session's own transport, confirming the banding
+  hypothesis. **The click is gone from the launch.** Still open: the counter data stays inside
+  the replay service - `4118` answers `{}` and `4130` answers `{"Streaming APS Data": false}`
+  because the request payload is built by `DYMTLShaderProfiler` through the unregistered
+  `<DYShaderProfilerDelegate>` protocol, and `/tmp/com.apple.gputools.profiling` is written by
+  Xcode-side `GTShaderProfiler`, not by the replayer. Probes: `dy-replayer-launch.py` (the
+  driver), `xpc-connect-probe.py`, `dymessage-kinds.py`, `dy-send-probe.py`,
   `gt-replay-chain.py`, `replay-trace-capture.sh`. Refuted en route: the
-  `GPUDebugger.ReplayOnOpen` / `ProfileOnTraceLoad` defaults are inert, and the "Replay GPU
-  Frame Capture" menu command does not appear in the UI.
+  `GPUDebugger.ReplayOnOpen` / `ProfileOnTraceLoad` defaults are inert, the "Replay GPU
+  Frame Capture" menu command does not appear in the UI, and kind `4098`
+  (`ReplayerReplayArchive`) is the experiments path with no caller - it is accepted and
+  dropped, the live replay is `4103` then `4106`.
 
 Unrelated to this investigation: `sharp-template.md`.
 
