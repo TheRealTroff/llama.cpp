@@ -330,6 +330,16 @@ stock GPU ones simply select none (`Counter Set: (null)`). That is a configurati
 a driver wall. The `counterprofile` / `countersshaderprofiler` keys named above are the
 lever, and the group names here are the values they are choosing between.
 
+> **SUPERSEDED for the replay path, 2026-08-23 (later the same day) - see
+> `aps-counters.md`.** Everything below is correct about **Instruments/xctrace**, which does
+> return 0 counter rows. It is wrong as a general verdict: the **Xcode replay collects the
+> counters anyway** and writes them into `streamData` under the key `APSCounterData` - 35
+> counters across `APS_USC`, `RDE_0`, `BMPR_RDE_0` and `Firmware`, with `Uarch Enabled` true
+> and 40 populated sample buffers. Readable with plain `plistlib`, no Instruments, no
+> entitlement, no GUI. The names are hashed and the payload is undecoded, so this is not yet
+> a number - but "the counters are unreachable" is retracted. Do not re-run the xctrace
+> experiments below expecting a different answer; start from `aps-counters.md`.
+
 ### Tried on 2026-08-23. Still blocked, but the block is now exact.
 
 **The entry point is an instrument, not a template.** `xcrun xctrace list instruments`

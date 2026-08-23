@@ -291,6 +291,16 @@ Superseded, kept for history - do not quote numbers from these:
 
 Tooling, not an experiment:
 
+- **`aps-counters.md` - the runtime GPU counters are in the replay output.** Four sessions
+  chased them through Instruments/xctrace (0 rows, "counter profile is not supported on
+  target device"). They are in `streamData` under `APSCounterData`, in the same file
+  `gpuprofiler-stats.py` already reads: 35 counters across `APS_USC` / `RDE_0` /
+  `BMPR_RDE_0` / `Firmware`, `Uarch Enabled` true, 40 sample buffers, ~16 MB per replay,
+  readable with plain `plistlib`. **This retracts `toolchain-isa-probe.md`'s "unreachable"
+  verdict for the replay path** (it stands for Instruments). Still open: the 35 names are
+  hashed with no on-disk table, and the sample payload is undecoded. `aps-counters.py`,
+  `gtcounter-classdump.py`, `gtcounter-probe.py`.
+
 - **`watch-replays.sh` - run this before clicking "Profile GPU Trace".** Xcode writes replay
   statistics into `/tmp/com.apple.gputools.profiling`, and on 2026-08-23 an entire session's
   worth was gone by morning along with the 95 MB oMLX capture: only eight fields that had
