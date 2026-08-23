@@ -242,6 +242,33 @@ Ruled out, each measured:
 So: read paths are open to an unentitled caller, the privileged launch is closed. That is a
 coherent security boundary and it should be treated as one.
 
+> **QUESTIONED 2026-08-23 by Johan, and not resolved. Do not treat "security boundary" as
+> established.** It is an inference from an outcome, and several things recorded in this very
+> file cut against it:
+>
+> - **The error is transport-shaped, not authorization-shaped.** `Code=7 "Encountered an XPC
+>   error: Connection interrupted"` is what a peer that died or never started looks like. A
+>   deliberate authz denial usually returns a distinct not-entitled error.
+> - **Nothing is logged.** Denials normally leave something in the unified log. This leaves
+>   nothing, from either `GPUToolsAgentService` or `gputoolsserviced`.
+> - **`GPUToolsAgentService` has no launch constraints at all** (`flags=0x0(none)`), recorded
+>   above as the reason `exit 137` did not apply here.
+> - **`MTLReplayerTrampoline.app` is not present on this system**, also recorded above and
+>   filed under "not pursued". If the replayer launch goes through a trampoline that does not
+>   exist, the launch fails for an environmental reason and the failure would look exactly
+>   like this.
+> - **Every read path is wide open** - full service registry enumeration by an unentitled
+>   caller. That is not the usual shape of a hardened boundary.
+>
+> The competing hypothesis is simply that the replay service cannot start in this
+> configuration and the refusal is a missing-component failure, not a policy decision. That
+> would make it fixable rather than off-limits. **Raised as a question, not a finding**; the
+> next session should test the trampoline path before assuming either way.
+>
+> Why it matters more now than when this was written: the replay click is no longer one
+> manual step in a profiling workflow, it is the gate on the entire GPU counter path
+> (`aps-counters.md`). Every counter measurement costs a human at the machine.
+
 ## Not pursued, and deliberately so
 
 `gputoolsserviced` exposes `launchReplayServiceApp:error:` and
