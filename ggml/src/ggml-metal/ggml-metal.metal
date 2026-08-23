@@ -3888,6 +3888,10 @@ constant short FC_mul_mv_r3    [[function_constant(FC_MUL_MV + 4)]];
 constant short FC_mul_mv_nr0_v [[function_constant(FC_MUL_MV + 5)]];
 constant short FC_mul_mv_nr0 = is_function_constant_defined(FC_mul_mv_nr0_v) ? FC_mul_mv_nr0_v : 1;
 
+// K-split probe (GGML_MV_EXT_KP): simdgroups per row block, each taking a strided slice of ne00
+constant short FC_mul_mv_kp_v [[function_constant(FC_MUL_MV + 6)]];
+constant short FC_mul_mv_kp = is_function_constant_defined(FC_mul_mv_kp_v) ? FC_mul_mv_kp_v : 1;
+
 template<typename block_q_type, short NR0, typename args_t>
 void mul_vec_q_n_f32_impl(
         args_t args,
@@ -5134,6 +5138,206 @@ void kernel_mul_mv_ext_q4_f16y_impl(
         }
     }
 }
+
+// K-split variant of the f16y ext kernel, selected by GGML_MV_EXT_KP > 1. KP simdgroups share
+// one row block and each strides a different slice of ne00, so the serial K chain per thread is
+// KP times shorter and the grid is KP times larger; the partials reduce through threadgroup
+// memory. nxpsg already splits K across the 32 lanes of a simdgroup - this splits it further,
+// past the simd width, at the cost of a barrier. The kernel is a separate copy so the default
+// path keeps its exact register allocation.
+template<short r1ptg, typename q_t, short chpb, void (*deq_t4)(device const q_t *, short, thread float4 &)>
+void kernel_mul_mv_ext_q4_f16y_ks_impl(
+        constant ggml_metal_kargs_mul_mv_ext & args,
+        device const char * src0,
+        device const char * src1,
+        device       char * dst,
+        threadgroup  char * shmem,
+        uint3   tgpig,
+        ushort  tiisg,
+        ushort  sgitg) {
+    const short NSG   = FC_mul_mv_nsg;
+    const short nxpsg = FC_mul_mv_nxpsg;
+    const short nr0   = FC_mul_mv_nr0;
+    const short KP    = FC_mul_mv_kp;
+
+    constexpr short NR0MAX  = 4;
+    constexpr short CHPTMAX = 2;
+
+    // one chunk here is 8 elements (two deq_t4 sub-chunks)
+    const short chpt = (nr0*r1ptg >= 6) ? 1 : 2;
+
+    const short nypsg = (32/nxpsg);
+
+    const short tx = tiisg%nxpsg;
+    const short ty = tiisg/nxpsg;
+
+    const short sgr = sgitg/KP; // row block this simdgroup serves
+    const short sgk = sgitg%KP; // K slice this simdgroup takes
+
+    const int i01 = tgpig.x*(nypsg*(NSG/KP)*nr0) + nypsg*nr0*sgr + ty*nr0;
+    const int i11 = tgpig.y*r1ptg;
+    const int i1m = tgpig.z;
+
+    const int i12 = i1m%FC_mul_mv_ne12;
+    const int i13 = i1m/FC_mul_mv_ne12;
+
+    const uint64_t offset0 = i01*args.nb01 + (i12/FC_mul_mv_r2)*args.nb02 + (i13/FC_mul_mv_r3)*args.nb03;
+    const uint64_t offset1 = i11*args.nb11 + (i12        )*args.nb12 + (i13        )*args.nb13;
+
+    // first chunk this thread reads: its lane offset within the simdgroup plus its K slice
+    const int ich0 = tx + sgk*chpt*nxpsg;
+
+    device const q_t * xq[NR0MAX];
+
+    for (short k = 0; k < nr0; ++k) {
+        xq[k] = (i01 + k < args.ne01) ? (device const q_t *) (src0 + offset0 + k*args.nb01) + 2*ich0/chpb : (device const q_t *) src0;
+    }
+
+    // src1 in units of 8 halfs (16 bytes)
+    device const uint4 * y8[r1ptg];
+
+    for (int ir1 = 0; ir1 < r1ptg; ++ir1) {
+        y8[ir1] = (i11 + ir1 < args.ne11) ? (device const uint4 *) (src1 + offset1 + ir1*args.nb11) + ich0 : (device const uint4 *) src1;
+    }
+
+    float sumf[NR0MAX][r1ptg] = {};
+
+    short cch = (2*ich0)%chpb; // sub-chunk index of the first of the pair
+
+    for (int ich = ich0; 8*ich < args.ne00; ich += chpt*nxpsg*KP) {
+        float4 lx[NR0MAX][2*CHPTMAX];
+
+#pragma unroll
+        for (short ch = 0; ch < chpt; ++ch) {
+            for (short k = 0; k < nr0; ++k) {
+                deq_t4(xq[k], cch + 0, lx[k][2*ch + 0]);
+                deq_t4(xq[k], cch + 1, lx[k][2*ch + 1]);
+            }
+
+            cch += 2*nxpsg;
+            if (cch >= chpb) {
+                const short adv = cch/chpb;
+                for (short k = 0; k < nr0; ++k) {
+                    xq[k] += adv;
+                }
+                cch %= chpb;
+            }
+        }
+
+#pragma unroll
+        for (short ch = 0; ch < chpt; ++ch) {
+#pragma unroll(r1ptg)
+            for (short ir1 = 0; ir1 < r1ptg; ++ir1) {
+                const uint4  raw = y8[ir1][ch*nxpsg];
+                const float4 ylo = float4(as_type<half4>(raw.xy));
+                const float4 yhi = float4(as_type<half4>(raw.zw));
+
+                for (short k = 0; k < nr0; ++k) {
+                    sumf[k][ir1] += dot(lx[k][2*ch + 0], ylo);
+                    sumf[k][ir1] += dot(lx[k][2*ch + 1], yhi);
+                }
+            }
+        }
+
+        // step over the slices owned by the other KP-1 simdgroups
+        cch += 2*nxpsg*chpt*(KP - 1);
+        if (cch >= chpb) {
+            const short adv = cch/chpb;
+            for (short k = 0; k < nr0; ++k) {
+                xq[k] += adv;
+            }
+            cch %= chpb;
+        }
+
+#pragma unroll(r1ptg)
+        for (short ir1 = 0; ir1 < r1ptg; ++ir1) {
+            y8[ir1] += chpt*nxpsg*KP;
+        }
+    }
+
+    for (short k = 0; k < nr0; ++k) {
+        for (short ir1 = 0; ir1 < r1ptg; ++ir1) {
+            if (nxpsg >= 32) {
+                sumf[k][ir1] += simd_shuffle_down(sumf[k][ir1], 16);
+            }
+            if (nxpsg >= 16) {
+                sumf[k][ir1] += simd_shuffle_down(sumf[k][ir1],  8);
+            }
+            if (nxpsg >= 8) {
+                sumf[k][ir1] += simd_shuffle_down(sumf[k][ir1],  4);
+            }
+            if (nxpsg >= 4) {
+                sumf[k][ir1] += simd_shuffle_down(sumf[k][ir1],  2);
+            }
+            if (nxpsg >= 2) {
+                sumf[k][ir1] += simd_shuffle_down(sumf[k][ir1],  1);
+            }
+        }
+    }
+
+    // one lane per (row, column) per simdgroup holds a partial sum: reduce across the K slices
+    threadgroup float * part = (threadgroup float *) shmem;
+
+    const short slot = (sgitg*nypsg + ty)*nr0*r1ptg;
+
+    if (tx == 0) {
+        for (short k = 0; k < nr0; ++k) {
+            for (short ir1 = 0; ir1 < r1ptg; ++ir1) {
+                part[slot + k*r1ptg + ir1] = sumf[k][ir1];
+            }
+        }
+    }
+
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    if (sgk != 0) {
+        return;
+    }
+
+    if (tx == 0) {
+        for (short p = 1; p < KP; ++p) {
+            const short slotp = ((sgitg + p)*nypsg + ty)*nr0*r1ptg;
+
+            for (short k = 0; k < nr0; ++k) {
+                for (short ir1 = 0; ir1 < r1ptg; ++ir1) {
+                    sumf[k][ir1] += part[slotp + k*r1ptg + ir1];
+                }
+            }
+        }
+
+        for (short ir1 = 0; ir1 < r1ptg && i11 + ir1 < args.ne11; ++ir1) {
+            device float * dst_f32 = (device float *) dst + (uint64_t)i1m*args.ne0*args.ne1 + (uint64_t)(i11 + ir1)*args.ne0;
+
+            for (short k = 0; k < nr0; ++k) {
+                if (i01 + k < args.ne01) {
+                    dst_f32[i01 + k] = sumf[k][ir1];
+                }
+            }
+        }
+    }
+}
+
+template<short r1ptg, typename q_t, short epb, void (*deq_t4)(device const q_t *, short, thread float4 &)>
+kernel void kernel_mul_mv_ext_q4_f16y_ks_disp(
+        constant ggml_metal_kargs_mul_mv_ext & args,
+        device const char * src0,
+        device const char * src1,
+        device       char * dst,
+        threadgroup  char * shmem [[threadgroup(0)]],
+        uint3   tgpig[[threadgroup_position_in_grid]],
+        ushort  tiisg[[thread_index_in_simdgroup]],
+        ushort  sgitg[[simdgroup_index_in_threadgroup]]) {
+    kernel_mul_mv_ext_q4_f16y_ks_impl<r1ptg, q_t, epb/4, deq_t4>(args, src0, src1, dst, shmem, tgpig, tiisg, sgitg);
+}
+
+typedef decltype(kernel_mul_mv_ext_q4_f16y_ks_disp<2, block_q4_0, 32, dequantize_q4_0_t4>) mul_mv_ext_q4_f16y_ks_t;
+
+template [[host_name("kernel_mul_mv_ext_q4_0_f16_ks_r1_2")]] kernel mul_mv_ext_q4_f16y_ks_t kernel_mul_mv_ext_q4_f16y_ks_disp<2, block_q4_0, 32, dequantize_q4_0_t4>;
+template [[host_name("kernel_mul_mv_ext_q4_0_f16_ks_r1_3")]] kernel mul_mv_ext_q4_f16y_ks_t kernel_mul_mv_ext_q4_f16y_ks_disp<3, block_q4_0, 32, dequantize_q4_0_t4>;
+template [[host_name("kernel_mul_mv_ext_q4_0_f16_ks_r1_4")]] kernel mul_mv_ext_q4_f16y_ks_t kernel_mul_mv_ext_q4_f16y_ks_disp<4, block_q4_0, 32, dequantize_q4_0_t4>;
+template [[host_name("kernel_mul_mv_ext_q4_0_f16_ks_r1_5")]] kernel mul_mv_ext_q4_f16y_ks_t kernel_mul_mv_ext_q4_f16y_ks_disp<5, block_q4_0, 32, dequantize_q4_0_t4>;
+template [[host_name("kernel_mul_mv_ext_q4_0_f16_ks_r1_6")]] kernel mul_mv_ext_q4_f16y_ks_t kernel_mul_mv_ext_q4_f16y_ks_disp<6, block_q4_0, 32, dequantize_q4_0_t4>;
+template [[host_name("kernel_mul_mv_ext_q4_0_f16_ks_r1_8")]] kernel mul_mv_ext_q4_f16y_ks_t kernel_mul_mv_ext_q4_f16y_ks_disp<8, block_q4_0, 32, dequantize_q4_0_t4>;
 
 template<short r1ptg, typename q_t, short epb, void (*deq_t4)(device const q_t *, short, thread float4 &)>
 kernel void kernel_mul_mv_ext_q4_f16y_disp(

@@ -245,6 +245,19 @@ Current state:
   nxpsg reading at width 3 as well as 4 (registers identical, instruction count slightly
   *higher* at nxpsg=16, so the win is grid geometry) and measure f16y halving device loads
   16 -> 8.
+- **`ksplit-width34.md` - OPEN, and the best result of 2026-08-23.** Splits K across
+  simdgroups (`GGML_MV_EXT_KP`, new `_ks` kernel on branch `metal-mv-ext-ksplit`, unmerged),
+  which is the one structural feature of their `verify_m4` we had never tried. **-5.4% /
+  -4.3% ms-per-pass at widths 3/4 and -4.2% on the width-4 round (146.2 -> 140.0 ms), n6
+  control flat, byte-identical output, 1154/1154 correct, zero spill.** Three things it
+  settles: cost at these widths is a function of **total K lanes** (`nxpsg*kp`) and not of
+  which axis supplies them; the lever **saturates at 32-64 lanes and regresses at 128**; and
+  at **width 4 the cross-simdgroup route beats the lane route** at equal lanes, because the
+  lane reduction costs `nr0*r1ptg` x `log2(nxpsg)` shuffles and so scales with the verify
+  width. It also retires run 6's "`nxpsg=16` is the one live tuning lever" - **`nxpsg=32` was
+  never tried and is worth -18% at width 3** on ffn_down, though it costs `attn_q` +73% at
+  width 4, so that half needs a per-shape routing rule and is left open. Does not move the
+  prod pick (width 7 routes to skinny).
 - `slope-sweep.md` - the small-batch slope, the ne11=9 skinny cliff, and both depth
   sweeps. Supersedes the "MTP d1 is optimal, don't re-run" note: the optimum is now d6.
   Run it with `run-slope-sweep.sh`.

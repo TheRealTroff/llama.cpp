@@ -2808,6 +2808,12 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
                             (use_f16y && ne11 == 5) ? 2 :
                             (ne11 >= 5 || ne01 >= 8192) ? 4 : 2;
 
+        // K-split probe (GGML_MV_EXT_KP=<simdgroups per row block>): kp simdgroups cooperate on one
+        // row block, each striding a different slice of ne00, and reduce through threadgroup memory.
+        // nxpsg splits K across the 32 lanes of a simdgroup; this splits it past the simd width.
+        // f16y-only (that is the only kernel with a ks copy), q4_0 only, and nsg must divide by kp.
+        static const int env_kp = getenv("GGML_MV_EXT_KP") ? atoi(getenv("GGML_MV_EXT_KP")) : 1;
+
         const int16_t nypsg  = 32/nxpsg;          // num threads along col per simdgroup (i.e. a simdgroup processes that many src0 rows at a time)
         const int16_t r0ptg  = nypsg*nsg*nr0;     // num src0 rows per threadgroup
               int16_t r1ptg  = 4;                 // num src1 rows per threadgroup
@@ -2849,6 +2855,18 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
         uint64_t nb01_eff = nb01;
 
         const bool use_di = use_f16y && ggml_metal_op_mul_mat_try_repack_q4_0(ctx, op, bid_src0, nb01_eff);
+
+        const int16_t kp_req = (env_kp > 1 && use_f16y && !use_di &&
+                                op->src[0]->type == GGML_TYPE_Q4_0) ? env_kp : 1;
+
+        // a row block needs kp simdgroups, so raise nsg for THIS dispatch only - setting
+        // GGML_MV_EXT_NSG instead would change every other ext dispatch as well, and that
+        // side effect costs more than the split buys (width4-verify.md run 8)
+        const int16_t nsg_kp  = kp_req > 1 ? std::max<int16_t>(nsg, kp_req) : nsg;
+        const int16_t kp      = (nsg_kp % kp_req == 0) ? kp_req : 1;
+
+        // with a K-split the threadgroup covers kp times fewer rows, so the grid grows by kp
+        const int16_t r0ptg_kp = kp > 1 ? nypsg*(nsg_kp/kp)*nr0 : r0ptg;
 
         // optionally convert src1 to f16 into the scratch after dst: one 16B load then covers 8 elements
         ggml_metal_buffer_id bid_src1 = ggml_metal_get_buffer_id(op->src[1]);
@@ -2896,7 +2914,7 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
             bid_src1 = bid_y16;
         }
 
-        auto pipeline = ggml_metal_library_get_pipeline_mul_mv_ext(lib, op, nsg, nxpsg, r1ptg, nr0, use_f16y ? GGML_TYPE_F16 : op->src[1]->type, use_di);
+        auto pipeline = ggml_metal_library_get_pipeline_mul_mv_ext(lib, op, kp > 1 ? nsg_kp : nsg, nxpsg, r1ptg, nr0, use_f16y ? GGML_TYPE_F16 : op->src[1]->type, use_di, kp);
 
         ggml_metal_kargs_mul_mv_ext args = {
             /*.ne00  =*/ ne00,
@@ -2925,7 +2943,12 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
         ggml_metal_encoder_set_buffer  (enc, bid_src1,                             2);
         ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         3);
 
-        ggml_metal_encoder_dispatch_threadgroups(enc, ((ne01 + r0ptg - 1)/r0ptg), ((ne11 + r1ptg - 1)/r1ptg), ne12*ne13, 32, nsg, 1);
+        if (kp > 1) {
+            // one partial per (simdgroup, ty, nr0 row, column), summed after the barrier
+            ggml_metal_encoder_set_threadgroup_memory_size(enc, nsg_kp*nypsg*nr0*r1ptg*sizeof(float), 0);
+        }
+
+        ggml_metal_encoder_dispatch_threadgroups(enc, ((ne01 + r0ptg_kp - 1)/r0ptg_kp), ((ne11 + r1ptg - 1)/r1ptg), ne12*ne13, 32, kp > 1 ? nsg_kp : nsg, 1);
     } else if (
         !ggml_is_transposed(op->src[0]) &&
         !ggml_is_transposed(op->src[1]) &&
