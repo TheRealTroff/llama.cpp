@@ -715,8 +715,15 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm_skinny(gg
 
     GGML_ASSERT(ne12 <= INT16_MAX && r2 <= INT16_MAX && r3 <= INT16_MAX);
 
+    // GGML_MM_SKINNY_NR0=<dst rows per threadgroup>, default 32. threads = 2*NR0 and
+    // nsg = NR0/16, so this scales threadgroup count at fixed weight traffic - and scales
+    // the activation re-read with it, since every threadgroup walks all of ne00.
+    static const int env_nr0 = getenv("GGML_MM_SKINNY_NR0") ? atoi(getenv("GGML_MM_SKINNY_NR0")) : 32;
+
+    const int nr0 = (env_nr0 >= 16 && env_nr0 <= 128 && env_nr0 % 16 == 0) ? env_nr0 : 32;
+
     snprintf(base, 256, "kernel_mul_mm_skinny_%s%s_%s", ggml_type_name(op->src[0]->type), di ? "_di" : "", ggml_type_name(op->src[1]->type));
-    snprintf(name, 256, "%s_ne12=%d_r2=%d_r3=%d", base, ne12, r2, r3);
+    snprintf(name, 256, "%s_ne12=%d_r2=%d_r3=%d_nr0=%d", base, ne12, r2, r3, nr0);
 
     ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
     if (!res.pipeline) {
@@ -726,16 +733,17 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm_skinny(gg
         ggml_metal_cv_set_int16(cv, (int16_t) ne13, FC_MUL_MM + 3);
         ggml_metal_cv_set_int16(cv, (int16_t) r2,   FC_MUL_MM + 4);
         ggml_metal_cv_set_int16(cv, (int16_t) r3,   FC_MUL_MM + 5);
+        ggml_metal_cv_set_int16(cv, (int16_t) nr0,  FC_MUL_MM + 6);
 
         res = ggml_metal_library_compile_pipeline(lib, base, name, cv);
 
         ggml_metal_cv_free(cv);
     }
 
-    res.nr0  = 32;
+    res.nr0  = nr0;
     res.nr1  = 8;
-    res.nsg  = 2;
-    res.smem = 4096 + 1024;
+    res.nsg  = nr0/16;
+    res.smem = nr0*64*2 + 1024;
 
     return res;
 }

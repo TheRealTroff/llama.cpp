@@ -35,6 +35,11 @@ ARMS = {
     'skinny': {'GGML_MM_SKINNY': '2'},
     'mv':     {},
     'mm':     {'GGML_MV_EXT_MAX': '1', 'GGML_MM_SKINNY': '0', 'GGML_MV_NC': '0', 'GGML_MM_MIN': '1'},
+    # NR0 discriminator: threadgroup count and activation re-read move together
+    'nr0=16':  {'GGML_MM_SKINNY': '2', 'GGML_MM_SKINNY_NR0': '16'},
+    'nr0=32':  {'GGML_MM_SKINNY': '2', 'GGML_MM_SKINNY_NR0': '32'},
+    'nr0=64':  {'GGML_MM_SKINNY': '2', 'GGML_MM_SKINNY_NR0': '64'},
+    'nr0=128': {'GGML_MM_SKINNY': '2', 'GGML_MM_SKINNY_NR0': '128'},
 }
 
 

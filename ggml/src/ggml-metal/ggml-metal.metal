@@ -11724,6 +11724,7 @@ constant short FC_mul_mm_ne12  [[function_constant(FC_MUL_MM + 2)]];
 constant short FC_mul_mm_ne13  [[function_constant(FC_MUL_MM + 3)]];
 constant short FC_mul_mm_r2    [[function_constant(FC_MUL_MM + 4)]];
 constant short FC_mul_mm_r3    [[function_constant(FC_MUL_MM + 5)]];
+constant short FC_mul_mm_sk_nr0 [[function_constant(FC_MUL_MM + 6)]];
 
 // each block_q contains 16*nl weights
 #ifdef GGML_METAL_HAS_TENSOR
@@ -12085,12 +12086,16 @@ kernel void kernel_mul_mm_skinny_q4_0_f32(
     // A tile row-major [row][k]; B tile [k][col]; mc = ma x mb -> [row][col]
     // software-pipelined: slice t+1 is loaded+dequantized into registers while
     // the simdgroup MACs of slice t run
-    threadgroup half * sa = (threadgroup half *)(shmem);          // NR0 x NK = 4096 B
-    threadgroup half * sb = (threadgroup half *)(shmem + 4096);   // NK x 8   = 1024 B
-
-    constexpr int NR0 = 32;
     constexpr int NR1 = 8;
     constexpr int NK  = 64;
+
+    // NR0 is a tuning knob (GGML_MM_SKINNY_NR0). The loader puts 2 threads on a row, so
+    // threads = 2*NR0 and nsg = NR0/16; rows per simdgroup stays 16 and mc[2] is unchanged.
+    // It scales threadgroup count at fixed weight traffic, and scales B re-reads with it.
+    const short NR0 = FC_mul_mm_sk_nr0;
+
+    threadgroup half * sa = (threadgroup half *)(shmem);              // NR0 x NK
+    threadgroup half * sb = (threadgroup half *)(shmem + NR0*NK*2);   // NK x 8 = 1024 B
 
     const int im = tgpig.z;
     const int r0 = tgpig.y*NR0;
@@ -12228,12 +12233,13 @@ kernel void kernel_mul_mm_skinny_q4_0_di_f32(
         ushort tiitg[[thread_index_in_threadgroup]],
         ushort sgitg[[simdgroup_index_in_threadgroup]]) {
 
-    threadgroup half * sa = (threadgroup half *)(shmem);
-    threadgroup half * sb = (threadgroup half *)(shmem + 4096);
-
-    constexpr int NR0 = 32;
     constexpr int NR1 = 8;
     constexpr int NK  = 64;
+
+    const short NR0 = FC_mul_mm_sk_nr0;
+
+    threadgroup half * sa = (threadgroup half *)(shmem);
+    threadgroup half * sb = (threadgroup half *)(shmem + NR0*NK*2);
 
     const int im = tgpig.z;
     const int r0 = tgpig.y*NR0;
