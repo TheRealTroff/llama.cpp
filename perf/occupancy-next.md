@@ -3,7 +3,7 @@
 Status: **open**. Written 2026-08-23 as a routing stub for a fresh session. Nothing here is
 measured; it is the option board. The measured state lives in `aps-counters.md`,
 `headless-replay-probe.md` and `width4-verify.md` - **read the Status block of each before
-starting**, and read `skills/macos-reversing` before touching any private framework.
+starting**, and read `~/.claude/skills/macos-reversing` before touching any private framework.
 
 ## The goal, and why it is worth a session
 

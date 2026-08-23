@@ -75,7 +75,7 @@ turn that from an argument into a measurement. `APS_USC` is the source it would 
 
 ## Tooling
 
-The general technique is written up as `skills/macos-reversing` - the ctypes/ObjC
+The general technique is written up as `~/.claude/skills/macos-reversing` - the ctypes/ObjC
 recipe, the traps, and how to read failure shapes. Read that before extending any of these.
 
 - `perf/aps-counters.py` - decodes the container, prints schema, sources and payload sizes.
