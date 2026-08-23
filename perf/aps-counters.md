@@ -75,6 +75,9 @@ turn that from an argument into a measurement. `APS_USC` is the source it would 
 
 ## Tooling
 
+The general technique is written up as `skills/macos-reversing` - the ctypes/ObjC
+recipe, the traps, and how to read failure shapes. Read that before extending any of these.
+
 - `perf/aps-counters.py` - decodes the container, prints schema, sources and payload sizes.
 - `perf/gtcounter-classdump.py` - live ObjC class/method dump of the GPU tools frameworks,
   filtered by regex. This is how the reader classes above were found.

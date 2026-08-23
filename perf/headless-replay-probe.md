@@ -323,6 +323,8 @@ zstd'd 4.5 GB -> 178 MB, plus `extract-launch-window.log` (the 10k lines around 
 `extract-gpu-classes.log.zst` (every GPU/DY/GT-class send), and
 `extract-gpu-histogram.txt` (11,475 distinct class+selector pairs).
 
+The tracing technique that settled this is generalised in `skills/macos-reversing`.
+
 ## Not pursued, and deliberately so
 
 `gputoolsserviced` exposes `launchReplayServiceApp:error:` and
