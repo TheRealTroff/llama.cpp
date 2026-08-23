@@ -7,7 +7,8 @@ Where it stands after runs 4-6 (2026-08-23), so a new session does not re-run th
 
 - **The shelf is still unexplained.** Three candidate causes are now measured and dead: the
   register tile (run 2), `nr0` (run 1), and the f16y convert dispatch (run 4). The tile is
-  off the table, `ext` is the right family (run 3), and the convert is a win, not a tax.
+  off the table, `ext` is the right family (run 3, and run 7 closes the family question
+  against plain `mul_mv` too), and the convert is a win, not a tax.
 - **`nxpsg=16` at widths 3-4 is the one live *tuning* lever**, worth **-1.5% to -1.7%** on a
   `llama-bench` pass at N=3/N=4 (run 6) - about a third of what run 3's per-shape table
   implied. ~~the one live lever~~ **Re-scoped 2026-08-23: it is a tuning lever against a
@@ -207,11 +208,15 @@ kernel is latency-bound, not bandwidth-bound.
    One more arm on `run-slope-sweep.sh`. The 141.0 above is from the existing n3 row; what is
    missing is a round decomposition at that depth (verify / drafter / overhead split), which
    is what decides how much of the 46 ms gap is kernel and how much is drafter.
-2. **Free, no code: confirm the current routing is actually best at widths 3-4.** They are
+2. ~~**Free, no code: confirm the current routing is actually best at widths 3-4.**~~
+   **Done - run 3 (ext vs mv-nc vs skinny) and run 7 (ext vs plain `mul_mv`). All four
+   families measured, `ext` wins at both widths.** They are
    left to `ext` by *configuration*, not by code - `GGML_MV_NC` caps at `min(env,4)` with
    nc3/nc4 kernels already compiled, and `GGML_MM_SKINNY`'s floor is 2. A three-arm A/B
    (ext vs mv-nc vs skinny +/- repack) costs one run. Prior evidence says ext wins
    (`mv-nc-cliff-probe.md`, `dflash-vs-mtp-uniform.md:61-74`), so this is confirmation.
+   It was not: run 3 found `nxpsg`, and run 7 found that plain mv ties `ext` on `ffn_down`
+   at width 3 while moving half the bandwidth.
 3. ~~**The real one: `nr0` 2 -> 4 at ne11=4.** One line in the heuristic at
    `ggml-metal-ops.cpp:2805-2809`.~~ **Done 2026-08-22 - refuted at width 4, see below.**
    It needed no code at all: `GGML_MV_EXT_NR0` has been a runtime override since the
@@ -769,6 +774,75 @@ not one. **The prod pick is dflash n6, which verifies 7 columns and routes to
 a viable operating point, and today n3 is our *worst* depth (20.462 t/s at n_predict 300
 against 25.038 at n6, `slope-sweep.md:56`). The width-4 work is about reaching oMLX's
 operating point, not about speeding up ours.
+
+## Run 7 (2026-08-23): plain `mul_mv` is the fourth family, and it loses too
+
+Run 3 A/B'd `ext` against `mv_nc` and `mul_mm_skinny` and never tested the **plain batch-1
+vector kernel** - the final `else` in `ggml_metal_op_mul_mat` (`:2985`), which dispatches
+`ne11` in the grid y dim with `nr1 = 1` and therefore walks the weights once per column.
+
+Zero code. `GGML_MV_EXT_MAX=2` drops widths 3-4 out of the ext gate
+(`ne11 <= ne11_mv_max`, `:2617`); `GGML_MM_MIN` stays 8 so `mul_mm` does not claim them;
+under the prod env nc holds width 2 and skinny holds 5-8. **Widths 3 and 4 are the only
+thing that changes**, so widths 1/2/5 are within-run controls. Harness
+`perf/run-width34-plainmv.sh`, caffeinated, 3 interleaved reps, `169635d6c`, binary 17:20.
+Routing confirmed per width from the compiled pipeline names in both arms (part 0b), and the
+plain-mv arm passes `test-backend-ops test -o MUL_MAT` on all 20 cases.
+
+`test-backend-ops perf`, median of 3, within-arm spread <= 4.9% (typically < 1.5%):
+
+| shape | width | `ext` (prod) | plain `mul_mv` | delta |
+|---|--:|--:|--:|--:|
+| ffn_gate/up | 3 | **282.58** | 323.26 | +14.4% |
+| ffn_gate/up | 4 | **332.73** | 428.65 | **+28.8%** |
+| ffn_down | 3 | 339.63 | **333.29** | **-1.9%** |
+| ffn_down | 4 | **361.86** | 437.60 | **+20.9%** |
+| gdn_qkv | 3 | **108.69** | 118.89 | +9.4% |
+| gdn_qkv | 4 | **127.47** | 156.05 | +22.4% |
+| attn_q | 3 | **61.82** | 64.02 | +3.6% |
+| attn_q | 4 | **76.07** | 81.20 | +6.7% |
+
+Controls: widths 1, 2 and 5 move -1.0% to +1.6% across all four shapes, which is the
+within-session floor.
+
+Whole model, `llama-bench -n 0 -p 1..8 -r 3`, same session, ms/pass:
+
+| width | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|
+| `ext` (prod) | 74.2 | 77.5 | **103.9** | **116.0** | 124.1 | 125.1 | 127.1 | 128.5 |
+| plain `mul_mv` | 76.0 | 77.3 | **108.0** | **137.2** | 123.9 | 124.8 | 127.7 | 128.1 |
+| delta | +2.5% | -0.3% | **+3.9%** | **+18.3%** | -0.1% | -0.2% | +0.5% | -0.3% |
+
+The untouched widths agree to <= 0.5% except pp1 at 2.5%, so 2.5% is the arm-to-arm floor for
+`llama-bench` (separate processes, model reload) and pp3's +3.9% is small but real, pp4's
++18.3% overwhelming. The `ext` row itself sits 2-4% above the archived curve
+(73.0/73.8/101.5/111.5/119.0/120.9/123.1/124.1), which is the documented ~3% cross-session
+drift; both arms here were measured minutes apart.
+
+**Verdict: `ext` is the right family at widths 3-4 against all three alternatives.** The
+family question is closed - `mv_nc`, `mul_mm_skinny` (run 3) and plain `mul_mv` (here) have
+each now been measured at these widths and each loses. Nothing here touches the prod pick,
+which sits at n6 / width 7 / skinny.
+
+### The one exception is the interesting number
+
+`ffn_down` at width 3 is a **-1.9% win** for plain mv, and it should not be close. Plain mv
+re-reads the weights per column, so at width 3 it should move 3 x 50.1 MB. 150 MB in 333 us
+would be **451 GB/s, 1.65x the machine's 273 GB/s peak** - so it is not doing that: the three
+column dispatches run concurrently over the same row blocks and the cache serves columns 2
+and 3. Effective DRAM traffic is ~50 MB in 333 us = **150 GB/s**, against **247 GB/s** for
+the same shape at width 1.
+
+Per column, plain mv costs 111 us at width 3 and 109 us at width 4, about **half** the 210 us
+it takes standing alone at width 1. So re-dispatching the batch-1 kernel per column recovers
+roughly 2x of reuse from the cache for free, and still never approaches `ext`'s single
+stream.
+
+**A kernel with a completely different structure, at half our bandwidth, ties `ext` at
+width 3.** That is independent of run 3's dispatch-geometry argument and points the same way:
+at these widths `ext` is not spending its time on weight traffic. Consistent with run 2 (a
+bigger per-thread tile made width 4 worse) and run 3 (`nxpsg=16`, twice the threadgroups,
+wins).
 
 ## Superseded plan: port the V2 base-pointer rewrite to `ext`
 

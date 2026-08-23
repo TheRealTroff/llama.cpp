@@ -232,6 +232,14 @@ Current state:
   the **e2e arm of that run is invalid - its n6 control failed at -6.1%** on a byte-identical
   workload, so quote no e2e number from 2026-08-23. **None of this moves the prod pick**,
   which sits at n6 / width 7 / skinny where widths 3-4 never occur.
+  **Run 7 (2026-08-23) closes the family question**: plain `mul_mv` at widths 3-4, reached with
+  `GGML_MV_EXT_MAX=2` and no code (`perf/run-width34-plainmv.sh`), costs **+6.7% to +28.8%**
+  per shape at width 4 and **+3.6% to +14.4%** at width 3, and **+18.3% / +3.9% ms/pass** on
+  llama-bench, with widths 1/2/5-8 flat as controls. All four families - nc, skinny, plain mv,
+  ext - are now measured at these widths and `ext` wins. One exception is worth reading: plain
+  mv *ties* `ext` on `ffn_down` at width 3 (-1.9%) while moving ~150 GB/s against 247 GB/s at
+  width 1, so **even the per-column kernel is not bandwidth-limited there** - the same
+  occupancy reading run 3 reached from dispatch geometry, from a kernel of different shape.
   Ten captures spanning the cliff are archived at `~/play/kvquant-experiments/traces/aug23/`,
   **all ten now replayed**, with counters under `traces/aug23/replays/`. Those confirm the
   nxpsg reading at width 3 as well as 4 (registers identical, instruction count slightly
