@@ -2766,8 +2766,14 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
         const int nsg    = env_nsg > 0 ? env_nsg : 2; // num simdgroups per threadgroup
 
         // num threads along row per simdgroup
+        //
+        // the ne11 cutoff is a perf heuristic and GGML_MV_EXT_NXPSG16_MAX moves it; the
+        // ne00 % 256 guard is NOT - forcing nxpsg=16 at ne00=128 gives NaN (measured
+        // 2026-08-23, kernel_mul_mv_ext_f16_f32_r1_2), so it stays in both arms.
+        static const int env_nx16_max = getenv("GGML_MV_EXT_NXPSG16_MAX") ? atoi(getenv("GGML_MV_EXT_NXPSG16_MAX")) : 3;
+
         int16_t nxpsg = 0;
-        if (ne00 % 256 == 0 && ne11 < 3) {
+        if (ne00 % 256 == 0 && ne11 < env_nx16_max) {
             nxpsg = 16;
         } else if (ne00 % 128 == 0) {
             nxpsg = 8;
