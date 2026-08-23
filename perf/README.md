@@ -143,7 +143,7 @@ against our 144.9. Our curve is flat but high; theirs is steep with a cheap shel
 > the n3 round at **141.0 ms** (`slope-sweep.md`). What is missing is a *round decomposition*
 > at depth 3. See **`width4-verify.md`**.
 
-## Two traps that have each cost a day
+## Three traps that have each cost a day
 
 **1. n_predict is not comparable across harnesses.** Generation grows the KV cache, so
 the same config reads ~25 t/s at `n_predict` 300 and ~23 at 600. `RUN_GDN_FUSE.sh` and
@@ -152,7 +152,19 @@ the same config reads ~25 t/s at `n_predict` 300 and ~23 at 600. `RUN_GDN_FUSE.s
 numbers across harnesses are not. At 300 the run is ~67 rounds and controls spread
 ~0.4 t/s, versus ~0.02 over ~166 rounds at 600 - use 600 for small deltas.
 
-**2. Record a commit sha with every number.** head-to-head-cooled.md recorded a date and
+**2. Check a benchmark shape against the model's own tensor list before believing a
+per-shape result.** Until 2026-08-23 the "27B verify projections" perf set had a case
+labelled `attn q` at **m=3072**, and **no tensor in Qwen3.8-27B has a 3072 dimension** - the
+real `blk.attn_q.weight` is (5120,12288), in 16 of 65 blocks. Meanwhile `blk.attn_qkv`
+(5120,10240) x48, `blk.attn_output`/`ssm_out` (6144,5120) x64 and the real `attn_q` were not
+cases at all, and the case called "gdn qkv" is actually `blk.attn_gate`. That one phantom
+shape was the *only* shape that ever lost on `nxpsg`, and it carried a routing conclusion
+from run 3 (2026-08-22) until it was caught. Fixed in `3fc270c6d`: the set is now the six
+real projections, each carrying its calls-per-round from the tagged profile so a per-shape
+result can be weighted before it is believed. Read shapes out of the GGUF
+(`gguf-py`, `GGUFReader`) or out of a tagged profile - not out of a comment.
+
+**3. Record a commit sha with every number.** head-to-head-cooled.md recorded a date and
 no sha, 24 commits landed under it, and the rot stayed invisible until someone compared
 against it and reported a bogus +5.8%.
 
@@ -255,8 +267,9 @@ Current state:
   at **width 4 the cross-simdgroup route beats the lane route** at equal lanes, because the
   lane reduction costs `nr0*r1ptg` x `log2(nxpsg)` shuffles and so scales with the verify
   width. It also retires run 6's "`nxpsg=16` is the one live tuning lever" - **`nxpsg=32` was
-  never tried and is worth -18% at width 3** on ffn_down, though it costs `attn_q` +73% at
-  width 4, so that half needs a per-shape routing rule and is left open. Does not move the
+  never tried and is worth -16% at width 3** on ffn_down, and the objection to flipping it
+  turned out to be **a benchmark shape the model does not have** (see below); on the real
+  projections nothing behaves like it, so a near-blanket flip is now the open question. Does not move the
   prod pick (width 7 routes to skinny).
 - `slope-sweep.md` - the small-batch slope, the ne11=9 skinny cliff, and both depth
   sweeps. Supersedes the "MTP d1 is optimal, don't re-run" note: the optimum is now d6.

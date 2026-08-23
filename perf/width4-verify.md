@@ -3,6 +3,22 @@
 Status: **open**. Opened 2026-08-22 from `mlx-cycle-capture.md` open stubs 1 and 2, plus a
 new kernel-level measurement taken the same day (below).
 
+> **SHAPE CORRECTION 2026-08-23 - every `attn_q` row in this file is a shape the model does
+> not have.** The perf case labelled "attn q" was `m=3072, k=5120`. **No tensor in
+> Qwen3.8-27B-uniform-Q4_0 has a 3072 dimension** (checked against the GGUF tensor list):
+> the real `blk.attn_q.weight` is **(5120, 12288)**, four times wider, and it runs in 16 of
+> 65 blocks, not all of them. The case labelled "gdn qkv" is a real shape but it is
+> `blk.attn_gate`; the real `blk.attn_qkv` is (5120,10240). Fixed in `tests/test-backend-ops.cpp`
+> (`3fc270c6d`), which now carries per-round call counts and the six real projections.
+>
+> **What this changes:** `attn_q` is the shape that carried "nxpsg cannot be a blanket flip
+> at widths 3-4" from run 3 onward. Re-measured on the real projections, **no real shape
+> behaves like it** - at `nxpsg=32`, width 3 is -3.9% to -16.0% across all six, and width 4
+> is -3.5% to +2.2%. The only real tensor that dislikes `nxpsg=32` is `attn_k/v` (5120,1024),
+> and `ssm_alpha/beta` (5120,48) *gains 66%*. See the corrected table in
+> `ksplit-width34.md`. The `attn_q` numbers below are left in place because they are real
+> measurements of a real kernel; they are just not evidence about this model.
+
 Where it stands after runs 4-6 (2026-08-23), so a new session does not re-run these:
 
 - **The shelf is still unexplained, but part of it is now priced.** Three candidate causes are

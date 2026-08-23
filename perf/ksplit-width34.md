@@ -65,14 +65,37 @@ reps:
 | **attn_q** | 3 | 62.2 | 63.1 (+1%) | **93.6 (+50%)** |
 | **attn_q** | 4 | 75.6 | 81.1 (+7%) | **130.7 (+73%)** |
 
-`nxpsg=32` is a new best on all three large projections and a catastrophe on `attn_q`, which
-run 3 already saw disliking 16 (+8% at width 4) without explaining it. The dislike is now
-monotone in `nxpsg` and much larger, which makes it a shape property, not noise. Exploratory
-single-rep `nxpsg=4` is worse than 8 everywhere (ffn_down w3 337.5, attn_q w3 71.1), so the
-curve has an interior optimum that moves with the shape.
+`nxpsg=32` is a new best on all three large projections and a catastrophe on `attn_q`.
 
-**This is a routing question, not a flag**: the gain needs `nxpsg` chosen per shape, and the
-`ne00 % 256 == 0` correctness guard (run 6) has to be kept whatever the rule is.
+> **CORRECTED the same day, and it inverts the conclusion.** That `attn_q` row is
+> `m=3072, k=5120`, and **no tensor in this model has a 3072 dimension** - the real
+> `blk.attn_q.weight` is (5120,12288). It was the only shape that ever lost, and it is the
+> shape that has carried "nxpsg cannot be a blanket flip" since run 3. The perf set is fixed
+> in `3fc270c6d`; re-measured on the **six real projections**, `nxpsg=32` against 8:
+
+| real tensor | shape (k, m) | calls/round | width 3 | width 4 |
+|---|---|--:|--:|--:|
+| `blk.ffn_down` | 17408, 5120 | 64 | **-16.0%** | -3.5% |
+| `blk.attn_q` | 5120, 12288 | 16 | -7.0% | -2.4% |
+| `blk.ffn_gate` + `ffn_up` | 5120, 17408 | 128 | -5.9% | -2.6% |
+| `blk.attn_qkv` | 5120, 10240 | 48 | -5.0% | -0.6% |
+| `blk.attn_gate` | 5120, 6144 | 48 | -4.0% | +0.1% |
+| `blk.attn_output` + `ssm_out` | 6144, 5120 | 64 | -3.9% | +2.2% |
+| `blk.ssm_alpha` + `ssm_beta` | 5120, 48 | 96 | **-66.6%** | **-66.2%** |
+| `blk.attn_k` + `attn_v` | 5120, 1024 | 32 | +22.5% | **+46.2%** |
+
+> **No real projection behaves like the phantom shape.** Weighted by calls per round, width 3
+> is a clear net win and width 4 is roughly break-even before the two small shapes, which
+> dominate the arithmetic in opposite directions: `ssm_alpha/beta` is dispatch-starved at
+> nxpsg=8 (48 rows = 3 threadgroups) and gains two thirds, while `attn_k/v` loses half again.
+> Both are on the **f32-y** kernel (below the 16.78M f16y gate) and the two large f32-y-free
+> shapes are not, so the losing case is narrower than "small shapes" and is not yet
+> characterised. Exploratory `nxpsg=4` is worse than 8 everywhere.
+
+**Still a routing question, but a far simpler one than "per shape"**: on the evidence above a
+blanket `nxpsg=32` for f16y shapes at widths 3-4 looks defensible, with the `ne00 % 256 == 0`
+correctness guard kept (run 6) and `attn_k/v` the one case needing an exclusion. It is
+**unmeasured at e2e** - forcing `nxpsg` globally is not a shippable arm - so it stays open.
 
 ## Stage 1: the sweep, grouped by total K lanes
 
@@ -112,9 +135,13 @@ at width 4 / nxpsg=32, against 6 x 5 = 30 at width 3. The `kp` route pays one ba
 worse the intra-simd route and the better the cross-simdgroup one - which is the structural
 choice their `verify_m4` makes, arrived at here from our own measurements.
 
-`attn_q` is a **control by construction** in every kp cell: it sits below the f16y size gate,
-the ks kernel is a copy of the f16y kernel only, so `kp` cannot engage. It reads flat (-1% to
-+1%) at every kp, and moves only with `nxpsg`. Widths 1, 2 and 5 are controls too (mv, mv_nc
+The shape labelled `attn_q` (`m=3072`, which the correction above shows is **not in this
+model**) is a **control by construction** in every kp cell: it sits below the f16y size gate,
+and the ks kernel is a copy of the f16y kernel only, so `kp` cannot engage. It reads flat
+(-1% to +1%) at every kp, and moves only with `nxpsg` - which is exactly what a control
+should do, so the kp columns stand. Real tensors below that gate (`attn_k/v`,
+`ssm_alpha/beta`) are in the same position: **`kp` cannot reach them today**, which is open
+thread 2. Widths 1, 2 and 5 are controls too (mv, mv_nc
 and skinny under the prod env) and stay within 1% across all ten cells.
 
 ## Stage 2: a pass and a round
@@ -166,10 +193,13 @@ arms read flat.
 
 ## Open
 
-1. **Per-shape `nxpsg` routing.** Stage 0 has up to -18% at width 3 sitting in `nxpsg=32` that
-   the `kp` path does not capture, and `attn_q` says it cannot be a blanket flip. Needs a rule
-   keyed on something measurable (`ne01`? K-chunks per thread?), the `ne00 % 256` guard kept,
-   and a fresh llama-bench arm - `nxpsg` forced globally is not a shippable arm.
+1. **`nxpsg=32` at widths 3-4, and it now looks like a near-blanket flip rather than a
+   per-shape rule.** Up to -16% at width 3 on `ffn_down` sits there and the `kp` path does not
+   capture it. The objection was a phantom shape; on the real projections the only loser is
+   `attn_k/v` (5120,1024) at +46% on width 4, against `ssm_alpha/beta` at -66% on 96 calls a
+   round. Needs: the `ne00 % 256` guard kept, a rule that excludes the `attn_k/v` case (what
+   distinguishes it from `ssm_alpha/beta` is not yet known - both are f32-y), and an e2e arm
+   built on that rule rather than on a global `GGML_MV_EXT_NXPSG`, which is not shippable.
 2. **`kp` for the f32-y kernel**, so `attn_q` and anything else below the f16y gate can use it
    at all. Today it is f16y-only, which is why `attn_q` is a control here rather than a
    candidate.

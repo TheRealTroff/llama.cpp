@@ -4,6 +4,12 @@ Status: **one hypothesis refuted, the other not testable with the captures on di
 2026-08-23 from the ten aug23 replays, using `perf/aps-dram-bandwidth.py` and
 `perf/aps-usc-values.py`. Everything below is measured unless it says otherwise.
 
+> **SHAPE CORRECTION 2026-08-23:** the `w4-attn_q-*` captures here are of `m=3072, k=5120`,
+> a shape **no tensor in this model has** - the real `blk.attn_q.weight` is (5120,12288).
+> The capture pair is still a valid matched pair of a real kernel, but it is not "the attn_q
+> projection". See the banner in `width4-verify.md` and the corrected shape set in
+> `tests/test-backend-ops.cpp`.
+
 ## The verdict, up front
 
 | | claim | outcome |
