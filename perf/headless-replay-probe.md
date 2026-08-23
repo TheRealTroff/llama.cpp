@@ -1,7 +1,10 @@
 # Driving the GPU trace replay without the Xcode GUI
 
-Status: **closed for now - there IS a permission boundary, but not where the old note put
-it.** An unentitled process can connect, is trusted, and can read the entire service
+Status: **REOPENED and largely answered 2026-08-23 - see "RESOLVED" below. There is no
+evidence of a permission boundary; we were calling an API Xcode never uses.**
+
+~~Status: closed for now - there IS a permission boundary, but not where the old note put
+it.~~ An unentitled process can connect, is trusted, and can read the entire service
 registry. It **cannot launch the replay service**: `launchReplayService:` is refused
 instantly. `toolchain-isa-probe.md` was wrong about the *mechanism* (we do not need the
 entitlement to talk, and there is no 89-message wire protocol to implement) and right about
@@ -268,6 +271,56 @@ coherent security boundary and it should be treated as one.
 > Why it matters more now than when this was written: the replay click is no longer one
 > manual step in a profiling workflow, it is the gate on the entire GPU counter path
 > (`aps-counters.md`). Every counter measurement costs a human at the machine.
+
+## RESOLVED 2026-08-23: Xcode never calls `launchReplayService:` at all
+
+Johan clicked one replay with Xcode running under `NSObjCMessageLoggingEnabled=YES`
+(`perf/replay-trace-capture.sh`). **97,196,011 message sends**, covering a complete
+successful replay of `w4-ffn_down-ext-nx8.gputrace`. Counts across the whole trace:
+
+| selector / class | occurrences in a successful replay |
+|---|--:|
+| `launchReplayService` | **0** |
+| `GTLaunchService` | **0** |
+| `GTMTLReplayService` | **0** |
+| `GTServiceProviderXPCProxy` | **0** |
+| `GTLocalXPCConnection` | **0** |
+| `MTLReplayerTrampoline` | **0** |
+| `DYXPCTransport` | **268** |
+| `GPUTraceSession -setupAndStartReplayer:` | 1 |
+| `GPUTraceReplayController -replaySession` | 5 |
+
+**The API this file spent a session on, and whose refusal it called a security boundary, is
+not the one Xcode uses.** The launch is `GPUTraceSession -setupAndStartReplayer:`, driven
+over `DYXPCTransport` with `GPUReplayMessage` and `DYFuture` - the **legacy DY path** that
+the "Do not hand-roll DY messages" section above dismissed in favour of the modern object
+API. That advice was backwards.
+
+So the verdict is not "policy denial" and not "missing trampoline" - both of those were
+inferences and both are now unsupported. `-launchReplayService:` returning `Code=7` is what
+you get from an endpoint that is not the live path on this system. **We tested a door Xcode
+does not use.**
+
+What this does *not* establish, and must not be read as:
+
+- **It does not prove the DY path will work for us end to end.** The section above measured
+  replayer-band kinds (4096+) returning nil replies on the *agent* transport, and that is
+  unchanged. The target is the replayer's own DY endpoint.
+- **It does not prove the modern GT API is dead**, only that this replay never touched it.
+- **Message logging cannot see file access**, so the trampoline is unproven either way -
+  though Xcode plainly does not message it.
+
+**What to do next**, and it is a much better position than "attack the boundary": we already
+have working two-way DY messaging (`perf/dy-send-probe.py`, kind 1290 answered), the kind
+values (`perf/dymessage-kinds.py`), and now the knowledge that DY is the live path. Read
+`extract-launch-window.log` in the archive for the exact send order around
+`setupAndStartReplayer:`, and aim the replayer kinds at the endpoint Xcode uses rather than
+at the agent.
+
+Archive: `~/play/kvquant-experiments/traces/aug23/replay-trace/` (216 MB) - full log
+zstd'd 4.5 GB -> 178 MB, plus `extract-launch-window.log` (the 10k lines around the launch),
+`extract-gpu-classes.log.zst` (every GPU/DY/GT-class send), and
+`extract-gpu-histogram.txt` (11,475 distinct class+selector pairs).
 
 ## Not pursued, and deliberately so
 
