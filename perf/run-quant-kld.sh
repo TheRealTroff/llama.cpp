@@ -39,12 +39,18 @@ echo "tests  : ${TESTS[*]}"
 echo "chunks : $CHUNKS at -c $CTX  (~$((CHUNKS*CTX)) tokens)"
 echo "commit : $(cd "$B" && git rev-parse --short HEAD) on $(cd "$B" && git rev-parse --abbrev-ref HEAD)"
 echo "binary : $(date -r "$BIN/llama-perplexity" '+%Y-%m-%d %H:%M')"
-echo "logits : $BASE  (need ~${NEED} GB, ${FREE} GB free)"
+if [ -s "$BASE" ]; then
+  echo "logits : $BASE (reusing, $(du -g "$BASE" | cut -f1) GB on disk)"
+else
+  echo "logits : $BASE  (to generate, need ~${NEED} GB, ${FREE} GB free)"
+fi
 echo
-[ "$FREE" -lt "$NEED" ] && { echo "ABORT: not enough space for the base logits"; exit 1; }
 
 # 1. reference logits. -fa on with f16 KV both sides so the ONLY variable is the weights.
+# The space check belongs HERE, not above: an existing base file is reused and needs no
+# room, and hoisting the check aborted a legitimate reuse run at 14 GB free on 2026-08-23.
 if [ ! -s "$BASE" ]; then
+  [ "$FREE" -lt "$NEED" ] && { echo "ABORT: not enough space for the base logits"; exit 1; }
   echo "--- generating reference logits from $(basename "$REF") ---"
   "$BIN/llama-perplexity" -m "$REF" -f "$W" -c "$CTX" --chunks "$CHUNKS" -fa on \
     -ctk f16 -ctv f16 --kl-divergence-base "$BASE" >"$OUT/$TAG-ref.log" 2>&1 \

@@ -60,7 +60,16 @@ the drafter must be the pure-Q4_0 requant. Both fast paths are hard-gated on
 > and changes nothing else in the stack. **Size that against streamed bytes, not file size**:
 > `token_embd.weight` is another 715 MB in the file but is a `GET_ROWS` gather, so the real
 > denominator is **13.665 GiB, not 14.33** - which also puts batch-1 at **74% of the 273 peak,
-> not 77%**. Speculation itself is lossless (byte-identical output across configs), so
+> not 77%**.
+>
+> **Measured, three ways (same source, one variable at a time). Same top token vs q8_0:
+> 90.75% (today) -> 91.97% (q6_K head) -> 93.42% (+ Q4_K body).** Batch-1 cost -2.1% and
+> -7.5%, and all three run at 192-195 GB/s, so at batch 1 the spread is pure byte count and
+> K-quant dequant is free. **Adopt the head, skip the body**: the head's 2.1% is exactly its
+> bytes, while the body costs 7.5% before any verify-width penalty and forfeits skinny and
+> repack for +1.45 pp and a *worse* extreme tail (99.9% KLD +29%, max +34%).
+> `~/play/Qwen3.8-27B-uniform-Q4_0-q6Khead.gguf` exists; **moving the prod pick to it is the
+> owner's call and has not been taken unilaterally.** Speculation itself is lossless (byte-identical output across configs), so
 > the weight format is the only place in this stack where speed is bought with quality.
 
 **Depth must stay <= 7.** Skinny routes `ne11 <= 8` and depth d verifies d+1 columns, so
@@ -283,10 +292,20 @@ Current state:
   is blind to it, which retires `mtp-kv-results.md`'s "premium tensors bought nothing
   measurable". Next step is a **q6_K output head** requantized from the q8_0 intermediate we
   already have, re-measured against the kept reference logits (~12 min): our `output.weight`
-  is Q4_0 at 715 MB, a quantized head produces top-token disagreement specifically, and the
-  fix costs ~2% of bandwidth. Harness: `perf/run-quant-kld.sh` (M/MD overridable, ARMS filter
-  added to `run-prod-pick.sh` the same day). **Read this before building any kernel that
-  hard-gates on Q4_0.**
+  is Q4_0 at 715 MB. **Three builds measured from one source**: the q6_K head buys +1.23 pp of
+  top-token agreement for exactly its 2.23% of bytes, a Q4_K body buys +1.45 pp more for 9.7%
+  and the whole fast path. **Adopt the head, skip the body.**
+  Two findings that outlive the decision. **PPL is actively misleading here, demonstrated:**
+  Q4_K_M scores 0.98969, a *better* perplexity than the q8_0 it was quantized from, while
+  disagreeing with it on 6.6% of tokens - so any quant conclusion in `perf/` resting on PPL
+  rests on a statistic that can move the wrong way. And **cross-model speculative t/s is
+  confounded** - acceptance is a property of the generated text, and the two head builds simply
+  swapped acceptance between n_predict 300 and 600 (46.9/40.3 then 41.3/47.1), flipping the
+  t/s delta from -15.5% to +3.2%. Use batch-1 for any cross-model speed claim.
+  **`ffn-utilization.md`'s worry is resolved in Q4_0's favour: a register-tile kernel targeting
+  Q4_0 does not bake in a lobotomy** - the body format is worth ~1.45 pp, not the bulk of the
+  gap. Harness: `perf/run-quant-kld.sh` (M/MD overridable, ARMS filter added to
+  `run-prod-pick.sh` the same day).
 - **`ffn-utilization.md` - OPEN, and on today's evidence the largest lever on the board.
   Runs 1-2 are in (2026-08-23) and they correct the file's own diagnosis - read its Status
   block first.** The width-7 pass really does cost ~2x and the FFN really is ~half the round
