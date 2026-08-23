@@ -1,0 +1,15 @@
+Explain what this function does, then list any bugs you find.
+
+static int ring_push(ring_t *r, const uint8_t *src, size_t n) {
+    size_t head = atomic_load(&r->head);
+    size_t tail = atomic_load(&r->tail);
+    size_t free = r->cap - (head - tail);
+    if (n > free) return -EAGAIN;
+    size_t off = head & (r->cap - 1);
+    size_t first = r->cap - off;
+    if (first > n) first = n;
+    memcpy(r->buf + off, src, first);
+    memcpy(r->buf, src + first, n - first);
+    atomic_store(&r->head, head + n);
+    return 0;
+}

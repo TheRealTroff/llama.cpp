@@ -27,12 +27,16 @@ MD=/Users/troff/play/Qwen3.8-27B-DFlash2-pureQ4_0.gguf
 PORT=8094
 OUT=/Users/troff/play/kvquant-experiments/results
 TAG=${TAG:-accpos-$(date +%m%d-%H%M)}
+# PROMPT selects the workload. Acceptance is a property of the generated text, so style
+# matters here far more than it does for any timing run.
+PROMPT=${PROMPT:-/Users/troff/play/benchprompt.txt}
 mkdir -p "$OUT"
 
 PICK_ENV=(GGML_MV_NC=2 GGML_MM_SKINNY=5 GGML_FA_VEC_MAX=5 GGML_FA_MM_NWG=8 GGML_GDN_FUSE_WB=1)
 
 echo "=== acc-per-pos trace: $TAG ==="
 echo "commit : $(cd "$B" && git rev-parse --short HEAD) on $(cd "$B" && git rev-parse --abbrev-ref HEAD) ($(cd "$B" && git status --porcelain | wc -l | tr -d ' ') dirty)"
+echo "prompt : $PROMPT"
 echo "note   : dirty files are docs/probes only - no source under ggml/ common/ tools/, so the build is current"
 echo
 
@@ -58,7 +62,7 @@ run_one() {
 
   python3 -c "
 import json
-p = open('/Users/troff/play/benchprompt.txt').read()
+p = open('$PROMPT').read()
 print(json.dumps({'prompt': p, 'n_predict': $npred, 'temperature': 0}))" \
   | curl -s -X POST "http://127.0.0.1:$PORT/completion" -d @- | python3 -c "
 import json,sys,hashlib
@@ -69,8 +73,9 @@ t=d.get('timings',{}); c=d.get('content','')
 gen=t.get('predicted_n',0); dn=t.get('draft_n',0); da=t.get('draft_n_accepted',0)
 rounds = gen - da
 acc = 100*da/dn if dn else 0
-print('[%-10s] acc=%5.1f%%  drafted/rd=%4.2f  committed/rd=%4.2f  rounds=%3d  sha1=%s %s'
-      % ('$label', acc, dn/rounds if rounds else 0, gen/rounds if rounds else 0, rounds,
+print('[%-16s] prompt_n=%5d  acc=%5.1f%%  drafted/rd=%4.2f  committed/rd=%4.2f  rounds=%3d  sha1=%s %s'
+      % ('$label', t.get('prompt_n',0), acc, dn/rounds if rounds else 0,
+         gen/rounds if rounds else 0, rounds,
          hashlib.sha1(c.encode()).hexdigest()[:12], '$clamp'))
 "
   # give print_timings() a moment to land in the log
