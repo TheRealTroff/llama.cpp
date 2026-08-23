@@ -5,11 +5,19 @@ new kernel-level measurement taken the same day (below).
 
 Where it stands after runs 4-6 (2026-08-23), so a new session does not re-run these:
 
-- **The shelf is still unexplained.** Three candidate causes are now measured and dead: the
-  register tile (run 2), `nr0` (run 1), and the f16y convert dispatch (run 4). The tile is
+- **The shelf is still unexplained, but part of it is now priced.** Three candidate causes are
+  measured and dead: the register tile (run 2), `nr0` (run 1), and the f16y convert dispatch
+  (run 4). What is measured and *real* is K parallelism: the kernel wants more lanes along K
+  than one simdgroup can give it, worth -4.2% on the width-4 round and saturating at 32-64
+  lanes (`ksplit-width34.md`). That narrows the width-4 ratio to ~1.48x; it does not close it. The tile is
   off the table, `ext` is the right family (run 3, and run 7 closes the family question
   against plain `mul_mv` too), and the convert is a win, not a tax.
-- **`nxpsg=16` at widths 3-4 is the one live *tuning* lever**, worth **-1.5% to -1.7%** on a
+- ~~**`nxpsg=16` at widths 3-4 is the one live *tuning* lever**~~ **SUPERSEDED 2026-08-23 by
+  `ksplit-width34.md`: `nxpsg=32` was never tried and beats 16 (ffn_down width 3 -18% against
+  -5%), and splitting K across *simdgroups* (`kp`, new kernel on branch
+  `metal-mv-ext-ksplit`) is worth -5.4%/-4.3% on a pass at widths 3/4 and -4.2% on the
+  width-4 round, with n6 flat and byte-identical output.** The run-6 numbers below stand as
+  measured; they were not the ceiling. `nxpsg=16` was worth **-1.5% to -1.7%** on a
   `llama-bench` pass at N=3/N=4 (run 6) - about a third of what run 3's per-shape table
   implied. ~~the one live lever~~ **Re-scoped 2026-08-23: it is a tuning lever against a
   1.48x deficit, so it cannot close the gap on its own.** See "The tile does not fit the
@@ -227,6 +235,11 @@ kernel is latency-bound, not bandwidth-bound.
    demonstrated false.
 5. **Toolchain, if 3-4 stall:** their kernel compiles standalone with `xcrun metal`, so
    `metal-objdump` / `metal-nm` will diff their register allocation against ours directly.
+6. **Done 2026-08-23 - `ksplit-width34.md`.** Split K across simdgroups the way their
+   `verify_m4` does. It pays, it saturates, and it produced the first measured reason width 4
+   is harder than width 3 that is not the tile: the lane reduction costs `nr0*r1ptg` x
+   `log2(nxpsg)` shuffles, so it grows with the verify width, while the cross-simdgroup
+   reduction does not.
 
 ## Run 1 (2026-08-22, caffeinated): nr0 2 -> 4 is not the lever
 
