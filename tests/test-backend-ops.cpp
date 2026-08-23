@@ -10213,14 +10213,23 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
 
     // the 27B (qwen35) verify projections, at the widths speculation actually emits.
     // the cold-streaming case above cannot see the width 3-4 weakness: its ne01 is 16384,
-    // so nr0 selection (ne11 >= 5 || ne01 >= 8192) already gives 4. ffn_down, attn and gdn
-    // have ne01 < 8192 and so land on nr0 = 2, which is the corner. see perf/width4-verify.md
+    // so nr0 selection (ne11 >= 5 || ne01 >= 8192) already gives 4. these have ne01 < 8192
+    // and so land on nr0 = 2, which is the corner. see perf/width4-verify.md
+    //
+    // every shape here is checked against the GGUF's own tensors, and the trailing count is
+    // calls per round at width 7 from the tagged profile. the set used until 2026-08-23 had
+    // a case labelled "attn q" at m=3072 - NO tensor in this model has a 3072 dim, and the
+    // real attn_q is four times wider - while three of the seven real projections were
+    // missing entirely. do not add a shape here without checking it against the model.
     for (int bs : {1, 2, 3, 4, 5, 6, 7, 8}) {
         for (ggml_type type_a : {GGML_TYPE_Q4_0}) {
-            test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32, 17408, bs,  5120, {1, 1}, {1, 1})); // ffn gate/up
-            test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32,  5120, bs, 17408, {1, 1}, {1, 1})); // ffn down
-            test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32,  6144, bs,  5120, {1, 1}, {1, 1})); // gdn qkv
-            test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32,  3072, bs,  5120, {1, 1}, {1, 1})); // attn q
+            test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32, 17408, bs,  5120, {1, 1}, {1, 1})); // ffn_gate + ffn_up   x128
+            test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32,  5120, bs, 17408, {1, 1}, {1, 1})); // ffn_down            x64
+            test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32,  5120, bs,  6144, {1, 1}, {1, 1})); // attn_output/ssm_out x64
+            test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32, 10240, bs,  5120, {1, 1}, {1, 1})); // attn_qkv            x48
+            test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32,  6144, bs,  5120, {1, 1}, {1, 1})); // attn_gate           x48
+            test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32, 12288, bs,  5120, {1, 1}, {1, 1})); // attn_q              x16
+            // attn_k/v (5120,1024) x32 is already covered by the small-ne01 block below
         }
     }
 
