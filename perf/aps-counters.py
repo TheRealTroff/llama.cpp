@@ -19,7 +19,11 @@ APS = Apple Performance Statistics. Layout:
 STATUS: the container is decoded, the payload is not. Two things are still open, and this
 script exists so the next session starts from here rather than from Instruments again:
 
-  1. Counter names are hashed - `_<64 hex>`, 35 of them. They are NOT sha256/sha1/md5/sha512
+  1. RESOLVED 2026-08-23: those `_<64 hex>` strings are NOT hashes - they are GRC enable
+     strings, and agxps_counter_get_grc_enable_str returns them beside the plaintext counter
+     names. Run perf/agxps-probe.py on the same streamData to name them, and read
+     perf/aps-counters.md "Round 4". The stale text below is kept so nobody retries the
+     digests: Counter names are hashed - `_<64 hex>`, 35 of them. They are NOT sha256/sha1/md5/sha512
      of the `vendorCounters` strings in Instruments' GPUCounterGraph.plist (534 names, all
      variants tried, 0 hits), and no mapping table exists on disk anywhere under
      GPUDebugger.ideplugin, Instruments.app or the GPUTools frameworks. Resolution is
