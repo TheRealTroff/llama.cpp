@@ -1,7 +1,30 @@
 # Getting an occupancy number: four ways in, pick one
 
-Status: **open**. Written 2026-08-23 as a routing stub for a fresh session. Nothing here is
-measured; it is the option board.
+Status: **open, but the original option board is CLOSED.** Written 2026-08-23 as a routing
+stub; ~~nothing here is measured; it is the option board~~ - that was true when written and is
+no longer. Everything below the board has since been measured. Resolution of A-D, all the
+same day:
+
+- **A (unlock the counter names): DONE, and its premise was wrong.** The `_<64 hex>` strings
+  were never digests - they are GRC enable strings. The blocker was `gpuGeneration=2` (Xcode's
+  enum, not agxps's; this is gen 16 variant 5) and then a single descriptor field,
+  `SystemTimePeriod`. Names *and* values are readable: `aps-counters.md`, `agxps-probe.py`,
+  `aps-usc-values.py`.
+- **B (identify counters by behaviour): CLOSED, wrong stream.** `Derived Counter Sample Data`
+  is not the GRC stream, and `aps-samples.py`'s record framing is wrong besides (stride 64/128/
+  352, not uniform 64). Do not restart it.
+- **C (drive the replay over DY): HALF DONE.** The launch click is gone
+  (`dy-replayer-launch.py`, `headless-replay-probe.md`) but `APSCounterData` comes back empty,
+  so counters on NEW captures are still blocked. The gate is Xcode-side `GTShaderProfiler`.
+- **D (attack width 4 without the counter): SUPERSEDED**, see below - it is downstream, not an
+  alternative.
+
+**What the counters then said: it is not occupancy and it is not bandwidth.** Occupancy is
+flat between width 3 and 4; DRAM sits at 47% of peak at width 4 against 92% at batch 1
+(`width4-limiter.md`). Nothing is saturated, which is a latency/stall signature nobody has yet
+localised. The tile-waste reading survives as inference only, and cannot be tested from the
+captures on disk - see `skinny-width-captures.md` for the matched pair that would test it, and
+`nc-nr3-refuted.md` for what was tried and failed.
 
 **Priority raised 2026-08-23 (owner's call): this is load-bearing, not curiosity.** The
 counter work is the instrument for the width-4 gap, which is the whole cross-framework gap.
