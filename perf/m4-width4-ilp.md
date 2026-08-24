@@ -116,5 +116,36 @@ each tile carries half the output-row arithmetic and live state. Dispatch is `(n
 groups of 32 threads.
 
 The embedded Metal source compiles. Offline `applegpu_g16s` translation reports 2184 bytes
-native text and zero spill, versus 3988/zero for K1 and 3658/zero for K2. Performance and GPU
-correctness are unmeasured.
+native text and zero spill, versus 3988/zero for K1 and 3658/zero for K2. Exact-shape MTL0
+correctness passes the CPU reference.
+
+Two full exported-model runs were extremely stable:
+
+| operation | baseline, us | R2, us | gain |
+|---|---:|---:|---:|
+| attn_output | 127.340 | 117.580 | 7.7% |
+| ffn_down | 359.730 | 341.640 | 5.0% |
+| z / attn_gate | 127.040 | 116.940 | 8.0% |
+| node13 / qkv | 201.455 | 189.735 | 5.8% |
+| Qcur | 240.035 | 222.315 | 7.4% |
+| ffn_gate | 329.490 | 306.195 | 7.1% |
+
+Across the serialized MAT_MUL calls this removes 6.095 ms/round. Applying the separately
+documented 1.21 concurrency-hiding factor estimates about **5.04 ms/round** end-to-end. R2 is
+therefore validated for this exported model; K1 remains refuted.
+
+### Static inner-schedule comparison with MLX
+
+The exact MLX source loads each activation as one `Vec8`, then runs a scalar `ki=0..7` loop.
+For each nibble it forms `wv = float(q)*scale + bias` and issues four scalar activation/weight
+accumulations per output row. R2 instead loads two `half4`s, converts vector nibbles through
+`half4`, evaluates two `dot(float4(weight), float4(activation))` expressions per row/column,
+and multiplies each four-lane dot by the block scale. Thus the morphology and traffic now agree,
+but the instruction schedule and floating-point association do not.
+
+The next bounded probe should be an **R2 scalar-inner sibling**: retain the validated 2x4 tile,
+single simdgroup, SoA layout, dispatch, and FP32 accumulators, but load a `half8`/`Vec8`, unroll
+eight scalar nibbles, form the symmetric Q4_0 weight as `float(q)*d - 8*d`, and use explicit
+scalar `fma` into the eight accumulators. This holds traffic and geometry fixed and tests whether
+M4 schedules MLX's scalar FMA stream better than Metal's vector `dot`; it should not be inferred
+from source-level vector width or native text size.
