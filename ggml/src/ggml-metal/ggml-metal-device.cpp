@@ -704,6 +704,45 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_solve_tri(ggml_m
     return res;
 }
 
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_w4(ggml_metal_library_t lib, const ggml_tensor * op, int nr0, int nsg, int nc) {
+    char base[256];
+    char name[256];
+
+    const int ne12 = op->src[1]->ne[2];
+    const int r2   = ne12 / op->src[0]->ne[2];
+    const int r3   = op->src[1]->ne[3] / op->src[0]->ne[3];
+
+    static const int env_w4 = getenv("GGML_W4") ? atoi(getenv("GGML_W4")) : 1;
+
+    // 1 = lanes along K, 2 = lanes along rows, 3 = wide block loads, 4/5 = 3 with CB=1/2
+    const char * variant = env_w4 == 2 ? "r" : (env_w4 == 3 ? "w" : (env_w4 == 4 ? "c1" : (env_w4 == 5 ? "c2" : (env_w4 == 6 ? "e" : (env_w4 == 7 ? "h" : (env_w4 == 8 ? "x4" : (env_w4 == 9 ? "x8" : (env_w4 == 10 ? "x16" : (env_w4 == 11 ? "s1" : (env_w4 == 12 ? "s2" : ""))))))))));
+
+    snprintf(base, 256, "kernel_mul_mv_w4%s_%s_%s_nr%d_nc%d", variant,
+             ggml_type_name(op->src[0]->type), ggml_type_name(op->src[1]->type), nr0, nc);
+    snprintf(name, 256, "%s_nsg=%d_ne12=%d_r2=%d_r3=%d", base, nsg, ne12, r2, r3);
+
+    ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
+    if (!res.pipeline) {
+        ggml_metal_cv_t cv = ggml_metal_cv_init();
+
+        ggml_metal_cv_set_int16(cv, (int16_t) nsg,  FC_MUL_MV + 0);
+        ggml_metal_cv_set_int16(cv, (int16_t) ne12, FC_MUL_MV + 2);
+        ggml_metal_cv_set_int16(cv, (int16_t) r2,   FC_MUL_MV + 3);
+        ggml_metal_cv_set_int16(cv, (int16_t) r3,   FC_MUL_MV + 4);
+
+        res = ggml_metal_library_compile_pipeline(lib, base, name, cv);
+
+        ggml_metal_cv_free(cv);
+    }
+
+    res.nr0  = nr0;
+    res.nr1  = nc;
+    res.nsg  = nsg;
+    res.smem = 0;
+
+    return res;
+}
+
 ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm_skinny(ggml_metal_library_t lib, const ggml_tensor * op, bool di) {
     char base[256];
     char name[256];

@@ -2627,6 +2627,58 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
     // small-ne01 dsts dispatch starved (2 TGs for [*,48]) and pay a flat ~80 us at N=7;
     // the mv structure keeps rows/nr0 parallelism. The NC>=3 fixed spill penalty is paid
     // per row-group, so small ne01 dodges most of it.
+    // GGML_W4=1: from-scratch verify-width kernel, ne11 == 4 only (perf/w4-ffn-scratch.md)
+    static const int env_w4     = getenv("GGML_W4")     ? atoi(getenv("GGML_W4"))     : 0;
+    static const int env_w4_nr0 = getenv("GGML_W4_NR0") ? atoi(getenv("GGML_W4_NR0")) : 4;
+    static const int env_w4_nsg = getenv("GGML_W4_NSG") ? atoi(getenv("GGML_W4_NSG")) : 4;
+    // probe only, WRONG RESULTS: every column reads activation column 0, so the activation
+    // working set shrinks by ne11x with registers, arithmetic and weight traffic unchanged
+    static const int env_w4_y1  = getenv("GGML_W4_Y1")  ? atoi(getenv("GGML_W4_Y1"))  : 0;
+
+    if (env_w4 > 0 && (ne11 == 4 || ((env_w4 == 3 || env_w4 == 6 || env_w4 == 7) && (ne11 == 1 || ne11 == 2))) &&
+        op->src[0]->type == GGML_TYPE_Q4_0 &&
+        op->src[1]->type == GGML_TYPE_F32 &&
+        !ggml_is_transposed(op->src[0]) &&
+        !ggml_is_transposed(op->src[1]) &&
+        ne00 % 32 == 0 && nb11 % 16 == 0) {
+        auto pipeline = ggml_metal_library_get_pipeline_mul_mv_w4(lib, op, env_w4_nr0, env_w4_nsg, (int) ne11);
+
+        ggml_metal_kargs_mul_mv args = {
+            /*.ne00 =*/ ne00,
+            /*.ne01 =*/ ne01,
+            /*.ne02 =*/ ne02,
+            /*.nb00 =*/ nb00,
+            /*.nb01 =*/ nb01,
+            /*.nb02 =*/ nb02,
+            /*.nb03 =*/ nb03,
+            /*.ne10 =*/ ne10,
+            /*.ne11 =*/ ne11,
+            /*.ne12 =*/ ne12,
+            /*.nb10 =*/ nb10,
+            /*.nb11 =*/ env_w4_y1 ? 0 : nb11,
+            /*.nb12 =*/ nb12,
+            /*.nb13 =*/ nb13,
+            /*.ne0  =*/ ne0,
+            /*.ne1  =*/ ne1,
+            /*.nr0  =*/ pipeline.nr0,
+            /*.r2   =*/ r2,
+            /*.r3   =*/ r3,
+        };
+
+        ggml_metal_encoder_set_pipeline(enc, pipeline);
+        ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);
+        ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[0]), 1);
+        ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[1]), 2);
+        ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         3);
+
+        // w4s puts every simdgroup of the threadgroup on the same rows, different columns
+        const int nrptg = (env_w4 >= 11) ? pipeline.nr0 : pipeline.nr0*pipeline.nsg;
+
+        ggml_metal_encoder_dispatch_threadgroups(enc, ((ne01 + nrptg - 1)/nrptg), 1, ne12*ne13, 32, pipeline.nsg, 1);
+
+        return 1;
+    }
+
     static const int env_mv_nc       = getenv("GGML_MV_NC")       ? atoi(getenv("GGML_MV_NC"))       : 0;
     static const int env_mv_nc_small = getenv("GGML_MV_NC_SMALL") ? atoi(getenv("GGML_MV_NC_SMALL")) : 0;
 

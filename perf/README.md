@@ -445,6 +445,25 @@ Current state:
   `mul_mm_skinny` family at all (pre-existing, prod's source fails the same way, while
   `mul_mv` still reproduces its calibration exactly), and `perf/agx-spill-probe.py` gained
   `--cvb` for bool function constants.
+- **`w4-ffn-scratch.md` - OPEN. What is possible on `ffn_gate/up` at width 4, measured from
+  scratch.** Nine kernels on branch `metal-ffn-w4-scratch` (`GGML_W4=<n>`, `FC_MUL_MV + 10..11`,
+  unmerged, all `test-backend-ops` clean). **The ceiling is ~200 us** (the width-1 mv call on the
+  same 50.1 MB; four columns of arithmetic are 102 us and fit under it), **the best existing
+  route is `ext nr0=2` at 314**, skinny 349, and **the best from-scratch kernel is 392**. The
+  useful part is the width curve of one kernel: **203.5 us at width 1, 210.8 at width 2 (the
+  second column is free, exactly as the roofline says), 501.5 at width 4**. The binding
+  constraint is per-thread live state, not arithmetic and not bandwidth: holding the activations
+  as `float4x4` instead of `half4` costs 739 and spills to 1657 at `nr0=8`, while splitting the
+  columns over two simdgroups recovers 22% - and then stops, because **the split doubles the
+  weight stream** (same kernel, one simdgroup and two columns: 213.8; two simdgroups and four:
+  392.6 = 100 MB at the DRAM roof). That closes the design space to three measured options - hold
+  the columns per thread (502), split them and pay a second stream (392), or stage the weights in
+  threadgroup memory, **which is what skinny already does** at 349 while half-using an 8-wide MMA
+  tile. Two side results: the weight stream **must** be lane-contiguous (giving each lane its own
+  row makes activations uniform, cuts their traffic 32x, and is **14x slower**), and the activation
+  working set is worth ~14% (`GGML_W4_Y1=1` probe, 501.5 -> 430.6). Tool: `perf/w4-routes.py`.
+  **The open item is the one design left: threadgroup-staged weights feeding a two-simdgroup
+  column split - skinny's fetch sharing without its MMA waste, bounded at ~213 us.**
 - **`skinny-bprefetch-refuted.md` - CLOSED, refuted, and the incidental find pays again.**
   The B hoist `skinny-tpr-bsplit.md` named as the next lever is **-0.70% e2e**
   (`GGML_MM_SKINNY_BPF`, `FC_MUL_MM + 10`, branch `metal-mm-skinny-bprefetch`, unmerged).
