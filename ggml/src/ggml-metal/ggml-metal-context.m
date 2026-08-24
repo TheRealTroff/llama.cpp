@@ -858,6 +858,10 @@ void ggml_metal_set_n_cb(ggml_metal_t ctx, int n_cb) {
                     break;
                 }
 
+                if (cb_idx == n_cb_l && k == 0) {
+                    ggml_metal_op_prepack_q4_0(ctx_op);
+                }
+
                 const int res = ggml_metal_op_encode(ctx_op, 0);
 
                 char key[192];
@@ -908,6 +912,12 @@ void ggml_metal_set_n_cb(ggml_metal_t ctx, int n_cb) {
                 ctx->debug_fusion,
                 NULL,
                 0);
+
+            // the main thread's command buffer is enqueued before every other one, so this is
+            // the only point in the graph where a weight can be rewritten in place safely
+            if (cb_idx == n_cb_l) {
+                ggml_metal_op_prepack_q4_0(ctx_op);
+            }
 
             for (int idx = 0; idx < ggml_metal_op_n_nodes(ctx_op); ++idx) {
                 const int res = ggml_metal_op_encode(ctx_op, idx);

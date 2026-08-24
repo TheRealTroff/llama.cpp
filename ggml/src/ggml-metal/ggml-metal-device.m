@@ -1031,9 +1031,15 @@ struct ggml_metal_buffer_id ggml_metal_device_get_repack_buffer(ggml_metal_devic
     [dev->repack_lock lock];
 
     id<MTLBuffer> buf = dev->repack_bufs[key];
-    if (buf) {
+    if (buf && [buf length] >= size) {
         *is_new = false;
     } else {
+        // a cached entry that is too small can only happen in test mode (GGML_MV_REPACK=2),
+        // where test-backend-ops hands out the same address to tensors of different shapes
+        if (buf) {
+            [buf release];
+            [dev->repack_bufs removeObjectForKey:key];
+        }
         buf = [dev->mtl_device newBufferWithLength:size options:MTLResourceStorageModePrivate];
         if (buf == nil) {
             GGML_LOG_ERROR("%s: failed to allocate repack buffer of size %zu\n", __func__, size);
@@ -1630,6 +1636,13 @@ struct ggml_metal_buffer {
 
     bool use_residency_sets;
 
+    // offsets of tensors in this buffer that have been converted to the deinterleaved q4_0
+    // layout in place (GGML_MV_REPACK=1). Held per buffer rather than per device so that the
+    // record cannot outlive the memory and be inherited by a different model loaded at the
+    // same address.
+    NSMutableSet * repacked;
+    NSLock       * repacked_lock;
+
     // optional MTLResidencySet
     // note: cannot use explicitly "id<MTLResidencySet>" here because it is not available on certain OSes
     id rset;
@@ -1905,6 +1918,15 @@ ggml_metal_buffer_t ggml_metal_buffer_map(ggml_metal_device_t dev, void * ptr, s
 void ggml_metal_buffer_free(ggml_metal_buffer_t buf) {
     ggml_metal_device_rsets_rm(buf->dev, buf->rset);
 
+    if (buf->repacked) {
+        [buf->repacked release];
+        buf->repacked = nil;
+    }
+    if (buf->repacked_lock) {
+        [buf->repacked_lock release];
+        buf->repacked_lock = nil;
+    }
+
     for (int i = 0; i < buf->n_buffers; i++) {
         [buf->buffers[i].metal release];
     }
@@ -1928,6 +1950,48 @@ void * ggml_metal_buffer_get_base(ggml_metal_buffer_t buf) {
 
 bool ggml_metal_buffer_is_shared(ggml_metal_buffer_t buf) {
     return buf->is_shared;
+}
+
+bool ggml_metal_buffer_is_owned(ggml_metal_buffer_t buf) {
+    return buf->owned;
+}
+
+static bool ggml_metal_buffer_repack_lookup(ggml_metal_buffer_t buf, const struct ggml_tensor * t, bool claim) {
+    const size_t offs = (size_t) ((char *) t->data - (char *) buf->all_data);
+
+    NSNumber * key = [NSNumber numberWithUnsignedLongLong:(unsigned long long) offs];
+
+    // the lock itself has to exist before it can be taken, and the first call may come from
+    // any of the encoding threads
+    static NSLock * init_lock = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ init_lock = [[NSLock alloc] init]; });
+
+    [init_lock lock];
+    if (!buf->repacked) {
+        buf->repacked      = [[NSMutableSet alloc] init];
+        buf->repacked_lock = [[NSLock alloc] init];
+    }
+    [init_lock unlock];
+
+    [buf->repacked_lock lock];
+
+    const bool present = [buf->repacked containsObject:key];
+    if (claim && !present) {
+        [buf->repacked addObject:key];
+    }
+
+    [buf->repacked_lock unlock];
+
+    return claim ? !present : present;
+}
+
+bool ggml_metal_buffer_repack_claim(ggml_metal_buffer_t buf, const struct ggml_tensor * t) {
+    return ggml_metal_buffer_repack_lookup(buf, t, true);
+}
+
+bool ggml_metal_buffer_repack_done(ggml_metal_buffer_t buf, const struct ggml_tensor * t) {
+    return ggml_metal_buffer_repack_lookup(buf, t, false);
 }
 
 void ggml_metal_buffer_memset_tensor(ggml_metal_buffer_t buf, struct ggml_tensor * tensor, uint8_t value, size_t offset, size_t size) {

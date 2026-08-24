@@ -31,6 +31,10 @@ int ggml_metal_op_node_idx(ggml_metal_op_t ctx, int i);
 
 int ggml_metal_op_encode(ggml_metal_op_t ctx, int idx);
 
+// one-time in-place conversion of this graph's q4_0 weights to the deinterleaved layout
+// (GGML_MV_REPACK=1). Must be encoded before any node of the graph.
+void ggml_metal_op_prepack_q4_0(ggml_metal_op_t ctx);
+
 //
 // available ops:
 //

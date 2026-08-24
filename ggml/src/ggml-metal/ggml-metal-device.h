@@ -138,10 +138,11 @@ struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_gated_del
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_solve_tri         (ggml_metal_library_t lib, const struct ggml_tensor * op);
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_ext        (ggml_metal_library_t lib, const struct ggml_tensor * op, int nsg, int nxpsg, int r1ptg, int nr0, enum ggml_type tsrc1, bool di);
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_repack_q4_0_di    (ggml_metal_library_t lib);
-struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_nc         (ggml_metal_library_t lib, const struct ggml_tensor * op, int nc);
+struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_repack_q4_0_di_ip (ggml_metal_library_t lib);
+struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_nc         (ggml_metal_library_t lib, const struct ggml_tensor * op, int nc, bool di);
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm_skinny     (ggml_metal_library_t lib, const struct ggml_tensor * op, bool di);
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv            (ggml_metal_library_t lib, const struct ggml_tensor * op, bool di);
-struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm            (ggml_metal_library_t lib, const struct ggml_tensor * op);
+struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm            (ggml_metal_library_t lib, const struct ggml_tensor * op, bool di);
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm_id_map0    (ggml_metal_library_t lib, int ne02, int ne20);
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm_id         (ggml_metal_library_t lib, const struct ggml_tensor * op);
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_id         (ggml_metal_library_t lib, const struct ggml_tensor * op);
@@ -314,6 +315,8 @@ const struct ggml_metal_device_props * ggml_metal_device_get_props(ggml_metal_de
 // then encode the repack kernel before first use)
 struct ggml_metal_buffer_id ggml_metal_device_get_repack_buffer(ggml_metal_device_t dev, const struct ggml_tensor * t, size_t size, bool * is_new);
 
+
+
 //
 // device buffers
 //
@@ -326,6 +329,16 @@ ggml_metal_buffer_t ggml_metal_buffer_map (ggml_metal_device_t dev, void * ptr, 
 void   ggml_metal_buffer_free     (ggml_metal_buffer_t buf);
 void * ggml_metal_buffer_get_base (ggml_metal_buffer_t buf);
 bool   ggml_metal_buffer_is_shared(ggml_metal_buffer_t buf);
+
+// false for a buffer wrapped around host memory (mmap-ed weights): that memory is mapped
+// PROT_READ from the model file, so nothing may be written into it
+bool   ggml_metal_buffer_is_owned (ggml_metal_buffer_t buf);
+
+// in-place repack (GGML_MV_REPACK=1): claim returns true for the caller that must encode the
+// conversion of t, done reports whether t is already in the deinterleaved layout. Recorded on
+// the buffer, so it cannot outlive the memory it describes.
+bool   ggml_metal_buffer_repack_claim(ggml_metal_buffer_t buf, const struct ggml_tensor * t);
+bool   ggml_metal_buffer_repack_done (ggml_metal_buffer_t buf, const struct ggml_tensor * t);
 
 void   ggml_metal_buffer_memset_tensor(ggml_metal_buffer_t buf, struct ggml_tensor * tensor, uint8_t value, size_t offset, size_t size);
 void   ggml_metal_buffer_set_tensor   (ggml_metal_buffer_t buf, struct ggml_tensor * tensor, const void * data, size_t offset, size_t size);

@@ -10,6 +10,8 @@
 
 #include <cassert>
 #include <algorithm>
+#include <unordered_set>
+#include <vector>
 #include <limits>
 #include <cmath>
 
@@ -2521,15 +2523,182 @@ size_t ggml_metal_op_mul_mat_extra_src1f16(const ggml_tensor * op) {
     return GGML_PAD(ggml_nelements(op->src[1])*sizeof(ggml_fp16_t), 32);
 }
 
-// weight-repack probe (GGML_MV_REPACK=1): redirect an immutable 2D q4_0 weight to a persistent
-// deinterleaved side buffer ([d x nblk][pad16][qs x nblk] per row), encoding the one-time repack
-// kernel on first use. On success, bid_src0/nb01_eff point at the repacked copy.
+// A q4_0 weight may be converted to the deinterleaved layout in the buffer it already occupies
+// only if every reader of it can read that layout, because the interleaved one is then gone:
+//
+//  - the buffer must be one we allocated. mmap-ed weights are PROT_READ pages of the model
+//    file, so llama-server has to be started with --load-mode none (or direct_io) for this to
+//    engage at all
+//  - the deinterleaved row must be exactly nb01 bytes, which holds when nblk % 8 == 0 and
+//    makes doff == 2*nblk, so the permutation fits where it is
+//  - mul_mv, mul_mv_nc, mul_mm and mul_mm_skinny all have a _di kernel. mul_mv_ext has one
+//    only for the f16-activation path, which is what >= 16 M element weights take, so smaller
+//    weights are left interleaved rather than given a kernel they cannot use
+//  - a row must fit in threadgroup memory, since the in-place kernel stages it there
+static bool ggml_metal_op_repack_inplace_eligible(const ggml_tensor * t) {
+    if (t->type != GGML_TYPE_Q4_0 || t->view_src || t->ne[2] != 1 || t->ne[3] != 1) {
+        return false;
+    }
+
+    if (!t->buffer || t->buffer->usage != GGML_BACKEND_BUFFER_USAGE_WEIGHTS) {
+        return false;
+    }
+
+    if (!ggml_metal_buffer_is_owned((ggml_metal_buffer_t) t->buffer->context)) {
+        return false;
+    }
+
+    const int64_t nblk = t->ne[0]/32;
+
+    if (nblk % 8 != 0 || t->nb[1] != 18*(uint64_t) nblk) {
+        return false;
+    }
+
+    if (t->ne[0]*t->ne[1] < 16*1024*1024) {
+        return false;
+    }
+
+    if (18*nblk > 32768) {
+        return false;
+    }
+
+    return true;
+}
+
+// Convert every eligible q4_0 weight of this graph in place, once. Encoded at the head of the
+// command buffer the main thread enqueues first, so nothing in the graph can read a weight
+// that is half converted, whichever thread encodes it.
+void ggml_metal_op_prepack_q4_0(ggml_metal_op_t ctx) {
+    static const int env_repack = getenv("GGML_MV_REPACK") ? atoi(getenv("GGML_MV_REPACK")) : 0;
+
+    if (env_repack != 1) {
+        return;
+    }
+
+    // both of these route a repacked weight to a kernel that has no _di twin
+    static const int env_f16y = getenv("GGML_MV_EXT_F16Y") ? atoi(getenv("GGML_MV_EXT_F16Y")) : 1;
+    static const int env_ncv2 = getenv("GGML_MV_NC_V2")    ? atoi(getenv("GGML_MV_NC_V2"))    : 0;
+
+    if (env_f16y == 0 || env_ncv2 != 0) {
+        static bool warned = false;
+        if (!warned) {
+            warned = true;
+            GGML_LOG_WARN("%s: GGML_MV_REPACK is off: GGML_MV_EXT_F16Y=0 or GGML_MV_NC_V2=1 selects a kernel with no deinterleaved variant\n", __func__);
+        }
+        return;
+    }
+
+    // the whole graph, not this command buffer's window: a weight may only be converted
+    // once every consumer of it has been seen
+    const ggml_cgraph * gf = ctx->graph();
+
+    std::vector<const ggml_tensor *> cands;
+
+    for (int i = 0; i < gf->n_nodes; ++i) {
+        const ggml_tensor * node = gf->nodes[i];
+
+        if (node->op == GGML_OP_MUL_MAT && node->src[0] &&
+            ggml_metal_op_repack_inplace_eligible(node->src[0]) &&
+            !ggml_metal_buffer_repack_done((ggml_metal_buffer_t) node->src[0]->buffer->context, node->src[0])) {
+            cands.push_back(node->src[0]);
+        }
+    }
+
+    // every graph after the first one lands here, so the scan below is paid once
+    if (cands.empty()) {
+        return;
+    }
+
+    // anything read by something other than a MUL_MAT src0 keeps the interleaved layout - a
+    // tied embedding read by GET_ROWS is the case this exists for
+    std::unordered_set<const ggml_tensor *> excluded;
+
+    for (int i = 0; i < gf->n_nodes; ++i) {
+        const ggml_tensor * node = gf->nodes[i];
+
+        for (int j = 0; j < GGML_MAX_SRC; ++j) {
+            const ggml_tensor * src = node->src[j];
+            if (!src) {
+                continue;
+            }
+
+            if (node->op == GGML_OP_MUL_MAT && j == 0) {
+                continue;
+            }
+
+            excluded.insert(src);
+            if (src->view_src) {
+                excluded.insert(src->view_src);
+            }
+        }
+    }
+
+    int    n_conv = 0;
+    size_t b_conv = 0;
+
+    for (const ggml_tensor * t : cands) {
+        if (excluded.count(t)) {
+            continue;
+        }
+
+        if (!ggml_metal_buffer_repack_claim((ggml_metal_buffer_t) t->buffer->context, t)) {
+            continue;
+        }
+
+        const int64_t nblk = t->ne[0]/32;
+
+        ggml_metal_kargs_repack_q4_0_di rargs = {
+            /*.nblk =*/ (int32_t) nblk,
+            /*.ne01 =*/ (int32_t) t->ne[1],
+            /*.nb01 =*/ t->nb[1],
+            /*.nbd1 =*/ t->nb[1],
+        };
+
+        auto pipeline = ggml_metal_library_get_pipeline_repack_q4_0_di_ip(ctx->lib);
+
+        ggml_metal_encoder_set_pipeline(ctx->enc, pipeline);
+        ggml_metal_encoder_set_bytes   (ctx->enc, &rargs, sizeof(rargs), 0);
+        ggml_metal_encoder_set_buffer  (ctx->enc, ggml_metal_get_buffer_id(t), 1);
+
+        ggml_metal_encoder_set_threadgroup_memory_size(ctx->enc, 18*nblk, 0);
+
+        ggml_metal_encoder_dispatch_threadgroups(ctx->enc, (int) t->ne[1], 1, 1, 256, 1, 1);
+
+        n_conv += 1;
+        b_conv += ggml_nbytes(t);
+    }
+
+    if (n_conv > 0) {
+        ggml_metal_op_concurrency_reset(ctx);
+
+        GGML_LOG_INFO("%s: repacked %d q4_0 weights (%.2f MiB) to the deinterleaved layout in place\n",
+                __func__, n_conv, b_conv/1024.0/1024.0);
+    }
+}
+
+// GGML_MV_REPACK:
+//   1 - convert the weight in place, once (ggml_metal_op_prepack_q4_0 above). No side buffer,
+//       so no second copy of the model, but it needs a buffer we own: --no-mmap
+//   2 - side buffer, WEIGHTS-usage requirement dropped so test-backend-ops can reach the _di
+//       kernels at all (test_mul_mat only overrides the one-argument build_graph(ctx), so its
+//       src0 never lands in ctx_weights and the buffer is never marked - README trap 3)
+//   3 - side buffer, the original probe: an immutable 2D q4_0 weight is redirected to a
+//       persistent deinterleaved copy ([d x nblk][pad16][qs x nblk] per row), repacked on
+//       first use. Costs a second copy of every repacked weight; kept for A/B against 1.
 static bool ggml_metal_op_mul_mat_try_repack_q4_0(ggml_metal_op_t ctx, const ggml_tensor * op, ggml_metal_buffer_id & bid_src0, uint64_t & nb01_eff) {
-    static const bool env_repack = getenv("GGML_MV_REPACK") ? atoi(getenv("GGML_MV_REPACK")) : 0;
+    static const int env_repack = getenv("GGML_MV_REPACK") ? atoi(getenv("GGML_MV_REPACK")) : 0;
+
+    const bool is_weights = op->src[0]->buffer && op->src[0]->buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS;
+
+    // in-place mode: the buffer and the row stride do not change, only the kernel does
+    if (env_repack == 1) {
+        return op->src[0]->type == GGML_TYPE_Q4_0 && is_weights &&
+               ggml_metal_buffer_repack_done((ggml_metal_buffer_t) op->src[0]->buffer->context, op->src[0]);
+    }
 
     if (!(env_repack &&
           op->src[0]->type == GGML_TYPE_Q4_0 &&
-          op->src[0]->buffer && op->src[0]->buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS &&
+          (is_weights || env_repack == 2) &&
           !op->src[0]->view_src && op->src[0]->ne[2] == 1 && op->src[0]->ne[3] == 1)) {
         return false;
     }
@@ -2550,7 +2719,16 @@ static bool ggml_metal_op_mul_mat_try_repack_q4_0(ggml_metal_op_t ctx, const ggm
         return false;
     }
 
-    if (is_new) {
+    // in test mode the cache key (the src0 data pointer) is not unique - test-backend-ops
+    // reuses addresses across cases with different contents - so re-encode every time and
+    // fence on both sides of it, which is exact and costs nothing outside a test run
+    const bool force = env_repack == 2;
+
+    if (is_new || force) {
+        if (force) {
+            ggml_metal_op_concurrency_reset(ctx);
+        }
+
         auto pipeline_rp = ggml_metal_library_get_pipeline_repack_q4_0_di(lib);
 
         ggml_metal_kargs_repack_q4_0_di rargs = {
@@ -2639,14 +2817,19 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
         !ggml_is_transposed(op->src[0]) &&
         !ggml_is_transposed(op->src[1]) &&
         ne00 % 32 == 0) {
-        auto pipeline = ggml_metal_library_get_pipeline_mul_mv_nc(lib, op, (int) ne11);
+        ggml_metal_buffer_id bid_src0 = ggml_metal_get_buffer_id(op->src[0]);
+        uint64_t nb01_eff = nb01;
+
+        const bool use_di = ggml_metal_op_mul_mat_try_repack_q4_0(ctx, op, bid_src0, nb01_eff);
+
+        auto pipeline = ggml_metal_library_get_pipeline_mul_mv_nc(lib, op, (int) ne11, use_di);
 
         ggml_metal_kargs_mul_mv args = {
             /*.ne00 =*/ ne00,
             /*.ne01 =*/ ne01,
             /*.ne02 =*/ ne02,
             /*.nb00 =*/ nb00,
-            /*.nb01 =*/ nb01,
+            /*.nb01 =*/ nb01_eff,
             /*.nb02 =*/ nb02,
             /*.nb03 =*/ nb03,
             /*.ne10 =*/ ne10,
@@ -2665,7 +2848,7 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
 
         ggml_metal_encoder_set_pipeline(enc, pipeline);
         ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);
-        ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[0]), 1);
+        ggml_metal_encoder_set_buffer  (enc, bid_src0,                              1);
         ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[1]), 2);
         ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         3);
 
@@ -2943,12 +3126,19 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
         //    default: break;
         //}
 
-        auto pipeline = ggml_metal_library_get_pipeline_mul_mm(lib, op);
+        // the prefill kernel reads the deinterleaved layout too, so a repacked weight does not
+        // have to be kept in both layouts
+        ggml_metal_buffer_id bid_src0 = ggml_metal_get_buffer_id(op->src[0]);
+        uint64_t nb01_eff = nb01;
+
+        const bool use_di = ggml_metal_op_mul_mat_try_repack_q4_0(ctx, op, bid_src0, nb01_eff);
+
+        auto pipeline = ggml_metal_library_get_pipeline_mul_mm(lib, op, use_di);
 
         ggml_metal_kargs_mul_mm args = {
             /*.ne00 =*/ ne00,
             /*.ne02 =*/ ne02,
-            /*.nb01 =*/ nb01,
+            /*.nb01 =*/ nb01_eff,
             /*.nb02 =*/ nb02,
             /*.nb03 =*/ nb03,
             /*.ne12 =*/ ne12,
@@ -2964,7 +3154,7 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
 
         ggml_metal_encoder_set_pipeline(enc, pipeline);
         ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);
-        ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[0]), 1);
+        ggml_metal_encoder_set_buffer  (enc, bid_src0,                              1);
         ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[1]), 2);
         ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         3);
 
