@@ -25,6 +25,7 @@ FRAMEWORKS = [
     f"{XCODE}/SharedFrameworks/GPUToolsCore.framework/GPUToolsCore",
     f"{XCODE}/SharedFrameworks/GPUTools.framework/GPUTools",
     f"{XCODE}/SharedFrameworks/GPUToolsServices.framework/GPUToolsServices",
+    f"{XCODE}/SharedFrameworks/GPUToolsPlatform.framework/GPUToolsPlatform",
     f"{XCODE}/SharedFrameworks/MTLToolsShaderProfiler.framework/MTLToolsShaderProfiler",
     f"{XCODE}/PlugIns/GPUDebugger.ideplugin/Contents/Frameworks/GTShaderProfiler.framework/GTShaderProfiler",
     f"{XCODE}/PlugIns/GPUDebugger.ideplugin/Contents/Frameworks/GPUToolsAdvancedUI.framework/GPUToolsAdvancedUI",
@@ -41,6 +42,13 @@ for fw in FRAMEWORKS:
     except OSError as e:
         print("could not load %s: %s" % (fw.rsplit("/", 1)[-1], e), file=sys.stderr)
 print("loaded: %s\n" % ", ".join(loaded), file=sys.stderr)
+
+# Calling this is what loads the selected platform's .gtpplugin bundle and its classes.
+if objc.objc_getClass(b"DYPPluginManager"):
+    _send = ctypes.CDLL(None).objc_msgSend
+    _send.restype = ctypes.c_void_p
+    _send.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    _send(objc.objc_getClass(b"DYPPluginManager"), objc.sel_registerName(b"metalPlugin"))
 
 objc.objc_copyClassNamesForImage.restype = ctypes.POINTER(ctypes.c_char_p)
 objc.objc_copyClassNamesForImage.argtypes = [ctypes.c_char_p, ctypes.POINTER(ctypes.c_uint)]
@@ -106,7 +114,8 @@ def resolve(fw):
             return im
     return fw
 
-for fw in [resolve(f) for f in FRAMEWORKS]:
+dynamic_plugins = [im for im in images if "GPUToolsPlatformSupport" in im]
+for fw in [resolve(f) for f in FRAMEWORKS] + dynamic_plugins:
     n = ctypes.c_uint()
     names = objc.objc_copyClassNamesForImage(fw.encode(), ctypes.byref(n))
     if not names:

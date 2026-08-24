@@ -696,6 +696,21 @@ That is the acceptance test for the next attempt: same trace, same numbers, no h
 
 ## If this is picked up again
 
+### 2026-08-24 coordinator result (Xcode 26.6)
+
+The client-side coordinator was implemented and dynamically exercised without Xcode. It
+selects `DYPMTLShaderProfiler_iOS`, retains the synthetic delegate, constructs the expected
+payload (`perEncoderDrawCallCount={4:128, 971:154}`), and takes the `gtUseAPSData` branch.
+The delegate receives `queryAPSDataWithPayload:` (4130) and
+`gtSetupStreamDataProcessor:`. However, the 4130 reply is kind 4105 with no decodable object
+payload, no subsequent 4124 stream notifications arrive, `APSCounterData` is still empty,
+and no complete raw counter set is produced. This is the exact current blocker; merely
+launching/replaying headlessly is not equivalent to retrieving all profiling data.
+
+`perf/metal-profile-headless.py` now refuses to choose this private backend automatically.
+Apple's documented `gpudebug` is the supported route when the selected Xcode ships it; use
+`--backend dy` only for continued private-framework investigation.
+
 1. **Build the `<DYShaderProfilerDelegate>` shim** and call
    `-[DYMTLShaderProfiler profileShader:afterGPUTimelineGather:atConsistentState:withOverlappingEnabled:`
    - note that selector, not `profileFrameAtConsistentState:`; the click trace shows it is the

@@ -292,7 +292,17 @@ class ShaderProfilerDelegateState:
     def __init__(self, replayer, archive, trace_name):
         self.r = replayer
         self.archive = archive
+        # This is not optional initialization: constructPayloadFromArchive: expects the
+        # platform plugin's state mirror/capture store to have been built first.
+        # The desktop replayer reports the iOS-family Metal plugin even for an Apple-GPU
+        # Mac capture.  Use the manager's selected plugin, exactly as DYMTLShaderProfiler
+        # does; metalPluginForArchive: loads the OSX bundle as well and creates duplicate
+        # ObjC classes when the profiler subsequently loads its selected iOS bundle.
+        self.metal_plugin = call(cls("DYPPluginManager"), "metalPlugin")
+        self.platform_data_source = msg(P, [P])(
+            self.metal_plugin, sel("platformDataSourceWithCaptureArchive:"), archive)
         self.handlers = []
+        self.reply_handlers = []
         self.processor = None
         self.delegate = None
         self.stream_data = msg(P, [P])(
@@ -307,16 +317,36 @@ class ShaderProfilerDelegateState:
         msg(None, [P])(self.stream_data, sel("setTraceName:"), nsstr(trace_name))
 
     def query(self, kind, payload):
+        print("shader profiler query %d payload=%s" % (kind, desc(payload)[:300]), flush=True)
         m = msg(P, [ctypes.c_int, P, P])(cls("DYTransportMessage"),
                                          sel("messageWithKind:attributes:objectPayload:"),
                                          kind, None, payload)
-        ok, error, reply = self.r.send(m, wait=600)
         future = call(cls("DYFuture"), "future")
-        value = unarchive_obj(reply[2]) if ok and reply and reply[2] else None
-        msg(None, [P])(future, sel("setResult:"), value)
+        RB = ctypes.CFUNCTYPE(None, P, P)
+
+        def replied(block, reply):
+            raw = payload_bytes(reply) if reply else None
+            value = unarchive_obj(raw) if raw else None
+            print("shader profiler reply %d kind=%s attrs=%s raw=%s value=%s" %
+                  (kind, msg(ctypes.c_int, [])(reply, sel("kind")) if reply else None,
+                   desc(msg(P, [])(reply, sel("attributes"))) if reply else None,
+                   len(raw) if raw else 0, desc(value)), flush=True)
+            msg(None, [P])(future, sel("setResult:"), value)
+
+        block = make_block(RB, replied, b"v@?@")
+        self.reply_handlers.append(block)
+        error = P()
+        ok = msg(ctypes.c_bool, [P, P, P, ctypes.c_uint64, P])(
+            self.r.tr, sel("send:error:replyQueue:timeout:handler:"), m,
+            ctypes.byref(error), libc.dispatch_get_global_queue(0, 0), 0, block)
         if not ok:
-            print("shader profiler query %d failed: %s" % (kind, error), flush=True)
+            print("shader profiler query %d failed: %s" % (kind, desc(error)), flush=True)
+            msg(None, [P])(future, sel("setResult:"), None)
         return future
+
+    def flag(self, name, value):
+        print("shader profiler delegate %s -> %s" % (name, value), flush=True)
+        return value
 
     def install_handler(self, block):
         copied = libc._Block_copy(block)
@@ -332,6 +362,7 @@ class ShaderProfilerDelegateState:
             ctypes.CFUNCTYPE(None, P, P)(invoke)(block, obj)
 
     def setup_processor(self, plugin_name):
+        print("shader profiler setup processor plugin=%s" % desc(plugin_name), flush=True)
         if self.processor:
             return
         if plugin_name:
@@ -394,9 +425,15 @@ def make_shader_profiler_delegate(state):
 
         add("captureArchive", P, [], lambda self, cmd: st(self).archive, b"@@:")
         add("streamData", P, [], lambda self, cmd: st(self).stream_data, b"@@:")
-        add("supportsGPUTimeline", ctypes.c_bool, [], lambda self, cmd: False, b"B@:")
+        add("supportsGPUTimeline", ctypes.c_bool, [],
+            lambda self, cmd: st(self).flag("supportsGPUTimeline", True), b"B@:")
         add("isForInternalTool", ctypes.c_bool, [], lambda self, cmd: False, b"B@:")
-        add("gtUseAPSData", ctypes.c_bool, [], lambda self, cmd: True, b"B@:")
+        add("dumpInstructions", ctypes.c_bool, [], lambda self, cmd: False, b"B@:")
+        add("supportsImmediateModeDrawCounters", ctypes.c_bool, [],
+            lambda self, cmd: False, b"B@:")
+        add("deviceInfo", P, [], lambda self, cmd: call(st(self).r.dev, "deviceInfo"), b"@@:")
+        add("gtUseAPSData", ctypes.c_bool, [],
+            lambda self, cmd: st(self).flag("gtUseAPSData", True), b"B@:")
         add("gtUseNewShaderProfiler", ctypes.c_bool, [], lambda self, cmd: True, b"B@:")
         add("queryAPSDataWithPayload:", P, [P],
             lambda self, cmd, payload: st(self).query(KIND_APS_DATA, payload), b"@@:@")
@@ -626,12 +663,37 @@ def main():
                                 sel("newShaderProfilerWithDelegate:"), delegate)
         if not profiler:
             sys.exit("DYMTLShaderProfiler initialization failed")
+        payload_probe = call(profiler, "_constructPayload")
+        pending = msg(P, [P])(profiler, sel("valueForKey:"), nsstr("pendingRequest"))
+        invalid = msg(P, [P])(profiler, sel("valueForKey:"), nsstr("sessionIsInvalid"))
+        installed_delegate = msg(P, [P])(profiler, sel("valueForKey:"), nsstr("delegate"))
+        platform_profiler = msg(P, [P])(profiler, sel("valueForKey:"),
+                                        nsstr("platformShaderProfiler"))
+        print("DYMTLShaderProfiler initialized; pending=%s invalid=%s delegate=%s "
+              "platformProfiler=%s payload=%s; "
+              "starting coordinated profile" %
+              (desc(pending), desc(invalid), desc(installed_delegate),
+               (objc.object_getClassName(platform_profiler) or b"nil").decode(),
+               desc(payload_probe)[:500]), flush=True)
         t0 = time.time()
-        future = msg(P, [ctypes.c_uint])(profiler, sel("profileFrameAtConsistentState:"), 2)
+        # This is the public coordinator entry point used by Xcode.  Its third argument is
+        # the numeric replay consistent-state value, not an object.  The second future is
+        # resolved by the GPU-timeline gather when that optional phase is requested.
+        timeline_future = call(cls("DYFuture"), "future")
+        static_future = call(cls("DYFuture"), "future")
+        msg(None, [P])(static_future, sel("setResult:"),
+                       call(profiler, "_gatherStaticInformation"))
+        future = msg(P, [P, P, ctypes.c_uint, ctypes.c_bool])(
+            profiler,
+            sel("profileShader:afterGPUTimelineGather:atConsistentState:withOverlappingEnabled:"),
+            static_future, timeline_future, 2, False)
+        if not future:
+            sys.exit("DYMTLShaderProfiler refused the coordinated profile request")
         msg(None, [])(future, sel("waitUntilResolved"))
         result = call(future, "result")
-        print("DYMTLShaderProfiler resolved=%s result=%s in %.1fs" %
-              (call(future, "resolved", ctypes.c_bool), desc(result), time.time() - t0), flush=True)
+        print("DYMTLShaderProfiler resolved=%s result=%s error=%s in %.1fs" %
+              (call(future, "resolved", ctypes.c_bool), desc(result),
+               desc(call(future, "error")), time.time() - t0), flush=True)
         if state.processor:
             msg(None, [])(state.processor, sel("waitUntilFinished"))
         if outdir:

@@ -2,7 +2,8 @@
 """Profile an existing Metal .gputrace without opening Xcode.
 
 Prefer Apple's supported ``gpudebug`` command when the selected Xcode ships it.
-Xcode 26 does not, so this falls back to the local DY replayer implementation.
+Xcode 26 does not.  Its local DY replayer implementation is available only as an
+explicit experimental backend because full APS counter retrieval is not yet verified.
 
 The command never captures a workload; its input is an existing .gputrace.
 """
@@ -69,7 +70,11 @@ def main():
     args = p.parse_args()
 
     gpudebug = find_gpudebug()
-    backend = ("gpudebug" if gpudebug else "dy") if args.backend == "auto" else args.backend
+    backend = ("gpudebug" if gpudebug else None) if args.backend == "auto" else args.backend
+    if backend is None:
+        p.error("gpudebug is not present in the selected Xcode; the private DY backend "
+                "can replay unattended but has not recovered APS counter payloads "
+                "(pass --backend dy only for investigation)")
     if backend == "gpudebug" and not gpudebug:
         p.error("gpudebug is not present in the selected Xcode")
     print("metal profiler backend: %s%s" %

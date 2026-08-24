@@ -43,17 +43,21 @@ Apple documents it as scriptable and agent-friendly, with a live local replayer 
 the bundle contents, man pages and downloadable-component list. The documentation appears
 to describe Xcode 27-era tooling but does not state a minimum version.
 
-On Xcode 26 the wrapper uses `perf/dy-replayer-launch.py`. This path is measured to launch
+On Xcode 26 there is no supported automatic fallback. The experimental
+`--backend dy` path is measured to launch
 `GPUToolsReplayService`, load and replay the archive, and perform all 16 hardware profiling
 passes without Xcode or a human. The older direct-message implementation lost APS data at
 the client boundary (`APSCounterData=0` despite 12.7 MB being collected). The current
 implementation drives `DYMTLShaderProfiler` with a synthesized delegate and a
 `GTShaderProfilerStreamDataProcessor`, matching Xcode's client-side ring-buffer setup.
 
-**Verification status:** the coordinator implementation has passed static checks but must
-not be called proven until an existing trace produces non-empty `APSCounterData` and all 20
-`Counters_f_*.raw` files. Use `HEADLESS_DY_DIRECT_MESSAGES=1` only to reproduce the known
-incomplete direct-message path. `perf/headless-replay-probe.md` is the evidence log.
+**Verification status:** full retrieval is not proven on Xcode 26.6. The coordinator reaches
+the synthesized delegate, builds the real 282-draw payload, calls 4130, and sets up
+`GTShaderProfilerStreamDataProcessor`; the reply contains no object payload and no 4124
+stream notifications follow. `APSCounterData` remains 0 and the C/P/T files remain empty.
+The wrapper therefore refuses automatic DY fallback. Use `--backend dy` only to investigate,
+and `HEADLESS_DY_DIRECT_MESSAGES=1` only to reproduce the older known-incomplete path.
+`perf/headless-replay-probe.md` is the evidence log.
 
 ## Step 3 - Read it (headless)
 
