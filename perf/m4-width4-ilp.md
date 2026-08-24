@@ -1,6 +1,7 @@
 # M4 width-4 accumulator banking
 
-Status: **refuted**. Branch `m4-width4-ilp`, commit `741bcb246`, M4 Pro. The experiment keeps
+Status: initial accumulator banking **refuted**; barrier-free vector-dot R2 **validated**.
+Branch `m4-width4-ilp`, starting commit `741bcb246`, M4 Pro. The experiment keeps
 the Q4_0 f16-src1 `mul_mv_ext` dispatch at `nsg=2`, `nxpsg=8`, `nr0=2` and changes only the
 K-loop accumulation from one dependency chain to two alternating banks.
 
@@ -233,7 +234,64 @@ The production env=1 path remains a persistent data-address cache for the lifeti
 `WEIGHTS` allocation and is otherwise unchanged. This is a harness-cache defect, not kernel arithmetic
 evidence; model runs use the immutable path.
 
-### Post-fix validation
+## `llama-server` end-to-end validation and mixed-layout cache fix
+
+The final test uses `perf/run-m4-width4-r2-e2e.sh`, derived from the existing caffeinated
+DFlash runner. It starts exactly one fresh server per arm, sends the 31,522-byte / 8,288-token
+`benchprompt.txt` (sha1 `c0653ba4af5e`), generates 600 tokens at temperature zero, terminates
+the server, and waits before the next arm. The warm-up is discarded and arm order alternates.
+
+The clean kernel comparison holds both the persistent allocation and byte layout fixed:
+
+```
+GGML_MV_NC=2 GGML_MM_SKINNY=5 GGML_FA_VEC_MAX=5 GGML_FA_MM_NWG=8
+GGML_GDN_FUSE_WB=1 GGML_MV_REPACK=1 GGML_MV_SOA_W4=1
+```
+
+K2 leaves `GGML_MV_SOA_W4_R2=0`; R2 sets it to 1. Thus K2 is the two-simdgroup 4x4 SoA
+kernel with terminal barrier and K-part add, while R2 changes only to the single-simdgroup
+2x4 direct-output kernel. DFlash n3 gives the affected width 4.
+
+| width-4 arm | four runs, t/s | mean, t/s | delta |
+|---|---|---:|---:|
+| SoA K2 | 19.873, 19.825, 19.874, 19.861 | 19.858 | - |
+| SoA R2 | 20.815, 20.757, 20.799, 20.835 | 20.801 | **+4.75%** |
+
+Each arm is internally deterministic. K2 has 59.3% draft acceptance and output sha1
+`3776c0adb7ee`; R2 has 60.2% and `462183a49c4c`. The texts share 2,149 prefix bytes, 95.6%
+of the shorter result, before greedy numerical sensitivity changes the tail. Therefore +4.75%
+is the actual e2e result, but includes the small acceptance/trajectory change rather than being
+a byte-identical workload comparison. The exported backend correctness set still passes 10/10.
+
+### The control caught a real cache-identity defect
+
+The first runner revision compared generic DI against the full SoA/R2 route. Its n3 result was
+stable but confounded layout policy. More importantly, the nominally unaffected DFlash n6
+control produced gibberish, accepted only 1 of 3,567 draft tokens, and ended in HTTP 500.
+
+The persistent repack cache was keyed only by `src0->data`, while `try_repack_q4_0` chose either
+generic DI or SoA bytes from the current operation width. A mixed-width speculative workload
+could therefore create one layout and later consume it as the other. Fixed-width kernel tests
+and the n3 target path did not expose this cross-operation reuse.
+
+The cache now records the layout alongside each tensor. An incompatible request returns no
+repack buffer and safely falls back to the original weights. It does not allocate a second
+side buffer, so the fix avoids doubling the already substantial repack residency, and it does
+not replace a resource that an unretained command buffer may still reference.
+
+After the fix, the order-balanced width-7 control is flat and byte-identical:
+
+| width-7 control | two runs, t/s | mean, t/s | delta |
+|---|---|---:|---:|
+| K2-labelled | 23.079, 23.068 | 23.073 | - |
+| R2-labelled | 23.055, 23.071 | 23.063 | **-0.05%** |
+
+Both control arms have 41.3% acceptance and sha1 `3776c0adb7ee`. A post-fix run of the
+model-exported `MUL_MAT` file (sha1 `8ba639ba8608`) with repack, SoA, and R2 enabled passes
+all 10/10 cases on MTL0. The end-to-end benchmark therefore validates R2 at its intended
+width and independently demonstrates that its selector is inert at width 7.
+
+## Earlier isolated post-fix validation
 
 After lifecycle eviction (`980de4c6c`), the broad exported test file passes all 10/10
 `MUL_MAT` cases on MTL0 with `GGML_MV_REPACK=2`, SoA, and vector-dot R2 enabled. This closes

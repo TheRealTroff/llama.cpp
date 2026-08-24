@@ -316,9 +316,11 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
 const struct ggml_metal_device_props * ggml_metal_device_get_props(ggml_metal_device_t dev);
 
 // weight-repack probe (GGML_MV_REPACK): return a persistent per-tensor side buffer for a
-// deinterleaved weight copy; *is_new is set when the buffer was just allocated (caller must
-// then encode the repack kernel before first use)
-struct ggml_metal_buffer_id ggml_metal_device_get_repack_buffer(ggml_metal_device_t dev, const struct ggml_tensor * t, size_t size, bool * is_new);
+// deinterleaved weight copy. A tensor keeps one layout: an incompatible layout request returns
+// an empty ID so the caller can safely use the original weights without doubling residency.
+// *is_new is set when the buffer was just allocated (caller must then encode the repack kernel
+// before first use).
+struct ggml_metal_buffer_id ggml_metal_device_get_repack_buffer(ggml_metal_device_t dev, const struct ggml_tensor * t, size_t size, bool soa, bool * is_new);
 
 //
 // device buffers

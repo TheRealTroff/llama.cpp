@@ -122,6 +122,20 @@ after the last real kernel of the same family works.
   AIR-level stage and `-mtranslator` is a closed whitelist. `AGX3_TEMP_REG_LIMIT` is
   ignored by the offline tool (it is read by the in-driver runtime compiler only).
 
+## Persistent-layout correctness is a separate gate
+
+When a kernel consumes a transformed persistent buffer, treat the byte layout as cache
+identity. A cache keyed only by source address or tensor can silently return an incompatible
+layout when the same weights are used at another batch width. If residency permits only one
+copy per tensor, record the cached layout and fall back to the original weights on a mismatch;
+never reinterpret the existing buffer and never replace a buffer still referenced by an
+unretained command buffer.
+
+Fixed-shape CPU-reference tests cannot expose this class of defect. Add a mixed-width
+end-to-end control that reuses one loaded model, requires stable output/acceptance, and selects
+an unaffected width in both A/B arms. Treat corrupted text, collapsed speculative acceptance,
+or a moving control as a correctness/routing failure before accepting a speed result.
+
 ## When a shape spills, what to try
 
 Look for live state that carries no data. Arrays of `device` pointers are the usual

@@ -567,6 +567,7 @@ struct ggml_metal_device {
 
     // weight-repack probe (GGML_MV_REPACK): per-tensor cache of deinterleaved weight copies
     NSMutableDictionary * repack_bufs;
+    NSMutableDictionary * repack_soa;
     NSLock * repack_lock;
 };
 
@@ -762,6 +763,7 @@ ggml_metal_device_t ggml_metal_device_init(int device) {
             dev->addr_virt = 0x000000400ULL;
 
             dev->repack_bufs = [[NSMutableDictionary alloc] init];
+            dev->repack_soa = [[NSMutableDictionary alloc] init];
             dev->repack_lock = [[NSLock alloc] init];
 
             dev->props.device = device;
@@ -1002,6 +1004,10 @@ void ggml_metal_device_free(ggml_metal_device_t dev) {
         [dev->repack_bufs release];
         dev->repack_bufs = nil;
     }
+    if (dev->repack_soa) {
+        [dev->repack_soa release];
+        dev->repack_soa = nil;
+    }
     if (dev->repack_lock) {
         [dev->repack_lock release];
         dev->repack_lock = nil;
@@ -1023,8 +1029,9 @@ void ggml_metal_device_free(ggml_metal_device_t dev) {
     free(dev);
 }
 
-struct ggml_metal_buffer_id ggml_metal_device_get_repack_buffer(ggml_metal_device_t dev, const struct ggml_tensor * t, size_t size, bool * is_new) {
+struct ggml_metal_buffer_id ggml_metal_device_get_repack_buffer(ggml_metal_device_t dev, const struct ggml_tensor * t, size_t size, bool soa, bool * is_new) {
     struct ggml_metal_buffer_id res = { NULL, 0 };
+    *is_new = false;
 
     NSNumber * key = [NSNumber numberWithUnsignedLongLong:(unsigned long long)(uintptr_t) t->data];
 
@@ -1032,7 +1039,11 @@ struct ggml_metal_buffer_id ggml_metal_device_get_repack_buffer(ggml_metal_devic
 
     id<MTLBuffer> buf = dev->repack_bufs[key];
     if (buf) {
-        *is_new = false;
+        NSNumber * cached_soa = dev->repack_soa[key];
+        if (cached_soa == nil || [cached_soa boolValue] != soa) {
+            [dev->repack_lock unlock];
+            return res;
+        }
     } else {
         buf = [dev->mtl_device newBufferWithLength:size options:MTLResourceStorageModePrivate];
         if (buf == nil) {
@@ -1041,6 +1052,7 @@ struct ggml_metal_buffer_id ggml_metal_device_get_repack_buffer(ggml_metal_devic
             return res;
         }
         dev->repack_bufs[key] = buf;
+        dev->repack_soa[key] = [NSNumber numberWithBool:soa];
         *is_new = true;
     }
 
@@ -1914,6 +1926,7 @@ static void ggml_metal_device_evict_repack_range(ggml_metal_device_t dev, const 
             id<MTLBuffer> repack = dev->repack_bufs[key];
             [repack release]; // balance newBuffer ownership
             [dev->repack_bufs removeObjectForKey:key];
+            [dev->repack_soa removeObjectForKey:key];
         }
     }
     [dev->repack_lock unlock];

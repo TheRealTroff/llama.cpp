@@ -2562,7 +2562,7 @@ static bool ggml_metal_op_mul_mat_try_repack_q4_0(ggml_metal_op_t ctx, const ggm
     const uint64_t nbd1 = use_soa ? 18*(uint64_t) nblk : doff + 16*(uint64_t) nblk;
 
     bool is_new = false;
-    ggml_metal_buffer_id bid_di = ggml_metal_device_get_repack_buffer(ctx->dev, op->src[0], nbd1*ne01, &is_new);
+    ggml_metal_buffer_id bid_di = ggml_metal_device_get_repack_buffer(ctx->dev, op->src[0], nbd1*ne01, use_soa, &is_new);
     if (!bid_di.metal) {
         return false;
     }
