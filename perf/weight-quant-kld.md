@@ -471,9 +471,10 @@ maximum and 99.9% columns, not `Same top p`, when judging the small-tensor upgra
 ### Consequences
 
 1. **Hybrid A is a serious prod-pick candidate on its own terms** - +1.93 pp wikitext
-   agreement, a 12.5x cut in worst-case divergence, for -3.2% batch-1. Not adopted; the file
-   is at `~/play/Qwen3.8-27B-hybridA.gguf` and the recipe above rebuilds it in ~7 min. Owner's
-   call, like the head and the repack residency.
+   agreement, a 12.5x cut in worst-case divergence, for -3.2% batch-1. Not adopted, and the
+   **file has been deleted to reclaim disk** - the recipe above rebuilds it from `conv-q8_0` in
+   ~7 min, which is why it was not worth keeping. Owner's call, like the head and the repack
+   residency.
 2. **The Q4_0 gate's cost is wildly non-linear in coverage**: 17.2% of bytes off the fast path
    costs 5.4%; 100% costs 39.3%. Cost tracks **share of round time**, not share of bytes, and
    the FFN is 73.9 of 120.3 ms of MUL_MAT (`ffn-utilization.md`). **Small tensors leave the

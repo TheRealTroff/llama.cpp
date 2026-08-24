@@ -336,8 +336,8 @@ Current state:
   small-tensor upgrades on maximum/99.9% KLD, not on `Same top p`, which saturates (hybrid A is
   0.18 sigma over uniform Q4_0 on own-trajectory top-token).** Kernel consequence: the target
   is not eight formats, it is **the FFN fast on one good 4-bit format** - three tensor shapes -
-  which alone unlocks ~3.9 pp. Candidate build kept at `~/play/Qwen3.8-27B-hybridA.gguf`,
-  recipe in `weight-quant-kld.md`, **not adopted - owner's call.** - the body format is worth ~1.45 pp, not the bulk of the
+  which alone unlocks ~3.9 pp. Candidate build **deleted to reclaim disk**; the recipe in
+  `weight-quant-kld.md` rebuilds it from `conv-q8_0` in ~7 min. **Not adopted - owner's call.** - the body format is worth ~1.45 pp, not the bulk of the
   gap. Harness: `perf/run-quant-kld.sh` (M/MD overridable, ARMS filter added to
   `run-prod-pick.sh` the same day).
 - **`ffn-utilization.md` - OPEN, and on today's evidence the largest lever on the board.
