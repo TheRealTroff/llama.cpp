@@ -42,6 +42,17 @@ ARMS = {
     # measured. r1max=5 makes width 7 take TWO passes over the weights (r1ptg=4, then 3).
     'ext-r1max8': {'GGML_MM_SKINNY': '9', 'GGML_MV_EXT_R1MAX': '8', 'GGML_MV_NC': '2'},
     'ext-r1max5': {'GGML_MM_SKINNY': '9', 'GGML_MV_EXT_R1MAX': '5', 'GGML_MV_NC': '2'},
+    # The overlap lever: TPR is mul_mm_skinny's A-tile loader threads-per-row, and nsg = TPR
+    # at the fixed 32x8 tile. TPR=4 halves rows per simdgroup to 8 (mc[1] instead of mc[2])
+    # and doubles simdgroups per threadgroup - the resource NR0 leaves invariant, which is
+    # why skinny-nr0-refuted.md found nothing. Branch metal-mm-skinny-tpr; needs that build.
+    'skinny-tpr4': {'GGML_MM_SKINNY': '2', 'GGML_MM_SKINNY_TPR': '4'},
+    'skinny-tpr1': {'GGML_MM_SKINNY': '2', 'GGML_MM_SKINNY_TPR': '1'},
+    # ... with the B-tile load spread over all 32*TPR threads instead of a fixed 32, so the
+    # TPR sweep is not also varying how much of the threadgroup idles in the B stage.
+    'skinny-bsp':      {'GGML_MM_SKINNY': '2', 'GGML_MM_SKINNY_BSPLIT': '1'},
+    'skinny-tpr4-bsp': {'GGML_MM_SKINNY': '2', 'GGML_MM_SKINNY_TPR': '4', 'GGML_MM_SKINNY_BSPLIT': '1'},
+    'skinny-tpr1-bsp': {'GGML_MM_SKINNY': '2', 'GGML_MM_SKINNY_TPR': '1', 'GGML_MM_SKINNY_BSPLIT': '1'},
 }
 
 

@@ -11724,6 +11724,8 @@ constant short FC_mul_mm_ne12  [[function_constant(FC_MUL_MM + 2)]];
 constant short FC_mul_mm_ne13  [[function_constant(FC_MUL_MM + 3)]];
 constant short FC_mul_mm_r2    [[function_constant(FC_MUL_MM + 4)]];
 constant short FC_mul_mm_r3    [[function_constant(FC_MUL_MM + 5)]];
+constant short FC_mul_mm_sk_tpr[[function_constant(FC_MUL_MM + 7)]];
+constant bool  FC_mul_mm_sk_bsp[[function_constant(FC_MUL_MM + 8)]];
 
 // each block_q contains 16*nl weights
 #ifdef GGML_METAL_HAS_TENSOR
@@ -12070,7 +12072,11 @@ kernel void kernel_mul_mm(
 #endif // GGML_METAL_HAS_TENSOR
 
 // skinny simdgroup-matrix matmul for speculative-verify batch sizes (2 <= N <= 8)
-// tile: 64 rows x 8 cols, K-slice 32; 128 threads / 4 simdgroups, each SG: 16 rows x all 8 cols
+// tile: 32 rows x 8 cols, K-slice 64; threads = 32*TPR, nsg = TPR, each SG covers 32/TPR rows
+// TPR (GGML_MM_SKINNY_TPR, 1/2/4) is the A-tile loader's threads-per-row, and it is the only
+// knob that changes rows per simdgroup - NR0 scales threadgroup count instead. Rows per
+// simdgroup is what amortizes the shared B tile: the MAC loop issues NMC A loads and one B
+// load per NMC MACs, so loads/MAC is 2.0 at TPR=4, 1.5 at TPR=2 and 1.25 at TPR=1
 // requires ne00 % 32 == 0
 kernel void kernel_mul_mm_skinny_q4_0_f32(
         constant ggml_metal_kargs_mul_mm & args,
@@ -12092,6 +12098,13 @@ kernel void kernel_mul_mm_skinny_q4_0_f32(
     constexpr int NR1 = 8;
     constexpr int NK  = 64;
 
+    // TPR threads load one A row, so threads = NR0*TPR and nsg = NR0*TPR/32. Rows per
+    // simdgroup is NR0/nsg = 32/TPR, hence RPS/8 accumulators: TPR=4 is 8 rows and mc[1],
+    // TPR=2 is 16 rows and mc[2], TPR=1 is the whole tile in one simdgroup and mc[4].
+    const short TPR = FC_mul_mm_sk_tpr;
+    const short RPS = 32/TPR;
+    const short NMC = RPS/8;
+
     const int im = tgpig.z;
     const int r0 = tgpig.y*NR0;
     const int r1 = tgpig.x*NR1;
@@ -12099,8 +12112,8 @@ kernel void kernel_mul_mm_skinny_q4_0_f32(
     const short nr0 = (args.ne0 - r0 < NR0) ? (args.ne0 - r0) : NR0;
     const short nr1 = (args.ne1 - r1 < NR1) ? (args.ne1 - r1) : NR1;
 
-    const short ar  = tiitg/2;
-    const short il0 = tiitg%2;
+    const short ar  = tiitg/TPR;
+    const short il0 = tiitg%TPR;
     const short lr0 = ar < nr0 ? ar : nr0 - 1;
 
     const int i12 = im % FC_mul_mm_ne12;
@@ -12108,47 +12121,80 @@ kernel void kernel_mul_mm_skinny_q4_0_f32(
 
     const uint64_t offset0 = (i12/FC_mul_mm_r2)*args.nb02 + (i13/FC_mul_mm_r3)*args.nb03;
 
-    device const block_q4_0 * x = (device const block_q4_0 *)(src0 + args.nb01*(r0 + lr0) + offset0) + il0;
+    device const block_q4_0 * x = (device const block_q4_0 *)(src0 + args.nb01*(r0 + lr0) + offset0) + il0*(NK/TPR)/32;
 
-    const short bcol = (short)(tiitg/4) < nr1 ? (short)(tiitg/4) : nr1 - 1;
-    const short bsx  = tiitg%4;
+    // B stage: BPC threads per column, NK/BPC f32 activations each. The legacy split is 4
+    // threads per column whatever the threadgroup size, so at TPR=4 three quarters of the
+    // threads idle through it; GGML_MM_SKINNY_BSPLIT spreads it over all 32*TPR of them.
+    const short BPC = FC_mul_mm_sk_bsp ? 32*TPR/NR1 : 4;
+    const short BVL = NK/BPC;
+
+    const short bcol = (short)(tiitg/BPC) < nr1 ? (short)(tiitg/BPC) : nr1 - 1;
+    const short bsx  = tiitg%BPC;
 
     device const float * y = (device const float *)(src1
         + args.nb13*i13
         + args.nb12*i12
         + args.nb11*(r1 + bcol)
-        + args.nb10*(16*bsx));
+        + args.nb10*(BVL*bsx));
 
-    simdgroup_half8x8 ma[2];
+    simdgroup_half8x8 ma[4];
     simdgroup_half8x8 mb;
 
-    simdgroup_float8x8 mc[2];
+    simdgroup_float8x8 mc[4];
     mc[0] = make_filled_simdgroup_matrix<float, 8>(0.f);
-    mc[1] = make_filled_simdgroup_matrix<float, 8>(0.f);
+    if (NMC >= 2) {
+        mc[1] = make_filled_simdgroup_matrix<float, 8>(0.f);
+    }
+    if (NMC >= 4) {
+        mc[2] = make_filled_simdgroup_matrix<float, 8>(0.f);
+        mc[3] = make_filled_simdgroup_matrix<float, 8>(0.f);
+    }
 
-    // prefetch slice 0
+    // prefetch slice 0: NK/TPR weights per thread. at TPR=4 that is one nibble half of one
+    // block (ta1..ta3 dead), at TPR=2 one block, at TPR=1 both blocks of the K slice
     half4x4 ta0;
     half4x4 ta1;
-    dequantize_q4_0(x, 0, ta0);
-    dequantize_q4_0(x, 1, ta1);
+    half4x4 ta2;
+    half4x4 ta3;
+    dequantize_q4_0(x, NMC == 1 ? il0 % 2 : 0, ta0);
+    if (NMC >= 2) {
+        dequantize_q4_0(x, 1, ta1);
+    }
+    if (NMC >= 4) {
+        dequantize_q4_0(x + 1, 0, ta2);
+        dequantize_q4_0(x + 1, 1, ta3);
+    }
     x += NK/32;
 
     for (int loop_k = 0; loop_k < args.ne00; loop_k += NK) {
         threadgroup_barrier(mem_flags::mem_threadgroup);
 
-        threadgroup half4 * pa = (threadgroup half4 *)(sa + ar*NK + 32*il0);
+        threadgroup half4 * pa = (threadgroup half4 *)(sa + ar*NK + (NK/TPR)*il0);
         pa[0] = ta0[0];
         pa[1] = ta0[1];
         pa[2] = ta0[2];
         pa[3] = ta0[3];
-        pa[4] = ta1[0];
-        pa[5] = ta1[1];
-        pa[6] = ta1[2];
-        pa[7] = ta1[3];
+        if (NMC >= 2) {
+            pa[4] = ta1[0];
+            pa[5] = ta1[1];
+            pa[6] = ta1[2];
+            pa[7] = ta1[3];
+        }
+        if (NMC >= 4) {
+            pa[ 8] = ta2[0];
+            pa[ 9] = ta2[1];
+            pa[10] = ta2[2];
+            pa[11] = ta2[3];
+            pa[12] = ta3[0];
+            pa[13] = ta3[1];
+            pa[14] = ta3[2];
+            pa[15] = ta3[3];
+        }
 
-        if (tiitg < 4*NR1) {
-            FOR_UNROLL (short j = 0; j < 16; ++j) {
-                sb[(16*bsx + j)*NR1 + tiitg/4] = (half) y[j];
+        if (tiitg < BPC*NR1) {
+            for (short j = 0; j < BVL; ++j) {
+                sb[(BVL*bsx + j)*NR1 + tiitg/BPC] = (half) y[j];
             }
         }
 
@@ -12158,24 +12204,42 @@ kernel void kernel_mul_mm_skinny_q4_0_f32(
 
         // prefetch slice t+1 while the MACs below run
         if (loop_k + NK < args.ne00) {
-            dequantize_q4_0(x, 0, ta0);
-            dequantize_q4_0(x, 1, ta1);
+            dequantize_q4_0(x, NMC == 1 ? il0 % 2 : 0, ta0);
+            if (NMC >= 2) {
+                dequantize_q4_0(x, 1, ta1);
+            }
+            if (NMC >= 4) {
+                dequantize_q4_0(x + 1, 0, ta2);
+                dequantize_q4_0(x + 1, 1, ta3);
+            }
             x += NK/32;
         }
 
-        threadgroup const half * lsma = sa + 16*sgitg*NK;
+        threadgroup const half * lsma = sa + RPS*sgitg*NK;
 
         FOR_UNROLL (short ik = 0; ik < NK/8; ik++) {
             simdgroup_barrier(mem_flags::mem_none);
 
             simdgroup_load(ma[0], lsma + 8*ik,        NK,  0, false);
-            simdgroup_load(ma[1], lsma + 8*NK + 8*ik, NK,  0, false);
+            if (NMC >= 2) {
+                simdgroup_load(ma[1], lsma +  8*NK + 8*ik, NK, 0, false);
+            }
+            if (NMC >= 4) {
+                simdgroup_load(ma[2], lsma + 16*NK + 8*ik, NK, 0, false);
+                simdgroup_load(ma[3], lsma + 24*NK + 8*ik, NK, 0, false);
+            }
             simdgroup_load(mb,    sb + 8*ik*NR1,      NR1, 0, false);
 
             simdgroup_barrier(mem_flags::mem_none);
 
             simdgroup_multiply_accumulate(mc[0], ma[0], mb, mc[0]);
-            simdgroup_multiply_accumulate(mc[1], ma[1], mb, mc[1]);
+            if (NMC >= 2) {
+                simdgroup_multiply_accumulate(mc[1], ma[1], mb, mc[1]);
+            }
+            if (NMC >= 4) {
+                simdgroup_multiply_accumulate(mc[2], ma[2], mb, mc[2]);
+                simdgroup_multiply_accumulate(mc[3], ma[3], mb, mc[3]);
+            }
         }
     }
 
@@ -12183,8 +12247,14 @@ kernel void kernel_mul_mm_skinny_q4_0_f32(
 
     threadgroup float * temp_all = (threadgroup float *) shmem;
 
-    simdgroup_store(mc[0], temp_all + (16*sgitg + 0)*NR1, NR1, 0, false);
-    simdgroup_store(mc[1], temp_all + (16*sgitg + 8)*NR1, NR1, 0, false);
+    simdgroup_store(mc[0], temp_all + (RPS*sgitg + 0)*NR1, NR1, 0, false);
+    if (NMC >= 2) {
+        simdgroup_store(mc[1], temp_all + (RPS*sgitg + 8)*NR1, NR1, 0, false);
+    }
+    if (NMC >= 4) {
+        simdgroup_store(mc[2], temp_all + (RPS*sgitg + 16)*NR1, NR1, 0, false);
+        simdgroup_store(mc[3], temp_all + (RPS*sgitg + 24)*NR1, NR1, 0, false);
+    }
 
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
@@ -12258,14 +12328,19 @@ kernel void kernel_mul_mm_skinny_q4_0_di_f32(
     device const half   * xd  = (device const half   *) (row0)        + il0;
     device const ushort * xqs = (device const ushort *) (row0 + doff) + 8*il0;
 
-    const short bcol = (short)(tiitg/4) < nr1 ? (short)(tiitg/4) : nr1 - 1;
-    const short bsx  = tiitg%4;
+    // B stage over all 64 threads with GGML_MM_SKINNY_BSPLIT, 32 without; see the
+    // interleaved kernel above. TPR is fixed at 2 here, so BPC is 8 or 4.
+    const short BPC = FC_mul_mm_sk_bsp ? 8 : 4;
+    const short BVL = NK/BPC;
+
+    const short bcol = (short)(tiitg/BPC) < nr1 ? (short)(tiitg/BPC) : nr1 - 1;
+    const short bsx  = tiitg%BPC;
 
     device const float * y = (device const float *)(src1
         + args.nb13*i13
         + args.nb12*i12
         + args.nb11*(r1 + bcol)
-        + args.nb10*(16*bsx));
+        + args.nb10*(BVL*bsx));
 
     simdgroup_half8x8 ma[2];
     simdgroup_half8x8 mb;
@@ -12324,9 +12399,9 @@ kernel void kernel_mul_mm_skinny_q4_0_di_f32(
         pa[6] = ta1[2];
         pa[7] = ta1[3];
 
-        if (tiitg < 4*NR1) {
-            FOR_UNROLL (short j = 0; j < 16; ++j) {
-                sb[(16*bsx + j)*NR1 + tiitg/4] = (half) y[j];
+        if (tiitg < BPC*NR1) {
+            for (short j = 0; j < BVL; ++j) {
+                sb[(BVL*bsx + j)*NR1 + tiitg/BPC] = (half) y[j];
             }
         }
 

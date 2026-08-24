@@ -10,7 +10,8 @@ default 0) when a kernel does not spill and grows monotonically once it does.
 See perf/toolchain-isa-probe.md for how it was identified and calibrated.
 
 Usage:
-  agx-spill-probe.py LIB.metallib KERNEL [KERNEL ...] [--cv IDX=VAL]... [--arch A]
+  agx-spill-probe.py LIB.metallib KERNEL [KERNEL ...] [--cv IDX=VAL]... [--cvb IDX=VAL]...
+                     [--arch A]
 
 Example (mul_mv nc sweep, runtime constants nsg=2 ne12=1 r2=1 r3=1):
   agx-spill-probe.py /tmp/x.metallib kernel_mul_mv_q4_0_f32_nc{2,3,4} \
@@ -101,7 +102,7 @@ def translate(lib, kernel, cvs, arch, outdir):
             "label": "L", "function": kernel, "specialized_name": kernel + "_spec",
             "constant_values": [
                 {"id_type": "FunctionConstantIndex", "id": {"data": i},
-                 "value_type": "ConstantShort", "value": {"data": v}} for i, v in cvs],
+                 "value_type": t, "value": {"data": v}} for i, v, t in cvs],
         }]}
         script["pipelines"]["compute_pipelines"] = [{"compute_function": "alias:L#" + kernel + "_spec"}]
 
@@ -122,13 +123,21 @@ def main():
     ap.add_argument('kernels', nargs='+')
     ap.add_argument('--cv', action='append', default=[], metavar='IDX=VAL',
                     help='function constant, short-typed (repeatable)')
+    # a bool constant must be declared ConstantBool - applegpu-nt rejects an i16 value for
+    # it ("cannot initialize function constant ... with a value of type 'i16'"), so a kernel
+    # with any bool FC in its used set is unreachable without this.
+    ap.add_argument('--cvb', action='append', default=[], metavar='IDX=VAL',
+                    help='function constant, bool-typed (repeatable)')
     ap.add_argument('--arch', default=None, help='default: this host')
     args = ap.parse_args()
 
     cvs = []
     for c in args.cv:
         i, v = c.split('=')
-        cvs.append((int(i), int(v)))
+        cvs.append((int(i), int(v), 'ConstantShort'))
+    for c in args.cvb:
+        i, v = c.split('=')
+        cvs.append((int(i), int(v) != 0, 'ConstantBool'))
     arch = args.arch or host_arch()
 
     print('%-44s %8s %8s' % ('kernel', 'text', 'spill'))
