@@ -2918,6 +2918,7 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
         static const int env_di_v2 = getenv("GGML_MV_EXT_DI_V2") ? atoi(getenv("GGML_MV_EXT_DI_V2")) : 0;
         static const int env_half_product = getenv("GGML_MV_EXT_HALF_PRODUCT") ? atoi(getenv("GGML_MV_EXT_HALF_PRODUCT")) : 0;
         static const int env_soa_w4 = getenv("GGML_MV_SOA_W4") ? atoi(getenv("GGML_MV_SOA_W4")) : 0;
+        static const int env_soa_w4_k1 = getenv("GGML_MV_SOA_W4_K1") ? atoi(getenv("GGML_MV_SOA_W4_K1")) : 0;
         const bool use_soa_w4 = env_soa_w4 && ne11 == 4 && ne12 == 1 && ne13 == 1 && use_f16y && use_di &&
                                 op->src[0]->type == GGML_TYPE_Q4_0 && ne00%64 == 0 &&
                                 ggml_metal_mul_mat_soa_w4_rows(ne01);
@@ -2925,7 +2926,8 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
                             ne11 == 4 && use_di && env_di_v2 ? 3 :
                             ne11 == 4 && use_f16y && !use_di && op->src[0]->type == GGML_TYPE_Q4_0 && env_half_product ? 4 : 1;
 
-        auto pipeline = use_soa_w4 ? ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w4(lib) :
+        auto pipeline = use_soa_w4 && env_soa_w4_k1 ? ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w4_k1(lib) :
+                        use_soa_w4 ? ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w4(lib) :
                                      ggml_metal_library_get_pipeline_mul_mv_ext(lib, op, nsg, nxpsg, r1ptg, nr0, use_f16y ? GGML_TYPE_F16 : op->src[1]->type, use_di, variant);
 
         ggml_metal_kargs_mul_mv_ext args = {
@@ -2956,7 +2958,7 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
         ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         3);
 
         if (use_soa_w4) {
-            ggml_metal_encoder_dispatch_threadgroups(enc, (ne01 + 3)/4, 1, 1, 32, 2, 1);
+            ggml_metal_encoder_dispatch_threadgroups(enc, (ne01 + 3)/4, 1, 1, 32, env_soa_w4_k1 ? 1 : 2, 1);
         } else {
             ggml_metal_encoder_dispatch_threadgroups(enc, ((ne01 + r0ptg - 1)/r0ptg), ((ne11 + r1ptg - 1)/r1ptg), ne12*ne13, 32, nsg, 1);
         }

@@ -89,3 +89,15 @@ The route is therefore restricted to the model's ordinary projection output-row 
 continuous threshold: it retains the measured transformer projection regime while excluding
 the small/batched linear-attention shapes and the 248320-row `lm_head`. The latter creates
 62080 tiny 4-row threadgroups and makes the fixed 4x4 morphology decisively worse.
+
+### Barrier-free K1 probe
+
+`GGML_MV_SOA_W4_K1=1` selects a separate one-simdgroup sibling while retaining the same
+whitelisted SoA route. One simdgroup owns the full K range and writes its 4x4 tile directly,
+removing the K2 kernel's threadgroup scratch, terminal barrier, and cross-simdgroup add. At
+the smallest routed output (5120 rows), 1280 independent row tiles remain available, so the
+second simdgroup is not needed to expose grid-level parallelism.
+
+Offline `applegpu_g16s` translation reports zero spills for both K2 and K1. Native text is
+3658 bytes for K2 and 3988 bytes for K1; this is not a speed prediction. Performance and GPU
+correctness have not been measured yet.
