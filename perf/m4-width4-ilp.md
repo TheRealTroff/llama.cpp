@@ -232,3 +232,27 @@ repack once and reuse the side buffer. Buffer destruction is also the safe resou
 The production env=1 path remains a persistent data-address cache for the lifetime of its immutable
 `WEIGHTS` allocation and is otherwise unchanged. This is a harness-cache defect, not kernel arithmetic
 evidence; model runs use the immutable path.
+
+### Post-fix validation
+
+After lifecycle eviction (`980de4c6c`), the broad exported test file passes all 10/10
+`MUL_MAT` cases on MTL0 with `GGML_MV_REPACK=2`, SoA, and vector-dot R2 enabled. This closes
+the sequential-shape correctness failure without changing the env=1 production path.
+
+A fresh order-balanced pair (baseline -> R2, then R2 -> baseline) measured:
+
+| operation | baseline, us | R2, us | delta |
+|---|---:|---:|---:|
+| attn_output | 125.480 | 109.160 | -13.0% |
+| ffn_down | 352.445 | 331.050 | -6.1% |
+| z / attn_gate | 125.845 | 109.695 | -12.8% |
+| node13 / qkv | 214.430 | 183.240 | -14.5% |
+| Qcur | 250.095 | 214.540 | -14.2% |
+| ffn_gate | 365.785 | 294.460 | -19.5% |
+
+The later-in-file gains are larger than the prior session and likely include within-run thermal
+or clock drift; they are supporting evidence, not the decision magnitude. The order-balanced
+whole-model result above, **+7.52% throughput**, remains the headline validation. Non-routed small
+cases stay roughly neutral, and `lm_head` correctly falls back (4478.38 vs 4545.42 us, +1.5%
+noise/slowdown). Lifecycle eviction affects only cache lifetime after source-buffer destruction;
+it does not alter immutable env=1 production caching.
