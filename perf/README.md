@@ -99,6 +99,16 @@ its config before trusting it.**
 Repack is not a general win - it pays only where the kernel reads the deinterleaved `_di`
 copy. At width 4 it *hurts* ext (146.6 -> 161.9 ms/round) and *helps* skinny (148.8 -> 135.3).
 
+> **The residency objection is now answered - `repack-inplace.md` (2026-08-24).** The
+> deinterleaved row is byte-for-byte the size of the row it replaces for every q4_0 tensor in
+> both models (`nblk % 8 == 0`), so the conversion is a permutation **in place**: no side
+> buffer and no second copy. Measured **+10.6% for +0.6 GiB**, against the side buffer's
+> +15.3% for +14.5 GiB, with byte-identical output. Two caveats decide whether it can be
+> adopted: **it needs `--load-mode none`** (mmap-ed weights are `PROT_READ` pages of the GGUF,
+> so nothing may be written into them), and **the side buffer is still ~3.4% faster on the
+> same memory path** - measured, not explained. Code on branch `metal-repack-inplace`, which
+> also gives `mul_mm` and `mul_mv_nc` the `_di` kernels they never had.
+
 ### GGML_MM_SKINNY_BSPLIT is worth +1.0 to +1.6% e2e and is NOT in the pick (2026-08-24)
 
 **`kernel_mul_mm_skinny` loads its B tile with 32 threads whatever the threadgroup size** -
@@ -206,6 +216,10 @@ and `test_mul_mat` only overrides the one-argument `build_graph(ctx)`, so its sr
 reaches `ctx_weights` and the buffer is never marked. The flag then does nothing and the
 arms read flat. **The pipeline name is the tell** - repack routes to a `_di` kernel, so if
 the compiled name has no `_di`, the flag did not engage. Check the name, not just the number.
+**Fixed for repack specifically on branch `metal-repack-inplace`: `GGML_MV_REPACK=2` drops the
+usage requirement, and `MUL_MAT` then runs 1154/1154 through the deinterleaved kernels.** It
+caught two real bugs the same day it existed (`repack-inplace.md`). The general lesson stands
+for every other flag.
 
 **4. Record a commit sha with every number.** head-to-head-cooled.md recorded a date and
 no sha, 24 commits landed under it, and the rot stayed invisible until someone compared
@@ -399,6 +413,20 @@ Current state:
   threads-per-row TPR=2, so **`NR0` could never change total simdgroups** - which is why the
   NR0 sweep found nothing. Changing TPR to 4 doubles simdgroups per threadgroup at fixed
   `NR0`. That is the overlap lever.
+- **`repack-inplace.md` - OPEN, and it is about memory rather than kernels.** `GGML_MV_REPACK`
+  is the largest single lever on record (+9.3% e2e, +14% re-measured 2026-08-24) and was parked
+  because it kept a second copy of every q4_0 weight. It does not have to: **the deinterleaved
+  row is exactly the size of the interleaved row** whenever `nblk % 8 == 0`, which holds for
+  every q4_0 tensor in both models, so `GGML_MV_REPACK=1` now converts **in place**, once, from
+  a pass encoded at the head of the first command buffer of the graph. **+10.6% for +0.6 GiB**
+  against the side buffer's +15.3% for +14.5 GiB, byte-identical output, 1154/1154. What it
+  cost was coverage: `mul_mm` (prefill) and `mul_mv_nc` (width 2) had no `_di` kernel and now
+  do; `mul_mv_ext`'s f32-activation path still does not, and is avoided by converting only
+  weights of >= 16 M elements. **Needs `--load-mode none`** - mmap-ed weights cannot be
+  written. **Open: the side buffer is still ~3.4% faster on the same memory path** (25.47 vs
+  24.64), most likely private vs CPU-coherent storage. Branch `metal-repack-inplace`,
+  unmerged; `GGML_MV_REPACK=2` is a test hook that finally makes the `_di` kernels reachable
+  from `test-backend-ops` (trap 3 below), and `=3` is the old side buffer, kept for A/B.
 - **`skinny-tpr-bsplit.md` - CLOSED. The last tuning axis on the skinny kernel is refuted,
   and the win is beside it.** `ext-at-width7-refuted.md` left one untested lever: the A-tile
   loader's threads-per-row (`GGML_MM_SKINNY_TPR`, branch `metal-mm-skinny-tpr`, unmerged),
