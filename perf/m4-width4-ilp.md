@@ -196,4 +196,19 @@ selection.
 
 The embedded Metal source compiles. Offline `applegpu_g16s` translation reports 3096 bytes
 native text and zero spill, between R2's 2184/zero and K1's 3988/zero. This establishes that
-R3 clears the register-allocation gate; correctness and performance are unmeasured.
+R3 clears the register-allocation gate. Exact-shape correctness passes, but one full exported
+run decisively rejects it:
+
+| operation | R2, us | R3, us | R3 delta |
+|---|---:|---:|---:|
+| attn_output | 117.580 | 128.020 | +8.9% |
+| ffn_down | 341.640 | 377.990 | +10.6% |
+| z / attn_gate | 116.940 | 122.950 | +5.1% |
+| node13 / qkv | 189.735 | 201.090 | +6.0% |
+| Qcur | 222.315 | 234.500 | +5.5% |
+| ffn_gate | 306.195 | 321.720 | +5.1% |
+
+R3 loses on every projection despite zero spilling. Together with the rejected 4-row K1 result,
+this establishes vector-dot R2 as the measured local optimum among the barrier-free 2-, 3-, and
+4-output-row shapes: the extra activation reuse does not repay the additional per-lane arithmetic
+and live accumulator state beyond two rows on M4 Pro.
