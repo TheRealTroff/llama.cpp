@@ -1,10 +1,13 @@
 # ffn_gate/up at width 4, from scratch: how close can this machine get?
 
-Status: **open. The ceiling is 200 us, the best existing route is 314, and nine from-scratch
-kernels on branch `metal-ffn-w4-scratch` land at 392 at best.** What the failures say is more
-useful than the number: at width 4 the four activation columns cannot be held per thread
-without wrecking occupancy, and every way of sharing them costs more than it saves. Written
-2026-08-24 against prod `7511233e4`, `test-backend-ops perf -b MTL0`, caffeinated.
+Status: **closed on the kernel question, open on one measurement.** Ten from-scratch kernels
+on branch `metal-ffn-w4-scratch`, including the threadgroup-staged design this file originally
+left as the open item. **That design was built and it does not pay: 395.8 us against the
+unstaged split's 392.6** - and in failing it settles what the wall actually is. **Width 4 is
+arithmetic-bound on the plain-FMA path at ~1.1 T MAC/s, not bandwidth-bound**, so the 200 us
+stream ceiling is unreachable without the matrix unit, and `mul_mv_ext` at 314 us is already
+at the limit rather than short of it. Written 2026-08-24 against prod `7511233e4`,
+`test-backend-ops perf -b MTL0`, caffeinated.
 
 Scope: one shape, `ffn_gate` / `ffn_up` = **17408 x 5120**, q4_0 weights (50.1 MB), f32
 activations, `ne11 = 4`. It is 39.1% of the round's MUL_MAT at width 7 (`perf/weighted-round.py`)
@@ -26,8 +29,13 @@ operating point that `mlx-parity` and `adaptive-spec` would need.
 
 The honest ceiling is **~200 us, not 174**: 174.5 is the width-1 call with its one column of
 arithmetic subtracted at the measured roof, which over-subtracts because that kernel already
-overlaps. 200.1 us is a measured call on the same bytes. Either way the arithmetic for four
-columns (102 us) fits **under** the stream, so a kernel that hides it lands at 200.
+overlaps. 200.1 us is a measured call on the same bytes. ~~Either way the arithmetic for four
+columns (102 us) fits **under** the stream, so a kernel that hides it lands at 200.~~
+
+**CORRECTED below (2026-08-24, the staged run): 102.4 us is the arithmetic at 3.48 T MAC/s,
+and that rate is only reachable through `simdgroup_half8x8`.** Measured on the plain-FMA path
+the marginal rate is **1.11 T MAC/s**, which puts four columns at **~320 us** - above the
+stream, not under it. The 200 us ceiling is real but only an MMA kernel can chase it.
 
 ## Where the existing routes sit
 
@@ -63,6 +71,7 @@ All on branch `metal-ffn-w4-scratch`, all selected with `GGML_W4=<n>` at `ne11 =
 | v8 | 7 | v3 on 8-element units (half the activation footprint) | 539.8 |
 | v9 | 8/9/10 | v3 with 4 / 8 / 16 lanes on K instead of 32 | 2385 / 1307 / 737 |
 | v10 | 12 | **columns split across 2 simdgroups, both on the same rows** | **392.6** |
+| v11 | 14 | **v10 with the weight blocks staged in threadgroup memory** | 395.8 |
 | v10 | 11 | same, 1 column per simdgroup over 4 simdgroups | 641.1 |
 
 ## The one measurement that explains the shape
@@ -100,16 +109,62 @@ one weight stream, two columns per thread:
 | nsg=1, columns 0-1 only | **213.8** |
 | nsg=2, all four columns | **392.6** (1.84x) |
 
-**The second column pair costs a second full weight stream.** Two simdgroups of the same
+~~**The second column pair costs a second full weight stream.** Two simdgroups of the same
 threadgroup, walking the same 50 MB of weights at the same time, do not share the fetch through
-the core's cache - 392.6 us is 100 MB at 255 GB/s, which is the DRAM roof, not a coincidence.
-So the four columns can be paid for in exactly three ways, and all three are now measured:
+the core's cache - 392.6 us is 100 MB at 255 GB/s, which is the DRAM roof, not a coincidence.~~
+
+**CORRECTED 2026-08-24 by the staged kernel below: it was a coincidence.** Stage the blocks in
+threadgroup memory and the DRAM traffic is provably 50 MB, and the kernel measures **395.8 us**
+- the same number. Neither kernel is bandwidth-bound. What the second column pair costs is its
+own arithmetic, at a rate the MMA path does not pay.
+
+## The staged design, built (v11, `GGML_W4=14`)
+
+The open item this file shipped with: stage the weight blocks in threadgroup memory once per K
+step and let two simdgroups take two columns each out of the staging - skinny's fetch sharing
+without skinny's 8-wide MMA tile. Each simdgroup stages a slice of the rows, both read all of
+them back, and with 32 lanes taking a whole block each a 5120-wide row is only **5 K steps**, so
+the two barriers per step cost 10 barriers per thread in total.
+
+| kernel (nr0=4) | columns | weight streams | us/call |
+|---|---|---|--:|
+| v10 split, no staging, nsg=1 | 2 | 1 | 213.8 |
+| **v11 staged, nsg=1** | 2 | 1 | **235.7** |
+| v10 split, no staging, nsg=2 | 4 | 2 | 392.6 |
+| **v11 staged, nsg=2** | 4 | **1** | **395.8** |
+
+Staging costs 22 us when nothing shares it (213.8 -> 235.7, the staging overhead alone) and
+**recovers none of the 160 us** the second column pair costs. Reading the last row against the
+one above it is the whole result: **with the weight stream already paid for and shared, adding
+columns 3 and 4 costs 235.7 -> 395.8 = 160.1 us for 178 M more MACs = 1.11 T MAC/s.** That is
+the plain-FMA arithmetic rate on this machine, measured with memory held constant.
+
+## What the wall is
+
+At 1.11 T MAC/s the four columns want **320 us of arithmetic**, and the stream is 200. Width 4
+is arithmetic-bound, and every plain-FMA kernel measured on this shape sits in the same band:
+
+| kernel | MACs | us | T MAC/s |
+|---|--:|--:|--:|
+| v3, 4 columns per thread | 356 M | 501.5 | 0.71 |
+| v11 staged split | 356 M | 395.8 | 0.90 |
+| v10 split | 356 M | 392.6 | 0.91 |
+| **`mul_mv_ext` nr0=2** | 356 M | **314.1** | **1.13** |
+| `kernel_mul_mm_skinny` | 713 M | 349.3 | **2.04** |
+
+**`mul_mv_ext` is not short of the roof, it is at the plain-FMA limit** - which is why ten
+kernels built from a different starting point could not pass it. The only measured way past
+1.13 T MAC/s on this hardware is `simdgroup_half8x8` at 2.04, and it buys that by computing an
+8-column tile, so at width 4 it does 2x the necessary MACs and still lands at 349.
+
+So the four columns can be paid for in four ways, and all four are now measured:
 
 - **hold them per thread** - registers collapse occupancy: 502 us (v3);
-- **split them across threads** - the weight stream doubles: 392 us (v10);
-- **stage the weights in threadgroup memory so the split is free** - that is
-  `kernel_mul_mm_skinny`, which is 349 us and pays for the staging with an 8-wide MMA tile it
-  only half uses.
+- **split them across threads, separate streams** - 392 us (v10);
+- **split them across threads, one staged stream** - 396 us (v11): the stream was never the
+  problem;
+- **compute them with the matrix unit** - 349 us (skinny), half of it wasted on columns nobody
+  asked for.
 
 `mul_mv_ext` at 314 is a fourth point on the same curve: it holds 4 columns per thread like v3
 but splits K only 8 ways, so its per-lane activation window is 8x smaller than v3's 16 KB.
@@ -130,14 +185,21 @@ Two smaller results, recorded so they are not re-derived:
 
 ## What is left
 
-**Status: open, and there is exactly one design left that has not been measured.** Stage the
-weight blocks in threadgroup memory once per K step and let two simdgroups take two columns
-each out of that staging - skinny's fetch-sharing without skinny's 8-wide MMA tile. It is the
-only route that pays for the column split without a second stream, and the numbers above bound
-what it can win: **392 us minus the duplicated stream is ~213 us**, against a 200 us roof and a
-314 us incumbent. It also inherits skinny's known cost - two barriers per K slice, which
-`skinny-bprefetch-refuted.md` shows the compiler already schedules around - so the arithmetic
-has to survive contact with the staging before this is worth anything.
+**Status: open, and it is now a question about instructions, not about memory or geometry.**
+1.11 T MAC/s is about **31% of this machine's fp32 ALU peak**, and the gap is the instruction
+budget around each FMA: nibble extraction, the `half4` conversion of the activations, and the
+per-block horizontal reduction. In v3's inner loop roughly **three instructions of overhead per
+FMA instruction** are issued, and every variant that traded some of that overhead for registers
+or extra loads landed back in the same band. **Nobody has measured what a minimum-overhead
+plain-FMA inner loop actually reaches on this hardware** - if it is 2 T MAC/s, four columns cost
+178 us and fit under the stream after all; if it is 1.2, ext is the end of the road and the only
+width-4 lever left is the MMA tile shape. That measurement is a microbenchmark of one loop, not
+a kernel, and it is the next thing to do.
+
+The `_di` (repack) layout is the other untried input to it: every kernel here reads the standard
+q4_0 layout, where the 18-byte block stride forces `packed_ushort4` loads and the nibble
+extraction sits on the critical path. `repack-inplace.md` makes that layout free of residency
+cost, and the skinny `_di` kernel already shows the cheaper register dequant it enables.
 
 Nothing here is in the prod pick and nothing here should be: at width 7 the shape routes to
 skinny, and all of the above is about a width the pick does not run.
