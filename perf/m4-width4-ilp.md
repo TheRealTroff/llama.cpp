@@ -26,7 +26,28 @@ deinterleaved q4_0 side buffer. It keeps the baseline dispatch and accumulator g
 replaces scalar masked-ushort reconstruction with two aligned `uchar4` loads and vector
 shift/mask/convert operations.
 
-Pre-benchmark status: Metal compilation succeeds; both old and v2 `_di` kernels spill zero
-bytes/thread at `nsg=2`, `nxpsg=8`, `nr0=2`. Native text is 4014 bytes old and 4226 bytes v2;
-code size is not a speed metric. The exact `ffn_down` evaluation case selects the v2 pipeline
-and passes CPU-reference correctness. Performance is not measured yet.
+Both old and v2 `_di` kernels spill zero bytes/thread at `nsg=2`, `nxpsg=8`, `nr0=2`. Native
+text is 4014 bytes old and 4226 bytes v2; code size is not a speed metric. The exact `ffn_down`
+evaluation case selects the v2 pipeline and passes CPU-reference correctness.
+
+Exact `ffn_down` width 4, two repetitions:
+
+| kernel | times, us | mean, us | delta |
+|---|---|---:|---:|
+| old DI | 356.45, 355.52 | 355.99 | - |
+| vector DI | 373.02, 374.07 | 373.55 | **+4.93%** |
+
+The vector expression increases native text and loses decisively. MSL source-level vectorization
+did not reduce the executed instruction cost on this target.
+
+## Packed-half products
+
+`GGML_MV_EXT_HALF_PRODUCT=1` keeps the baseline geometry and FP32 accumulation, but rounds
+each `float4(weight) * half4(activation)` product through `half4` before widening and reducing
+it into the FP32 accumulator. The exact `ffn_down` evaluation case passes the CPU reference.
+Offline compilation on `applegpu_g16s` reports zero spill for both kernels (native text 3850
+bytes baseline, 3946 bytes half-product).
+
+One controlled pair was sufficient to reject it: **391.80 us** for the half-product kernel
+against **359.46 us** for the immediately following baseline, a **+9.0% regression**. Packed
+half source arithmetic does not map to a faster execution path for this dot-product shape.

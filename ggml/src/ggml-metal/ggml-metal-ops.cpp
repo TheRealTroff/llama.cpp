@@ -2898,8 +2898,10 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
 
         static const int env_ilp = getenv("GGML_MV_EXT_ILP") ? atoi(getenv("GGML_MV_EXT_ILP")) : 1;
         static const int env_di_v2 = getenv("GGML_MV_EXT_DI_V2") ? atoi(getenv("GGML_MV_EXT_DI_V2")) : 0;
+        static const int env_half_product = getenv("GGML_MV_EXT_HALF_PRODUCT") ? atoi(getenv("GGML_MV_EXT_HALF_PRODUCT")) : 0;
         const int variant = ne11 == 4 && use_f16y && !use_di && op->src[0]->type == GGML_TYPE_Q4_0 && env_ilp == 2 ? 2 :
-                            ne11 == 4 && use_di && env_di_v2 ? 3 : 1;
+                            ne11 == 4 && use_di && env_di_v2 ? 3 :
+                            ne11 == 4 && use_f16y && !use_di && op->src[0]->type == GGML_TYPE_Q4_0 && env_half_product ? 4 : 1;
 
         auto pipeline = ggml_metal_library_get_pipeline_mul_mv_ext(lib, op, nsg, nxpsg, r1ptg, nr0, use_f16y ? GGML_TYPE_F16 : op->src[1]->type, use_di, variant);
 

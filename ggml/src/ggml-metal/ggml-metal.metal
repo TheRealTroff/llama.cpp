@@ -5010,7 +5010,7 @@ void kernel_mul_mv_ext_q4x4_f32_impl(
 }
 
 // f16-src1 variant of the t4 kernel: one 16B load covers 8 contiguous src1 elements
-template<short r1ptg, typename q_t, short chpb, void (*deq_t4)(device const q_t *, short, thread float4 &) >
+template<short r1ptg, typename q_t, short chpb, void (*deq_t4)(device const q_t *, short, thread float4 &), bool half_product = false>
 void kernel_mul_mv_ext_q4_f16y_impl(
         constant ggml_metal_kargs_mul_mv_ext & args,
         device const char * src0,
@@ -5086,12 +5086,19 @@ void kernel_mul_mv_ext_q4_f16y_impl(
 #pragma unroll(r1ptg)
             for (short ir1 = 0; ir1 < r1ptg; ++ir1) {
                 const uint4  raw = y8[ir1][ch*nxpsg];
-                const float4 ylo = float4(as_type<half4>(raw.xy));
-                const float4 yhi = float4(as_type<half4>(raw.zw));
+                const half4 yhlo = as_type<half4>(raw.xy);
+                const half4 yhhi = as_type<half4>(raw.zw);
 
                 for (short k = 0; k < nr0; ++k) {
-                    sumf[k][ir1] += dot(lx[k][2*ch + 0], ylo);
-                    sumf[k][ir1] += dot(lx[k][2*ch + 1], yhi);
+                    if constexpr (half_product) {
+                        const half4 plo = half4(lx[k][2*ch + 0])*yhlo;
+                        const half4 phi = half4(lx[k][2*ch + 1])*yhhi;
+                        sumf[k][ir1] += dot(float4(plo), 1.f);
+                        sumf[k][ir1] += dot(float4(phi), 1.f);
+                    } else {
+                        sumf[k][ir1] += dot(lx[k][2*ch + 0], float4(yhlo));
+                        sumf[k][ir1] += dot(lx[k][2*ch + 1], float4(yhhi));
+                    }
                 }
             }
         }
@@ -5133,6 +5140,18 @@ void kernel_mul_mv_ext_q4_f16y_impl(
             }
         }
     }
+}
+
+[[host_name("kernel_mul_mv_ext_q4_0_f16_hp_r1_4")]]
+kernel void kernel_mul_mv_ext_q4_0_f16y_hp(
+        constant ggml_metal_kargs_mul_mv_ext & args,
+        device const char * src0,
+        device const char * src1,
+        device       char * dst,
+        uint3   tgpig[[threadgroup_position_in_grid]],
+        ushort  tiisg[[thread_index_in_simdgroup]],
+        ushort  sgitg[[simdgroup_index_in_threadgroup]]) {
+    kernel_mul_mv_ext_q4_f16y_impl<4, block_q4_0, 8, dequantize_q4_0_t4, true>(args, src0, src1, dst, tgpig, tiisg, sgitg);
 }
 
 template<short NB>
