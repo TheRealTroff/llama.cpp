@@ -1,7 +1,9 @@
 # The register-tile kernel loses at width 7, and it is structural, not tuning
 
 Status: **closed, refuted - and it redirects `ffn-utilization.md`'s experiment 3.** Measured
-2026-08-24 at prod `2d21fe72b`, `test-backend-ops perf` on MTL0, zero code.
+2026-08-24 at prod `2d21fe72b`, `test-backend-ops perf` on MTL0, zero code. **The TPR lever
+this file left open at the bottom is now built and refuted too - `skinny-tpr-bsplit.md`,
+same day - and the overlap win it was after turned out to be in the loader, not the MACs.**
 
 ## What this tests
 
@@ -92,5 +94,14 @@ threads-per-row, currently 2. So `nsg = TPR*NR0/32`, and varying `NR0` alone mov
 count while leaving total simdgroups and rows-per-simdgroup invariant - which is exactly why
 `skinny-nr0-refuted.md` found nothing. **Changing TPR from 2 to 4 halves rows per simdgroup to
 8 (`mc[1]` instead of `mc[2]`) and doubles simdgroups per threadgroup at fixed `NR0`**, giving
-each barrier more independent MAC work to hide the A-tile loads behind. That is the overlap
-lever, it is a real code change, and it is the next thing to try.
+each barrier more independent MAC work to hide the A-tile loads behind. ~~That is the overlap
+lever, it is a real code change, and it is the next thing to try.~~
+
+**CORRECTED 2026-08-24, built and measured the same day: `skinny-tpr-bsplit.md`.** TPR is a
+real knob (`GGML_MM_SKINNY_TPR`, 1154/1154 correct at 1/2/4) and **rows per simdgroup is
+already at its optimum at 16**: TPR=4 costs +7.7% on `ffn_gate+up` and buys 0.3% on
+`ffn_down`, TPR=1 costs +9.9% / +13.4%. The paragraph above is right that `NR0` could not
+reach this resource and wrong that reaching it would pay. What did pay was found beside it:
+the B-tile load was pinned at 32 threads whatever the threadgroup size, and spreading it over
+all of them (`GGML_MM_SKINNY_BSPLIT`) is **-1.4% to -2.6% on every projection and +1.0 to
++1.6% e2e**. The overlap this file was looking for was in the loader, not in the MAC side.

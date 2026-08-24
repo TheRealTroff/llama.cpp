@@ -101,3 +101,16 @@ narrow-tile item and the shape of their `verify_m4`. Read it, benchmark it, do n
 `NR0` is now a live function constant and it is worth keeping - not as a lever, but because a
 new kernel with a different rows-per-simdgroup structure would make it one. The invariance
 above is a property of *this* loader, not of the parameter.
+
+**ANSWERED 2026-08-24, `skinny-tpr-bsplit.md`.** The loader's threads-per-row is the knob that
+moves rows per simdgroup (`nsg = TPR*NR0/32`, rows/SG = `32/TPR`), and it has now been swept
+in both directions: **8 rows costs +7.7% on `ffn_gate+up`, 32 rows costs +9.9%, and the
+shipped 16 is the optimum.** So the invariance this file describes was hiding nothing, and
+that closes tuning on this kernel from the last side it had. What did pay was a different
+resource in the same loader - the B-tile load was pinned at 32 threads whatever the
+threadgroup size, and spreading it is worth ~1.3% of the round.
+
+**One scope note while this file is being edited.** "Next step is unchanged and now
+unavoidable: the register-tile kernel" above is **correct at width 4 and refuted at the prod
+width 7** - `ext-at-width7-refuted.md` measured that family at 596 us against skinny's 367.
+The sentence was written before that measurement existed; read it as a width-4 statement.

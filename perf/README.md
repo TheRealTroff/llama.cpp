@@ -99,6 +99,20 @@ its config before trusting it.**
 Repack is not a general win - it pays only where the kernel reads the deinterleaved `_di`
 copy. At width 4 it *hurts* ext (146.6 -> 161.9 ms/round) and *helps* skinny (148.8 -> 135.3).
 
+### GGML_MM_SKINNY_BSPLIT is worth +1.0 to +1.6% e2e and is NOT in the pick (2026-08-24)
+
+**`kernel_mul_mm_skinny` loads its B tile with 32 threads whatever the threadgroup size** -
+4 threads per column, 16 activations each - and that stage sits between the two barriers of
+every K slice. `GGML_MM_SKINNY_BSPLIT=1` spreads it over all `32*TPR` threads. Measured
+per shape it is **-1.4% to -2.6% on every projection** (weighted -2.0 ms of a ~150 ms round)
+and e2e **+1.20% at `n_predict` 600, +1.03% at 300, +1.56% with `GGML_MV_REPACK=1`**, with
+byte-identical output in every arm and 1154/1154 correct. See `skinny-tpr-bsplit.md`.
+
+**It is not in the pick because the code is unmerged** (branch `metal-mm-skinny-tpr`), not
+because of a trade-off: unlike repack it costs no residency and no quality. Making it the
+default is a one-line change to `ggml-metal-device.cpp`, and it changes every skinny call in
+the engine, so it is the owner's call.
+
 ### Current number
 
 **25.02 t/s** (dflash n6, `n_predict` 300). prod `9f477ae5`, clean tree, build 2026-08-22
@@ -385,6 +399,23 @@ Current state:
   threads-per-row TPR=2, so **`NR0` could never change total simdgroups** - which is why the
   NR0 sweep found nothing. Changing TPR to 4 doubles simdgroups per threadgroup at fixed
   `NR0`. That is the overlap lever.
+- **`skinny-tpr-bsplit.md` - CLOSED. The last tuning axis on the skinny kernel is refuted,
+  and the win is beside it.** `ext-at-width7-refuted.md` left one untested lever: the A-tile
+  loader's threads-per-row (`GGML_MM_SKINNY_TPR`, branch `metal-mm-skinny-tpr`, unmerged),
+  which is what sets **rows per simdgroup = 32/TPR** - the resource `NR0` structurally could
+  not reach. Swept both ways at 1154/1154 correct: **8 rows/SG costs +7.7% on `ffn_gate+up`,
+  32 rows costs +9.9%, and the shipped 16 is the optimum.** Reasons differ by direction -
+  fewer rows means fewer MACs to amortize the shared B load over (loads/MAC 1.5 -> 2.0), more
+  rows means a 4x `half4x4` prefetch in one simdgroup. **The incidental find is the useful
+  half**: the B-tile load was pinned at 32 threads whatever the threadgroup size, and
+  spreading it (`GGML_MM_SKINNY_BSPLIT`) is **-1.4% to -2.6% per call on all seven
+  projections and +1.0 to +1.6% e2e**, byte-identical output, `_di` included. See the
+  prod-pick section above - it is a candidate, not adopted. **Next on this kernel: the B tile
+  is still loaded inside the barrier window while A is prefetched a slice ahead; hoisting it
+  out has never been tried.** Two side notes: the offline spill probe cannot translate the
+  `mul_mm_skinny` family at all (pre-existing, prod's source fails the same way, while
+  `mul_mv` still reproduces its calibration exactly), and `perf/agx-spill-probe.py` gained
+  `--cvb` for bool function constants.
 - **`skinny-nr0-refuted.md` - CLOSED, refuted, and it decides the next move.** `NR0` is now a
   function constant on both `mul_mm_skinny` variants (`GGML_MM_SKINNY_NR0`, branch
   `metal-mm-skinny-nr0`, unmerged, 1154/1154 correct at 16/32/64/128). **NR0=32 was already

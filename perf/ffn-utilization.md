@@ -287,7 +287,14 @@ about the scaffolding. Those are compatible, and only the second one is still op
    rewriting.
 2. ~~**Overlap directly: more simdgroups per threadgroup, or fewer barriers per K slice.**~~
    The `nsg` half is dead with 1 - it is the same function constant and it moves nothing.
-   The **barriers** half is not a tuning question and survives only inside 3.
+   ~~The **barriers** half is not a tuning question and survives only inside 3.~~
+   **REFUTED AND PARTLY VINDICATED 2026-08-24, `skinny-tpr-bsplit.md`.** The `nsg` half was
+   reached properly at last (`GGML_MM_SKINNY_TPR`, the loader's threads-per-row, which is what
+   sets rows per simdgroup): **4 simdgroups of 8 rows costs +7.7% on `ffn_gate+up`, 1 of 32
+   costs +9.9%, and the shipped 2 of 16 is the optimum.** The barriers half did not need a new
+   kernel after all - the **B-tile load between them was pinned at 32 threads** whatever the
+   threadgroup size, and spreading it (`GGML_MM_SKINNY_BSPLIT`) is -1.4% to -2.6% per call on
+   every projection and **+1.0 to +1.6% e2e**, the first measured win on this kernel.
 3. ~~**THE ONE LEFT: the register-tile kernel.**~~ **REFUTED 2026-08-24 at the prod width -
    see `ext-at-width7-refuted.md`. That kernel already exists: it is `mul_mv_ext`, and at
    width 7 the best-tuned config is 596 us against skinny's 367, a 1.63x loss.** The register
