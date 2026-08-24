@@ -293,8 +293,9 @@ about the scaffolding. Those are compatible, and only the second one is still op
    width 7 the best-tuned config is 596 us against skinny's 367, a 1.63x loss.** The register
    tile's accumulators and its `nr0*r1ptg*log2(nxpsg)` reduction both scale with verify width,
    so the family wins below width 5 and loses above it; the crossover is at 5 and is
-   shape-dependent. Building a new kernel of that shape would reproduce the result. Keep the
-   original text below for the reasoning, which is still right about width 4:** *(Quant target ~~settled 2026-08-23~~
+   shape-dependent. Building a new kernel of that shape would reproduce the result. **Keep
+   the original text below for the reasoning, which is still right about width 4:**
+   *(Quant target ~~settled 2026-08-23~~
    **REOPENED 2026-08-24.** That day's call to build for Q4_0 rested on a clean Q4_K_M worth
    only +1.45 pp. `weight-quant-kld.md` then measured **UD-Q4_K_M at +5.82 pp for FEWER bytes**
    - a well-chosen 4-bit body is worth ~+4.6 pp, the largest quality lever in this project, and
