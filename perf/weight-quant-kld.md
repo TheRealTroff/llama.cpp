@@ -253,6 +253,37 @@ assigns are much better calibrated. **On self-generated text use KLD; top-token 
 dominated by easy positions.** Which is the mirror image of the PPL lesson - no statistic
 here is safe on every corpus.
 
+### UD on its own trajectory (2026-08-24)
+
+| | Q4_0 own traj. | q6K head own traj. | **UD own traj.** |
+|---|--:|--:|--:|
+| **Same top token** | 94.852 +/- 0.399% | 95.080 +/- 0.390% | **97.393 +/- 0.288%** |
+| Median KLD | 0.00303 | 0.00062 | **0.00037** |
+| Mean KLD | 0.06642 | 0.03504 | **0.00949** |
+| 90% KLD | 0.14535 | 0.10014 | **0.02921** |
+| 99% KLD | 0.83153 | 0.34137 | **0.09784** |
+| **Maximum KLD** | 7.94983 | 7.92136 | **0.62483** |
+| RMS `dp` | 10.215% | 7.560% | **3.969%** |
+| corpus reference PPL | 1.2881 | 1.2120 | **1.4197** |
+| **median tokens to divergence** | **13.1** | 13.7 | **26.2** |
+
+**+2.541 pp against uniform-Q4_0, 5.2 sigma** - unlike the q6K head's +0.228 pp at 0.4 sigma,
+this clears the saturation problem easily. Top-token agreement saturates on self-generated
+text only when the difference is small; UD's is not.
+
+**The maximum KLD over ~6100 positions is 0.625.** Uniform-Q4_0's is 7.95 and the q6K head's
+7.92. On its own trajectory UD essentially never catastrophically disagrees with q8_0 - there
+is no token in the sample where the two distributions come apart. That is a qualitatively
+different failure profile, not a quantitatively better one.
+
+**Median tokens to divergence doubles, 13.1 -> 26.2.**
+
+**The corpus confound runs the other way here, which strengthens the result.** For the q6K
+head the confound favoured it (its corpus was easier, reference PPL 1.212 vs 1.288). UD's
+corpus is **harder** - reference PPL 1.4197, the highest of the three - and it still scores
+7x better on mean KLD. Whatever share of UD's advantage is corpus difficulty, it is negative:
+**the measurement understates UD.**
+
 ### Confound, stated
 
 Each model generated its **own** corpus, which is the right design for "how far is this model
@@ -262,6 +293,100 @@ scores lower KLD regardless of model. **Some unknown share of the -47% is corpus
 Deconfounding needs both models scored on one corpus, which necessarily puts one of them
 off-trajectory - the tension is not resolvable within a single measurement. The per-model
 numbers are each valid on their own; the ratio between columns is not.
+
+## UD-Q4_K_M: the body lever is much larger than the clean Q4_K_M suggested (2026-08-24)
+
+Re-fetched from `unsloth/Qwen3.8-27B-GGUF` (16.46 GB, downloaded at 51.8 MB/s) after the
+local copy was gone. Scored against **the same kept reference logits** - byte-identical q8_0
+logits, same wikitext corpus, same 24 chunks as the three builds above, which is a stricter
+comparison than regenerating them.
+
+Tensor mix confirmed from the GGUF, and it matches `mtp-kv-results.md`'s 2026-08-19 inventory
+exactly: 360 F32, 131 Q5_K, 117 IQ4_XS, 106 Q8_0, 104 Q4_K, 30 Q6_K, 7 Q3_K, 7 IQ4_NL,
+4 IQ3_S. Head Q6_K (1042.9 MB), `token_embd` Q4_K. **15.334 GiB file, 14.668 GiB streamed
+(+7.3% over uniform-Q4_0's 13.665).**
+
+| metric | uniform Q4_0 | q6K head | clean Q4_K_M | **UD-Q4_K_M** |
+|---|--:|--:|--:|--:|
+| **Same top token** | 90.746% | 91.972% | 93.418% | **96.562 +/- 0.116%** |
+| Mean KLD | 0.05397 | 0.04880 | 0.03928 | **0.01365** |
+| Median KLD | 0.02049 | 0.01490 | 0.00899 | **0.00267** |
+| 90% KLD | 0.08562 | 0.07500 | 0.04737 | **0.01512** |
+| 99% KLD | 0.45398 | 0.45474 | 0.33134 | **0.09257** |
+| 99.9% KLD | 4.38574 | 4.25356 | 5.65388 | **0.82308** |
+| Maximum KLD | 24.055 | 24.141 | 32.350 | **21.674** |
+| RMS `dp` | 6.294% | 5.972% | 5.158% | **3.072%** |
+| streamed | 13.665 GiB | 13.970 | 14.990 | **14.668** |
+
+**Disagreement falls 9.25% -> 3.44%, a 63% relative cut, for +7.3% of streamed bytes.** The
+clean Q4_K_M managed 29% for *more* bytes (+9.7%). UD is cheaper and more than twice as
+effective, and median tokens-to-divergence on wikitext goes 7.1 -> 19.8.
+
+### This retires the clean Q4_K_M as a proxy, and one of its conclusions
+
+~~The body upgrade is worth +1.45 pp for +9.7% of bytes and the whole fast path; skip it.~~
+**That was reasoned from the only body upgrade then measured, and it was a poor
+representative.** A well-chosen 4-bit body is worth **+5.82 pp** (of which ~+1.23 is the head,
+so **~+4.6 pp is body**) - by a wide margin the largest quality lever measured in this project.
+
+~~Q4_K's 256-element super-blocks with 6-bit sub-scales are better on average and worse when
+an outlier weight lands badly.~~ **Refuted.** UD is Q4_K/Q5_K/IQ4_XS-based and its extreme
+tail is **5.3x better** than uniform-Q4_0 (99.9% KLD 0.823 vs 4.386) and **6.9x better** than
+the clean Q4_K_M (5.654). The clean build's bad tail was a **layer-selection** failure, not a
+format property.
+
+### What UD actually spends its budget on
+
+Streamed bytes by format (`token_embd` excluded, it is a gather):
+
+```
+Q5_K   4.83 GB 30.7%    Q6_K   1.81 GB 11.5%    Q3_K  0.27 GB 1.7%
+IQ4_XS 4.76 GB 30.2%    IQ4_NL 0.33 GB  2.1%    IQ3_S 0.15 GB 1.0%
+Q4_K   3.49 GB 22.2%    Q8_0   0.08 GB  0.5%
+```
+
+**There are ZERO Q4_0 tensors in the file**, so `mul_mm_skinny` and `GGML_MV_REPACK` cover
+**0.0%** of it. Not "some tensors miss the gate" - the type does not appear.
+
+The "106 Q8_0 tensors" headline is misleading: they are 0.08 GB, 96 of them the tiny
+`ssm_alpha`/`ssm_beta` vectors. **The real precision spend is Q5_K and Q6_K (42% of bytes)**,
+concentrated in `ssm_out`, `attn_output`, `attn_k`/`attn_v` and about a third of the FFN. And
+the format varies **per layer within a role** - `ffn_down` alone uses seven formats across 65
+blocks - so this is per-tensor sensitivity selection, presumably imatrix-driven (the repo
+ships `imatrix_unsloth.gguf`), not a rule like "attention gets more bits".
+
+### Speed, and why it is not yet a verdict
+
+Same-session, uniform-Q4_0 control alongside:
+
+| | uniform Q4_0 | UD-Q4_K_M |
+|---|--:|--:|
+| batch-1 @300 | 13.051 t/s | 11.779 (-9.7%) |
+| **n6 @600 (prod pick)** | **22.003 t/s** | **13.346 (-39.3%)** |
+| acceptance @600 | 41.3% | 43.0% |
+
+Batch-1's -9.7% is roughly its +7.3% of bytes plus a small i-quant dequant cost. **All the
+damage is in the speculative path, and it is not acceptance** - UD's is slightly higher.
+Speculation buys UD only **1.13x** over its own floor against Q4_0's **1.69x**, because 0% of
+its bytes reach the tuned kernels. `mtp-kv-results.md`'s 2026-08-19 note blamed the 117
+IQ4_XS tensors; the real figure is 100% of the model.
+
+**Do not read -39.3% as UD's cost.** It is the cost of the Q4_0 gate on a model that has no
+Q4_0 in it, measured on kernels nobody has written yet.
+
+### The experiment this sets up (not run - queued)
+
+`llama-quantize --tensor-type` takes per-tensor regex overrides, and we have `conv-q8_0`. So
+build a **hybrid: Q4_0 where the fast path needs it, precision only where UD says it matters.**
+The arithmetic is favourable - `attn_k`/`attn_v`, `attn_output`, `ssm_out` and the ssm vectors
+are **1.54 GB of 15.74, under 10% of streamed bytes.** If most of the +4.6 pp body gain lives
+there, a build holding all three FFN projections and `attn_qkv` at Q4_0 keeps fast-path
+coverage on ~80% of bytes while buying most of the quality. One requant (~7 min) plus one KLD
+pass against the kept reference logits (~12 min).
+
+That also answers what the UD comparison structurally cannot: UD confounds **format** with
+**unsloth's layer-selection policy**, so it says the difference is real without saying which
+layers earn it. A hybrid sweep says which.
 
 ## Methodology finding: cross-model speculative t/s is confounded
 

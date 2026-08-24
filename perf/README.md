@@ -310,8 +310,20 @@ Current state:
   Headline: both builds stay identical to q8_0 for a **median of ~13 tokens** before
   diverging, and the head upgrade does not change that. Divergence is not degradation -
   nothing here says which path is better.
-  **`ffn-utilization.md`'s worry is resolved in Q4_0's favour: a register-tile kernel targeting
-  Q4_0 does not bake in a lobotomy** - the body format is worth ~1.45 pp, not the bulk of the
+  **UD-Q4_K_M re-fetched and measured 2026-08-24, and it overturns the "skip the body" call.**
+  Same top token **96.562%** on wikitext and **97.393%** on its own trajectory (5.2 sigma over
+  uniform-Q4_0), mean KLD 7x better, **maximum KLD over 6100 own-trajectory positions 0.625
+  against 7.95** - it never catastrophically disagrees. Median tokens to divergence doubles,
+  13.1 -> 26.2. Costs **+7.3% streamed bytes**, less than the clean Q4_K_M that bought a third
+  as much. **A well-chosen 4-bit body is worth ~+4.6 pp - the largest quality lever measured
+  here.** But it has **ZERO Q4_0 tensors**, so skinny and repack cover **0.0%** of it and n6
+  drops 22.0 -> 13.3 t/s. **That -39% is the cost of the Q4_0 gate, not of UD** - do not quote
+  it as UD's price. Queued: a hybrid holding the FFN and `attn_qkv` at Q4_0 (~80% of bytes,
+  fast path intact) with precision only on `attn_k/v`, `attn_output`, `ssm_out` and the ssm
+  vectors (1.54 of 15.74 GB).
+  ~~`ffn-utilization.md`'s worry is resolved in Q4_0's favour: a register-tile kernel targeting
+  Q4_0 does not bake in a lobotomy~~ **REOPENED by the UD result: the format the kernel targets
+  is now worth ~4.6 pp of top-token agreement, not the ~1.45 pp the clean Q4_K_M suggested.** - the body format is worth ~1.45 pp, not the bulk of the
   gap. Harness: `perf/run-quant-kld.sh` (M/MD overridable, ARMS filter added to
   `run-prod-pick.sh` the same day).
 - **`ffn-utilization.md` - OPEN, and on today's evidence the largest lever on the board.

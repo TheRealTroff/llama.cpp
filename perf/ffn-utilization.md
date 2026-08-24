@@ -288,10 +288,13 @@ about the scaffolding. Those are compatible, and only the second one is still op
 2. ~~**Overlap directly: more simdgroups per threadgroup, or fewer barriers per K slice.**~~
    The `nsg` half is dead with 1 - it is the same function constant and it moves nothing.
    The **barriers** half is not a tuning question and survives only inside 3.
-3. **THE ONE LEFT: the register-tile kernel.** *(Quant target settled 2026-08-23:
-   `weight-quant-kld.md` measured Q4_K's body against q8_0 logits and it is worth only
-   +1.45 pp of top-token agreement for +9.7% of streamed bytes plus the whole fast path.
-   **Build it for Q4_0.** An earlier draft of that file argued the opposite; it was wrong.)* No `simdgroup_matrix`, inline dequant, never
+3. **THE ONE LEFT: the register-tile kernel.** *(Quant target ~~settled 2026-08-23~~
+   **REOPENED 2026-08-24.** That day's call to build for Q4_0 rested on a clean Q4_K_M worth
+   only +1.45 pp. `weight-quant-kld.md` then measured **UD-Q4_K_M at +5.82 pp for FEWER bytes**
+   - a well-chosen 4-bit body is worth ~+4.6 pp, the largest quality lever in this project, and
+   it contains **zero Q4_0 tensors**. So the format the kernel targets is now a real decision
+   worth several points of top-token agreement, not a free choice. Resolve it with the hybrid
+   experiment queued in that file before committing kernel work to a format.)* No `simdgroup_matrix`, inline dequant, never
    staged to threadgroup memory, K-split, narrow column tile. With 1-2 dead, dispatch geometry
    and activation re-read are both excluded and the design itself is what is left - the
    `dequant -> threadgroup -> simdgroup_load` round trip plus two barriers per K slice, paid
