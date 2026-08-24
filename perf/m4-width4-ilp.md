@@ -149,3 +149,11 @@ eight scalar nibbles, form the symmetric Q4_0 weight as `float(q)*d - 8*d`, and 
 scalar `fma` into the eight accumulators. This holds traffic and geometry fixed and tests whether
 M4 schedules MLX's scalar FMA stream better than Metal's vector `dot`; it should not be inferred
 from source-level vector width or native text size.
+
+`GGML_MV_SOA_W4_R2_SCALAR=1` implements that sibling (together with the R2 and SoA route
+switches). It uses one `vec<half, 8>` load per activation column, an unrolled eight-nibble
+loop, `wv = float(q)*d - 8*d`, and explicit scalar `fma` into the same eight FP32 accumulators.
+Offline `applegpu_g16s` translation reports 2176 bytes native text and zero spill, versus
+2184/zero for dot-R2. The near-identical static footprint makes this a clean scheduling A/B;
+it does not predict which instruction stream is faster. GPU correctness and performance are
+unmeasured.
