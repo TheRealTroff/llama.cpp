@@ -1023,15 +1023,14 @@ void ggml_metal_device_free(ggml_metal_device_t dev) {
     free(dev);
 }
 
-struct ggml_metal_buffer_id ggml_metal_device_get_repack_buffer(ggml_metal_device_t dev, const struct ggml_tensor * t, size_t size, bool force_new, bool * is_new) {
+struct ggml_metal_buffer_id ggml_metal_device_get_repack_buffer(ggml_metal_device_t dev, const struct ggml_tensor * t, size_t size, bool * is_new) {
     struct ggml_metal_buffer_id res = { NULL, 0 };
 
     NSNumber * key = [NSNumber numberWithUnsignedLongLong:(unsigned long long)(uintptr_t) t->data];
 
     [dev->repack_lock lock];
 
-    id<MTLBuffer> old = force_new ? dev->repack_bufs[key] : nil;
-    id<MTLBuffer> buf = force_new ? nil : old;
+    id<MTLBuffer> buf = dev->repack_bufs[key];
     if (buf) {
         *is_new = false;
     } else {
@@ -1042,11 +1041,6 @@ struct ggml_metal_buffer_id ggml_metal_device_get_repack_buffer(ggml_metal_devic
             return res;
         }
         dev->repack_bufs[key] = buf;
-        if (old) {
-            // Drop the ownership from old's newBuffer allocation; replacing the dictionary
-            // entry already dropped its dictionary retain. In-flight command buffers retain it.
-            [old release];
-        }
         *is_new = true;
     }
 
@@ -1908,7 +1902,29 @@ ggml_metal_buffer_t ggml_metal_buffer_map(ggml_metal_device_t dev, void * ptr, s
     return res;
 }
 
+static void ggml_metal_device_evict_repack_range(ggml_metal_device_t dev, const void * data, size_t size) {
+    const uintptr_t begin = (uintptr_t) data;
+    const uintptr_t end   = begin + size;
+
+    [dev->repack_lock lock];
+    NSArray * keys = [dev->repack_bufs allKeys];
+    for (NSNumber * key in keys) {
+        const uintptr_t addr = (uintptr_t) [key unsignedLongLongValue];
+        if (addr >= begin && addr < end) {
+            id<MTLBuffer> repack = dev->repack_bufs[key];
+            [repack release]; // balance newBuffer ownership
+            [dev->repack_bufs removeObjectForKey:key];
+        }
+    }
+    [dev->repack_lock unlock];
+}
+
 void ggml_metal_buffer_free(ggml_metal_buffer_t buf) {
+    // Repack keys are source data addresses. Evict them before this allocation can be reused
+    // for another tensor; buffer destruction is the safe lifetime boundary for unretained
+    // command-buffer references and preserves caching across repeated nodes in one graph.
+    ggml_metal_device_evict_repack_range(buf->dev, buf->all_data, buf->all_size);
+
     ggml_metal_device_rsets_rm(buf->dev, buf->rset);
 
     for (int i = 0; i < buf->n_buffers; i++) {

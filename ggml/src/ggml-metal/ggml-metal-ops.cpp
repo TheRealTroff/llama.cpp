@@ -2562,10 +2562,7 @@ static bool ggml_metal_op_mul_mat_try_repack_q4_0(ggml_metal_op_t ctx, const ggm
     const uint64_t nbd1 = use_soa ? 18*(uint64_t) nblk : doff + 16*(uint64_t) nblk;
 
     bool is_new = false;
-    // Synthetic backend tests recycle data addresses across tensors and refill them between ops.
-    // Their env=2 bypass must therefore repack every invocation; immutable WEIGHTS retain the
-    // persistent data-address cache used by env=1.
-    ggml_metal_buffer_id bid_di = ggml_metal_device_get_repack_buffer(ctx->dev, op->src[0], nbd1*ne01, env_repack == 2, &is_new);
+    ggml_metal_buffer_id bid_di = ggml_metal_device_get_repack_buffer(ctx->dev, op->src[0], nbd1*ne01, &is_new);
     if (!bid_di.metal) {
         return false;
     }

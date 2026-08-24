@@ -222,8 +222,13 @@ for successively refilled, differently shaped synthetic tensors, so the cache re
 private side buffer without reallocating or encoding another repack. Its contents, row stride, and
 possibly allocation size were stale for the next case.
 
-The env=2 test bypass now forces a fresh side buffer and repack on every invocation. Replacing a
-same-address entry releases its cache allocation ownership while Metal command buffers retain any
-in-flight resource. The production env=1 path remains a persistent data-address cache and is
-unchanged because it accepts only immutable `WEIGHTS` buffers. This is a harness-cache defect, not
-kernel arithmetic evidence; model runs use the immutable path.
+Repacking on every env=2 operation is not valid: `eval_perf` duplicates one node within a graph,
+so that would charge repack to every timed copy and replace resources referenced by command buffers
+created with unretained references. Instead, freeing a Metal allocation now evicts every repack key
+whose source address lies in that allocation. Backend tests allocate one buffer per case and free it
+between cases, so address reuse cannot inherit stale state; duplicated nodes within a case still
+repack once and reuse the side buffer. Buffer destruction is also the safe resource-lifetime boundary.
+
+The production env=1 path remains a persistent data-address cache for the lifetime of its immutable
+`WEIGHTS` allocation and is otherwise unchanged. This is a harness-cache defect, not kernel arithmetic
+evidence; model runs use the immutable path.
