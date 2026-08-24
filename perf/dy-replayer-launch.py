@@ -30,6 +30,7 @@ python (the venv one works). Xcode does NOT need to be running.
 import ctypes
 import os
 import plistlib
+import shutil
 import sys
 import time
 
@@ -282,7 +283,7 @@ def wait_for_stream_end(r, timeout=180.0):
 
 
 def aps_entry_count(stream_data_path):
-    """How many APSCounterData records the replay wrote. 0 headless, 41 for a real click."""
+    """How many APSCounterData records the replay wrote."""
     try:
         d = plistlib.load(open(stream_data_path, "rb"))
         objs = d["$objects"]
@@ -290,6 +291,19 @@ def aps_entry_count(stream_data_path):
         return len(aps) if hasattr(aps, "__len__") else aps
     except Exception as e:
         return "unreadable: %s" % e
+
+
+def archive_coordinator_raw(trace_name, outdir):
+    """Preserve the coordinator's separate APS files in the reader's standard raw/ dir."""
+    source = os.path.join(PROFDIR, trace_name + "_stream.gpuprofiler_raw")
+    if not os.path.isdir(source):
+        print("WARNING: coordinator raw directory is missing: %s" % source,
+              file=sys.stderr, flush=True)
+        return None
+    destination = os.path.join(outdir, "raw")
+    shutil.copytree(source, destination, dirs_exist_ok=True)
+    print("archived profiler raw files: %s" % destination, flush=True)
+    return destination
 
 
 _delegate_states = {}
@@ -748,6 +762,7 @@ def main():
     # 4130 does collect counters in the replay service, but omits the client-owned shared
     # ring buffers and consequently loses APSCounterData.  The delegate creates those files.
     use_coordinator = os.environ.get("HEADLESS_DY_DIRECT_MESSAGES") != "1"
+    profile_complete = False
     if use_coordinator:
         archive_error = P()
         archive = msg(P, [P, ctypes.c_ulonglong, ctypes.POINTER(P)])(
@@ -793,8 +808,18 @@ def main():
         if outdir:
             stream_path = os.path.join(outdir, "streamData")
             if write_nsdata(archive_obj(state.stream_data), stream_path):
+                aps_count = aps_entry_count(stream_path)
                 print("streamData: %s; APSCounterData entries: %s" %
-                      (stream_path, aps_entry_count(stream_path)), flush=True)
+                      (stream_path, aps_count), flush=True)
+                profile_complete = isinstance(aps_count, int) and aps_count > 0
+                if profile_complete:
+                    archive_coordinator_raw(name.removesuffix(".gputrace"), outdir)
+                else:
+                    print("ERROR: replay completed but APS counter payload is empty",
+                          file=sys.stderr)
+        else:
+            print("ERROR: coordinator mode requires an output directory to save its result",
+                  file=sys.stderr)
 
     # Legacy diagnostic path. 4117 and 4130 are interchangeable triggers: whichever runs
     # first does ~12 s of real work (the replay service logs 16 passes of RDE counter
@@ -815,26 +840,22 @@ def main():
         if outdir and got and got[2]:
             open(os.path.join(outdir, "reply-%d.bin" % kind), "wb").write(got[2])
 
-    # the replay side answers with 4124 notifications; one carries the path it wrote
-    raw_path = wait_for_stream_end(r)
-    print("profiler raw: %s" % raw_path, flush=True)
-    if raw_path and os.path.exists(raw_path):
-        aps_count = aps_entry_count(raw_path)
-        print("  %d bytes; APSCounterData entries: %s"
-              % (os.path.getsize(raw_path), aps_count), flush=True)
-        if outdir:
-            import shutil
-            raw_dir = os.path.dirname(raw_path)
-            archived = os.path.join(outdir, os.path.basename(raw_dir))
-            shutil.copytree(raw_dir, archived, dirs_exist_ok=True)
-            print("archived profiler directory: %s" % archived, flush=True)
-        if use_coordinator and (not isinstance(aps_count, int) or aps_count == 0):
-            print("ERROR: replay completed but APS counter payload is empty", file=sys.stderr)
-            profile_complete = False
-        else:
+    # Direct-message diagnostics still use the replay-side 4124 completion and raw path.
+    # The coordinator future already covers this lifecycle and owns a different raw tree;
+    # waiting here would impose a spurious 180-second timeout after a successful profile.
+    if not use_coordinator:
+        raw_path = wait_for_stream_end(r)
+        print("profiler raw: %s" % raw_path, flush=True)
+        if raw_path and os.path.exists(raw_path):
+            aps_count = aps_entry_count(raw_path)
+            print("  %d bytes; APSCounterData entries: %s"
+                  % (os.path.getsize(raw_path), aps_count), flush=True)
+            if outdir:
+                raw_dir = os.path.dirname(raw_path)
+                archived = os.path.join(outdir, os.path.basename(raw_dir))
+                shutil.copytree(raw_dir, archived, dirs_exist_ok=True)
+                print("archived profiler directory: %s" % archived, flush=True)
             profile_complete = True
-    else:
-        profile_complete = False
 
     m = msg(P, [ctypes.c_int])(cls("DYTransportMessage"), sel("messageWithKind:"), KIND_END_DEBUG)
     r.send(m, wait=30)

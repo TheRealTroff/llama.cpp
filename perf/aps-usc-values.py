@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Read per-USC hardware counter values out of a replay's Counters_f_*.raw, by name.
+"""Read per-USC hardware counter values from a replay, by name.
+
+APS_USC records may carry bytes inline as ``ShaderProfilerData`` or refer to
+``raw/Counters_f_*.raw`` through ``APSTraceDataFile``; both formats are accepted.
 
 `perf/agxps-probe.py` names the counters a capture enabled; this reads their samples. Both
 drive `libagxps` from ctypes - see perf/aps-counters.md and skills/macos-reversing.
@@ -186,8 +189,8 @@ def parse_usc(desc, blob, wanted):
     return out, (ts, m, all_names), 0
 
 
-def usc_files(replay_dir):
-    """RingBufferIndex -> Counters_f_<n>.raw, read out of the capture's own APSCounterData."""
+def usc_sources(replay_dir):
+    """RingBufferIndex -> inline bytes or Counters_f_<n>.raw from APSCounterData."""
     def keyed(objects, node, depth=0):
         i = node.data if isinstance(node, plistlib.UID) else None
         o = objects[i] if i is not None else node
@@ -207,23 +210,31 @@ def usc_files(replay_dir):
     objects = top['$objects']
     aps = keyed(objects, objects[top['$top']['root'].data].get('APSCounterData')) or []
     out = {}
-    for i in range(1, len(aps)):
-        arch = plistlib.load(io.BytesIO(bytes(aps[i])))
+    for entry in aps:
+        arch = plistlib.load(io.BytesIO(bytes(entry)))
         rec = keyed(arch['$objects'], arch['$top']['root'])
-        if isinstance(rec, dict) and rec.get('Source') == 'APS_USC' and rec.get('APSTraceDataFile'):
-            out[int(rec['RingBufferIndex'])] = rec['APSTraceDataFile']
+        if not isinstance(rec, dict) or rec.get('Source') != 'APS_USC':
+            continue
+        source = rec.get('ShaderProfilerData') or rec.get('APSTraceDataFile')
+        if source:
+            out[int(rec['RingBufferIndex'])] = source
     return out
 
 
 def collect(replay_dir, wanted, desc):
     """-> {name: {'n':, 'nz':, 'sum':, 'ticks':, 'per_usc':[...]}} over all 20 USCs."""
-    files = usc_files(replay_dir)
+    sources = usc_sources(replay_dir)
     agg = {}
-    for usc in sorted(files):
-        path = os.path.join(replay_dir, "raw", files[usc])
-        if not os.path.exists(path):
-            continue
-        vals, meta, err = parse_usc(desc, open(path, 'rb').read(), wanted)
+    for usc in sorted(sources):
+        source = sources[usc]
+        if isinstance(source, (bytes, bytearray)):
+            blob = bytes(source)
+        else:
+            path = os.path.join(replay_dir, "raw", source)
+            if not os.path.exists(path):
+                continue
+            blob = open(path, 'rb').read()
+        vals, meta, err = parse_usc(desc, blob, wanted)
         if vals is None:
             continue
         (ts, m, _) = meta

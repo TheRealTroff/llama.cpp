@@ -1,14 +1,11 @@
 # Driving the GPU trace replay without the Xcode GUI
 
-Status: **implementation ready for a quiet-machine replay test.** Updated 2026-08-24
-(fifth pass). `perf/metal-profile-headless.py` now capability-detects Apple's official
-`gpudebug` CLI and falls back on Xcode 26 to `perf/dy-replayer-launch.py`. The fallback now
-creates the missing Xcode-side `DYMTLShaderProfiler` coordinator, synthesized delegate,
-`GTShaderProfilerStreamData` and `GTShaderProfilerStreamDataProcessor` before requesting
-APS data. Static validation proves that the capture archive, stream-data object, delegate
-and processor all initialize against the existing trace. A profiling replay has been
-deliberately deferred while concurrent benchmark work is active. Do not call the APS gap
-closed until that run produces `APSCounterData > 0` and 20 non-empty `Counters_f_*.raw`.
+Status: **resolved and dynamically verified on Xcode 26.6.** Updated 2026-08-24 (sixth
+pass). `perf/metal-profile-headless.py` prefers Apple's official `gpudebug` when present and
+otherwise uses `perf/dy-replayer-launch.py`. The DY path completed in 11.9 seconds without
+Xcode or a human, saved 41 `APSCounterData` records, and produced all 20 non-empty
+`Counters_f_*.raw` streams. `perf/aps-dram-bandwidth.py` parsed the result (128.2 GB/s,
+47% busy for the verification trace). The output contract is `streamData` plus `raw/`.
 
 Previous status: **open. The click is gone, the APS counters are not.** Updated 2026-08-23 (fourth
 pass). The DY path runs end to end from a script with no Xcode and no human: the replayer
@@ -694,66 +691,28 @@ trace it prints all 20 USCs:
 
 That is the acceptance test for the next attempt: same trace, same numbers, no human.
 
-## If this is picked up again
+## Resolved coordinator contract
 
 ### 2026-08-24 coordinator result (Xcode 26.6)
 
-The client-side coordinator was implemented and dynamically exercised without Xcode. It
-selects `DYPMTLShaderProfiler_iOS`, retains the synthetic delegate, constructs the expected
-payload (`perEncoderDrawCallCount={4:128, 971:154}`), and takes the `gtUseAPSData` branch.
-The delegate receives `queryAPSDataWithPayload:` (4130) and
-`gtSetupStreamDataProcessor:`. However, the 4130 reply is kind 4105 with no decodable object
-payload, no subsequent 4124 stream notifications arrive, `APSCounterData` is still empty,
-and no complete raw counter set is produced. This is the exact current blocker; merely
-launching/replaying headlessly is not equivalent to retrieving all profiling data.
+The decisive differences from the incomplete direct-message path are all on the Xcode-side
+client contract:
 
-`perf/metal-profile-headless.py` now refuses to choose this private backend automatically.
-Apple's documented `gpudebug` is the supported route when the selected Xcode ships it; use
-`--backend dy` only for continued private-framework investigation.
+- Create `DYMTLShaderProfiler` with a retained delegate and call
+  `profileShader:nil afterGPUTimelineGather:<unresolved DYFuture> atConsistentState:2
+  withOverlappingEnabled:false`.
+- Register notification subtype 15 on the coordinator's requested queue before sending
+  4130. Decode replies as `plistPayload ?: objectPayload`; a 4130 success is
+  `{"Streaming APS Data": 1}`.
+- Feed 4124 data to `GTShaderProfilerStreamDataProcessor`, including the exact no-argument
+  callbacks `gtProcessedTimelineResult`, `gtProcessAPSCostData`, and
+  `gtProcessedShaderProfilerResult`.
+- After the coordinator future and processor resolve, save the stream archive. A positive
+  `APSCounterData` count is completion; do not then wait for the legacy replay-side raw-path
+  notification. Preserve the deterministic
+  `/tmp/com.apple.gputools.profiling/<trace>_stream.gpuprofiler_raw/` contents as `raw/`.
 
-1. **Build the `<DYShaderProfilerDelegate>` shim** and call
-   `-[DYMTLShaderProfiler profileShader:afterGPUTimelineGather:atConsistentState:withOverlappingEnabled:`
-   - note that selector, not `profileFrameAtConsistentState:`; the click trace shows it is the
-   one a real "Profile GPU Trace" runs. The full click sequence, from the 97 M-send log, is:
-
-   ```
-   +[DYMTLShaderProfiler newShaderProfilerWithDelegate:]
-   -[DYMTLShaderProfiler profileShader:afterGPUTimelineGather:atConsistentState:withOverlappingEnabled:]
-     -_constructPayload -> -[DYPMTLShaderProfiler_iOS constructPayloadFromArchive:]
-                             -> -_constructPayloadFromArchiveGT:
-     -_queryStreamingAPSData:forDelegate:forFuture:forGPUTimelineFuture:
-        delegate -notifyStreamingShaderProfilingDataOnQueue:handler:
-        delegate -queryAPSDataWithPayload:          -> DY 4130
-        delegate -gtSetupStreamDataProcessor:       -> GTShaderProfilerStreamDataProcessor
-   ```
-
-   The delegate protocol `<DYShaderProfilerDelegate>` is referenced but never defined, so
-   `objc_getProtocol` returns nil and the selectors must come out of `MTLToolsShaderProfiler`'s
-   disassembly; synthesise the class with `objc_allocateClassPair`. **The delegate is the piece
-   that names and sizes the ring-buffer files**, which is the one thing measurably missing.
-2. ~~Cheaper cross-check first: send 4130 with a **non-empty** payload.~~ Done and refuted -
-   three different payloads give byte-identical output. See "What does NOT gate it".
-3. `GTShaderProfiler` has a `/tmp/com.apple.gputools.profiling/gtstandalone_` prefix and a
-   `generateGTStandaloneConfigFromStreamDataOnly` option in
-   `GTMioTraceDataBuilderOptions` - there may be a standalone entry point that skips the
-   delegate entirely. Still not looked at, and it is the cheapest thing left on this list.
-4. Sanity check worth one run before any of the above: watch which process opens
-   `/tmp/com.apple.gputools.profiling/C/f_0.raw` for writing (`lsof` on the replay service
-   showed no `GTShaderProfiler` mapped, so the naming decision is being made somewhere else
-   than assumed).
-4. ~~The accessibility route: click "Profile GPU Trace" by AX title.~~ Not needed for the
-   launch any more. It would only be a way to make Xcode itself do step 1-3 for us.
-5. ~~Assemble the chain:~~ xpc connection -> `GTLocalXPCConnection` -> `GTLaunchServiceXPCProxy
-   -launchReplayService:error:` -> service info via `GTServiceProviderXPCProxy
-   -waitForService:error:` -> `GTMTLReplayServiceXPCProxy -initWithConnection:serviceInfo:`
-   -> `-load:error:` -> `-profile:`. Every step is a named method; none of it needs DY
-   framing or hand-built messages.
-6. ~~Work out the payload for `ReplayArchive` (4098) - a keyed-archived dictionary, with
-   `ArchivesDirectoryPath` (4116) suggesting the archive is addressed by directory plus
-   name rather than by full path.~~ Refuted: 4098 is the experiments path and has no caller;
-   4116 is never sent; the archive is addressed by absolute path in the 4103 attributes.
-7. Once counter data lands, poll `/tmp/com.apple.gputools.profiling` until the file count
-   holds steady (the skill's oscillation gotcha applies) and run `perf/gpuprofiler-stats.py`.
+The older failed attempts below remain as negative evidence, not current instructions.
 
 ## Refuted along the way - do not retry
 
