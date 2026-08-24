@@ -58,6 +58,8 @@ KIND_DERIVED_COUNTERS = 4118
 KIND_QUERY_SHADER_INFO = 4117
 KIND_STREAM_NOTIFY = 4124
 KIND_APS_DATA = 4130
+KIND_ERROR = 0x1300
+SESSION_NOTIFY_STREAMING_SHADER_PROFILE = 15
 PROFDIR = "/tmp/com.apple.gputools.profiling"
 
 P = ctypes.c_void_p
@@ -81,10 +83,14 @@ cf.CFRunLoopRunInMode.argtypes = [P, ctypes.c_double, ctypes.c_bool]
 MODE = ctypes.c_void_p.in_dll(cf, "kCFRunLoopDefaultMode")
 libc.dispatch_get_global_queue.restype = P
 libc.dispatch_get_global_queue.argtypes = [ctypes.c_long, ctypes.c_ulong]
+libc.dispatch_queue_create.restype = P
+libc.dispatch_queue_create.argtypes = [ctypes.c_char_p, P]
 libc.sandbox_extension_issue_file.restype = ctypes.c_char_p
 libc.sandbox_extension_issue_file.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint32]
 libc._Block_copy.restype = P
 libc._Block_copy.argtypes = [P]
+cf._CFURLAttachSecurityScopeToFileURL.restype = None
+cf._CFURLAttachSecurityScopeToFileURL.argtypes = [P, P]
 
 
 def msg(restype, argtypes):
@@ -183,6 +189,14 @@ def payload_bytes(m):
     b = msg(P, [])(pl, sel("bytes"))
     n = msg(ctypes.c_ulonglong, [])(pl, sel("length"))
     return ctypes.string_at(b, n) if (b and n) else None
+
+
+def transport_message_value(m):
+    """Decode a DY reply the way Xcode does: plist first, keyed object second."""
+    if not m:
+        return None
+    value = msg(P, [])(m, sel("plistPayload"))
+    return value or msg(P, [])(m, sel("objectPayload"))
 
 
 def keyed(objects, node, depth=0):
@@ -285,9 +299,9 @@ _delegate_imps = []
 class ShaderProfilerDelegateState:
     """Minimal, headless implementation of Xcode's private DYShaderProfilerDelegate.
 
-    The method set and behavior mirror GPUMTLDebuggerController.  In particular, the
-    GTShaderProfilerStreamDataProcessor is created *before* the 4130 request; it owns the
-    shared C/P/T files into which the replay service streams APS counter data.
+    The method set and behavior mirror GPUMTLDebuggerController: register the guest-session
+    stream observer, query 4130, create the processor from the reply's MetalPluginName, then
+    replace its stream data when the 4124 Profiler Raw notification arrives.
     """
     def __init__(self, replayer, archive, trace_name):
         self.r = replayer
@@ -303,6 +317,8 @@ class ShaderProfilerDelegateState:
             self.metal_plugin, sel("platformDataSourceWithCaptureArchive:"), archive)
         self.handlers = []
         self.reply_handlers = []
+        self.reply_queues = []
+        self.session_observers = []
         self.processor = None
         self.delegate = None
         self.stream_data = msg(P, [P])(
@@ -326,21 +342,28 @@ class ShaderProfilerDelegateState:
 
         def replied(block, reply):
             raw = payload_bytes(reply) if reply else None
-            value = unarchive_obj(raw) if raw else None
+            reply_kind = msg(ctypes.c_int, [])(reply, sel("kind")) if reply else None
+            value = transport_message_value(reply)
             print("shader profiler reply %d kind=%s attrs=%s raw=%s value=%s" %
-                  (kind, msg(ctypes.c_int, [])(reply, sel("kind")) if reply else None,
+                  (kind, reply_kind,
                    desc(msg(P, [])(reply, sel("attributes"))) if reply else None,
                    len(raw) if raw else 0, desc(value)), flush=True)
+            if reply_kind == KIND_ERROR:
+                msg(None, [P])(future, sel("setError:"), value)
+                value = None
             msg(None, [P])(future, sel("setResult:"), value)
 
         block = make_block(RB, replied, b"v@?@")
         self.reply_handlers.append(block)
+        reply_queue = libc.dispatch_queue_create(None, None)
+        self.reply_queues.append(reply_queue)
         error = P()
         ok = msg(ctypes.c_bool, [P, P, P, ctypes.c_uint64, P])(
             self.r.tr, sel("send:error:replyQueue:timeout:handler:"), m,
-            ctypes.byref(error), libc.dispatch_get_global_queue(0, 0), 0, block)
+            ctypes.byref(error), reply_queue, 0, block)
         if not ok:
             print("shader profiler query %d failed: %s" % (kind, desc(error)), flush=True)
+            msg(None, [P])(future, sel("setError:"), error)
             msg(None, [P])(future, sel("setResult:"), None)
         return future
 
@@ -348,9 +371,28 @@ class ShaderProfilerDelegateState:
         print("shader profiler delegate %s -> %s" % (name, value), flush=True)
         return value
 
-    def install_handler(self, block):
+    def install_handler(self, queue, block):
+        """Register the 4124 observer synchronously, before the coordinator sends 4130."""
+        for _, observer in self.session_observers:
+            if observer:
+                msg(None, [P])(self.r.sess, sel("removeObserver:"), observer)
+        self.session_observers = []
         copied = libc._Block_copy(block)
-        self.handlers.append(copied)
+        self.handlers = [copied]
+
+        # DYGuestAppSession turns transport kind 4124 into notification subtype 15 and
+        # supplies the already-decoded dictionary. Register on the coordinator's queue so
+        # its semaphore ordering is identical to Xcode's GPUMTLDebuggerController path.
+        NH = ctypes.CFUNCTYPE(None, P, ctypes.c_ulonglong, P)
+
+        def notified(session_block, notification_kind, value):
+            if notification_kind == SESSION_NOTIFY_STREAMING_SHADER_PROFILE:
+                self.notify(value)
+
+        session_block = make_block(NH, notified, b"v@?Q@")
+        observer = msg(P, [P, P])(
+            self.r.sess, sel("notifyOnQueue:handler:"), queue, session_block)
+        self.session_observers.append((session_block, observer))
 
     def notify(self, obj):
         # A block starts with isa, flags, reserved, invoke. Handler ABI is void (^)(id).
@@ -361,9 +403,9 @@ class ShaderProfilerDelegateState:
             invoke = ctypes.cast(block, ctypes.POINTER(Block)).contents.invoke
             ctypes.CFUNCTYPE(None, P, P)(invoke)(block, obj)
 
-    def setup_processor(self, plugin_name):
+    def setup_processor(self, plugin_name, force=False):
         print("shader profiler setup processor plugin=%s" % desc(plugin_name), flush=True)
-        if self.processor:
+        if self.processor and not force:
             return
         if plugin_name:
             msg(None, [P])(self.stream_data, sel("setMetalPluginName:"), plugin_name)
@@ -378,17 +420,43 @@ class ShaderProfilerDelegateState:
     def add_aps_data(self, data):
         if not data:
             return
-        raw = msg(P, [P])(data, sel("objectForKeyedSubscript:"), nsstr("Profiler Raw"))
-        if not raw:
+        streamed = None
+        raw_url = msg(P, [P])(
+            data, sel("objectForKeyedSubscript:"), nsstr("Profiler Raw URL"))
+        if raw_url:
+            extension = msg(P, [P])(
+                data, sel("objectForKeyedSubscript:"), nsstr("sandbox-extension"))
+            scoped = None
+            if extension:
+                scoped = msg(P, [P, ctypes.c_ulonglong])(
+                    msg(P, [])(cls("NSData"), sel("alloc")),
+                    sel("initWithBase64EncodedString:options:"), extension, 1)
+                if scoped:
+                    cf._CFURLAttachSecurityScopeToFileURL(raw_url, scoped)
+            msg(ctypes.c_bool, [])(raw_url, sel("startAccessingSecurityScopedResource"))
+            streamed = msg(P, [P])(
+                cls("GTShaderProfilerStreamData"),
+                sel("dataFromArchivedDataURL:"), raw_url)
+            msg(None, [])(raw_url, sel("stopAccessingSecurityScopedResource"))
+        else:
+            raw = msg(P, [P])(
+                data, sel("objectForKeyedSubscript:"), nsstr("Profiler Raw"))
+            if raw and msg(ctypes.c_bool, [P])(
+                    raw, sel("isKindOfClass:"), cls("NSString")):
+                path = pystr(raw)
+                if path and os.path.exists(path):
+                    url = msg(P, [P])(cls("NSURL"), sel("fileURLWithPath:"), raw)
+                    streamed = msg(P, [P])(
+                        cls("GTShaderProfilerStreamData"),
+                        sel("dataFromArchivedDataURL:"), url)
+            elif raw and msg(ctypes.c_bool, [P])(
+                    raw, sel("isKindOfClass:"), cls("NSData")):
+                streamed = msg(P, [P])(
+                    cls("GTShaderProfilerStreamData"), sel("steamDataFromData:"), raw)
+        if not streamed:
             return
-        path = pystr(raw)
-        if not path or not os.path.exists(path):
-            return
-        url = msg(P, [P])(cls("NSURL"), sel("fileURLWithPath:"), raw)
-        streamed = msg(P, [P])(
-            cls("GTShaderProfilerStreamData"), sel("dataFromArchivedDataURL:"), url)
-        if streamed:
-            self.stream_data = streamed
+        self.stream_data = streamed
+        self.setup_processor(call(streamed, "metalPluginName"), force=True)
 
     def process_gpu_timeline(self, data):
         if not self.processor:
@@ -442,7 +510,7 @@ def make_shader_profiler_delegate(state):
         add("derivedCounterInfo:", P, [P],
             lambda self, cmd, payload: st(self).query(KIND_DERIVED_COUNTERS, payload), b"@@:@")
         add("notifyStreamingShaderProfilingDataOnQueue:handler:", None, [P, P],
-            lambda self, cmd, queue, block: st(self).install_handler(block), b"v@:@@")
+            lambda self, cmd, queue, block: st(self).install_handler(queue, block), b"v@:@@")
         add("gtSetupStreamDataProcessor:", None, [P],
             lambda self, cmd, plugin: st(self).setup_processor(plugin), b"v@:@")
         # Processor callbacks used after streaming completes.
@@ -545,8 +613,12 @@ class Replayer(object):
                 att = desc(msg(P, [])(m, sel("attributes"))) if m else None
                 self.inbox.append((k, kind_name(k), att, payload_bytes(m) if m else None,
                                    time.time() - self.t0))
-                if k == KIND_STREAM_NOTIFY and self.profiler_delegate_state:
-                    self.profiler_delegate_state.notify(unarchive_obj(payload_bytes(m)))
+                # The shader-profiler delegate registers through DYGuestAppSession before
+                # querying. Keep this raw source for diagnostics; use it only as a fallback
+                # if session notification registration was unavailable.
+                if (k == KIND_STREAM_NOTIFY and self.profiler_delegate_state and
+                        not self.profiler_delegate_state.session_observers):
+                    self.profiler_delegate_state.notify(transport_message_value(m))
             except Exception as e:
                 self.inbox.append((-2, "handler error %r" % e, None, None, time.time() - self.t0))
 
@@ -663,30 +735,25 @@ def main():
                                 sel("newShaderProfilerWithDelegate:"), delegate)
         if not profiler:
             sys.exit("DYMTLShaderProfiler initialization failed")
-        payload_probe = call(profiler, "_constructPayload")
         pending = msg(P, [P])(profiler, sel("valueForKey:"), nsstr("pendingRequest"))
         invalid = msg(P, [P])(profiler, sel("valueForKey:"), nsstr("sessionIsInvalid"))
         installed_delegate = msg(P, [P])(profiler, sel("valueForKey:"), nsstr("delegate"))
         platform_profiler = msg(P, [P])(profiler, sel("valueForKey:"),
                                         nsstr("platformShaderProfiler"))
         print("DYMTLShaderProfiler initialized; pending=%s invalid=%s delegate=%s "
-              "platformProfiler=%s payload=%s; "
+              "platformProfiler=%s; "
               "starting coordinated profile" %
               (desc(pending), desc(invalid), desc(installed_delegate),
-               (objc.object_getClassName(platform_profiler) or b"nil").decode(),
-               desc(payload_probe)[:500]), flush=True)
+               (objc.object_getClassName(platform_profiler) or b"nil").decode()), flush=True)
         t0 = time.time()
-        # This is the public coordinator entry point used by Xcode.  Its third argument is
-        # the numeric replay consistent-state value, not an object.  The second future is
-        # resolved by the GPU-timeline gather when that optional phase is requested.
+        # Exact Xcode call shape: nil profile input, an unresolved GPU-timeline future,
+        # requested performance state 2, and overlapping collection disabled. The profiler
+        # constructs the request payload exactly once inside this call.
         timeline_future = call(cls("DYFuture"), "future")
-        static_future = call(cls("DYFuture"), "future")
-        msg(None, [P])(static_future, sel("setResult:"),
-                       call(profiler, "_gatherStaticInformation"))
         future = msg(P, [P, P, ctypes.c_uint, ctypes.c_bool])(
             profiler,
             sel("profileShader:afterGPUTimelineGather:atConsistentState:withOverlappingEnabled:"),
-            static_future, timeline_future, 2, False)
+            None, timeline_future, 2, False)
         if not future:
             sys.exit("DYMTLShaderProfiler refused the coordinated profile request")
         msg(None, [])(future, sel("waitUntilResolved"))
