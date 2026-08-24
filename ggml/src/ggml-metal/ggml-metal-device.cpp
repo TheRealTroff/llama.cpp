@@ -715,7 +715,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_w4(ggml_m
     static const int env_w4 = getenv("GGML_W4") ? atoi(getenv("GGML_W4")) : 1;
 
     // 1 = lanes along K, 2 = lanes along rows, 3 = wide block loads, 4/5 = 3 with CB=1/2
-    const char * variant = env_w4 == 2 ? "r" : (env_w4 == 3 ? "w" : (env_w4 == 4 ? "c1" : (env_w4 == 5 ? "c2" : (env_w4 == 6 ? "e" : (env_w4 == 7 ? "h" : (env_w4 == 8 ? "x4" : (env_w4 == 9 ? "x8" : (env_w4 == 10 ? "x16" : (env_w4 == 11 ? "s1" : (env_w4 == 12 ? "s2" : ""))))))))));
+    const char * variant = env_w4 == 2 ? "r" : (env_w4 == 3 ? "w" : (env_w4 == 4 ? "c1" : (env_w4 == 5 ? "c2" : (env_w4 == 6 ? "e" : (env_w4 == 7 ? "h" : (env_w4 == 8 ? "x4" : (env_w4 == 9 ? "x8" : (env_w4 == 10 ? "x16" : (env_w4 == 11 ? "s1" : (env_w4 == 12 ? "s2" : (env_w4 == 13 ? "t1" : (env_w4 == 14 ? "t2" : ""))))))))))));
 
     snprintf(base, 256, "kernel_mul_mv_w4%s_%s_%s_nr%d_nc%d", variant,
              ggml_type_name(op->src[0]->type), ggml_type_name(op->src[1]->type), nr0, nc);

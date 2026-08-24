@@ -13044,6 +13044,161 @@ template [[host_name("kernel_mul_mv_w4s2_q4_0_f32_nr8_nc4")]] kernel mul_mv_w4_t
 template [[host_name("kernel_mul_mv_w4s1_q4_0_f32_nr16_nc4")]] kernel mul_mv_w4_t kernel_mul_mv_w4s_q4_0_f32<16, 1>;
 template [[host_name("kernel_mul_mv_w4s2_q4_0_f32_nr16_nc4")]] kernel mul_mv_w4_t kernel_mul_mv_w4s_q4_0_f32<16, 2>;
 
+// w4t: the open design from w4-ffn-scratch.md. Columns are split across simdgroups like
+// w4s, but the weight blocks are staged in threadgroup memory first, so the stream is
+// fetched once for all NC columns instead of once per simdgroup. Each simdgroup stages a
+// slice of the rows, then every simdgroup reads all of them back. With 32 lanes taking a
+// whole block each, a 5120-wide row is only 5 K steps, so the two barriers per step are
+// paid 10 times per thread in total.
+template<short NR0, short NCS>
+void mul_vec_w4t_q4_0_f32_impl(
+        constant ggml_metal_kargs_mul_mv & args,
+        device const char * src0,
+        device const char * src1,
+        device       char * dst,
+        threadgroup half   * sd,
+        threadgroup ushort * sq,
+        uint3  tgpig,
+        ushort tiisg,
+        ushort sgitg) {
+    const short NSG = FC_mul_mv_nsg;
+
+    const int nb = args.ne00/QK4_0;
+
+    const int r0 = tgpig.x*NR0;
+    const int c0 = sgitg*NCS;
+    const int im = tgpig.z;
+
+    const uint i12 = im%FC_mul_mv_ne12;
+    const uint i13 = im/FC_mul_mv_ne12;
+
+    device const block_q4_0 * ax[NR0];
+    FOR_UNROLL (short row = 0; row < NR0; ++row) {
+        const int      r  = (r0 + row) < args.ne01 ? (r0 + row) : (args.ne01 - 1);
+        const uint64_t o0 = r*args.nb01 + (i12/FC_mul_mv_r2)*args.nb02 + (i13/FC_mul_mv_r3)*args.nb03;
+
+        ax[row] = (device const block_q4_0 *) (src0 + o0);
+    }
+
+    device const char * y0 = src1 + c0*args.nb11 + i12*args.nb12 + i13*args.nb13;
+
+    float acc[NR0][NCS];
+    FOR_UNROLL (short row = 0; row < NR0; ++row) {
+        FOR_UNROLL (short c = 0; c < NCS; ++c) {
+            acc[row][c] = 0.0f;
+        }
+    }
+
+    for (int ib0 = 0; ib0 < nb; ib0 += N_SIMDWIDTH) {
+        const int ib = ib0 + tiisg;
+        const int ibc = ib < nb ? ib : nb - 1;
+
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        for (short row = sgitg; row < NR0; row += NSG) {
+            device const block_q4_0 * xb = ax[row] + ibc;
+
+            sd[row*N_SIMDWIDTH + tiisg] = xb->d;
+
+            threadgroup ushort * sqb = sq + (row*N_SIMDWIDTH + tiisg)*8;
+
+            *(threadgroup packed_ushort4 *) (sqb + 0) = *(device const packed_ushort4 *)((device const ushort *) xb + 1);
+            *(threadgroup packed_ushort4 *) (sqb + 4) = *(device const packed_ushort4 *)((device const ushort *) xb + 5);
+        }
+
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        if (ib < nb) {
+            FOR_UNROLL (short il = 0; il < 2; ++il) {
+                half4 ye0[NCS], ye1[NCS], yo0[NCS], yo1[NCS];
+                half  sumy[NCS];
+
+                FOR_UNROLL (short c = 0; c < NCS; ++c) {
+                    device const float4 * y4 = (device const float4 *) (y0 + c*args.nb11) + 8*ib + 4*il;
+
+                    const float4 v0 = y4[0];
+                    const float4 v1 = y4[1];
+                    const float4 v2 = y4[2];
+                    const float4 v3 = y4[3];
+
+                    ye0[c] = half4(v0.x, v0.z, v1.x, v1.z);
+                    yo0[c] = half4(v0.y, v0.w, v1.y, v1.w);
+                    ye1[c] = half4(v2.x, v2.z, v3.x, v3.z);
+                    yo1[c] = half4(v2.y, v2.w, v3.y, v3.w);
+
+                    const half4 t = (ye0[c] + yo0[c]) + (ye1[c] + yo1[c]);
+
+                    sumy[c] = (t[0] + t[1]) + (t[2] + t[3]);
+                }
+
+                FOR_UNROLL (short row = 0; row < NR0; ++row) {
+                    threadgroup const ushort * sqb = sq + (row*N_SIMDWIDTH + tiisg)*8;
+
+                    const ushort4 p0 = *(threadgroup const packed_ushort4 *) (sqb + 0);
+                    const ushort4 p1 = *(threadgroup const packed_ushort4 *) (sqb + 4);
+
+                    const ushort4 s0 = il ? (p0 >> 4) : p0;
+                    const ushort4 s1 = il ? (p1 >> 4) : p1;
+
+                    const half4 we0 = (half4)(s0 & (ushort4) 0x000F);
+                    const half4 wo0 = (half4)((s0 >> 8) & (ushort4) 0x000F);
+                    const half4 we1 = (half4)(s1 & (ushort4) 0x000F);
+                    const half4 wo1 = (half4)((s1 >> 8) & (ushort4) 0x000F);
+
+                    const float d = (float) sd[row*N_SIMDWIDTH + tiisg];
+
+                    FOR_UNROLL (short c = 0; c < NCS; ++c) {
+                        half4 s = we0*ye0[c];
+                        s += wo0*yo0[c];
+                        s += we1*ye1[c];
+                        s += wo1*yo1[c];
+
+                        const half dot = (s[0] + s[1]) + (s[2] + s[3]);
+
+                        acc[row][c] += d*((float) dot - 8.0f*(float) sumy[c]);
+                    }
+                }
+            }
+        }
+    }
+
+    device float * dst_f32 = (device float *) dst + im*args.ne0*args.ne1;
+
+    FOR_UNROLL (short row = 0; row < NR0; ++row) {
+        FOR_UNROLL (short c = 0; c < NCS; ++c) {
+            const float tot = simd_sum(acc[row][c]);
+
+            if (tiisg == 0 && r0 + row < args.ne01) {
+                dst_f32[(c0 + c)*args.ne0 + r0 + row] = tot;
+            }
+        }
+    }
+}
+
+template<short NR0, short NCS>
+kernel void kernel_mul_mv_w4t_q4_0_f32(
+        constant ggml_metal_kargs_mul_mv & args,
+        device const char * src0,
+        device const char * src1,
+        device       char * dst,
+        uint3  tgpig[[threadgroup_position_in_grid]],
+        ushort tiisg[[thread_index_in_simdgroup]],
+        ushort sgitg[[simdgroup_index_in_threadgroup]]) {
+    threadgroup half   sd[NR0*N_SIMDWIDTH];
+    threadgroup ushort sq[NR0*N_SIMDWIDTH*8];
+
+    mul_vec_w4t_q4_0_f32_impl<NR0, NCS>(args, src0, src1, dst, sd, sq, tgpig, tiisg, sgitg);
+}
+
+template [[host_name("kernel_mul_mv_w4t1_q4_0_f32_nr2_nc4")]] kernel mul_mv_w4_t kernel_mul_mv_w4t_q4_0_f32<2, 1>;
+template [[host_name("kernel_mul_mv_w4t2_q4_0_f32_nr2_nc4")]] kernel mul_mv_w4_t kernel_mul_mv_w4t_q4_0_f32<2, 2>;
+template [[host_name("kernel_mul_mv_w4t1_q4_0_f32_nr4_nc4")]] kernel mul_mv_w4_t kernel_mul_mv_w4t_q4_0_f32<4, 1>;
+template [[host_name("kernel_mul_mv_w4t2_q4_0_f32_nr4_nc4")]] kernel mul_mv_w4_t kernel_mul_mv_w4t_q4_0_f32<4, 2>;
+template [[host_name("kernel_mul_mv_w4t1_q4_0_f32_nr8_nc4")]] kernel mul_mv_w4_t kernel_mul_mv_w4t_q4_0_f32<8, 1>;
+template [[host_name("kernel_mul_mv_w4t2_q4_0_f32_nr8_nc4")]] kernel mul_mv_w4_t kernel_mul_mv_w4t_q4_0_f32<8, 2>;
+template [[host_name("kernel_mul_mv_w4t1_q4_0_f32_nr16_nc4")]] kernel mul_mv_w4_t kernel_mul_mv_w4t_q4_0_f32<16, 1>;
+template [[host_name("kernel_mul_mv_w4t2_q4_0_f32_nr16_nc4")]] kernel mul_mv_w4_t kernel_mul_mv_w4t_q4_0_f32<16, 2>;
+
 
 
 
