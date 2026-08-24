@@ -5363,8 +5363,18 @@ void dequantize_q4_0_di_t8(device const uint16_t * qs, half dh, short il, thread
     r1[3] = d2 * (q.w & mask1) + md;
 }
 
+void dequantize_q4_0_di_t8_v2(device const uint16_t * qs, half dh, short il, thread float4 & r0, thread float4 & r1) {
+    device const uchar4 * q = (device const uchar4 *) qs + (il%4);
+    const uchar4 mask = 0x0f;
+    const short shift = (il/4)*4;
+    const float d = dh;
+
+    r0 = (float4((q[0] >> shift) & mask) - 8.f)*d;
+    r1 = (float4((q[1] >> shift) & mask) - 8.f)*d;
+}
+
 // f16y kernel over the deinterleaved layout; 2D weights only (args.nb01 = di row stride)
-template<short r1ptg>
+template<short r1ptg, void (*deq_t8)(device const uint16_t *, half, short, thread float4 &, thread float4 &) = dequantize_q4_0_di_t8>
 void kernel_mul_mv_ext_q4_0_di_f16y_impl(
         constant ggml_metal_kargs_mul_mv_ext & args,
         device const char * src0,
@@ -5429,7 +5439,7 @@ void kernel_mul_mv_ext_q4_0_di_f16y_impl(
 #pragma unroll
         for (short ch = 0; ch < chpt; ++ch) {
             for (short k = 0; k < nr0; ++k) {
-                dequantize_q4_0_di_t8(xqs[k], *xd[k], cch, lx[k][2*ch + 0], lx[k][2*ch + 1]);
+                deq_t8(xqs[k], *xd[k], cch, lx[k][2*ch + 0], lx[k][2*ch + 1]);
             }
 
             cch += 2*nxpsg;
@@ -5495,6 +5505,18 @@ void kernel_mul_mv_ext_q4_0_di_f16y_impl(
             }
         }
     }
+}
+
+[[host_name("kernel_mul_mv_ext_q4_0_di_f16_v2_r1_4")]]
+kernel void kernel_mul_mv_ext_q4_0_di_f16y_v2(
+        constant ggml_metal_kargs_mul_mv_ext & args,
+        device const char * src0,
+        device const char * src1,
+        device       char * dst,
+        uint3   tgpig[[threadgroup_position_in_grid]],
+        ushort  tiisg[[thread_index_in_simdgroup]],
+        ushort  sgitg[[simdgroup_index_in_threadgroup]]) {
+    kernel_mul_mv_ext_q4_0_di_f16y_impl<4, dequantize_q4_0_di_t8_v2>(args, src0, src1, dst, tgpig, tiisg, sgitg);
 }
 
 template<short r1ptg>

@@ -2521,15 +2521,15 @@ size_t ggml_metal_op_mul_mat_extra_src1f16(const ggml_tensor * op) {
     return GGML_PAD(ggml_nelements(op->src[1])*sizeof(ggml_fp16_t), 32);
 }
 
-// weight-repack probe (GGML_MV_REPACK=1): redirect an immutable 2D q4_0 weight to a persistent
+// weight-repack probe: redirect an immutable 2D q4_0 weight to a persistent
 // deinterleaved side buffer ([d x nblk][pad16][qs x nblk] per row), encoding the one-time repack
-// kernel on first use. On success, bid_src0/nb01_eff point at the repacked copy.
+// kernel on first use. GGML_MV_REPACK=2 also permits non-weight buffers for correctness tests.
 static bool ggml_metal_op_mul_mat_try_repack_q4_0(ggml_metal_op_t ctx, const ggml_tensor * op, ggml_metal_buffer_id & bid_src0, uint64_t & nb01_eff) {
-    static const bool env_repack = getenv("GGML_MV_REPACK") ? atoi(getenv("GGML_MV_REPACK")) : 0;
+    static const int env_repack = getenv("GGML_MV_REPACK") ? atoi(getenv("GGML_MV_REPACK")) : 0;
 
     if (!(env_repack &&
           op->src[0]->type == GGML_TYPE_Q4_0 &&
-          op->src[0]->buffer && op->src[0]->buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS &&
+          op->src[0]->buffer && (env_repack == 2 || op->src[0]->buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS) &&
           !op->src[0]->view_src && op->src[0]->ne[2] == 1 && op->src[0]->ne[3] == 1)) {
         return false;
     }
@@ -2897,9 +2897,11 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
         }
 
         static const int env_ilp = getenv("GGML_MV_EXT_ILP") ? atoi(getenv("GGML_MV_EXT_ILP")) : 1;
-        const int ilp = ne11 == 4 && use_f16y && !use_di && op->src[0]->type == GGML_TYPE_Q4_0 && env_ilp == 2 ? 2 : 1;
+        static const int env_di_v2 = getenv("GGML_MV_EXT_DI_V2") ? atoi(getenv("GGML_MV_EXT_DI_V2")) : 0;
+        const int variant = ne11 == 4 && use_f16y && !use_di && op->src[0]->type == GGML_TYPE_Q4_0 && env_ilp == 2 ? 2 :
+                            ne11 == 4 && use_di && env_di_v2 ? 3 : 1;
 
-        auto pipeline = ggml_metal_library_get_pipeline_mul_mv_ext(lib, op, nsg, nxpsg, r1ptg, nr0, use_f16y ? GGML_TYPE_F16 : op->src[1]->type, use_di, ilp);
+        auto pipeline = ggml_metal_library_get_pipeline_mul_mv_ext(lib, op, nsg, nxpsg, r1ptg, nr0, use_f16y ? GGML_TYPE_F16 : op->src[1]->type, use_di, variant);
 
         ggml_metal_kargs_mul_mv_ext args = {
             /*.ne00  =*/ ne00,
