@@ -438,12 +438,24 @@ Current state:
   half**: the B-tile load was pinned at 32 threads whatever the threadgroup size, and
   spreading it (`GGML_MM_SKINNY_BSPLIT`) is **-1.4% to -2.6% per call on all seven
   projections and +1.0 to +1.6% e2e**, byte-identical output, `_di` included. See the
-  prod-pick section above - it is a candidate, not adopted. **Next on this kernel: the B tile
+  prod-pick section above - it is a candidate, not adopted. ~~**Next on this kernel: the B tile
   is still loaded inside the barrier window while A is prefetched a slice ahead; hoisting it
-  out has never been tried.** Two side notes: the offline spill probe cannot translate the
+  out has never been tried.**~~ **CORRECTED 2026-08-24: refuted, see
+  `skinny-bprefetch-refuted.md` below.** Two side notes: the offline spill probe cannot translate the
   `mul_mm_skinny` family at all (pre-existing, prod's source fails the same way, while
   `mul_mv` still reproduces its calibration exactly), and `perf/agx-spill-probe.py` gained
   `--cvb` for bool function constants.
+- **`skinny-bprefetch-refuted.md` - CLOSED, refuted, and the incidental find pays again.**
+  The B hoist `skinny-tpr-bsplit.md` named as the next lever is **-0.70% e2e**
+  (`GGML_MM_SKINNY_BPF`, `FC_MUL_MM + 10`, branch `metal-mm-skinny-bprefetch`, unmerged).
+  A `threadgroup` barrier does not order device reads, so the compiler could already hoist
+  those loads and the hand-written prefetch only adds 16 live halfs across the MAC block.
+  **Loading B with 4 `float4`s instead of 16 scalars and leaving it inside the window is
+  +0.58% e2e** (mode 3), byte-identical, 3/3 backends correct. **Open: whether that survives
+  on top of `GGML_MM_SKINNY_BSPLIT`**, which thins the same stage from the other end - the two
+  have never been in one tree. Also measured on the way: `weighted-round.py` reports its
+  **second arm 0.3% cheaper when both arms are identical**, which is the size of both effects
+  here, so it ranked them and sized neither.
 - **`skinny-nr0-refuted.md` - CLOSED, refuted, and it decides the next move.** `NR0` is now a
   function constant on both `mul_mm_skinny` variants (`GGML_MM_SKINNY_NR0`, branch
   `metal-mm-skinny-nr0`, unmerged, 1154/1154 correct at 16/32/64/128). **NR0=32 was already
