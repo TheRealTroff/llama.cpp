@@ -2526,6 +2526,9 @@ size_t ggml_metal_op_mul_mat_extra_src1f16(const ggml_tensor * op) {
 // kernel on first use. GGML_MV_REPACK=2 also permits non-weight buffers for correctness tests.
 static bool ggml_metal_op_mul_mat_try_repack_q4_0(ggml_metal_op_t ctx, const ggml_tensor * op, ggml_metal_buffer_id & bid_src0, uint64_t & nb01_eff) {
     static const int env_repack = getenv("GGML_MV_REPACK") ? atoi(getenv("GGML_MV_REPACK")) : 0;
+    static const int env_soa_w4 = getenv("GGML_MV_SOA_W4") ? atoi(getenv("GGML_MV_SOA_W4")) : 0;
+    const bool use_soa = env_soa_w4 && op->src[1]->ne[1] == 4 && op->src[1]->ne[2] == 1 &&
+                         op->src[1]->ne[3] == 1 && op->src[0]->ne[0]%64 == 0;
 
     if (!(env_repack &&
           op->src[0]->type == GGML_TYPE_Q4_0 &&
@@ -2542,7 +2545,7 @@ static bool ggml_metal_op_mul_mat_try_repack_q4_0(ggml_metal_op_t ctx, const ggm
 
     const int      nblk = ne00/32;
     const uint64_t doff = ((2*(uint64_t) nblk + 15)/16)*16;
-    const uint64_t nbd1 = doff + 16*(uint64_t) nblk;
+    const uint64_t nbd1 = use_soa ? 18*(uint64_t) nblk : doff + 16*(uint64_t) nblk;
 
     bool is_new = false;
     ggml_metal_buffer_id bid_di = ggml_metal_device_get_repack_buffer(ctx->dev, op->src[0], nbd1*ne01, &is_new);
@@ -2551,7 +2554,8 @@ static bool ggml_metal_op_mul_mat_try_repack_q4_0(ggml_metal_op_t ctx, const ggm
     }
 
     if (is_new) {
-        auto pipeline_rp = ggml_metal_library_get_pipeline_repack_q4_0_di(lib);
+        auto pipeline_rp = use_soa ? ggml_metal_library_get_pipeline_repack_q4_0_soa(lib) :
+                                     ggml_metal_library_get_pipeline_repack_q4_0_di(lib);
 
         ggml_metal_kargs_repack_q4_0_di rargs = {
             /*.nblk =*/ nblk,
@@ -2899,11 +2903,15 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
         static const int env_ilp = getenv("GGML_MV_EXT_ILP") ? atoi(getenv("GGML_MV_EXT_ILP")) : 1;
         static const int env_di_v2 = getenv("GGML_MV_EXT_DI_V2") ? atoi(getenv("GGML_MV_EXT_DI_V2")) : 0;
         static const int env_half_product = getenv("GGML_MV_EXT_HALF_PRODUCT") ? atoi(getenv("GGML_MV_EXT_HALF_PRODUCT")) : 0;
+        static const int env_soa_w4 = getenv("GGML_MV_SOA_W4") ? atoi(getenv("GGML_MV_SOA_W4")) : 0;
+        const bool use_soa_w4 = env_soa_w4 && ne11 == 4 && ne12 == 1 && ne13 == 1 && use_f16y && use_di &&
+                                op->src[0]->type == GGML_TYPE_Q4_0 && ne00%64 == 0;
         const int variant = ne11 == 4 && use_f16y && !use_di && op->src[0]->type == GGML_TYPE_Q4_0 && env_ilp == 2 ? 2 :
                             ne11 == 4 && use_di && env_di_v2 ? 3 :
                             ne11 == 4 && use_f16y && !use_di && op->src[0]->type == GGML_TYPE_Q4_0 && env_half_product ? 4 : 1;
 
-        auto pipeline = ggml_metal_library_get_pipeline_mul_mv_ext(lib, op, nsg, nxpsg, r1ptg, nr0, use_f16y ? GGML_TYPE_F16 : op->src[1]->type, use_di, variant);
+        auto pipeline = use_soa_w4 ? ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w4(lib) :
+                                     ggml_metal_library_get_pipeline_mul_mv_ext(lib, op, nsg, nxpsg, r1ptg, nr0, use_f16y ? GGML_TYPE_F16 : op->src[1]->type, use_di, variant);
 
         ggml_metal_kargs_mul_mv_ext args = {
             /*.ne00  =*/ ne00,
@@ -2932,7 +2940,11 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
         ggml_metal_encoder_set_buffer  (enc, bid_src1,                             2);
         ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         3);
 
-        ggml_metal_encoder_dispatch_threadgroups(enc, ((ne01 + r0ptg - 1)/r0ptg), ((ne11 + r1ptg - 1)/r1ptg), ne12*ne13, 32, nsg, 1);
+        if (use_soa_w4) {
+            ggml_metal_encoder_dispatch_threadgroups(enc, (ne01 + 3)/4, 1, 1, 32, 2, 1);
+        } else {
+            ggml_metal_encoder_dispatch_threadgroups(enc, ((ne01 + r0ptg - 1)/r0ptg), ((ne11 + r1ptg - 1)/r1ptg), ne12*ne13, 32, nsg, 1);
+        }
     } else if (
         !ggml_is_transposed(op->src[0]) &&
         !ggml_is_transposed(op->src[1]) &&
