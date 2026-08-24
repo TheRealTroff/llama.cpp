@@ -288,7 +288,13 @@ about the scaffolding. Those are compatible, and only the second one is still op
 2. ~~**Overlap directly: more simdgroups per threadgroup, or fewer barriers per K slice.**~~
    The `nsg` half is dead with 1 - it is the same function constant and it moves nothing.
    The **barriers** half is not a tuning question and survives only inside 3.
-3. **THE ONE LEFT: the register-tile kernel.** *(Quant target ~~settled 2026-08-23~~
+3. ~~**THE ONE LEFT: the register-tile kernel.**~~ **REFUTED 2026-08-24 at the prod width -
+   see `ext-at-width7-refuted.md`. That kernel already exists: it is `mul_mv_ext`, and at
+   width 7 the best-tuned config is 596 us against skinny's 367, a 1.63x loss.** The register
+   tile's accumulators and its `nr0*r1ptg*log2(nxpsg)` reduction both scale with verify width,
+   so the family wins below width 5 and loses above it; the crossover is at 5 and is
+   shape-dependent. Building a new kernel of that shape would reproduce the result. Keep the
+   original text below for the reasoning, which is still right about width 4:** *(Quant target ~~settled 2026-08-23~~
    **REOPENED 2026-08-24.** That day's call to build for Q4_0 rested on a clean Q4_K_M worth
    only +1.45 pp. `weight-quant-kld.md` then measured **UD-Q4_K_M at +5.82 pp for FEWER bytes**
    - a well-chosen 4-bit body is worth ~+4.6 pp, the largest quality lever in this project, and

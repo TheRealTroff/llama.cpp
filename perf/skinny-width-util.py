@@ -35,6 +35,13 @@ ARMS = {
     'skinny': {'GGML_MM_SKINNY': '2'},
     'mv':     {},
     'mm':     {'GGML_MV_EXT_MAX': '1', 'GGML_MM_SKINNY': '0', 'GGML_MV_NC': '0', 'GGML_MM_MIN': '1'},
+    # The register-tile family at prod width. mul_mv_ext uses NO simdgroup_matrix, no
+    # threadgroup staging and no barriers - it is the kernel shape ffn-utilization.md's
+    # experiment 3 asks for, and it already exists. GGML_MV_EXT_R1MAX defaults to 5, which
+    # disables the r1_6/r1_8 variants, so ext single-pass at widths 5-8 has never been
+    # measured. r1max=5 makes width 7 take TWO passes over the weights (r1ptg=4, then 3).
+    'ext-r1max8': {'GGML_MM_SKINNY': '9', 'GGML_MV_EXT_R1MAX': '8', 'GGML_MV_NC': '2'},
+    'ext-r1max5': {'GGML_MM_SKINNY': '9', 'GGML_MV_EXT_R1MAX': '5', 'GGML_MV_NC': '2'},
 }
 
 

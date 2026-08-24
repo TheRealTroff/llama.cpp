@@ -369,6 +369,22 @@ Current state:
   the K-split included - is about a kernel the prod pick never executes.** Tools:
   `perf/skinny-width-util.py` (utilization vs width, per kernel),
   `perf/skinny-roofline.py` (both roofs, `--sweep-m`, `--roof-tflops`).
+- **`ext-at-width7-refuted.md` - CLOSED, refuted, and it redirects the kernel plan.** The
+  "register-tile kernel" that `ffn-utilization.md` experiment 3 called for **already exists -
+  it is `mul_mv_ext`** - and it had never been measured at the prod width, because
+  `GGML_MV_EXT_R1MAX` defaults to 5 and disables the single-pass `r1_8` variant. Measured:
+  **best-tuned ext at width 7 is 596 us against skinny's 367, a 1.63x loss**, with every knob
+  swept (`nr0` 4->2 recovers 34%, the register cliff again, and nothing else helps). It is
+  structural: the register tile's accumulators AND its `nr0*r1ptg*log2(nxpsg)` reduction both
+  scale with verify width, while skinny's staging round trip is fixed and amortizes over 8
+  columns. **Crossover is width 5** and is shape-dependent - ext wins on `ffn_down` there
+  (410.2 vs 429.6), skinny wins on `ffn_gate+up` (360.8 vs 374.5). Scopes
+  `width4-skinny-ab.md`'s "no-`simdgroup_matrix` is the correct choice on this hardware":
+  **correct at width 4, MLX's operating point, and it does not transfer to width 7.** Next
+  and untested: `mul_mm_skinny` pins rows-per-simdgroup at `32/TPR` with the loader's
+  threads-per-row TPR=2, so **`NR0` could never change total simdgroups** - which is why the
+  NR0 sweep found nothing. Changing TPR to 4 doubles simdgroups per threadgroup at fixed
+  `NR0`. That is the overlap lever.
 - **`skinny-nr0-refuted.md` - CLOSED, refuted, and it decides the next move.** `NR0` is now a
   function constant on both `mul_mm_skinny` variants (`GGML_MM_SKINNY_NR0`, branch
   `metal-mm-skinny-nr0`, unmerged, 1154/1154 correct at 16/32/64/128). **NR0=32 was already
