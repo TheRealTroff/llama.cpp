@@ -5,7 +5,8 @@ description: Get per-kernel register counts, spill bytes and instruction mix for
 
 # Profile a Metal kernel: registers, spill, instruction mix
 
-Three steps. Capture is headless, replay needs Xcode once, parsing is headless.
+Three steps. Capture and parsing are headless. Replay is also headless; whether every APS
+counter is retrievable depends on the selected Xcode's command-line tooling (details below).
 
 This gives **measured** per-thread register counts and the full instruction mix.
 `skills/metal-kernel-prescreen` answers the narrower "does this shape spill?" offline in
@@ -29,24 +30,30 @@ path is logged: `ggml_metal_graph_compute: capturing graph in ...`.
 Narrow the workload with `-p` first. The capture holds every buffer the graph touched, so
 a whole model pass writes gigabytes; one perf case writes ~50 MB.
 
-## Step 2 - Replay (Xcode, once per trace)
+## Step 2 - Replay and profile (headless)
 
 ```sh
-open /tmp/perf-metal-<pid>.gputrace
+./perf/metal-profile-headless.py \
+  /tmp/perf-metal-<pid>.gputrace /tmp/profile-output
 ```
 
-~~Xcode replays it and populates Shaders, Counters, Cost Graph and Heat Map. Nothing
-further is needed in the GUI; the data is on disk from this point.~~ **Corrected
-2026-08-23: `open` alone does nothing.** Measured - a trace left open and untouched for
-180 s spawned no replayer and wrote zero profiling files, with Xcode idle at ~1.4% CPU.
+The wrapper prefers Apple's supported `gpudebug` CLI when the selected Xcode provides it.
+Apple documents it as scriptable and agent-friendly, with a live local replayer and a
+`performance` subtree. Xcode 26.6 does not ship it; this was checked with `xcrun --find`,
+the bundle contents, man pages and downloadable-component list. The documentation appears
+to describe Xcode 27-era tooling but does not state a minimum version.
 
-You must **click "Profile GPU Trace"** in the loaded trace. That click is the replay, and
-the replay - not the capture - is what produces the statistics. It populates **Shaders**,
-**Counters**, **Cost Graph** and **Heat Map**; nothing further is needed in the GUI after
-it, and the data is on disk from that point.
+On Xcode 26 the wrapper uses `perf/dy-replayer-launch.py`. This path is measured to launch
+`GPUToolsReplayService`, load and replay the archive, and perform all 16 hardware profiling
+passes without Xcode or a human. The older direct-message implementation lost APS data at
+the client boundary (`APSCounterData=0` despite 12.7 MB being collected). The current
+implementation drives `DYMTLShaderProfiler` with a synthesized delegate and a
+`GTShaderProfilerStreamDataProcessor`, matching Xcode's client-side ring-buffer setup.
 
-This click is the one manual step in the workflow and the reason it cannot be run from
-away from the machine. `perf/headless-replay-probe.md` has what has been tried.
+**Verification status:** the coordinator implementation has passed static checks but must
+not be called proven until an existing trace produces non-empty `APSCounterData` and all 20
+`Counters_f_*.raw` files. Use `HEADLESS_DY_DIRECT_MESSAGES=1` only to reproduce the known
+incomplete direct-message path. `perf/headless-replay-probe.md` is the evidence log.
 
 ## Step 3 - Read it (headless)
 
@@ -55,8 +62,8 @@ python3 perf/gpuprofiler-stats.py            # newest replay
 python3 perf/gpuprofiler-stats.py --all      # every field
 ```
 
-**Start `perf/watch-replays.sh` before step 2 and this happens by itself**, archived out of
-`/tmp` and dumped both ways. Do it: the replay output lives in
+For legacy Xcode GUI replay, **start `perf/watch-replays.sh` before step 2** so output is
+archived out of `/tmp`. The replay output lives in
 `/tmp/com.apple.gputools.profiling` and does not survive. On 2026-08-23 a whole session of it
 was gone by morning and only eight hand-transcribed fields were left, with `--all` never run.
 The same applies to the `.gputrace` itself - move it somewhere durable before you rely on it.
@@ -90,7 +97,11 @@ Replay writes to `/tmp/com.apple.gputools.profiling/<trace>_stream.gpuprofiler_r
 - `Counters_f_*.raw`, `Timeline_f_*.raw`, `Profiling_f_*.raw` - 20 each, undocumented
   binary.
 
-## Why step 2 needs the GUI
+## Historical GUI path and dead ends
+
+Before the DY launch chain was recovered, clicking **Profile GPU Trace** in Xcode was the
+only complete path. The material below is retained to prevent repeating dead ends; it is
+not the current workflow.
 
 Traced with a process monitor across a real reopen. The replay is driven over **XPC**, not
 by a command you can copy:
@@ -128,17 +139,16 @@ see `perf/headless-replay-probe.md`:
 - The plugin also declares a command "Replay GPU Frame Capture", but **that menu item does
   not appear in the UI** on a loaded trace, so there is nothing for AppleScript to click.
 
-The XPC route was worked to the end on 2026-08-23 and is **closed**, though not for the
-reason the section above gives.
+The modern GT XPC-proxy route was worked to the end on 2026-08-23 and is **closed**, though
+the separate DY guest-app-session route now works.
 An unentitled process can load `GPUToolsTransportAgents.framework`, open a
 `DYXPCTransport`, and have launchd **spawn the entitled agent for it** - measured, with a
 second agent pid appearing next to Xcode's. The replay path is six messages with known
 kind values, and the modern object API is `GTMTLReplayServiceXPCProxy -load:`/`-profile:`.
 **But `GTLaunchServiceXPCProxy -launchReplayService:error:` is refused instantly for an
-unentitled caller**, so the replay service never starts. Full detail, and the six things
-ruled out before calling it a refusal, in `perf/headless-replay-probe.md`. The remaining
-route is accessibility: click the button by AX title, after a one-time Accessibility grant
-to the terminal app.
+unentitled caller.** Full detail is in `perf/headless-replay-probe.md`. The working DY route
+instead launches `com.apple.DesktopReplayer` through `DYMTLGuestAppSession`; do not infer
+from the failed GT proxy that headless replay is impossible.
 
 ## Gotchas
 

@@ -25,6 +25,7 @@ FRAMEWORKS = [
     f"{XCODE}/SharedFrameworks/GPUToolsCore.framework/GPUToolsCore",
     f"{XCODE}/SharedFrameworks/GPUTools.framework/GPUTools",
     f"{XCODE}/SharedFrameworks/GPUToolsServices.framework/GPUToolsServices",
+    f"{XCODE}/SharedFrameworks/MTLToolsShaderProfiler.framework/MTLToolsShaderProfiler",
     f"{XCODE}/PlugIns/GPUDebugger.ideplugin/Contents/Frameworks/GTShaderProfiler.framework/GTShaderProfiler",
     f"{XCODE}/PlugIns/GPUDebugger.ideplugin/Contents/Frameworks/GPUToolsAdvancedUI.framework/GPUToolsAdvancedUI",
 ]
@@ -53,6 +54,8 @@ objc.sel_getName.restype = ctypes.c_char_p
 objc.sel_getName.argtypes = [ctypes.c_void_p]
 objc.method_getTypeEncoding.restype = ctypes.c_char_p
 objc.method_getTypeEncoding.argtypes = [ctypes.c_void_p]
+objc.method_getImplementation.restype = ctypes.c_void_p
+objc.method_getImplementation.argtypes = [ctypes.c_void_p]
 objc.objc_getMetaClass.restype = ctypes.c_void_p
 objc.objc_getMetaClass.argtypes = [ctypes.c_char_p]
 
@@ -74,13 +77,23 @@ def methods(c, prefix):
         enc = (objc.method_getTypeEncoding(ms[i]) or b"").decode()
         if sel_re and not sel_re.search(sel):
             continue
-        out.append("  %s%-58s %s" % (prefix, sel, enc))
+        imp = objc.method_getImplementation(ms[i])
+        di = DlInfo()
+        libc.dladdr(imp, ctypes.byref(di))
+        off = (imp or 0) - (di.base or 0)
+        out.append("  %s%-58s %-24s imp=0x%x fileoff=0x%x" %
+                   (prefix, sel, enc, imp or 0, off))
     return sorted(out)
 
 
 # objc_copyClassNamesForImage wants the path dyld actually recorded, which for a versioned
 # bundle is .../Versions/A/Name, not the symlinked .../Name we dlopen'd. Ask dyld.
 libc = ctypes.CDLL(None)
+class DlInfo(ctypes.Structure):
+    _fields_ = [("name", ctypes.c_char_p), ("base", ctypes.c_void_p),
+                ("symbol", ctypes.c_char_p), ("symbol_addr", ctypes.c_void_p)]
+libc.dladdr.argtypes = [ctypes.c_void_p, ctypes.POINTER(DlInfo)]
+libc.dladdr.restype = ctypes.c_int
 libc._dyld_image_count.restype = ctypes.c_uint32
 libc._dyld_get_image_name.restype = ctypes.c_char_p
 libc._dyld_get_image_name.argtypes = [ctypes.c_uint32]
@@ -89,7 +102,7 @@ images = [libc._dyld_get_image_name(i).decode() for i in range(libc._dyld_image_
 def resolve(fw):
     base = fw.rsplit("/", 1)[-1]
     for im in images:
-        if im.endswith("/" + base) and "GPUTools" in im or im.endswith("/" + base) and "GTShader" in im:
+        if im.endswith("/" + base) and any(s in im for s in ("GPUTools", "GTShader", "MTLTools")):
             return im
     return fw
 

@@ -1,6 +1,16 @@
 # Driving the GPU trace replay without the Xcode GUI
 
-Status: **open. The click is gone, the APS counters are not.** Updated 2026-08-23 (fourth
+Status: **implementation ready for a quiet-machine replay test.** Updated 2026-08-24
+(fifth pass). `perf/metal-profile-headless.py` now capability-detects Apple's official
+`gpudebug` CLI and falls back on Xcode 26 to `perf/dy-replayer-launch.py`. The fallback now
+creates the missing Xcode-side `DYMTLShaderProfiler` coordinator, synthesized delegate,
+`GTShaderProfilerStreamData` and `GTShaderProfilerStreamDataProcessor` before requesting
+APS data. Static validation proves that the capture archive, stream-data object, delegate
+and processor all initialize against the existing trace. A profiling replay has been
+deliberately deferred while concurrent benchmark work is active. Do not call the APS gap
+closed until that run produces `APSCounterData > 0` and 20 non-empty `Counters_f_*.raw`.
+
+Previous status: **open. The click is gone, the APS counters are not.** Updated 2026-08-23 (fourth
 pass). The DY path runs end to end from a script with no Xcode and no human: the replayer
 launches, loads a `.gputrace`, replays it, runs a real profiling pass, and writes a
 `streamData` file to disk whose capture metadata is identical to a click-driven one. What is

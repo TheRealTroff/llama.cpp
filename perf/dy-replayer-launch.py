@@ -43,6 +43,8 @@ FRAMEWORKS = [
     "%s/SharedFrameworks/GPUToolsPlatform.framework/GPUToolsPlatform" % XCODE,
     "%s/SharedFrameworks/GPUToolsDesktopFoundation.framework/GPUToolsDesktopFoundation" % XCODE,
     "%s/SharedFrameworks/MTLToolsServices.framework/MTLToolsServices" % XCODE,
+    "%s/SharedFrameworks/MTLToolsShaderProfiler.framework/MTLToolsShaderProfiler" % XCODE,
+    "%s/PlugIns/GPUDebugger.ideplugin/Contents/Frameworks/GTShaderProfiler.framework/GTShaderProfiler" % XCODE,
     "%s/PlugIns/GPUDebugger.ideplugin/Contents/Frameworks/GPUToolsTransportAgents.framework/GPUToolsTransportAgents" % XCODE,
 ]
 LOCALHOST_ID = "127.0.0.1:25182"
@@ -69,6 +71,11 @@ objc.sel_registerName.restype = P
 objc.sel_registerName.argtypes = [ctypes.c_char_p]
 objc.object_getClassName.restype = ctypes.c_char_p
 objc.object_getClassName.argtypes = [P]
+objc.objc_allocateClassPair.restype = P
+objc.objc_allocateClassPair.argtypes = [P, ctypes.c_char_p, ctypes.c_size_t]
+objc.objc_registerClassPair.argtypes = [P]
+objc.class_addMethod.restype = ctypes.c_bool
+objc.class_addMethod.argtypes = [P, P, P, ctypes.c_char_p]
 cf.CFRunLoopRunInMode.restype = ctypes.c_int
 cf.CFRunLoopRunInMode.argtypes = [P, ctypes.c_double, ctypes.c_bool]
 MODE = ctypes.c_void_p.in_dll(cf, "kCFRunLoopDefaultMode")
@@ -76,6 +83,8 @@ libc.dispatch_get_global_queue.restype = P
 libc.dispatch_get_global_queue.argtypes = [ctypes.c_long, ctypes.c_ulong]
 libc.sandbox_extension_issue_file.restype = ctypes.c_char_p
 libc.sandbox_extension_issue_file.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint32]
+libc._Block_copy.restype = P
+libc._Block_copy.argtypes = [P]
 
 
 def msg(restype, argtypes):
@@ -209,6 +218,30 @@ def decode(raw):
     return d
 
 
+def unarchive_obj(raw):
+    """Decode a DY keyed-archive payload to the native ObjC object consumers expect."""
+    if not raw:
+        return None
+    buf = ctypes.create_string_buffer(raw)
+    data = msg(P, [ctypes.c_void_p, ctypes.c_ulonglong])(
+        cls("NSData"), sel("dataWithBytes:length:"), ctypes.cast(buf, P), len(raw))
+    return msg(P, [P])(cls("NSKeyedUnarchiver"), sel("unarchiveObjectWithData:"), data)
+
+
+def archive_obj(obj):
+    error = P()
+    return msg(P, [P, ctypes.c_bool, ctypes.POINTER(P)])(
+        cls("NSKeyedArchiver"), sel("archivedDataWithRootObject:requiringSecureCoding:error:"),
+        obj, True, ctypes.byref(error))
+
+
+def write_nsdata(data, path):
+    if not data:
+        return False
+    return msg(ctypes.c_bool, [P, ctypes.c_bool])(
+        data, sel("writeToFile:atomically:"), nsstr(path), True)
+
+
 def wait_for_stream_end(r, timeout=180.0):
     """Pump until the 4124 'End Streaming Data' lands and the written file stops growing."""
     path, last, stable = None, -1, 0
@@ -245,10 +278,161 @@ def aps_entry_count(stream_data_path):
         return "unreadable: %s" % e
 
 
+_delegate_states = {}
+_delegate_imps = []
+
+
+class ShaderProfilerDelegateState:
+    """Minimal, headless implementation of Xcode's private DYShaderProfilerDelegate.
+
+    The method set and behavior mirror GPUMTLDebuggerController.  In particular, the
+    GTShaderProfilerStreamDataProcessor is created *before* the 4130 request; it owns the
+    shared C/P/T files into which the replay service streams APS counter data.
+    """
+    def __init__(self, replayer, archive, trace_name):
+        self.r = replayer
+        self.archive = archive
+        self.handlers = []
+        self.processor = None
+        self.delegate = None
+        self.stream_data = msg(P, [P])(
+            cls("GTShaderProfilerStreamData"), sel("savedStreamDataFromCaptureArchive:"), archive)
+        if self.stream_data and msg(ctypes.c_bool, [P])(
+                self.stream_data, sel("isKindOfClass:"), cls("NSArray")):
+            saved = items(self.stream_data)
+            self.stream_data = saved[0] if saved else None
+        if not self.stream_data:
+            self.stream_data = call(msg(P, [])(cls("GTMutableShaderProfilerStreamData"), sel("alloc")),
+                                    "initWithNewFileFormatV2Support:", P, [ctypes.c_bool], True)
+        msg(None, [P])(self.stream_data, sel("setTraceName:"), nsstr(trace_name))
+
+    def query(self, kind, payload):
+        m = msg(P, [ctypes.c_int, P, P])(cls("DYTransportMessage"),
+                                         sel("messageWithKind:attributes:objectPayload:"),
+                                         kind, None, payload)
+        ok, error, reply = self.r.send(m, wait=600)
+        future = call(cls("DYFuture"), "future")
+        value = unarchive_obj(reply[2]) if ok and reply and reply[2] else None
+        msg(None, [P])(future, sel("setResult:"), value)
+        if not ok:
+            print("shader profiler query %d failed: %s" % (kind, error), flush=True)
+        return future
+
+    def install_handler(self, block):
+        copied = libc._Block_copy(block)
+        self.handlers.append(copied)
+
+    def notify(self, obj):
+        # A block starts with isa, flags, reserved, invoke. Handler ABI is void (^)(id).
+        class Block(ctypes.Structure):
+            _fields_ = [("isa", P), ("flags", ctypes.c_int), ("reserved", ctypes.c_int),
+                        ("invoke", P)]
+        for block in list(self.handlers):
+            invoke = ctypes.cast(block, ctypes.POINTER(Block)).contents.invoke
+            ctypes.CFUNCTYPE(None, P, P)(invoke)(block, obj)
+
+    def setup_processor(self, plugin_name):
+        if self.processor:
+            return
+        if plugin_name:
+            msg(None, [P])(self.stream_data, sel("setMetalPluginName:"), plugin_name)
+        helper = nsstr("%s/Developer/Platforms/MacOSX.platform/Developer/Library/"
+                       "GPUToolsPlatform/PlugIns/GTLLVMHelper" % XCODE)
+        self.processor = msg(P, [P, P])(
+            msg(P, [])(cls("GTShaderProfilerStreamDataProcessor"), sel("alloc")),
+            sel("initWithStreamData:llvmHelperPath:"), self.stream_data, helper)
+        if self.processor and self.delegate:
+            msg(None, [P])(self.processor, sel("setDelegate:"), self.delegate)
+
+    def add_aps_data(self, data):
+        if not data:
+            return
+        raw = msg(P, [P])(data, sel("objectForKeyedSubscript:"), nsstr("Profiler Raw"))
+        if not raw:
+            return
+        path = pystr(raw)
+        if not path or not os.path.exists(path):
+            return
+        url = msg(P, [P])(cls("NSURL"), sel("fileURLWithPath:"), raw)
+        streamed = msg(P, [P])(
+            cls("GTShaderProfilerStreamData"), sel("dataFromArchivedDataURL:"), url)
+        if streamed:
+            self.stream_data = streamed
+
+    def process_gpu_timeline(self, data):
+        if not self.processor:
+            return
+        if data:
+            msg(None, [P])(self.processor, sel("processGPUTimelineData:"), data)
+        else:
+            msg(None, [])(self.processor, sel("processTimelineStreamData"))
+
+    def process_shader_data(self, data):
+        if not self.processor:
+            return
+        if data:
+            msg(None, [P])(self.processor, sel("processShaderProfilerData:"), data)
+        else:
+            msg(None, [])(self.processor, sel("processShaderProfilerStreamData"))
+
+
+def make_shader_profiler_delegate(state):
+    """Synthesize the unregistered DYShaderProfilerDelegate protocol at runtime."""
+    name = b"HeadlessDYShaderProfilerDelegate"
+    c = objc.objc_getClass(name)
+    if not c:
+        c = objc.objc_allocateClassPair(cls("NSObject"), name, 0)
+
+        def add(selector, restype, argtypes, callback, encoding):
+            fn = ctypes.CFUNCTYPE(restype, P, P, *argtypes)(callback)
+            _delegate_imps.append(fn)
+            if not objc.class_addMethod(c, sel(selector), ctypes.cast(fn, P), encoding):
+                raise RuntimeError("could not add delegate method " + selector)
+
+        def st(self):
+            return _delegate_states[int(self)]
+
+        add("captureArchive", P, [], lambda self, cmd: st(self).archive, b"@@:")
+        add("streamData", P, [], lambda self, cmd: st(self).stream_data, b"@@:")
+        add("supportsGPUTimeline", ctypes.c_bool, [], lambda self, cmd: False, b"B@:")
+        add("isForInternalTool", ctypes.c_bool, [], lambda self, cmd: False, b"B@:")
+        add("gtUseAPSData", ctypes.c_bool, [], lambda self, cmd: True, b"B@:")
+        add("gtUseNewShaderProfiler", ctypes.c_bool, [], lambda self, cmd: True, b"B@:")
+        add("queryAPSDataWithPayload:", P, [P],
+            lambda self, cmd, payload: st(self).query(KIND_APS_DATA, payload), b"@@:@")
+        add("queryShaderInfoWithPayload:", P, [P],
+            lambda self, cmd, payload: st(self).query(KIND_QUERY_SHADER_INFO, payload), b"@@:@")
+        add("derivedCounterInfo:", P, [P],
+            lambda self, cmd, payload: st(self).query(KIND_DERIVED_COUNTERS, payload), b"@@:@")
+        add("notifyStreamingShaderProfilingDataOnQueue:handler:", None, [P, P],
+            lambda self, cmd, queue, block: st(self).install_handler(block), b"v@:@@")
+        add("gtSetupStreamDataProcessor:", None, [P],
+            lambda self, cmd, plugin: st(self).setup_processor(plugin), b"v@:@")
+        # Processor callbacks used after streaming completes.
+        add("gtProcessGPUTimelineData:", None, [P],
+            lambda self, cmd, data: st(self).process_gpu_timeline(data), b"v@:@")
+        add("gtProcessShaderProfilerData:", None, [P],
+            lambda self, cmd, data: st(self).process_shader_data(data), b"v@:@")
+        add("gtAddAPSData:", None, [P],
+            lambda self, cmd, data: st(self).add_aps_data(data), b"v@:@")
+        add("gtProcessAPSTimelineData", None, [],
+            lambda self, cmd: (msg(None, [])(st(self).processor,
+                                             sel("processAPSTimelineData"))
+                               if st(self).processor else None), b"v@:")
+        add("streamDataProcessorBatchIdFilteredCountersUpdated:observerInfo:",
+            None, [P, P], lambda self, cmd, data, info: None, b"v@:@@")
+        objc.objc_registerClassPair(c)
+    obj = call(msg(P, [])(c, sel("alloc")), "init")
+    _delegate_states[int(obj)] = state
+    state.delegate = obj
+    return obj
+
+
 
 class Replayer(object):
     def __init__(self):
         self.inbox = []
+        self.profiler_delegate_state = None
         self.t0 = time.time()
 
     def load(self):
@@ -324,6 +508,8 @@ class Replayer(object):
                 att = desc(msg(P, [])(m, sel("attributes"))) if m else None
                 self.inbox.append((k, kind_name(k), att, payload_bytes(m) if m else None,
                                    time.time() - self.t0))
+                if k == KIND_STREAM_NOTIFY and self.profiler_delegate_state:
+                    self.profiler_delegate_state.notify(unarchive_obj(payload_bytes(m)))
             except Exception as e:
                 self.inbox.append((-2, "handler error %r" % e, None, None, time.time() - self.t0))
 
@@ -422,13 +608,45 @@ def main():
     print("4106 DebugFuncStop sent=%s err=%s reply=%s in %.1fs"
           % (ok, err, got[0] if got else None, time.time() - t0), flush=True)
 
-    # ask for a profiling pass. 4117 and 4130 are interchangeable triggers: whichever runs
+    # Drive the same client-side shader-profiler coordinator as Xcode.  Directly sending
+    # 4130 does collect counters in the replay service, but omits the client-owned shared
+    # ring buffers and consequently loses APSCounterData.  The delegate creates those files.
+    use_coordinator = os.environ.get("HEADLESS_DY_DIRECT_MESSAGES") != "1"
+    if use_coordinator:
+        archive_error = P()
+        archive = msg(P, [P, ctypes.c_ulonglong, ctypes.POINTER(P)])(
+            msg(P, [])(cls("DYCaptureArchive"), sel("alloc")),
+            sel("initWithURL:options:error:"), url, 0, ctypes.byref(archive_error))
+        if not archive:
+            sys.exit("client could not open capture archive: " + desc(archive_error))
+        state = ShaderProfilerDelegateState(r, archive, name.removesuffix(".gputrace"))
+        delegate = make_shader_profiler_delegate(state)
+        r.profiler_delegate_state = state
+        profiler = msg(P, [P])(cls("DYMTLShaderProfiler"),
+                                sel("newShaderProfilerWithDelegate:"), delegate)
+        if not profiler:
+            sys.exit("DYMTLShaderProfiler initialization failed")
+        t0 = time.time()
+        future = msg(P, [ctypes.c_uint])(profiler, sel("profileFrameAtConsistentState:"), 2)
+        msg(None, [])(future, sel("waitUntilResolved"))
+        result = call(future, "result")
+        print("DYMTLShaderProfiler resolved=%s result=%s in %.1fs" %
+              (call(future, "resolved", ctypes.c_bool), desc(result), time.time() - t0), flush=True)
+        if state.processor:
+            msg(None, [])(state.processor, sel("waitUntilFinished"))
+        if outdir:
+            stream_path = os.path.join(outdir, "streamData")
+            if write_nsdata(archive_obj(state.stream_data), stream_path):
+                print("streamData: %s; APSCounterData entries: %s" %
+                      (stream_path, aps_entry_count(stream_path)), flush=True)
+
+    # Legacy diagnostic path. 4117 and 4130 are interchangeable triggers: whichever runs
     # first does ~12 s of real work (the replay service logs 16 passes of RDE counter
     # collection) and answers {"Streaming APS Data": True}; the second is a no-op repeat.
     # The payload is inert - see perf/headless-replay-probe.md, "what does not gate it".
-    for kind, label in ((KIND_QUERY_SHADER_INFO, "QueryShaderInfo"),
+    for kind, label in (() if use_coordinator else ((KIND_QUERY_SHADER_INFO, "QueryShaderInfo"),
                         (KIND_APS_DATA, "APSData"),
-                        (KIND_DERIVED_COUNTERS, "DerivedCounterData")):
+                        (KIND_DERIVED_COUNTERS, "DerivedCounterData"))):
         empty = call(cls("NSMutableDictionary"), "dictionary")
         m = msg(P, [ctypes.c_int, P, P])(cls("DYTransportMessage"),
                                          sel("messageWithKind:attributes:objectPayload:"),
@@ -445,11 +663,22 @@ def main():
     raw_path = wait_for_stream_end(r)
     print("profiler raw: %s" % raw_path, flush=True)
     if raw_path and os.path.exists(raw_path):
+        aps_count = aps_entry_count(raw_path)
         print("  %d bytes; APSCounterData entries: %s"
-              % (os.path.getsize(raw_path), aps_entry_count(raw_path)), flush=True)
+              % (os.path.getsize(raw_path), aps_count), flush=True)
         if outdir:
             import shutil
-            shutil.copy2(raw_path, os.path.join(outdir, os.path.basename(raw_path)))
+            raw_dir = os.path.dirname(raw_path)
+            archived = os.path.join(outdir, os.path.basename(raw_dir))
+            shutil.copytree(raw_dir, archived, dirs_exist_ok=True)
+            print("archived profiler directory: %s" % archived, flush=True)
+        if use_coordinator and (not isinstance(aps_count, int) or aps_count == 0):
+            print("ERROR: replay completed but APS counter payload is empty", file=sys.stderr)
+            profile_complete = False
+        else:
+            profile_complete = True
+    else:
+        profile_complete = False
 
     m = msg(P, [ctypes.c_int])(cls("DYTransportMessage"), sel("messageWithKind:"), KIND_END_DEBUG)
     r.send(m, wait=30)
@@ -459,6 +688,8 @@ def main():
     call(r.sess, "invalidate", None)
     r.drain(1)
     print("done; %d messages received" % len(r.inbox), flush=True)
+    if use_coordinator and not profile_complete:
+        sys.exit(2)
 
 
 if __name__ == "__main__":
