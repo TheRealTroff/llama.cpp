@@ -155,5 +155,20 @@ switches). It uses one `vec<half, 8>` load per activation column, an unrolled ei
 loop, `wv = float(q)*d - 8*d`, and explicit scalar `fma` into the same eight FP32 accumulators.
 Offline `applegpu_g16s` translation reports 2176 bytes native text and zero spill, versus
 2184/zero for dot-R2. The near-identical static footprint makes this a clean scheduling A/B;
-it does not predict which instruction stream is faster. GPU correctness and performance are
-unmeasured.
+it does not predict which instruction stream is faster. Exact-shape correctness passes.
+
+One full exported-model run rejects the scalar schedule:
+
+| operation | dot-R2, us | scalar R2, us | scalar delta |
+|---|---:|---:|---:|
+| attn_output | 117.580 | 130.300 | +10.8% |
+| ffn_down | 341.640 | 357.170 | +4.5% |
+| z / attn_gate | 116.940 | 117.790 | +0.7% |
+| node13 / qkv | 189.735 | 188.950 | -0.4% |
+| Qcur | 222.315 | 222.720 | +0.2% |
+| ffn_gate | 306.195 | 307.030 | +0.3% |
+
+There is no meaningful scalar-inner win, while the K=6144 `attn_output` and K=17408
+`ffn_down` losses are decisive. On M4 Pro, the compiler's vector-dot schedule is better for
+the long inner reductions even though both variants have zero spill and nearly identical
+native text size. Keep dot-R2 as the validated design; the scalar sibling is refuted.
