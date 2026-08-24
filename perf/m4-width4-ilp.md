@@ -101,3 +101,20 @@ second simdgroup is not needed to expose grid-level parallelism.
 Offline `applegpu_g16s` translation reports zero spills for both K2 and K1. Native text is
 3658 bytes for K2 and 3988 bytes for K1; this is not a speed prediction. Performance and GPU
 correctness have not been measured yet.
+
+The exact-shape correctness check passed, but the exported-model run rejects K1: `attn_output`
+rose to 144.80 us from about 127.34 us and `ffn_down` to 389.97 us from about 359.73 us;
+`z` was close at 123.87 us and the remaining operations were neutral or slower. Removing the
+barrier while doubling per-lane K work with 16 live accumulators is not a win.
+
+### Barrier-free two-row probe
+
+`GGML_MV_SOA_W4_R2=1` selects a distinct single-simdgroup 2-row by 4-column tile. It keeps
+full-K lane stride 32 and direct output, but cuts accumulator state from 16 to eight FP32 values.
+The trade is deliberate: neighboring row tiles reload the same hot activation vectors, while
+each tile carries half the output-row arithmetic and live state. Dispatch is `(ne01 + 1)/2`
+groups of 32 threads.
+
+The embedded Metal source compiles. Offline `applegpu_g16s` translation reports 2184 bytes
+native text and zero spill, versus 3988/zero for K1 and 3658/zero for K2. Performance and GPU
+correctness are unmeasured.
