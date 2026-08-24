@@ -137,12 +137,19 @@ Two things this run also says, neither of them the point of it:
 
 ## What is left
 
-**The B stage is on the critical path and is not software-pipelined.** The A tile is
+~~**The B stage is on the critical path and is not software-pipelined.** The A tile is
 prefetched one K slice ahead into registers; the B tile is loaded from device memory *between
 the two barriers*, so every K slice pays its latency in full. Spreading it over more threads
 is worth 1.3% - **hoisting it out of the barrier window the way A already is has never been
 tried**, and it is the same lever one step further. That is the next thing to try on this
-kernel.
+kernel.~~
+
+**CORRECTED 2026-08-24: tried and refuted, see `skinny-bprefetch-refuted.md`.** The hand-written
+prefetch is **-0.70% e2e**. The premise was wrong: `threadgroup_barrier(mem_flags::mem_threadgroup)`
+does not order device reads, so the compiler was already free to issue the B loads early, and the
+hoist buys no scheduling freedom while costing 16 live halfs across the MAC block. What did pay,
+from the same branch, is **loading B with 4 `float4`s instead of 16 scalars and leaving it where
+it is: +0.58% e2e**, byte-identical.
 
 **Not landed:** `GGML_MM_SKINNY_BSPLIT` defaults to off and the branch is unmerged. It has no
 residency or quality cost, unlike `GGML_MV_REPACK`, so making it the default is a one-line

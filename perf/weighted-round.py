@@ -18,6 +18,10 @@ READ THE BIAS BEFORE BELIEVING A TOTAL (calibrated 2026-08-23 against the tagged
     not), and they are also the ops most likely to hide entirely at runtime. small-ne01-
     routing.md measured 2.3x per call and 0.0% e2e. Treat any win that lives in the small
     rows as unproven until an e2e arm says otherwise.
+  * Arm order biases the comparison: running the SAME config in both arms reports the second
+    arm 0.37 ms (0.3%) cheaper at width 7. Anything at or under ~0.5% needs the arms swapped
+    (--env carries the treatment) or an e2e arm - see skinny-bprefetch-refuted.md, where this
+    tool ranked two 0.6-0.7% effects correctly and sized neither.
   * Weights are per forward pass and come from `rounddecomp-aug22-tagged-n6.server.log`,
     cross-checked against the GGUF tensor list. They are a property of the architecture, not
     of the width, so they hold at any width; re-derive them if the model changes.

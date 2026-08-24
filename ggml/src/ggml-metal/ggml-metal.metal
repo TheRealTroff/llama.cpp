@@ -11724,6 +11724,9 @@ constant short FC_mul_mm_ne12  [[function_constant(FC_MUL_MM + 2)]];
 constant short FC_mul_mm_ne13  [[function_constant(FC_MUL_MM + 3)]];
 constant short FC_mul_mm_r2    [[function_constant(FC_MUL_MM + 4)]];
 constant short FC_mul_mm_r3    [[function_constant(FC_MUL_MM + 5)]];
+// skinny only: how the B tile is loaded (GGML_MM_SKINNY_BPF). + 10 leaves 6/7/8/9 to the
+// nr0, tpr/bsplit and repack branches so this composes with them.
+constant short FC_mul_mm_sk_bpf[[function_constant(FC_MUL_MM + 10)]];
 
 // each block_q contains 16*nl weights
 #ifdef GGML_METAL_HAS_TENSOR
@@ -12133,6 +12136,26 @@ kernel void kernel_mul_mm_skinny_q4_0_f32(
     dequantize_q4_0(x, 1, ta1);
     x += NK/32;
 
+    // prefetch B slice 0 into registers (FC_mul_mm_sk_bpf 1 = scalar, 2 = float4)
+    half tb[16];
+    if (FC_mul_mm_sk_bpf == 1 && tiitg < 4*NR1) {
+        FOR_UNROLL (short j = 0; j < 16; ++j) {
+            tb[j] = (half) y[j];
+        }
+        y += NK;
+    }
+    if (FC_mul_mm_sk_bpf == 2 && tiitg < 4*NR1) {
+        device const float4 * y4 = (device const float4 *) y;
+        FOR_UNROLL (short i = 0; i < 4; ++i) {
+            const float4 v = y4[i];
+            tb[4*i + 0] = (half) v.x;
+            tb[4*i + 1] = (half) v.y;
+            tb[4*i + 2] = (half) v.z;
+            tb[4*i + 3] = (half) v.w;
+        }
+        y += NK;
+    }
+
     for (int loop_k = 0; loop_k < args.ne00; loop_k += NK) {
         threadgroup_barrier(mem_flags::mem_threadgroup);
 
@@ -12147,12 +12170,30 @@ kernel void kernel_mul_mm_skinny_q4_0_f32(
         pa[7] = ta1[3];
 
         if (tiitg < 4*NR1) {
-            FOR_UNROLL (short j = 0; j < 16; ++j) {
-                sb[(16*bsx + j)*NR1 + tiitg/4] = (half) y[j];
+            if (FC_mul_mm_sk_bpf == 1 || FC_mul_mm_sk_bpf == 2) {
+                FOR_UNROLL (short j = 0; j < 16; ++j) {
+                    sb[(16*bsx + j)*NR1 + tiitg/4] = tb[j];
+                }
+            } else if (FC_mul_mm_sk_bpf == 3) {
+                // control: same barrier window, 4 wide loads instead of 16 scalar ones
+                device const float4 * y4 = (device const float4 *) y;
+                FOR_UNROLL (short i = 0; i < 4; ++i) {
+                    const float4 v = y4[i];
+                    sb[(16*bsx + 4*i + 0)*NR1 + tiitg/4] = (half) v.x;
+                    sb[(16*bsx + 4*i + 1)*NR1 + tiitg/4] = (half) v.y;
+                    sb[(16*bsx + 4*i + 2)*NR1 + tiitg/4] = (half) v.z;
+                    sb[(16*bsx + 4*i + 3)*NR1 + tiitg/4] = (half) v.w;
+                }
+            } else {
+                FOR_UNROLL (short j = 0; j < 16; ++j) {
+                    sb[(16*bsx + j)*NR1 + tiitg/4] = (half) y[j];
+                }
             }
         }
 
-        y += NK;
+        if (FC_mul_mm_sk_bpf == 0 || FC_mul_mm_sk_bpf == 3) {
+            y += NK;
+        }
 
         threadgroup_barrier(mem_flags::mem_threadgroup);
 
@@ -12161,6 +12202,24 @@ kernel void kernel_mul_mm_skinny_q4_0_f32(
             dequantize_q4_0(x, 0, ta0);
             dequantize_q4_0(x, 1, ta1);
             x += NK/32;
+
+            if (FC_mul_mm_sk_bpf == 1 && tiitg < 4*NR1) {
+                FOR_UNROLL (short j = 0; j < 16; ++j) {
+                    tb[j] = (half) y[j];
+                }
+                y += NK;
+            }
+            if (FC_mul_mm_sk_bpf == 2 && tiitg < 4*NR1) {
+                device const float4 * y4 = (device const float4 *) y;
+                FOR_UNROLL (short i = 0; i < 4; ++i) {
+                    const float4 v = y4[i];
+                    tb[4*i + 0] = (half) v.x;
+                    tb[4*i + 1] = (half) v.y;
+                    tb[4*i + 2] = (half) v.z;
+                    tb[4*i + 3] = (half) v.w;
+                }
+                y += NK;
+            }
         }
 
         threadgroup const half * lsma = sa + 16*sgitg*NK;
@@ -12281,6 +12340,26 @@ kernel void kernel_mul_mm_skinny_q4_0_di_f32(
     xd  += NK/32;
     xqs += 8*(NK/32);
 
+    // prefetch B slice 0 into registers (FC_mul_mm_sk_bpf 1 = scalar, 2 = float4)
+    half tb[16];
+    if (FC_mul_mm_sk_bpf == 1 && tiitg < 4*NR1) {
+        FOR_UNROLL (short j = 0; j < 16; ++j) {
+            tb[j] = (half) y[j];
+        }
+        y += NK;
+    }
+    if (FC_mul_mm_sk_bpf == 2 && tiitg < 4*NR1) {
+        device const float4 * y4 = (device const float4 *) y;
+        FOR_UNROLL (short i = 0; i < 4; ++i) {
+            const float4 v = y4[i];
+            tb[4*i + 0] = (half) v.x;
+            tb[4*i + 1] = (half) v.y;
+            tb[4*i + 2] = (half) v.z;
+            tb[4*i + 3] = (half) v.w;
+        }
+        y += NK;
+    }
+
     for (int loop_k = 0; loop_k < args.ne00; loop_k += NK) {
         // fast register dequant: e = d*(nibble - 8), vectorized short->half math
         half4x4 ta0;
@@ -12325,12 +12404,30 @@ kernel void kernel_mul_mm_skinny_q4_0_di_f32(
         pa[7] = ta1[3];
 
         if (tiitg < 4*NR1) {
-            FOR_UNROLL (short j = 0; j < 16; ++j) {
-                sb[(16*bsx + j)*NR1 + tiitg/4] = (half) y[j];
+            if (FC_mul_mm_sk_bpf == 1 || FC_mul_mm_sk_bpf == 2) {
+                FOR_UNROLL (short j = 0; j < 16; ++j) {
+                    sb[(16*bsx + j)*NR1 + tiitg/4] = tb[j];
+                }
+            } else if (FC_mul_mm_sk_bpf == 3) {
+                // control: same barrier window, 4 wide loads instead of 16 scalar ones
+                device const float4 * y4 = (device const float4 *) y;
+                FOR_UNROLL (short i = 0; i < 4; ++i) {
+                    const float4 v = y4[i];
+                    sb[(16*bsx + 4*i + 0)*NR1 + tiitg/4] = (half) v.x;
+                    sb[(16*bsx + 4*i + 1)*NR1 + tiitg/4] = (half) v.y;
+                    sb[(16*bsx + 4*i + 2)*NR1 + tiitg/4] = (half) v.z;
+                    sb[(16*bsx + 4*i + 3)*NR1 + tiitg/4] = (half) v.w;
+                }
+            } else {
+                FOR_UNROLL (short j = 0; j < 16; ++j) {
+                    sb[(16*bsx + j)*NR1 + tiitg/4] = (half) y[j];
+                }
             }
         }
 
-        y += NK;
+        if (FC_mul_mm_sk_bpf == 0 || FC_mul_mm_sk_bpf == 3) {
+            y += NK;
+        }
 
         threadgroup_barrier(mem_flags::mem_threadgroup);
 
@@ -12341,6 +12438,24 @@ kernel void kernel_mul_mm_skinny_q4_0_di_f32(
             q1 = *(device const ushort4 *)(xqs + 4);
             xd  += NK/32;
             xqs += 8*(NK/32);
+
+            if (FC_mul_mm_sk_bpf == 1 && tiitg < 4*NR1) {
+                FOR_UNROLL (short j = 0; j < 16; ++j) {
+                    tb[j] = (half) y[j];
+                }
+                y += NK;
+            }
+            if (FC_mul_mm_sk_bpf == 2 && tiitg < 4*NR1) {
+                device const float4 * y4 = (device const float4 *) y;
+                FOR_UNROLL (short i = 0; i < 4; ++i) {
+                    const float4 v = y4[i];
+                    tb[4*i + 0] = (half) v.x;
+                    tb[4*i + 1] = (half) v.y;
+                    tb[4*i + 2] = (half) v.z;
+                    tb[4*i + 3] = (half) v.w;
+                }
+                y += NK;
+            }
         }
 
         threadgroup const half * lsma = sa + 16*sgitg*NK;
