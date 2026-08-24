@@ -474,6 +474,27 @@ class ShaderProfilerDelegateState:
         else:
             msg(None, [])(self.processor, sel("processShaderProfilerStreamData"))
 
+    def process_aps_cost_data(self):
+        if self.processor:
+            msg(None, [])(self.processor, sel("processAPSCostData"))
+
+    def processed_timeline_result(self):
+        """The timeline object Xcode resolves after processAPSTimelineData."""
+        if not self.processor:
+            return None
+        mio_data = call(self.processor, "mioData")
+        if mio_data:
+            return mio_data
+        result = call(self.processor, "result")
+        return call(result, "timelineInfo") if result else None
+
+    def processed_shader_profiler_result(self):
+        """Return the processor's completed cost result to the coordinator future."""
+        if not self.processor:
+            return None
+        result = call(self.processor, "result")
+        return call(result, "shaderProfilerResult") if result else None
+
 
 def make_shader_profiler_delegate(state):
     """Synthesize the unregistered DYShaderProfilerDelegate protocol at runtime."""
@@ -524,6 +545,12 @@ def make_shader_profiler_delegate(state):
             lambda self, cmd: (msg(None, [])(st(self).processor,
                                              sel("processAPSTimelineData"))
                                if st(self).processor else None), b"v@:")
+        add("gtProcessedTimelineResult", P, [],
+            lambda self, cmd: st(self).processed_timeline_result(), b"@@:")
+        add("gtProcessAPSCostData", None, [],
+            lambda self, cmd: st(self).process_aps_cost_data(), b"v@:")
+        add("gtProcessedShaderProfilerResult", P, [],
+            lambda self, cmd: st(self).processed_shader_profiler_result(), b"@@:")
         add("streamDataProcessorBatchIdFilteredCountersUpdated:observerInfo:",
             None, [P, P], lambda self, cmd, data, info: None, b"v@:@@")
         objc.objc_registerClassPair(c)
