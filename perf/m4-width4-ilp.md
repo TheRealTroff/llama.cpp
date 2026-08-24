@@ -68,3 +68,24 @@ Pre-benchmark status: the embedded Metal library builds. Offline `applegpu_g16s`
 reports 3658 bytes native text and **zero spill bytes/thread**, despite the 16 accumulators.
 The exact `ffn_down` shape (`m=5120,n=4,k=17408`) selected both the SoA repack and dedicated
 kernel on MTL0 and passed the CPU reference (1/1). Performance is unmeasured.
+
+Two full exported-model runs showed that the morphology is not a universal width-4 route:
+
+| operation | baseline, us | SoA, us | delta |
+|---|---:|---:|---:|
+| node34 | 24.045 | 24.325 | +1.2% |
+| Vcur | 31.710 | 32.200 | +1.5% |
+| linear_attn_out | 155.725 | 159.535 | +2.4% |
+| attn_output | 127.340 | 121.495 | -4.6% |
+| ffn_out | 359.730 | 349.220 | -2.9% |
+| z | 127.040 | 122.395 | -3.7% |
+| node13 | 201.455 | 200.000 | -0.7% |
+| Qcur | 240.035 | 237.245 | -1.2% |
+| ffn_gate | 329.490 | 328.220 | -0.4% |
+| lm_head | 4194.370 | 4522.425 | +7.8% |
+
+The route is therefore restricted to the model's ordinary projection output-row counts:
+5120, 6144, 10240, 12288, and 17408. This is intentionally an exact whitelist, not an inferred
+continuous threshold: it retains the measured transformer projection regime while excluding
+the small/batched linear-attention shapes and the 248320-row `lm_head`. The latter creates
+62080 tiny 4-row threadgroups and makes the fixed 4x4 morphology decisively worse.

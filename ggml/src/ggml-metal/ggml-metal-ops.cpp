@@ -2521,6 +2521,19 @@ size_t ggml_metal_op_mul_mat_extra_src1f16(const ggml_tensor * op) {
     return GGML_PAD(ggml_nelements(op->src[1])*sizeof(ggml_fp16_t), 32);
 }
 
+static bool ggml_metal_mul_mat_soa_w4_rows(int64_t ne01) {
+    switch (ne01) {
+        case  5120:
+        case  6144:
+        case 10240:
+        case 12288:
+        case 17408:
+            return true;
+        default:
+            return false;
+    }
+}
+
 // weight-repack probe: redirect an immutable 2D q4_0 weight to a persistent
 // deinterleaved side buffer ([d x nblk][pad16][qs x nblk] per row), encoding the one-time repack
 // kernel on first use. GGML_MV_REPACK=2 also permits non-weight buffers for correctness tests.
@@ -2528,7 +2541,8 @@ static bool ggml_metal_op_mul_mat_try_repack_q4_0(ggml_metal_op_t ctx, const ggm
     static const int env_repack = getenv("GGML_MV_REPACK") ? atoi(getenv("GGML_MV_REPACK")) : 0;
     static const int env_soa_w4 = getenv("GGML_MV_SOA_W4") ? atoi(getenv("GGML_MV_SOA_W4")) : 0;
     const bool use_soa = env_soa_w4 && op->src[1]->ne[1] == 4 && op->src[1]->ne[2] == 1 &&
-                         op->src[1]->ne[3] == 1 && op->src[0]->ne[0]%64 == 0;
+                         op->src[1]->ne[3] == 1 && op->src[0]->ne[0]%64 == 0 &&
+                         ggml_metal_mul_mat_soa_w4_rows(op->src[0]->ne[1]);
 
     if (!(env_repack &&
           op->src[0]->type == GGML_TYPE_Q4_0 &&
@@ -2905,7 +2919,8 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
         static const int env_half_product = getenv("GGML_MV_EXT_HALF_PRODUCT") ? atoi(getenv("GGML_MV_EXT_HALF_PRODUCT")) : 0;
         static const int env_soa_w4 = getenv("GGML_MV_SOA_W4") ? atoi(getenv("GGML_MV_SOA_W4")) : 0;
         const bool use_soa_w4 = env_soa_w4 && ne11 == 4 && ne12 == 1 && ne13 == 1 && use_f16y && use_di &&
-                                op->src[0]->type == GGML_TYPE_Q4_0 && ne00%64 == 0;
+                                op->src[0]->type == GGML_TYPE_Q4_0 && ne00%64 == 0 &&
+                                ggml_metal_mul_mat_soa_w4_rows(ne01);
         const int variant = ne11 == 4 && use_f16y && !use_di && op->src[0]->type == GGML_TYPE_Q4_0 && env_ilp == 2 ? 2 :
                             ne11 == 4 && use_di && env_di_v2 ? 3 :
                             ne11 == 4 && use_f16y && !use_di && op->src[0]->type == GGML_TYPE_Q4_0 && env_half_product ? 4 : 1;
