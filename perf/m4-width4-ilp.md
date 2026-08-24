@@ -185,3 +185,15 @@ native text size. Keep dot-R2 as the validated design; the scalar sibling is ref
 The corresponding width-4 pass time falls from approximately 117.01 ms to 108.83 ms,
 **-7.0%**. The model-level result confirms that the projection wins survive whole-graph
 scheduling and concurrency; vector-dot R2 is the validated width-4 route for this model.
+
+### Barrier-free three-row probe
+
+`GGML_MV_SOA_W4_R3=1` selects the remaining bounded morphology between validated R2 and
+rejected 4-row K1: a single-simdgroup 3-row by 4-column tile with 12 FP32 accumulators, full-K
+lane stride 32, the validated vector-dot inner loop, and 12 direct stores. It dispatches
+`(ne01 + 2)/3` groups of 32 threads. R2 remains the validated route and default experiment
+selection.
+
+The embedded Metal source compiles. Offline `applegpu_g16s` translation reports 3096 bytes
+native text and zero spill, between R2's 2184/zero and K1's 3988/zero. This establishes that
+R3 clears the register-allocation gate; correctness and performance are unmeasured.

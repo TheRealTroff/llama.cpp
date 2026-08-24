@@ -5566,6 +5566,61 @@ kernel void kernel_mul_mv_q4_0_soa_w4_r2(
     }
 }
 
+// Barrier-free 3x4 midpoint between the validated R2 tile and the rejected 4x4 K1 tile.
+kernel void kernel_mul_mv_q4_0_soa_w4_r3(
+        constant ggml_metal_kargs_mul_mv_ext & args,
+        device const char * src0,
+        device const half * src1,
+        device float * dst,
+        uint3 tgpig [[threadgroup_position_in_grid]],
+        ushort tiisg [[thread_index_in_simdgroup]]) {
+    float acc[12] = {};
+    const uint nblk = args.ne00/32;
+    const uint npack = 4*nblk;
+    const uint row0 = 3*tgpig.x;
+
+    for (uint p = tiisg; p < npack; p += 32) {
+        const uint block = p/4;
+        const uint k0 = 8*p;
+        const half4 y0lo = *(device const half4 *)(src1 + 0*args.ne00 + k0);
+        const half4 y0hi = *(device const half4 *)(src1 + 0*args.ne00 + k0 + 4);
+        const half4 y1lo = *(device const half4 *)(src1 + 1*args.ne00 + k0);
+        const half4 y1hi = *(device const half4 *)(src1 + 1*args.ne00 + k0 + 4);
+        const half4 y2lo = *(device const half4 *)(src1 + 2*args.ne00 + k0);
+        const half4 y2hi = *(device const half4 *)(src1 + 2*args.ne00 + k0 + 4);
+        const half4 y3lo = *(device const half4 *)(src1 + 3*args.ne00 + k0);
+        const half4 y3hi = *(device const half4 *)(src1 + 3*args.ne00 + k0 + 4);
+
+#pragma unroll
+        for (short r = 0; r < 3; ++r) {
+            if (row0 + r >= args.ne01) {
+                continue;
+            }
+            device const char * row = src0 + (uint64_t)(row0 + r)*args.nb01;
+            const float d = *(device const half *)(row + 2*block);
+            const uint q = *(device const uint *)(row + 2*nblk + 4*p);
+            const half4 wlo = half4((uint4(q) >> uint4(0, 4, 8, 12)) & 0xf) - 8.h;
+            const half4 whi = half4((uint4(q) >> uint4(16, 20, 24, 28)) & 0xf) - 8.h;
+            acc[4*r + 0] += d*(dot(float4(wlo), float4(y0lo)) + dot(float4(whi), float4(y0hi)));
+            acc[4*r + 1] += d*(dot(float4(wlo), float4(y1lo)) + dot(float4(whi), float4(y1hi)));
+            acc[4*r + 2] += d*(dot(float4(wlo), float4(y2lo)) + dot(float4(whi), float4(y2hi)));
+            acc[4*r + 3] += d*(dot(float4(wlo), float4(y3lo)) + dot(float4(whi), float4(y3hi)));
+        }
+    }
+
+#pragma unroll
+    for (short i = 0; i < 12; ++i) {
+        const float v = simd_sum(acc[i]);
+        if (tiisg == i) {
+            const uint r = i/4;
+            const uint c = i%4;
+            if (row0 + r < args.ne01) {
+                dst[c*args.ne01 + row0 + r] = v;
+            }
+        }
+    }
+}
+
 // R2 with MLX-style scalar nibble/FMA scheduling; morphology and traffic match the dot sibling.
 kernel void kernel_mul_mv_q4_0_soa_w4_r2_scalar(
         constant ggml_metal_kargs_mul_mv_ext & args,
