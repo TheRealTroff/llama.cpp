@@ -323,7 +323,21 @@ Current state:
   vectors (1.54 of 15.74 GB).
   ~~`ffn-utilization.md`'s worry is resolved in Q4_0's favour: a register-tile kernel targeting
   Q4_0 does not bake in a lobotomy~~ **REOPENED by the UD result: the format the kernel targets
-  is now worth ~4.6 pp of top-token agreement, not the ~1.45 pp the clean Q4_K_M suggested.** - the body format is worth ~1.45 pp, not the bulk of the
+  is now worth ~4.6 pp of top-token agreement, not the ~1.45 pp the clean Q4_K_M suggested.**
+  **HYBRID A RUN 2026-08-24, and it splits the question in two.** Q4_0 on the FFN and
+  `attn_qkv`/`attn_gate`/`attn_q`, precision only on `ssm_out`/`attn_output`/`attn_k`/`attn_v`
+  and the head: **82.8% fast-path coverage, -3.2% batch-1, -5.4% n6.** Wikitext agreement
+  92.673%, so it captures only **a third** of UD's gain - **+3.89 of UD's +5.82 pp is in the
+  FFN**, i.e. exactly the 83% of bytes the fast path needs. *You cannot have UD's bulk
+  agreement and the Q4_0 fast path.* **But the other axis is cheap and this is the keeper:
+  hybrid A's worst own-trajectory KLD is 0.638 against uniform-Q4_0's 7.95 and UD's 0.625** -
+  the catastrophic-disagreement mode is owned by those few small tensors, not the FFN, and is
+  bought for ~3% of speed. The q6_K head alone does NOT fix it (max stays 7.92). **Judge the
+  small-tensor upgrades on maximum/99.9% KLD, not on `Same top p`, which saturates (hybrid A is
+  0.18 sigma over uniform Q4_0 on own-trajectory top-token).** Kernel consequence: the target
+  is not eight formats, it is **the FFN fast on one good 4-bit format** - three tensor shapes -
+  which alone unlocks ~3.9 pp. Candidate build kept at `~/play/Qwen3.8-27B-hybridA.gguf`,
+  recipe in `weight-quant-kld.md`, **not adopted - owner's call.** - the body format is worth ~1.45 pp, not the bulk of the
   gap. Harness: `perf/run-quant-kld.sh` (M/MD overridable, ARMS filter added to
   `run-prod-pick.sh` the same day).
 - **`ffn-utilization.md` - OPEN, and on today's evidence the largest lever on the board.

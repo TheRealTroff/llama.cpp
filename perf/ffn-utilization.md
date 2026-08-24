@@ -293,8 +293,12 @@ about the scaffolding. Those are compatible, and only the second one is still op
    only +1.45 pp. `weight-quant-kld.md` then measured **UD-Q4_K_M at +5.82 pp for FEWER bytes**
    - a well-chosen 4-bit body is worth ~+4.6 pp, the largest quality lever in this project, and
    it contains **zero Q4_0 tensors**. So the format the kernel targets is now a real decision
-   worth several points of top-token agreement, not a free choice. Resolve it with the hybrid
-   experiment queued in that file before committing kernel work to a format.)* No `simdgroup_matrix`, inline dequant, never
+   worth several points of top-token agreement, not a free choice. **Hybrid A resolved it
+   2026-08-24: +3.89 of UD's +5.82 pp is in the FFN specifically**, and taking small tensors
+   off the Q4_0 fast path is nearly free (-3.2% batch-1 at 82.8% coverage) while taking the FFN
+   off it costs -39%. **So the kernel target is narrow, not wide: make `ffn_gate`/`ffn_up`/
+   `ffn_down` fast on ONE good 4-bit format.** Three tensor shapes, ~3.9 pp of quality, and the
+   rest of the model can stay K-quantized at ~3%.)* No `simdgroup_matrix`, inline dequant, never
    staged to threadgroup memory, K-split, narrow column tile. With 1-2 dead, dispatch geometry
    and activation re-read are both excluded and the design itself is what is left - the
    `dequant -> threadgroup -> simdgroup_load` round trip plus two barriers per K slice, paid

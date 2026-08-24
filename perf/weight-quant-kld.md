@@ -388,6 +388,101 @@ That also answers what the UD comparison structurally cannot: UD confounds **for
 **unsloth's layer-selection policy**, so it says the difference is real without saying which
 layers earn it. A hybrid sweep says which.
 
+## Hybrid A: the gain splits on two axes, and only one of them is cheap (2026-08-24)
+
+The queued experiment, run. **Q4_0 wherever the fast path needs it, precision only where UD
+spends it**, built from `conv-q8_0` in one `llama-quantize` run. Recipe, verified with
+`--dry-run` first (norms correctly stayed F32, `attn_q` and the FFN correctly stayed q4_0):
+
+```
+llama-quantize --allow-requantize --pure \
+  --output-tensor-type q6_K --token-embedding-type q4_0 \
+  --tensor-type attn_k.weight=q6_K   --tensor-type attn_v.weight=q6_K \
+  --tensor-type attn_output.weight=q5_K --tensor-type ssm_out.weight=q5_K \
+  --tensor-type ssm_alpha.weight=q8_0 --tensor-type ssm_beta.weight=q8_0 \
+  Qwen3.8-27B-conv-q8_0.gguf Qwen3.8-27B-hybridA.gguf q4_0
+```
+
+Result: 310 Q4_0, 96 Q8_0, 65 Q5_K, 35 Q6_K, 360 F32. **14.928 GiB file, 14.262 GiB streamed
+(+4.37%, cheaper than UD's +7.34%), and 82.8% of streamed bytes still on the Q4_0 fast path**
+against UD's 0.0%.
+
+| | uniform Q4_0 | q6K head | **hybrid A** | clean Q4_K_M | UD |
+|---|--:|--:|--:|--:|--:|
+| **Same top (wikitext)** | 90.746% | 91.972% | **92.673 +/- 0.166%** | 93.418% | 96.562% |
+| Mean KLD | 0.05397 | 0.04880 | **0.04141** | 0.03928 | 0.01365 |
+| Median KLD | 0.02049 | 0.01490 | **0.01197** | 0.00899 | 0.00267 |
+| 99% KLD | 0.45398 | 0.45474 | **0.38706** | 0.33134 | 0.09257 |
+| 99.9% KLD | 4.38574 | 4.25356 | **3.63413** | 5.65388 | 0.82308 |
+| RMS `dp` | 6.294% | 5.972% | **5.466%** | 5.158% | 3.072% |
+| streamed | 13.665 GiB | 13.970 | **14.262** | 14.990 | 14.668 |
+| **fast path** | 100% | ~95% | **82.8%** | 0% | **0%** |
+| **batch-1 t/s** | 13.003 | 12.803 | **12.590 (-3.2%)** | 12.099 | 11.779 (-9.7%) |
+| n6 @600 t/s | 22.026 | - | **20.828 (-5.4%)** | - | 13.346 (-39.3%) |
+
+### Where UD's +5.82 pp actually lives
+
+Hybrid A was built to isolate this, and it does:
+
+| source | gain | share of streamed bytes |
+|---|--:|--:|
+| q6_K head | +1.23 pp | 4.9%, one call/round |
+| `ssm_out` + `attn_output` + `attn_k/v` + ssm vectors | **+0.70 pp** | ~12% |
+| **FFN + `attn_qkv`/`attn_gate`/`attn_q`** | **+3.89 pp** | **83%** |
+
+**Two-thirds of UD's advantage is in the tensors that must stay Q4_0 for the fast path to
+exist.** The hybrid captured everything it was designed to capture; there was not much there.
+**You cannot have UD's bulk agreement and the Q4_0 fast path - they want the same 83% of the
+model.** That is a real negative result and it closes the "compromise build" idea on this axis.
+
+### But the OTHER axis is cheap, and this is the finding worth keeping
+
+Own-trajectory extreme tails (`run-agreement.sh`, each model on its own generated text):
+
+| | uniform Q4_0 | q6K head | **hybrid A** | UD |
+|---|--:|--:|--:|--:|
+| Same top | 94.852% | 95.080% | **94.966 +/- 0.484%** | 97.393% |
+| Mean KLD | 0.06642 | 0.03504 | **0.02204** | 0.00949 |
+| Median KLD | 0.00303 | 0.00062 | **0.00055** | 0.00037 |
+| 99% KLD | 0.83153 | 0.34137 | **0.19776** | 0.09784 |
+| 99.9% KLD | 4.32773 | 0.89193 | **0.43727** | 0.27636 |
+| **Maximum KLD** | **7.94983** | 7.92136 | **0.63777** | **0.62483** |
+
+**Hybrid A's worst token in ~6100 positions is 0.638. UD's is 0.625. Uniform Q4_0's is 7.95.**
+
+So the catastrophic-disagreement failure mode - the positions where the two models'
+distributions come apart entirely - is **eliminated by the cheap tensors**, and hybrid A
+reaches UD's floor there **for -3.2% at batch 1 instead of -9.7%, and -5.4% at n6 instead of
+-39.3%**. The q6_K head alone does *not* do it (max stays 7.92); it takes `ssm_out`,
+`attn_output` and `attn_k/v`.
+
+**The two axes are separable and they have completely different prices:**
+
+- **Worst-case blowups** are owned by a handful of small tensors. ~12% of bytes, ~3% of speed,
+  and it buys a **12.5x** cut in maximum divergence. Cheapest quality win measured here.
+- **Bulk tracking** (top-token agreement, median KLD) is owned by the FFN. Expensive, and
+  unavailable without kernel work.
+
+On own-trajectory top-token, hybrid A is **+0.114 pp over uniform Q4_0, 0.18 sigma - not
+significant**, and median tokens-to-divergence is 13.4 against 13.1. That is the saturation
+effect again: the bulk statistic cannot see a change concentrated in the tail. **Read the
+maximum and 99.9% columns, not `Same top p`, when judging the small-tensor upgrades.**
+
+### Consequences
+
+1. **Hybrid A is a serious prod-pick candidate on its own terms** - +1.93 pp wikitext
+   agreement, a 12.5x cut in worst-case divergence, for -3.2% batch-1. Not adopted; the file
+   is at `~/play/Qwen3.8-27B-hybridA.gguf` and the recipe above rebuilds it in ~7 min. Owner's
+   call, like the head and the repack residency.
+2. **The Q4_0 gate's cost is wildly non-linear in coverage**: 17.2% of bytes off the fast path
+   costs 5.4%; 100% costs 39.3%. Cost tracks **share of round time**, not share of bytes, and
+   the FFN is 73.9 of 120.3 ms of MUL_MAT (`ffn-utilization.md`). **Small tensors leave the
+   fast path nearly free; the FFN cannot.**
+3. **This sharpens the kernel target rather than widening it.** A register-tile kernel does not
+   need to cover eight formats. It needs **the FFN fast on one good 4-bit format** - three
+   tensor shapes, `ffn_gate`/`ffn_up`/`ffn_down` - which alone unlocks ~3.9 of UD's 5.8 pp,
+   with the small tensors free to stay K-quantized at ~3%.
+
 ## Methodology finding: cross-model speculative t/s is confounded
 
 **Two models that emit different text cannot be compared on speculative t/s.** Acceptance is a
