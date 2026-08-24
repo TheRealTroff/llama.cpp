@@ -318,7 +318,7 @@ const struct ggml_metal_device_props * ggml_metal_device_get_props(ggml_metal_de
 // weight-repack probe (GGML_MV_REPACK): return a persistent per-tensor side buffer for a
 // deinterleaved weight copy; *is_new is set when the buffer was just allocated (caller must
 // then encode the repack kernel before first use)
-struct ggml_metal_buffer_id ggml_metal_device_get_repack_buffer(ggml_metal_device_t dev, const struct ggml_tensor * t, size_t size, bool * is_new);
+struct ggml_metal_buffer_id ggml_metal_device_get_repack_buffer(ggml_metal_device_t dev, const struct ggml_tensor * t, size_t size, bool force_new, bool * is_new);
 
 //
 // device buffers

@@ -212,3 +212,18 @@ R3 loses on every projection despite zero spilling. Together with the rejected 4
 this establishes vector-dot R2 as the measured local optimum among the barrier-free 2-, 3-, and
 4-output-row shapes: the extra activation reuse does not repay the additional per-lane arithmetic
 and live accumulator state beyond two rows on M4 Pro.
+
+### Synthetic multi-shape correctness cache
+
+A multi-case `test-backend-ops --test-file` run with `GGML_MV_REPACK=2` initially passed three
+cases, then produced an approximately 1.998 error on `attn_output` and NaNs in following eligible
+shapes. The repack cache key was only `src0->data`. Backend tests reuse the same allocation address
+for successively refilled, differently shaped synthetic tensors, so the cache returned the first
+private side buffer without reallocating or encoding another repack. Its contents, row stride, and
+possibly allocation size were stale for the next case.
+
+The env=2 test bypass now forces a fresh side buffer and repack on every invocation. Replacing a
+same-address entry releases its cache allocation ownership while Metal command buffers retain any
+in-flight resource. The production env=1 path remains a persistent data-address cache and is
+unchanged because it accepts only immutable `WEIGHTS` buffers. This is a harness-cache defect, not
+kernel arithmetic evidence; model runs use the immutable path.

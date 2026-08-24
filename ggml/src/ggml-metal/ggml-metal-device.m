@@ -1023,14 +1023,15 @@ void ggml_metal_device_free(ggml_metal_device_t dev) {
     free(dev);
 }
 
-struct ggml_metal_buffer_id ggml_metal_device_get_repack_buffer(ggml_metal_device_t dev, const struct ggml_tensor * t, size_t size, bool * is_new) {
+struct ggml_metal_buffer_id ggml_metal_device_get_repack_buffer(ggml_metal_device_t dev, const struct ggml_tensor * t, size_t size, bool force_new, bool * is_new) {
     struct ggml_metal_buffer_id res = { NULL, 0 };
 
     NSNumber * key = [NSNumber numberWithUnsignedLongLong:(unsigned long long)(uintptr_t) t->data];
 
     [dev->repack_lock lock];
 
-    id<MTLBuffer> buf = dev->repack_bufs[key];
+    id<MTLBuffer> old = force_new ? dev->repack_bufs[key] : nil;
+    id<MTLBuffer> buf = force_new ? nil : old;
     if (buf) {
         *is_new = false;
     } else {
@@ -1041,6 +1042,11 @@ struct ggml_metal_buffer_id ggml_metal_device_get_repack_buffer(ggml_metal_devic
             return res;
         }
         dev->repack_bufs[key] = buf;
+        if (old) {
+            // Drop the ownership from old's newBuffer allocation; replacing the dictionary
+            // entry already dropped its dictionary retain. In-flight command buffers retain it.
+            [old release];
+        }
         *is_new = true;
     }
 
