@@ -172,3 +172,16 @@ There is no meaningful scalar-inner win, while the K=6144 `attn_output` and K=17
 `ffn_down` losses are decisive. On M4 Pro, the compiler's vector-dot schedule is better for
 the long inner reductions even though both variants have zero spill and nearly identical
 native text size. Keep dot-R2 as the validated design; the scalar sibling is refuted.
+
+### Whole-graph validation
+
+`llama-bench` at width 4 (`pp4`), two baseline/R2 A/B pairs with three repetitions per arm:
+
+| route | pair means, t/s | overall mean, t/s | delta |
+|---|---|---:|---:|
+| baseline | 34.20, 34.17 | 34.185 | - |
+| vector-dot R2 | 36.80, 36.71 | 36.755 | **+7.52%** |
+
+The corresponding width-4 pass time falls from approximately 117.01 ms to 108.83 ms,
+**-7.0%**. The model-level result confirms that the projection wins survive whole-graph
+scheduling and concurrency; vector-dot R2 is the validated width-4 route for this model.
