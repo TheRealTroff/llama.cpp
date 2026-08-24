@@ -129,3 +129,10 @@ offender: each is 2 GPRs, and a `ptr[NR0]` plus `ptr[NC]` pair can be a dozen re
 of pure address bookkeeping. Replacing them with one base pointer per operand plus
 recomputed offsets removed the spill entirely at the mul_mv nc3 shape. Accumulators are
 irreducible; addressing usually is not.
+
+For M4 width-4 q4_0 work, screen accumulator banking before building. On `applegpu_g16s`,
+the `mul_mv_ext` 2-row x 4-column f16-src1 shape stayed at zero spill with two independent
+accumulator banks, while four banks spilled 272 bytes/thread (`nr0=2`, `nxpsg=8`, `nsg=2`).
+This is a measured register-allocation boundary, not a speed result. Keep two banks as the
+first performance candidate; do not benchmark the four-bank shape unless its live state is
+reduced and the probe returns to zero.
