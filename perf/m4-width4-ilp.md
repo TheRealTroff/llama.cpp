@@ -356,3 +356,26 @@ include the identical `kernel_cpy_f32_f16` helper in both arms, and the absolute
 simdgroups/core conversion assumes the measured accumulator represents residency per 4096-tick
 sample. Captured-run timings are discarded because capture distorts wall time. Durable traces
 and replay output are under `kvquant-experiments/{traces,profiles}/aug25-m4-width4-profile/`.
+
+## Landed on prod (2026-08-25) and what remains open
+
+Vector-dot R2, the SoA route and whitelist, lifecycle eviction, and the layout-identity
+cache fix merged to `prod` (this branch through `407ea33c8`). Open items, in order:
+
+1. **The un-run cell: 2-row x K-split.** The morphology matrix measured 4-row K2 (K split
+   across two simdgroups, terminal barrier), 4-row K1, 3-row R3, and 2-row R2 (full-K,
+   barrier-free) - but never a 2x4 tile with two simdgroups splitting K. K-split won at
+   4 rows, full-K won at 2; the R2 profile shows neither issue (1.93/tick) nor DRAM
+   (54% of peak) saturated, so the cell is not a priori dead.
+2. **Where does the remaining gap come from?** Against `width4-verify.md`'s pinned
+   95.00 ms/round, R2's ~108.83 ms leaves roughly **1.15x**. That figure is cross-session
+   arithmetic; the same-session head-to-head is deliberately deferred. The prior question
+   is what the ~14 ms is made of: per-kernel time on the six routed projections,
+   non-MUL_MV operations, dispatch/launch overhead, or idle gaps between encoders.
+3. **Whitelist generalization.** The SoA route is an exact five-value output-row whitelist
+   for this model. Any other model silently falls back to baseline - safe, but the win
+   does not transfer. Deriving the routing condition (projection-regime rows vs
+   small/batched rows vs lm_head-scale rows) is unstarted.
+4. **The +7.52% whole-graph table's env flag set was not recorded**, in this file or its
+   commit. The e2e section's block is the closest reconstruction. Record the exact set
+   the next time the number is reproduced.

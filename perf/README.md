@@ -273,7 +273,15 @@ against it and reported a bogus +5.8%.
 Current state:
 
 - **prod-pick: this file** + `run-prod-pick.sh`
-- **`width4-verify.md` - THE OPEN TASK.** The whole cross-framework gap is one width. Matched
+- **`m4-width4-ilp.md` - THE OPEN TASK (2026-08-25).** The width-4 morphology answer is in
+  and landed on `prod`: single-simdgroup 2x4 SoA **vector-dot R2**, +7.52% pp4 whole-graph,
+  +4.75% e2e, whitelist-routed to the six projection row counts. MLX's own 4x4 tile and its
+  scalar inner schedule both lose to it on M4 Pro. Estimated remaining width-4 gap **~1.15x**
+  (cross-session arithmetic vs the pinned 95.00 ms/round; head-to-head deferred). Open stubs
+  at the end of the file: the un-run 2-row x K-split cell, decomposing the remaining ~14 ms,
+  whitelist generalization.
+- **`width4-verify.md` - ~~THE OPEN TASK~~ answered 2026-08-25; open work moved to
+  `m4-width4-ilp.md`.** The whole cross-framework gap is one width. Matched
   by width we are level at 5 (1.06x) and behind only at 4 (1.48x), which is where their
   controller sits for 82% of cycles and where our routing is weakest. Contains the first
   kernel-level measurement of their `verify_m4` against our `mul_mv_ext` (they widen 1 -> 4
