@@ -4,8 +4,9 @@ Status: ~~**open**~~ **answered 2026-08-25 - the shelf was morphology.** Branch
 `m4-width4-ilp`, landed on `prod`: a single-simdgroup 2x4 SoA vector-dot kernel (R2) is
 validated at +7.52% pp4 whole-graph and +4.75% e2e. MLX's own 4x4 tile (run 2 below) and
 its scalar inner schedule both lose to R2 on M4 Pro. Remaining width-4 gap vs the pinned
-95.00 ms/round is ~1.15x (cross-session estimate; head-to-head deferred). Open work
-continues in `m4-width4-ilp.md`. Opened 2026-08-22 from `mlx-cycle-capture.md` open
+95.00 ms/cycle is **~1.42x at round level** (~135 ms/round est.; a same-day ~1.15x figure
+compared a bare pass to their full cycle and is corrected in `m4-width4-ilp.md`).
+Open work continues in `m4-width4-ilp.md`. Opened 2026-08-22 from `mlx-cycle-capture.md` open
 stubs 1 and 2, plus a kernel-level measurement taken the same day (below).
 
 > **SHAPE CORRECTION 2026-08-23 - every `attn_q` row in this file is a shape the model does

@@ -367,11 +367,16 @@ cache fix merged to `prod` (this branch through `407ea33c8`). Open items, in ord
    barrier-free) - but never a 2x4 tile with two simdgroups splitting K. K-split won at
    4 rows, full-K won at 2; the R2 profile shows neither issue (1.93/tick) nor DRAM
    (54% of peak) saturated, so the cell is not a priori dead.
-2. **Where does the remaining gap come from?** Against `width4-verify.md`'s pinned
-   95.00 ms/round, R2's ~108.83 ms leaves roughly **1.15x**. That figure is cross-session
-   arithmetic; the same-session head-to-head is deliberately deferred. The prior question
-   is what the ~14 ms is made of: per-kernel time on the six routed projections,
-   non-MUL_MV operations, dispatch/launch overhead, or idle gaps between encoders.
+2. **Where does the remaining gap come from?** ~~An earlier revision said ~1.15x
+   (108.83 vs 95.00)~~ **corrected 2026-08-25, same day: that compared our bare width-4
+   `llama-bench` pass against their full draft+verify cycle.** Like for like, the R2 e2e
+   arm implies ~135 ms/round (20.801 t/s at ~2.81 committed tokens/round; the K2 arm
+   reproduces the archived 141.0 the same way), so the round-level ratio is **~1.42x,
+   barely moved from 1.48x**. The six routed projections were ~6 ms of a ~46 ms round
+   gap. The decomposition question is therefore the whole game: how the remaining ~40 ms
+   splits across the width-4 verify pass (ours ~108.8 ms measured alone), the drafter,
+   non-MUL_MV operations, and host/scheduling gaps - against their 95.00 ms total.
+   Cross-session arithmetic; the same-session head-to-head stays deferred.
 3. **Whitelist generalization.** The SoA route is an exact five-value output-row whitelist
    for this model. Any other model silently falls back to baseline - safe, but the win
    does not transfer. Deriving the routing condition (projection-regime rows vs
