@@ -29,6 +29,10 @@ path is logged: `ggml_metal_graph_compute: capturing graph in ...`.
 Narrow the workload with `-p` first. The capture holds every buffer the graph touched, so
 a whole model pass writes gigabytes; one perf case writes ~50 MB.
 
+Synthetic `test-backend-ops` tensors are not model `WEIGHTS`. If the selected kernel depends
+on a persistent weight repack, use the branch's test-only repack mode (`GGML_MV_REPACK=2`
+for this fork) and reject the capture unless the log names the intended pipeline.
+
 ## Step 2 - Replay and profile (headless)
 
 ```sh
@@ -45,9 +49,10 @@ to describe Xcode 27-era tooling but does not state a minimum version.
 When `gpudebug` is absent, the wrapper automatically uses the Xcode 26 DY private-framework
 path. This fallback is verified on Xcode 26.6: it launches `GPUToolsReplayService`, drives
 the same client-side `DYMTLShaderProfiler` coordinator as Xcode, completes the hardware
-passes, and saves 41 APS counter records plus the 20-USC raw streams without Xcode or a
-human. Pass `--backend dy` to select it explicitly. `HEADLESS_DY_DIRECT_MESSAGES=1` is only
-for reproducing the older, known-incomplete diagnostic path.
+passes, and saves a positive APS counter set plus the 20-USC raw streams without Xcode or a
+human. Independent replays have produced 39-42 APS records, so the exact count is not an
+invariant. Pass `--backend dy` to select it explicitly. `HEADLESS_DY_DIRECT_MESSAGES=1` is
+only for reproducing the older, known-incomplete diagnostic path.
 
 The output directory has the established reader contract: `streamData` plus `raw/`.
 Treat a positive `APSCounterData` count as coordinator completion; its future subsumes the
