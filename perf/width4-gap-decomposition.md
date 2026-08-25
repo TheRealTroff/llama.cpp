@@ -133,8 +133,9 @@ What this rules in and out for closing the ~40 ms:
    wider loads already emitted by the compiler (8 device loads in the R2 body). What
    remains on the kernel axis is arithmetic-format work: ~~nc-style masked-nibble/sumy in
    the R2 tile~~ (REFUTED 2026-08-25, +15-32%/pass - `width4-sumy-fold-refuted.md`),
-   base-pointer addressing, and the activation-format question (their winning kernel is
-   bf16).
+   base-pointer addressing, and ~~the activation-format question (their winning kernel is
+   bf16)~~ (CLOSED 2026-08-25 offline - f16 y already folds to 16-bit operands, bf16
+   does not fold and costs more; `width4-y-operand-width.md`).
 2. **The drafter head**: 5.3 ms/round streams 715 MB to draft 3 tokens. Candidates:
    narrow-vocab draft head, reusing the verify pass's last-column logits for the staged
    token, or accepting the cost knowingly. Unstarted.

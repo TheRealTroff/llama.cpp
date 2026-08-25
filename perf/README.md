@@ -280,8 +280,10 @@ Current state:
   compiled instructions per weight byte (nc2 20.8 -> 1.16x, R2 33.9 -> 1.82x). Next
   probes are instr/B reducers: ~~sumy-fold dequant~~ (REFUTED 2026-08-25, +15-32%/pass,
   `width4-sumy-fold-refuted.md` - the fold trades cheap row-side chains for per-column
-  y-side work), base-pointer addressing, bf16/f16-pair y. Also: skinny is grid-starved
-  at ffn_down only (~12% there).
+  y-side work), base-pointer addressing, ~~bf16/f16-pair y~~ (CLOSED 2026-08-25 offline,
+  `width4-y-operand-width.md` - f16 y already folds to 16-bit FMA operands, nothing to
+  halve; bf16 does not fold and costs more). Base-pointer addressing is the one open
+  mv probe. Also: skinny is grid-starved at ffn_down only (~12% there).
 - **`width4-gap-decomposition.md` - THE OPEN TASK (2026-08-25 pm).** The round gap is
   measured and named: q4_0 projections run at 51-53% of peak (1.65-2.0x bytes floor),
   112 of 142.5 serialized ms/round; everything else is second order. The kernel
@@ -289,7 +291,8 @@ Current state:
   `m4-width4-latency`: K-split, unroll, tg packing; nc4 re-refuted; even nc pays +140%
   for 2 -> 4 columns - no known kernel runs width 4 near 1.2x floor). Open, in order:
   arithmetic/format probes (~~masked-nibble in the R2 tile~~ refuted 2026-08-25, see
-  `width4-sumy-fold-refuted.md`; addressing, bf16 y), the drafter's 5.3 ms
+  `width4-sumy-fold-refuted.md`; ~~bf16 y~~ closed 2026-08-25,
+  `width4-y-operand-width.md`; addressing is the one left), the drafter's 5.3 ms
   full-vocab head, operating points that avoid width 4 (MTP d1), the deferred
   head-to-head.
 - **`m4-width4-ilp.md` - ~~THE OPEN TASK~~ (2026-08-25, stubs now answered in place).** The width-4 morphology answer is in

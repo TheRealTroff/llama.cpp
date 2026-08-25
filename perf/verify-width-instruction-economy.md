@@ -111,10 +111,13 @@ Cut instructions per weight byte from ~34 toward nc2's ~21. In candidate order:
    what is NOT amortized in R2 is address generation per row per pack (`AGen` feeds the
    ALU-input counters; INT ops are 49 of R2's 271). Base-pointer + increment addressing
    (the V2 rewrite pattern from `width4-verify.md` run 2) applied to the SoA kernel.
-3. **f16 dot pairs / bf16 activations** - halves y-side operand width per MAC; their
+3. ~~**f16 dot pairs / bf16 activations** - halves y-side operand width per MAC; their
    winning kernel is `_bf16`. The earlier `HALF_PRODUCT` refutation changed rounding on
    the product path; a bf16/f16-pair probe that keeps FP32 accumulation is a different
-   cell and unmeasured.
+   cell and unmeasured.~~ **CLOSED 2026-08-25, offline** (`width4-y-operand-width.md`):
+   the compiler already folds f16 y into 16-bit FMA source operands (an fp32-y R2
+   variant compiles to size-identical code), so there is nothing to halve; bf16 sources
+   do NOT fold and cost extra ops per MAC, refuting the bf16 flavor before any build.
 4. **Grid fix for skinny at m=5120** (ffn_down only): halve rows-per-tg or split K
    across threadgroups to lift 160 tgs above the residency knee. Bounded ~12% on that
    one shape; independent of the instr/B story.
