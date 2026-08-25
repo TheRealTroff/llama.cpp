@@ -5676,6 +5676,216 @@ kernel void kernel_mul_mv_q4_0_soa_w4_r2_scalar(
     }
 }
 
+// sumy-fold probe: nibbles stay at bit position (mask only, no shift/sub/half step),
+// y is pre-scaled by exact powers of two and the -8 offset folds into d*sumy per column
+kernel void kernel_mul_mv_q4_0_soa_w4_r2_sumy(
+        constant ggml_metal_kargs_mul_mv_ext & args,
+        device const char * src0,
+        device const half * src1,
+        device float * dst,
+        uint3 tgpig [[threadgroup_position_in_grid]],
+        ushort tiisg [[thread_index_in_simdgroup]]) {
+    float acc[8] = {};
+    const uint nblk = args.ne00/32;
+    const uint npack = 4*nblk;
+    const uint row0 = 2*tgpig.x;
+
+    const float4 kscale = float4(1.0f, 1.0f/16, 1.0f/256, 1.0f/4096);
+    const uint4  kmask  = uint4(0x000F, 0x00F0, 0x0F00, 0xF000);
+
+    for (uint p = tiisg; p < npack; p += 32) {
+        const uint block = p/4;
+        const uint k0 = 8*p;
+
+        const float4 y0lo = float4(*(device const half4 *)(src1 + 0*args.ne00 + k0));
+        const float4 y0hi = float4(*(device const half4 *)(src1 + 0*args.ne00 + k0 + 4));
+        const float4 y1lo = float4(*(device const half4 *)(src1 + 1*args.ne00 + k0));
+        const float4 y1hi = float4(*(device const half4 *)(src1 + 1*args.ne00 + k0 + 4));
+        const float4 y2lo = float4(*(device const half4 *)(src1 + 2*args.ne00 + k0));
+        const float4 y2hi = float4(*(device const half4 *)(src1 + 2*args.ne00 + k0 + 4));
+        const float4 y3lo = float4(*(device const half4 *)(src1 + 3*args.ne00 + k0));
+        const float4 y3hi = float4(*(device const half4 *)(src1 + 3*args.ne00 + k0 + 4));
+
+        const float sumy0 = (y0lo.x + y0lo.y + y0lo.z + y0lo.w) + (y0hi.x + y0hi.y + y0hi.z + y0hi.w);
+        const float sumy1 = (y1lo.x + y1lo.y + y1lo.z + y1lo.w) + (y1hi.x + y1hi.y + y1hi.z + y1hi.w);
+        const float sumy2 = (y2lo.x + y2lo.y + y2lo.z + y2lo.w) + (y2hi.x + y2hi.y + y2hi.z + y2hi.w);
+        const float sumy3 = (y3lo.x + y3lo.y + y3lo.z + y3lo.w) + (y3hi.x + y3hi.y + y3hi.z + y3hi.w);
+
+        const float4 ys0lo = y0lo*kscale;
+        const float4 ys0hi = y0hi*kscale;
+        const float4 ys1lo = y1lo*kscale;
+        const float4 ys1hi = y1hi*kscale;
+        const float4 ys2lo = y2lo*kscale;
+        const float4 ys2hi = y2hi*kscale;
+        const float4 ys3lo = y3lo*kscale;
+        const float4 ys3hi = y3hi*kscale;
+
+#pragma unroll
+        for (short r = 0; r < 2; ++r) {
+            if (row0 + r >= args.ne01) {
+                continue;
+            }
+            device const char * row = src0 + (uint64_t)(row0 + r)*args.nb01;
+            const float d = *(device const half *)(row + 2*block);
+            const float md = -8.0f*d;
+            const uint q = *(device const uint *)(row + 2*nblk + 4*p);
+            const float4 wlo = float4(uint4(q & 0xFFFF) & kmask);
+            const float4 whi = float4(uint4(q >> 16)   & kmask);
+            acc[4*r + 0] += d*(dot(wlo, ys0lo) + dot(whi, ys0hi)) + md*sumy0;
+            acc[4*r + 1] += d*(dot(wlo, ys1lo) + dot(whi, ys1hi)) + md*sumy1;
+            acc[4*r + 2] += d*(dot(wlo, ys2lo) + dot(whi, ys2hi)) + md*sumy2;
+            acc[4*r + 3] += d*(dot(wlo, ys3lo) + dot(whi, ys3hi)) + md*sumy3;
+        }
+    }
+
+#pragma unroll
+    for (short i = 0; i < 8; ++i) {
+        const float v = simd_sum(acc[i]);
+        if (tiisg == i) {
+            const uint r = i/4;
+            const uint c = i%4;
+            if (row0 + r < args.ne01) {
+                dst[c*args.ne01 + row0 + r] = v;
+            }
+        }
+    }
+}
+
+// same fold on the 4-row tile: the per-pack y-side fold work halves per row
+kernel void kernel_mul_mv_q4_0_soa_w4_r4_sumy(
+        constant ggml_metal_kargs_mul_mv_ext & args,
+        device const char * src0,
+        device const half * src1,
+        device float * dst,
+        uint3 tgpig [[threadgroup_position_in_grid]],
+        ushort tiisg [[thread_index_in_simdgroup]]) {
+    float acc[16] = {};
+    const uint nblk = args.ne00/32;
+    const uint npack = 4*nblk;
+    const uint row0 = 4*tgpig.x;
+
+    const float4 kscale = float4(1.0f, 1.0f/16, 1.0f/256, 1.0f/4096);
+    const uint4  kmask  = uint4(0x000F, 0x00F0, 0x0F00, 0xF000);
+
+    for (uint p = tiisg; p < npack; p += 32) {
+        const uint block = p/4;
+        const uint k0 = 8*p;
+
+        const float4 y0lo = float4(*(device const half4 *)(src1 + 0*args.ne00 + k0));
+        const float4 y0hi = float4(*(device const half4 *)(src1 + 0*args.ne00 + k0 + 4));
+        const float4 y1lo = float4(*(device const half4 *)(src1 + 1*args.ne00 + k0));
+        const float4 y1hi = float4(*(device const half4 *)(src1 + 1*args.ne00 + k0 + 4));
+        const float4 y2lo = float4(*(device const half4 *)(src1 + 2*args.ne00 + k0));
+        const float4 y2hi = float4(*(device const half4 *)(src1 + 2*args.ne00 + k0 + 4));
+        const float4 y3lo = float4(*(device const half4 *)(src1 + 3*args.ne00 + k0));
+        const float4 y3hi = float4(*(device const half4 *)(src1 + 3*args.ne00 + k0 + 4));
+
+        const float sumy0 = (y0lo.x + y0lo.y + y0lo.z + y0lo.w) + (y0hi.x + y0hi.y + y0hi.z + y0hi.w);
+        const float sumy1 = (y1lo.x + y1lo.y + y1lo.z + y1lo.w) + (y1hi.x + y1hi.y + y1hi.z + y1hi.w);
+        const float sumy2 = (y2lo.x + y2lo.y + y2lo.z + y2lo.w) + (y2hi.x + y2hi.y + y2hi.z + y2hi.w);
+        const float sumy3 = (y3lo.x + y3lo.y + y3lo.z + y3lo.w) + (y3hi.x + y3hi.y + y3hi.z + y3hi.w);
+
+        const float4 ys0lo = y0lo*kscale;
+        const float4 ys0hi = y0hi*kscale;
+        const float4 ys1lo = y1lo*kscale;
+        const float4 ys1hi = y1hi*kscale;
+        const float4 ys2lo = y2lo*kscale;
+        const float4 ys2hi = y2hi*kscale;
+        const float4 ys3lo = y3lo*kscale;
+        const float4 ys3hi = y3hi*kscale;
+
+#pragma unroll
+        for (short r = 0; r < 4; ++r) {
+            if (row0 + r >= args.ne01) {
+                continue;
+            }
+            device const char * row = src0 + (uint64_t)(row0 + r)*args.nb01;
+            const float d = *(device const half *)(row + 2*block);
+            const float md = -8.0f*d;
+            const uint q = *(device const uint *)(row + 2*nblk + 4*p);
+            const float4 wlo = float4(uint4(q & 0xFFFF) & kmask);
+            const float4 whi = float4(uint4(q >> 16)   & kmask);
+            acc[4*r + 0] += d*(dot(wlo, ys0lo) + dot(whi, ys0hi)) + md*sumy0;
+            acc[4*r + 1] += d*(dot(wlo, ys1lo) + dot(whi, ys1hi)) + md*sumy1;
+            acc[4*r + 2] += d*(dot(wlo, ys2lo) + dot(whi, ys2hi)) + md*sumy2;
+            acc[4*r + 3] += d*(dot(wlo, ys3lo) + dot(whi, ys3hi)) + md*sumy3;
+        }
+    }
+
+#pragma unroll
+    for (short i = 0; i < 16; ++i) {
+        const float v = simd_sum(acc[i]);
+        if (tiisg == i) {
+            const uint r = i/4;
+            const uint c = i%4;
+            if (row0 + r < args.ne01) {
+                dst[c*args.ne01 + row0 + r] = v;
+            }
+        }
+    }
+}
+
+// minimal fold probe: R2 expansion unchanged except the -8 subtract moves into d*sumy
+kernel void kernel_mul_mv_q4_0_soa_w4_r2_sumymin(
+        constant ggml_metal_kargs_mul_mv_ext & args,
+        device const char * src0,
+        device const half * src1,
+        device float * dst,
+        uint3 tgpig [[threadgroup_position_in_grid]],
+        ushort tiisg [[thread_index_in_simdgroup]]) {
+    float acc[8] = {};
+    const uint nblk = args.ne00/32;
+    const uint npack = 4*nblk;
+    const uint row0 = 2*tgpig.x;
+
+    for (uint p = tiisg; p < npack; p += 32) {
+        const uint block = p/4;
+        const uint k0 = 8*p;
+        const half4 y0lo = *(device const half4 *)(src1 + 0*args.ne00 + k0);
+        const half4 y0hi = *(device const half4 *)(src1 + 0*args.ne00 + k0 + 4);
+        const half4 y1lo = *(device const half4 *)(src1 + 1*args.ne00 + k0);
+        const half4 y1hi = *(device const half4 *)(src1 + 1*args.ne00 + k0 + 4);
+        const half4 y2lo = *(device const half4 *)(src1 + 2*args.ne00 + k0);
+        const half4 y2hi = *(device const half4 *)(src1 + 2*args.ne00 + k0 + 4);
+        const half4 y3lo = *(device const half4 *)(src1 + 3*args.ne00 + k0);
+        const half4 y3hi = *(device const half4 *)(src1 + 3*args.ne00 + k0 + 4);
+
+        const float sumy0 = dot(float4(y0lo), float4(1.0f)) + dot(float4(y0hi), float4(1.0f));
+        const float sumy1 = dot(float4(y1lo), float4(1.0f)) + dot(float4(y1hi), float4(1.0f));
+        const float sumy2 = dot(float4(y2lo), float4(1.0f)) + dot(float4(y2hi), float4(1.0f));
+        const float sumy3 = dot(float4(y3lo), float4(1.0f)) + dot(float4(y3hi), float4(1.0f));
+
+#pragma unroll
+        for (short r = 0; r < 2; ++r) {
+            if (row0 + r >= args.ne01) {
+                continue;
+            }
+            device const char * row = src0 + (uint64_t)(row0 + r)*args.nb01;
+            const float d = *(device const half *)(row + 2*block);
+            const float md = -8.0f*d;
+            const uint q = *(device const uint *)(row + 2*nblk + 4*p);
+            const half4 wlo = half4((uint4(q) >> uint4(0, 4, 8, 12)) & 0xf);
+            const half4 whi = half4((uint4(q) >> uint4(16, 20, 24, 28)) & 0xf);
+            acc[4*r + 0] += d*(dot(float4(wlo), float4(y0lo)) + dot(float4(whi), float4(y0hi))) + md*sumy0;
+            acc[4*r + 1] += d*(dot(float4(wlo), float4(y1lo)) + dot(float4(whi), float4(y1hi))) + md*sumy1;
+            acc[4*r + 2] += d*(dot(float4(wlo), float4(y2lo)) + dot(float4(whi), float4(y2hi))) + md*sumy2;
+            acc[4*r + 3] += d*(dot(float4(wlo), float4(y3lo)) + dot(float4(whi), float4(y3hi))) + md*sumy3;
+        }
+    }
+
+#pragma unroll
+    for (short i = 0; i < 8; ++i) {
+        const float v = simd_sum(acc[i]);
+        if (tiisg == i) {
+            const uint r = i/4;
+            const uint c = i%4;
+            if (row0 + r < args.ne01) {
+                dst[c*args.ne01 + row0 + r] = v;
+            }
+        }
+    }
+}
+
 // deinterleaved q4_0: one aligned 8-byte qs load covers a pair of 4-elem sub-chunks (il even),
 // scale passed by value (loaded once per block instead of per deq call)
 void dequantize_q4_0_di_t8(device const uint16_t * qs, half dh, short il, thread float4 & r0, thread float4 & r1) {
