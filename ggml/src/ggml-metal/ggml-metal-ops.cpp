@@ -2514,11 +2514,27 @@ static bool ggml_metal_mul_mat_use_f16_src1(const ggml_tensor * op) {
     }
 }
 
+// GGML_MM_SKINNY_BDIRECT=1: skinny loads the B tile directly from the f16 y scratch,
+// which must then span 8 columns; the pad columns stay uninitialized (their C columns
+// are discarded), so this only widens the allocation
+static bool ggml_metal_mul_mat_skinny_bdirect(const ggml_tensor * op) {
+    static const int env_bdirect = getenv("GGML_MM_SKINNY_BDIRECT") ? atoi(getenv("GGML_MM_SKINNY_BDIRECT")) : 0;
+    return env_bdirect &&
+           op->src[0]->type == GGML_TYPE_Q4_0 &&
+           op->src[1]->ne[1] >= 2 && op->src[1]->ne[1] <= 8 &&
+           op->src[1]->ne[2] == 1 && op->src[1]->ne[3] == 1 &&
+           ggml_metal_mul_mat_use_f16_src1(op);
+}
+
 size_t ggml_metal_op_mul_mat_extra_src1f16(const ggml_tensor * op) {
     if (!ggml_metal_mul_mat_use_f16_src1(op)) {
         return 0;
     }
-    return GGML_PAD(ggml_nelements(op->src[1])*sizeof(ggml_fp16_t), 32);
+    int64_t ne = ggml_nelements(op->src[1]);
+    if (ggml_metal_mul_mat_skinny_bdirect(op)) {
+        ne = op->src[1]->ne[0]*8;
+    }
+    return GGML_PAD(ne*sizeof(ggml_fp16_t), 32);
 }
 
 static bool ggml_metal_mul_mat_soa_w4_rows(int64_t ne01) {
@@ -2711,7 +2727,61 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
 
         const bool use_di = ggml_metal_op_mul_mat_try_repack_q4_0(ctx, op, bid_src0, nb01_eff);
 
-        auto pipeline = ggml_metal_library_get_pipeline_mul_mm_skinny(lib, op, use_di);
+        // B direct from the f16 y scratch: convert src1 once, no sb staging in the kernel
+        const bool use_bdirect = ggml_metal_mul_mat_skinny_bdirect(op);
+
+        ggml_metal_buffer_id bid_src1 = ggml_metal_get_buffer_id(op->src[1]);
+
+        if (use_bdirect) {
+            ggml_metal_buffer_id bid_y16 = ggml_metal_get_buffer_id(op);
+            bid_y16.offs += ggml_nbytes(op);
+
+            auto pipeline_cpy = ggml_metal_library_get_pipeline_cpy(lib, GGML_TYPE_F32, GGML_TYPE_F16);
+
+            ggml_metal_kargs_cpy cargs = {
+                /*.nk0  =*/ ne10,
+                /*.ne00 =*/ ne10,
+                /*.ne01 =*/ ne11,
+                /*.ne02 =*/ ne12,
+                /*.ne03 =*/ ne13,
+                /*.nb00 =*/ nb10,
+                /*.nb01 =*/ nb11,
+                /*.nb02 =*/ nb12,
+                /*.nb03 =*/ nb13,
+                /*.ne0  =*/ ne10,
+                /*.ne1  =*/ ne11,
+                /*.ne2  =*/ ne12,
+                /*.ne3  =*/ ne13,
+                /*.nb0  =*/ sizeof(ggml_fp16_t),
+                /*.nb1  =*/ sizeof(ggml_fp16_t)*ne10,
+                /*.nb2  =*/ sizeof(ggml_fp16_t)*ne10*ne11,
+                /*.nb3  =*/ sizeof(ggml_fp16_t)*ne10*ne11*ne12,
+            };
+
+            const int nth_cpy = std::min<int>(ne10, 256);
+            const int nw0     = (ne10 + nth_cpy - 1)/nth_cpy;
+
+            // =2 encodes the convert twice: the arm delta prices the convert for attribution
+            static const int env_bdirect = atoi(getenv("GGML_MM_SKINNY_BDIRECT"));
+            for (int rep = 0; rep < (env_bdirect == 2 ? 2 : 1); ++rep) {
+                ggml_metal_encoder_set_pipeline(enc, pipeline_cpy);
+                ggml_metal_encoder_set_bytes   (enc, &cargs, sizeof(cargs), 0);
+                ggml_metal_encoder_set_buffer  (enc, bid_src1, 1);
+                ggml_metal_encoder_set_buffer  (enc, bid_y16,  2);
+
+                ggml_metal_encoder_dispatch_threadgroups(enc, nw0*ne11, ne12, ne13, nth_cpy, 1, 1);
+
+                ggml_metal_op_concurrency_reset(ctx);
+            }
+
+            bid_src1 = bid_y16;
+        }
+
+        // =3: double-buffered sa on top of B-direct (non-di only)
+        static const int env_bdirect_mode = getenv("GGML_MM_SKINNY_BDIRECT") ? atoi(getenv("GGML_MM_SKINNY_BDIRECT")) : 0;
+        const int f16b = !use_bdirect ? 0 : (env_bdirect_mode == 3 && !use_di) ? 2 : 1;
+
+        auto pipeline = ggml_metal_library_get_pipeline_mul_mm_skinny(lib, op, use_di, f16b);
 
         ggml_metal_kargs_mul_mm args = {
             /*.ne00 =*/ ne00,
@@ -2732,9 +2802,9 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
 
         ggml_metal_encoder_set_pipeline(enc, pipeline);
         ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);
-        ggml_metal_encoder_set_buffer  (enc, bid_src0,                              1);
-        ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[1]), 2);
-        ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         3);
+        ggml_metal_encoder_set_buffer  (enc, bid_src0,                      1);
+        ggml_metal_encoder_set_buffer  (enc, bid_src1,                      2);
+        ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op), 3);
 
         ggml_metal_encoder_set_threadgroup_memory_size(enc, pipeline.smem, 0);
 

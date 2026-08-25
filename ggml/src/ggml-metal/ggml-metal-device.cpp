@@ -704,7 +704,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_solve_tri(ggml_m
     return res;
 }
 
-ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm_skinny(ggml_metal_library_t lib, const ggml_tensor * op, bool di) {
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm_skinny(ggml_metal_library_t lib, const ggml_tensor * op, bool di, int f16b) {
     char base[256];
     char name[256];
 
@@ -715,7 +715,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm_skinny(gg
 
     GGML_ASSERT(ne12 <= INT16_MAX && r2 <= INT16_MAX && r3 <= INT16_MAX);
 
-    snprintf(base, 256, "kernel_mul_mm_skinny_%s%s_%s", ggml_type_name(op->src[0]->type), di ? "_di" : "", ggml_type_name(op->src[1]->type));
+    snprintf(base, 256, "kernel_mul_mm_skinny_%s%s_%s", ggml_type_name(op->src[0]->type), di ? "_di" : "", f16b == 2 ? "f16b_db" : f16b ? "f16b" : ggml_type_name(op->src[1]->type));
     snprintf(name, 256, "%s_ne12=%d_r2=%d_r3=%d", base, ne12, r2, r3);
 
     ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
@@ -735,7 +735,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm_skinny(gg
     res.nr0  = 32;
     res.nr1  = 8;
     res.nsg  = 2;
-    res.smem = 4096 + 1024;
+    res.smem = f16b == 2 ? 8192 : f16b ? 4096 : 4096 + 1024;
 
     return res;
 }
