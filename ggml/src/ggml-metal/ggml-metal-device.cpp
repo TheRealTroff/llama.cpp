@@ -837,6 +837,18 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_
     return res.pipeline ? res : ggml_metal_library_compile_pipeline(lib, name, name, nullptr);
 }
 
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w4_r2u2(ggml_metal_library_t lib) {
+    const char * name = "kernel_mul_mv_q4_0_soa_w4_r2u2";
+    auto res = ggml_metal_library_get_pipeline(lib, name);
+    return res.pipeline ? res : ggml_metal_library_compile_pipeline(lib, name, name, nullptr);
+}
+
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w4_r2g(ggml_metal_library_t lib, int g) {
+    const char * name = g == 8 ? "kernel_mul_mv_q4_0_soa_w4_r2g8" : "kernel_mul_mv_q4_0_soa_w4_r2g4";
+    auto res = ggml_metal_library_get_pipeline(lib, name);
+    return res.pipeline ? res : ggml_metal_library_compile_pipeline(lib, name, name, nullptr);
+}
+
 ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_ext(ggml_metal_library_t lib, const ggml_tensor * op, int nsg, int nxpsg, int r1ptg, int nr0, ggml_type tsrc1, bool di, int variant) {
     char base[256];
     char name[256];
