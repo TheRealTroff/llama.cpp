@@ -141,8 +141,10 @@ What this rules in and out for closing the ~40 ms:
 2. **The drafter head**: 5.3 ms/round streams 715 MB to draft 3 tokens. Candidates:
    narrow-vocab draft head, reusing the verify pass's last-column logits for the staged
    token, or accepting the cost knowingly. Unstarted.
-3. **Their side of the ledger is still pinned, not measured**: 95.00 total with verify
-   76-85 derived. The deferred same-session head-to-head (and a per-kernel decode of
-   their capture) decides how much of their 95 is their own drafter+head overhead - if
-   their cycle hides a comparable ~15 ms, the kernel-utilization target is their 76-85
+3. ~~**Their side of the ledger is still pinned, not measured**: 95.00 total with verify
+   76-85 derived.~~ **MEASURED 2026-08-25 (`head-to-head-aug25.md`): the pinned block-4
+   cycle reproduces at 95.9 ms in the same session as our 24.39 t/s; best-vs-best
+   1.323x at a recorded sha.** The per-kernel decode of their capture (how much of the
+   95.9 is drafter+head overhead vs verify) is still open - if their cycle hides a
+   comparable ~15 ms, the kernel-utilization target is their 76-85
    verify, which the arithmetic above already matches.

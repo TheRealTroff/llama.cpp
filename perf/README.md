@@ -288,7 +288,8 @@ Current state:
   the tg-L1 staging mechanism is refuted and the skinny wall is unidentified. The
   ffn_down grid fix is refuted too (`skinny-grid-refuted.md` - inflight rose with zero
   time change). **Every kernel-local lever on both walls is now measured and closed**;
-  what remains is the drafter head, operating points, and the deferred head-to-head.
+  what remains is the drafter head, operating points, and the per-kernel decode of
+  their capture (the head-to-head itself is done - `head-to-head-aug25.md`).
 - **`width4-gap-decomposition.md` - THE OPEN TASK (2026-08-25 pm).** The round gap is
   measured and named: q4_0 projections run at 51-53% of peak (1.65-2.0x bytes floor),
   112 of 142.5 serialized ms/round; everything else is second order. The kernel
@@ -299,8 +300,10 @@ Current state:
   addressing refuted, bf16 y closed - `width4-sumy-fold-refuted.md`,
   `width4-addressing-refuted.md`, `width4-y-operand-width.md`; the kernel axis is
   closed), the drafter's 5.3 ms
-  full-vocab head, operating points that avoid width 4 (MTP d1), the deferred
-  head-to-head.
+  full-vocab head, operating points that avoid width 4 (MTP d1), and ~~the deferred
+  head-to-head~~ (DONE 2026-08-25, `head-to-head-aug25.md`: their pinned 95.00
+  validates at 95.9 ms same-session, best-vs-best 1.323x; still open there is the
+  per-kernel decode of their block-4 capture).
 - **`m4-width4-ilp.md` - ~~THE OPEN TASK~~ (2026-08-25, stubs now answered in place).** The width-4 morphology answer is in
   and landed on `prod`: single-simdgroup 2x4 SoA **vector-dot R2**, +7.52% pp4 whole-graph,
   +4.75% e2e, whitelist-routed to the six projection row counts. MLX's own 4x4 tile and its
