@@ -103,7 +103,10 @@ Cut instructions per weight byte from ~34 toward nc2's ~21. In candidate order:
    +15 to +32% per pass in every variant, including the 4-row tile. The convert+subtract
    chains are nearly free; the fold's sumy/pre-scale terms are per-column y-side work,
    which is the very term that scales with width. nc2's instr/B edge is its 2 columns,
-   not its offset arithmetic.
+   not its offset arithmetic. The replay also refined the law itself: r2_sumy is +16%
+   instructions but +32% time because its all-FP32 mix ALSO drops issue/tick 1.93 ->
+   1.77 - instr/B predicts time only at comparable issue rates (same shape as the K2
+   anomaly above, now with a measured mechanism).
 2. **Amortize the q fetch and nibble expansion across all four columns** is already done;
    what is NOT amortized in R2 is address generation per row per pack (`AGen` feeds the
    ALU-input counters; INT ops are 49 of R2's 271). Base-pointer + increment addressing

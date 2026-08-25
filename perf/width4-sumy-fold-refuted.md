@@ -67,6 +67,33 @@ Method note: the offline text-size proxy under-called the damage 3x (+9.2% text 
 +31.7% time for r2_sumy) but got the SIGN right on all three variants before any build.
 As a gate it worked; do not read its magnitude as a prediction.
 
+## Replay follow-up (same day): instruction count is only half the slowdown
+
+Both r2 variants were captured and replayed (archives:
+`kvquant-experiments/profiles/aug25-sumy-fold/`, traces moved there too; R2 reference
+numbers reproduce from the archived `aug25-m4-width4-profile/w4-ffn-down-r2` with the
+same commands). Counters are the "over active" values per `aps-counters.md`; the fourth
+ALU raw input reads zero in the new captures and is summed as such.
+
+| kernel | instr | FP32/FP16 | regs | us | inflight | issue/tick | ALU-in/tick |
+|---|---:|---|---:|---:|---:|---:|---:|
+| R2 | 271 | 80/16 | 43 | 331.3 | 3.29 | 1.93 | 4.11 |
+| r2_sumymin | 293 (+8.1%) | 118/0 | 48 | 381.6 (+15.2%) | 3.19 | 1.87 | 3.87 |
+| r2_sumy | 315 (+16.2%) | 142/0 | 69 | 436.3 (+31.7%) | 3.06 | 1.77 | 3.48 |
+
+The instruction growth alone under-predicts the time (+16% instr vs +32% time), because
+the **issue rate fell at the same time** (1.93 -> 1.77/tick). The two multiply and close
+most of the gap: 1.162 x 1.088 = 1.26 of the measured 1.32 (sumymin: 1.081 x 1.033 =
+1.12 of 1.15). Residency is not the story - inflight only eased 3.29 -> 3.06 despite 69
+registers. What changed is the mix: the fold moved all arithmetic to FP32 (R2's 16 FP16
+ops vanish; FP32 80 -> 142), i.e. wider operands per instruction on a machine whose
+ALU-input bandwidth was already the highest-loaded counter. **Refinement to the economy
+law: time per byte tracks instructions per byte only at comparable issue rates; a mix
+shift toward wider operands taxes both terms.** This is the same shape as the K2 anomaly
+the economy file flagged (29.1 instr/B but no faster), now with a measured mechanism on
+the mv side. It also sharpens candidate 3: bf16/f16-pair y attacks operand width
+directly, the term this probe accidentally made worse.
+
 ## What this retires and what stays open
 
 - Retired: candidate 1 (sumy-fold dequant), all in-kernel forms. A fold can only pay if
