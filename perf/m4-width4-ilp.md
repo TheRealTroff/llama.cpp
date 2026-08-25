@@ -314,3 +314,45 @@ whole-model result above, **+7.52% throughput**, remains the headline validation
 cases stay roughly neutral, and `lm_head` correctly falls back (4478.38 vs 4545.42 us, +1.5%
 noise/slowdown). Lifecycle eviction affects only cache lifetime after source-buffer destruction;
 it does not alter immutable env=1 production caching.
+
+## Isolated headless K2/R2 profiles
+
+Fresh Xcode 26.6 hardware-counter replays on 2026-08-25 profile the exact `ffn_down` case
+(`m=5120,n=4,k=17408`) from commit `f8e1a6a43`. The synthetic harness uses
+`GGML_MV_REPACK=2`; env=1 does not repack its non-`WEIGHTS` tensor and instead captures the
+generic `mul_mv_ext` route. Pipeline-name gating confirmed
+`kernel_mul_mv_q4_0_soa_w4_k2` and `kernel_mul_mv_q4_0_soa_w4_r2` before replay.
+
+The dispatch changes from 1280 groups of two simdgroups for K2 to 2560 groups of one
+simdgroup for R2. Both launch exactly 2560 simdgroups and 81,920 threads, so R2's dynamic
+occupancy gain is not caused by submitting more total simdgroups.
+
+| measured quantity | K2 | R2 | R2 delta |
+|---|---:|---:|---:|
+| temporary registers/thread | 55 | 43 | -21.8% |
+| spilled bytes/thread | 0 | 0 | - |
+| static instruction count | 465 | 271 | -41.7% |
+| static ALU instructions | 400 | 227 | -43.2% |
+| threadgroup load instructions | 2 | 0 | removed |
+| threadgroup store instructions | 16 | 0 | removed |
+| compute simdgroups/core, active samples | 3.1300 | 3.2882 | +5.1% |
+| compute simdgroups/core, all samples | 2.6801 | 2.8133 | +5.0% |
+| sum of four ALU raw inputs/tick, active samples | 3.9964 | 4.1066 | +2.8% |
+| instruction issue/tick, active samples | 1.8400 | 1.9295 | +4.9% |
+| instruction dispatch/tick, active samples | 1.8216 | 1.9114 | +4.9% |
+| DRAM busy-half bandwidth | 143.4 GB/s | 146.8 GB/s | +2.4% |
+| DRAM busy-half share of 273 GB/s | 53% | 54% | +1 point |
+
+The profile therefore looks like a scheduling win. R2 removes the inter-simdgroup
+threadgroup path, uses 12 fewer registers, and keeps about 5% more simdgroups active while
+issue and dispatch rise by the same amount. DRAM traffic is only marginally higher and stays
+near half of peak, so the gain is not a move toward bandwidth saturation. The raw dynamic
+threadgroup load/store rates also fall from 0.0021/0.0039 per tick in K2 to 0.0001/about zero
+in R2, corroborating the per-kernel compiler statistics at whole-replay scope.
+
+The profiler's instruction fields count the compiled body, not loop-weighted dynamic
+instructions; the 41.7% static reduction is not a runtime prediction. Counter windows also
+include the identical `kernel_cpy_f32_f16` helper in both arms, and the absolute
+simdgroups/core conversion assumes the measured accumulator represents residency per 4096-tick
+sample. Captured-run timings are discarded because capture distorts wall time. Durable traces
+and replay output are under `kvquant-experiments/{traces,profiles}/aug25-m4-width4-profile/`.
