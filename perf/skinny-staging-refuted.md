@@ -49,15 +49,20 @@ removing the B round trip entirely does nothing, and additionally halving the ba
 while overlapping the A store with the MMAs also does nothing. The staging was already
 fully hidden.
 
-What the wall could still be (unmeasured, in rough order of plausibility given the
-existing counters - skinny has the HIGHEST issue/tick (2.61) and ALU-inputs/tick (4.90)
-of every kernel in the table):
-
-- the MMA + dequant instruction stream itself (the mv lesson one level up: the stream
-  is the cost), including the tg-L1 *load* path feeding `simdgroup_load` of ma, which
-  no probe touched;
-- device-load latency on the x prefetch;
-- simply the achievable MMA throughput at this tile shape.
+**CORRECTED 2026-08-25 (late): the wall is not unidentified - it was already priced.**
+`ffn-utilization.md` + `perf/skinny-roofline.py` measured (arith roof 3.48 T MAC/s on
+the same simdgroup primitive, per-shape stream roofs from each shape's own width-1
+call) that every skinny shape lands at 85-118% of **stream + arith paid in series**;
+the ceiling is max(stream, arith), ~54 ms/round at width 7 from overlap alone. What
+this file's probes add is causal elimination of the proposed CAUSES of that
+non-overlap: not the B round trip, not the barriers, not the A-store serialization
+(and per `skinny-grid-refuted.md`, not grid residency). The software pipeline already
+issues the next slice's loads and dequant during the MMAs and still measures serial.
+The surviving suspect is that it is all ONE instruction stream contending for the same
+issue/ALU-input bandwidth - skinny has the HIGHEST issue/tick (2.61) and
+ALU-inputs/tick (4.90) of every kernel in the table, and ~2-3 inflight simdgroups/core
+is not enough to overlap across streams. Deciding that needs per-line stall
+attribution (shaderProfilerData decode) or AGX disassembly, not more kernel variants.
 
 **Discrepancy flagged, not resolved:** `skinny-tpr-bsplit.md` measured -1.4 to -2.6%
 per projection from merely spreading the B stage over more threads, and +1.2% e2e

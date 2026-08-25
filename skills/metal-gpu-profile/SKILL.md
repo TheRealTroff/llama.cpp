@@ -20,6 +20,20 @@ working directory; steps 2 and 3 work from anywhere. Inside the fork the same sc
 are also reachable as `perf/<name>` via symlinks, and the `perf/*.md` probe docs cited
 below exist only in the fork.
 
+Related tooling that is NOT in `references/` and was invisible to a fresh session until
+2026-08-25 - check these before building anything similar:
+
+- **Standalone kernel dispatch harness**:
+  `~/play/rotorquant/turboquant/benchmark_metal.py` (pyobjc; loads a metallib from
+  file, builds the pipeline, binds buffers, dispatches, times). Kernels are
+  rotor-specific but the skeleton generalizes - no llama.cpp build or routing plumbing
+  needed for a kernel A/B.
+- **Measured roofline model for the skinny mm family**: `perf/skinny-roofline.py` +
+  `perf/ffn-utilization.md` (arith roof 3.48 T MAC/s measured on the same
+  `simdgroup_half8x8` primitive; per-shape stream roofs from each shape's own width-1
+  call). Note the MXU utilization counters are undefined for gen 16 in the catalogue,
+  so MMA occupancy cannot be read directly on M4.
+
 ## Step 1 - Capture (headless)
 
 ggml already has capture built in. Both env vars are required:

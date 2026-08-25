@@ -285,7 +285,11 @@ Current state:
   (`width4-addressing-refuted.md`). The width-4 mv instruction stream is what the work
   intrinsically costs. The mm/skinny half is ALSO rewritten 2026-08-25
   (`skinny-staging-refuted.md`): B-direct and sa double-buffering both measure flat, so
-  the tg-L1 staging mechanism is refuted and the skinny wall is unidentified. The
+  the tg-L1 staging mechanism is refuted and ~~the skinny wall is unidentified~~ the
+  surviving skinny frame is `ffn-utilization.md`'s: stream + arith paid in series,
+  ceiling max(stream, arith), ~54 ms/round at w7 from overlap - the probes eliminated
+  staging/barriers/grid as CAUSES of the non-overlap, leaving single-stream
+  issue/ALU-input contention as the suspect. The
   ffn_down grid fix is refuted too (`skinny-grid-refuted.md` - inflight rose with zero
   time change). **Every kernel-local lever on both walls is now measured and closed**;
   what remains is the drafter head, operating points, and the per-kernel decode of

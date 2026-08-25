@@ -98,7 +98,9 @@ serialization were already fully hidden, so this section's mm mechanism is wrong
 2026-08-25 (`skinny-grid-refuted.md`): doubling the grid raised inflight 1.79 -> 2.11
 with zero time change - the inflight correlation was not causation.** The actual mm
 wall is unidentified (skinny has the highest issue/tick and ALU-inputs/tick in the
-table), and no skinny lever with measured headroom remains.
+table), and no skinny lever with measured headroom remains. The surviving quantified
+frame is `ffn-utilization.md`'s serial stream+arith roofline (~54 ms/rd at w7 from
+overlap); the refutations narrow its cause to single-stream issue contention.
 
 ## What would actually move width 4
 
