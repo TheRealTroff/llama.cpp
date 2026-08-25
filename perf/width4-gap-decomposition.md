@@ -131,8 +131,10 @@ What this rules in and out for closing the ~40 ms:
    `m4-width4-latency.md`): K-split ~1% of the pass; unroll-2 costs 43 -> 73 registers
    and drops DRAM busy 54% -> 45%, netting ~0; threadgroup packing flat to negative;
    wider loads already emitted by the compiler (8 device loads in the R2 body). What
-   remains on the kernel axis is arithmetic-format work: nc-style masked-nibble/sumy in
-   the R2 tile, and the activation-format question (their winning kernel is bf16).
+   remains on the kernel axis is arithmetic-format work: ~~nc-style masked-nibble/sumy in
+   the R2 tile~~ (REFUTED 2026-08-25, +15-32%/pass - `width4-sumy-fold-refuted.md`),
+   base-pointer addressing, and the activation-format question (their winning kernel is
+   bf16).
 2. **The drafter head**: 5.3 ms/round streams 715 MB to draft 3 tokens. Candidates:
    narrow-vocab draft head, reusing the verify pass's last-column logits for the staged
    token, or accepting the cost knowingly. Unstarted.

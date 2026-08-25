@@ -97,8 +97,13 @@ serializing; (3) the ffn_down grid fix (independent, ~12%).
 
 Cut instructions per weight byte from ~34 toward nc2's ~21. In candidate order:
 
-1. **Fold the -8 offset and scale via the sumy identity** (nc-style) instead of two
-   `half4` convert+subtract chains per pack per row - removes converts, keeps dots.
+1. ~~**Fold the -8 offset and scale via the sumy identity** (nc-style) instead of two
+   `half4` convert+subtract chains per pack per row - removes converts, keeps dots.~~
+   **REFUTED 2026-08-25** (`width4-sumy-fold-refuted.md`, branch `m4-width4-sumy-fold`):
+   +15 to +32% per pass in every variant, including the 4-row tile. The convert+subtract
+   chains are nearly free; the fold's sumy/pre-scale terms are per-column y-side work,
+   which is the very term that scales with width. nc2's instr/B edge is its 2 columns,
+   not its offset arithmetic.
 2. **Amortize the q fetch and nibble expansion across all four columns** is already done;
    what is NOT amortized in R2 is address generation per row per pack (`AGen` feeds the
    ALU-input counters; INT ops are 49 of R2's 271). Base-pointer + increment addressing
