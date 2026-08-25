@@ -49,9 +49,13 @@ per-instruction register pressure).
 
 ## What remains (mechanical)
 
-- ISA strings read `-` until generation is triggered: call
-  `mcaBinaryForBinaryKey:` -> `generateAssemblyContent` (or set an isaPrinter /
-  check `cachedISAFileURL`) and re-read.
+- ISA strings read `-` until generation is triggered. `mcaBinaryForBinaryKey:` with a
+  SEGMENT key ("328") returns nil (tried 2026-08-25 late; a "Task 0 terminated" from the
+  GTLLVMHelper subprocess suggests the helper session had already ended). Next routes:
+  find the key format mcaBinaryForBinaryKey: actually wants (read its disassembly), or
+  construct `GTShaderProfilerMCABinary initWithAPSBinary:programType:uniqueIdentifier:`
+  directly, or `GTShaderProfilerBinaryAnalysisResult analyzeBinary:targetIndex:isaPrinter:`,
+  or check `cachedISAFileURL` after a processor run with an isaPrinter set.
 - Read the cost VALUES: `instructionCosts` shape not yet dumped (likely NSArray or a
   C-array accessor); `costForLine:...` has out-params - prototype carefully.
 - Join segments -> kernel with `usedInPipelineState:` and emit the deliverable: a
