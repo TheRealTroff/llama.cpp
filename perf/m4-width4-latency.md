@@ -42,9 +42,13 @@ Synthetic interleaved A/B vs R2 (`GGML_MV_REPACK=2`, exact shapes, us/run means)
 **Why U2 fails, measured** (headless replay of the exact ffn_down capture, archived at
 `kvquant-experiments/profiles/aug25-m4-width4-latency/w4-ffn-down-r2u2`): the unrolled body compiles to **73 temporary registers
 against R2's 43** (550 instructions, 24 device loads, zero spill but 32 B thread-invariant
-spill), and DRAM busy-half drops from R2's 146.8 GB/s (54%) to **122.1 GB/s (45%)**. The
-extra in-flight state buys per-lane latency cover and pays for it in residency; the two
-cancel. Together with R2K2 (+1-4% per kernel) and R2G (flat to negative), the SoA
+spill), and DRAM busy-half drops from R2's 146.8 GB/s (54%) to **122.1 GB/s (45%)**.
+~~The extra in-flight state buys per-lane latency cover and pays for it in residency; the
+two cancel.~~ **Corrected same day: the register-residency reading is refuted by the
+follow-up counter read - U2's simdgroups-inflight (3.12 active) equals R2's (3.29), so
+registers cost no residency.** U2 fails because it leaves instructions per weight byte
+unchanged (34.4 vs R2's 33.9), and these kernels are instruction-throughput-bound -
+see `verify-width-instruction-economy.md`, which unifies this whole series. Together with R2K2 (+1-4% per kernel) and R2G (flat to negative), the SoA
 convert-style family is at a measured local optimum in the ILP-vs-registers plane:
 every schedule axis - K parallelism, per-lane unroll, threadgroup packing - moves the
 needle by low single digits at best.
