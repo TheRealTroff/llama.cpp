@@ -5676,6 +5676,69 @@ kernel void kernel_mul_mv_q4_0_soa_w4_r2_scalar(
     }
 }
 
+// R2's 2x4 tile with K2's K parallelism: two simdgroups split K, terminal 8-value add.
+kernel void kernel_mul_mv_q4_0_soa_w4_r2k2(
+        constant ggml_metal_kargs_mul_mv_ext & args,
+        device const char * src0,
+        device const half * src1,
+        device float * dst,
+        uint3 tgpig [[threadgroup_position_in_grid]],
+        ushort tiisg [[thread_index_in_simdgroup]],
+        ushort sgitg [[simdgroup_index_in_threadgroup]]) {
+    threadgroup float partial[2][8];
+    float acc[8] = {};
+
+    const uint nblk = args.ne00/32;
+    const uint npack = 4*nblk;
+    const uint row0 = 2*tgpig.x;
+
+    for (uint p = 32*sgitg + tiisg; p < npack; p += 64) {
+        const uint block = p/4;
+        const uint k0 = 8*p;
+        const half4 y0lo = *(device const half4 *)(src1 + 0*args.ne00 + k0);
+        const half4 y0hi = *(device const half4 *)(src1 + 0*args.ne00 + k0 + 4);
+        const half4 y1lo = *(device const half4 *)(src1 + 1*args.ne00 + k0);
+        const half4 y1hi = *(device const half4 *)(src1 + 1*args.ne00 + k0 + 4);
+        const half4 y2lo = *(device const half4 *)(src1 + 2*args.ne00 + k0);
+        const half4 y2hi = *(device const half4 *)(src1 + 2*args.ne00 + k0 + 4);
+        const half4 y3lo = *(device const half4 *)(src1 + 3*args.ne00 + k0);
+        const half4 y3hi = *(device const half4 *)(src1 + 3*args.ne00 + k0 + 4);
+
+#pragma unroll
+        for (short r = 0; r < 2; ++r) {
+            if (row0 + r >= args.ne01) {
+                continue;
+            }
+            device const char * row = src0 + (uint64_t)(row0 + r)*args.nb01;
+            const float d = *(device const half *)(row + 2*block);
+            const uint q = *(device const uint *)(row + 2*nblk + 4*p);
+            const half4 wlo = half4((uint4(q) >> uint4(0, 4, 8, 12)) & 0xf) - 8.h;
+            const half4 whi = half4((uint4(q) >> uint4(16, 20, 24, 28)) & 0xf) - 8.h;
+            acc[4*r + 0] += d*(dot(float4(wlo), float4(y0lo)) + dot(float4(whi), float4(y0hi)));
+            acc[4*r + 1] += d*(dot(float4(wlo), float4(y1lo)) + dot(float4(whi), float4(y1hi)));
+            acc[4*r + 2] += d*(dot(float4(wlo), float4(y2lo)) + dot(float4(whi), float4(y2hi)));
+            acc[4*r + 3] += d*(dot(float4(wlo), float4(y3lo)) + dot(float4(whi), float4(y3hi)));
+        }
+    }
+
+#pragma unroll
+    for (short i = 0; i < 8; ++i) {
+        const float v = simd_sum(acc[i]);
+        if (tiisg == 0) {
+            partial[sgitg][i] = v;
+        }
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    if (sgitg == 0 && tiisg < 8) {
+        const uint r = tiisg/4;
+        const uint c = tiisg%4;
+        if (row0 + r < args.ne01) {
+            dst[c*args.ne01 + row0 + r] = partial[0][tiisg] + partial[1][tiisg];
+        }
+    }
+}
+
 // deinterleaved q4_0: one aligned 8-byte qs load covers a pair of 4-elem sub-chunks (il even),
 // scale passed by value (loaded once per block instead of per deq call)
 void dequantize_q4_0_di_t8(device const uint16_t * qs, half dh, short il, thread float4 & r0, thread float4 & r1) {
