@@ -72,6 +72,53 @@ second order:
   large hidden scheduling gap. The old "~7 ms overhead" line item is really encoder
   serialization already counted inside the buckets.
 
+## MTP rerun (2026-08-25): two representative points
+
+Same instruments, same COMMON_ENV, `--spec-type draft-mtp`, no drafter model - the MTP
+head lives in the target GGUF. All three spec configs produce the canonical output
+`9ad7e023c6ab` (speculation is lossless across spec types) and land within 0.15% of each
+other in t/s - the operating surface is flat across drafters at these depths:
+
+| point | t/s | accept | commit/rd | wall ms/rd | verify ser. | draft ser. | total ser. |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| DFlash n3 (w4) | 21.453 | 63.6% | 2.908 | 135.8 | 127.3 | 15.2 | 142.5 |
+| MTP d3 (w4) | 21.425 | 65.6% | 2.968 | 138.6 | 130.3 | 16.3 | 146.6 |
+| MTP d1 (w2) | 21.427 | 86.2% | 1.862 | 87.0 | 86.5 | 6.2 | 92.7 |
+
+Two findings:
+
+**1. The width-4 utilization shortfall is kernel-family-specific - our own width-2
+kernels prove ~1.2x floor is attainable on the same weights.** MTP d1's verify runs at
+width 2 (`GGML_MV_NC=2` route), and every projection lands far closer to its bytes floor
+than the width-4 SoA/R2 family does:
+
+| shape (m,k) | w4 us/call (x floor) | w2 us/call (x floor) |
+|---|---:|---:|
+| ffn_gate/up (17408,5120) | 303.8 (1.65) | 216.5 (**1.18**) |
+| ffn_down (5120,17408) | 338.3 (1.84) | 219.2 (**1.19**) |
+| attn_qkv (10240,5120) | 187.3 (1.73) | 132.5 (1.23) |
+| attn_output (5120,6144) | 129.5 (2.00) | 92.0 (1.42) |
+| attn_gate (6144,5120) | 128.0 (1.98) | 91.9 (1.42) |
+| attn_q (12288,5120) | 219.7 (1.69) | 157.0 (1.21) |
+| lm_head (248320,5120) | 5149 (1.97) | 2914 (**1.11**) |
+
+lm_head at width 2 costs the same as at width 1 (2914 vs 2935 us, both ~1.1x floor):
+width 1 -> 2 is free, width 2 -> 4 costs +77%. The "column reuse is nearly free" property
+of the nc kernels did not carry into the width-4 family, and closing that - not MLX
+mimicry - is the measured target. Applying w2-grade utilization (~1.2x) to the width-4
+byte budget prices the verify at ~63 ms proj + ~25 ms FA/GDN/elementwise = ~88 ms, right
+at their demonstrated 76-85.
+
+**2. MTP's draft cost is bytes-bound, DFlash's is kernel-bound - and MTP buys more
+acceptance per draft millisecond.** The MTP head is one transformer layer plus a full
+248320-row lm_head **per draft step** (w1, 1.12x floor, 2.9 ms) plus TOP_K. At d3 that
+is 16.3 ms/round - the same total as DFlash's drafter - but 8.9 ms of it is lm_head
+streaming at floor, unoptimizable except by narrowing the head. At d1 the whole draft is
+6.2 ms/round and acceptance is 86.2%: an 87 ms round committing 1.86 tokens matches the
+136-139 ms width-4 rounds committing ~2.9. MTP d1 achieves DFlash-n3 throughput while
+never touching the broken width-4 regime; conversely, fixing width-4 utilization pays
+all three points, and a narrowed draft head pays MTP threefold.
+
 What this rules in and out for closing the ~40 ms:
 
 1. ~~More simdgroups on the projections~~ - measured, `m4-width4-r2k2.md`: K-split

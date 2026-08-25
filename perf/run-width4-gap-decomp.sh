@@ -24,6 +24,10 @@ PORT=${PORT:-8093}
 OUT=${OUT:-/Users/troff/play/kvquant-experiments/results}
 TAG=${TAG:-w4-gap-decomp-$(date +%m%d-%H%M)}
 NPRED=${NPRED:-300}
+# Speculation config: default is the DFlash n3 point this file first measured.
+# For MTP: SPEC_ARGS="--spec-type draft-mtp --spec-draft-n-max 3" (no -md).
+SPEC_ARGS=${SPEC_ARGS:--md $MD --spec-type draft-dflash --spec-draft-n-max 3}
+SKIP_BENCH=${SKIP_BENCH:-0}
 
 COMMON_ENV=(
     GGML_MV_NC=2
@@ -47,9 +51,13 @@ if lsof -ti :"$PORT" >/dev/null 2>&1; then
     exit 1
 fi
 
-echo
-echo "--- 1. llama-bench pp4: bare width-4 pass ---"
-env "${COMMON_ENV[@]}" "$BIN/llama-bench" -m "$M" -fa 1 -p 4 -n 0 -r 4 2>"$OUT/$TAG-bench.err" | tee "$OUT/$TAG-bench.txt"
+echo "spec   : $SPEC_ARGS"
+
+if [ "$SKIP_BENCH" != 1 ]; then
+    echo
+    echo "--- 1. llama-bench pp4: bare width-4 pass ---"
+    env "${COMMON_ENV[@]}" "$BIN/llama-bench" -m "$M" -fa 1 -p 4 -n 0 -r 4 2>"$OUT/$TAG-bench.err" | tee "$OUT/$TAG-bench.txt"
+fi
 
 server_pid=
 cleanup_server() {
@@ -72,7 +80,7 @@ run_server() {
     local slog=$OUT/$TAG-$label.server.log
     env "${COMMON_ENV[@]}" "$@" \
         "$BIN/llama-server" -m "$M" -c 10240 -fa on -ctk f16 -ctv f16 \
-        -md "$MD" --spec-type draft-dflash --spec-draft-n-max 3 \
+        $SPEC_ARGS \
         --port "$PORT" >"$slog" 2>&1 &
     server_pid=$!
     local healthy=0
@@ -96,12 +104,14 @@ PY
     sleep 5
 }
 
-echo
-echo "--- 2. decode-prof: host-side split, DFlash n3 ---"
-run_server decodeprof LLAMA_DECODE_PROF=1
+if [ "${SKIP_DECODEPROF:-0}" != 1 ]; then
+    echo
+    echo "--- 2. decode-prof: host-side split ($SPEC_ARGS) ---"
+    run_server decodeprof LLAMA_DECODE_PROF=1
+fi
 
 echo
-echo "--- 3. metal-profile: per-op GPU time, DFlash n3 (serialized encoders) ---"
+echo "--- 3. metal-profile: per-op GPU time, serialized encoders ($SPEC_ARGS) ---"
 run_server metalprof GGML_METAL_PROFILE=1
 
 echo
