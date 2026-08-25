@@ -362,21 +362,19 @@ and replay output are under `kvquant-experiments/{traces,profiles}/aug25-m4-widt
 Vector-dot R2, the SoA route and whitelist, lifecycle eviction, and the layout-identity
 cache fix merged to `prod` (this branch through `407ea33c8`). Open items, in order:
 
-1. **The un-run cell: 2-row x K-split.** The morphology matrix measured 4-row K2 (K split
-   across two simdgroups, terminal barrier), 4-row K1, 3-row R3, and 2-row R2 (full-K,
-   barrier-free) - but never a 2x4 tile with two simdgroups splitting K. K-split won at
-   4 rows, full-K won at 2; the R2 profile shows neither issue (1.93/tick) nor DRAM
-   (54% of peak) saturated, so the cell is not a priori dead.
-2. **Where does the remaining gap come from?** ~~An earlier revision said ~1.15x
-   (108.83 vs 95.00)~~ **corrected 2026-08-25, same day: that compared our bare width-4
-   `llama-bench` pass against their full draft+verify cycle.** Like for like, the R2 e2e
-   arm implies ~135 ms/round (20.801 t/s at ~2.81 committed tokens/round; the K2 arm
-   reproduces the archived 141.0 the same way), so the round-level ratio is **~1.42x,
-   barely moved from 1.48x**. The six routed projections were ~6 ms of a ~46 ms round
-   gap. The decomposition question is therefore the whole game: how the remaining ~40 ms
-   splits across the width-4 verify pass (ours ~108.8 ms measured alone), the drafter,
-   non-MUL_MV operations, and host/scheduling gaps - against their 95.00 ms total.
-   Cross-session arithmetic; the same-session head-to-head stays deferred.
+1. ~~**The un-run cell: 2-row x K-split.**~~ **Answered 2026-08-25, branch
+   `m4-width4-r2k2` (`perf/m4-width4-r2k2.md`): kernel-level win on every routed
+   projection (0.5-4.2%), e2e -0.30% because the K-split numerics land K2's greedy
+   trajectory; not adopted, R2 stays the route. The matrix {2,3,4} rows x {K1,K2} is
+   complete and 2-row is optimal in both columns. Occupancy recovery inside this family
+   is ~1% of the pass.**
+2. ~~**Where does the remaining gap come from?**~~ **Answered for our side 2026-08-25 -
+   `perf/width4-gap-decomposition.md`.** The round is ~135.8 ms measured; the q4_0
+   projections (target + drafter + both lm_heads) are 112 of its 142.5 serialized ms and
+   run at 51-53% of peak on 15.5 GB/round, 1.65-2.0x their bytes floor. The gap to their
+   95.00 is, to first order, entirely projection-kernel utilization; second order, the
+   drafter's separate full-vocab lm_head + TOP_K (5.3 ms/round). The earlier ~1.42x
+   correction in this section stands; the same-session head-to-head stays deferred.
 3. **Whitelist generalization.** The SoA route is an exact five-value output-row whitelist
    for this model. Any other model silently falls back to baseline - safe, but the win
    does not transfer. Deriving the routing condition (projection-regime rows vs
