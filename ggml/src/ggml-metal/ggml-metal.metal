@@ -5825,6 +5825,71 @@ kernel void kernel_mul_mv_q4_0_soa_w4_r4_sumy(
     }
 }
 
+// negative control for the y operand width question: identical to R2 except y is
+// materialized in fp32 registers, forcing 32-bit FMA operand reads on the y side
+kernel void kernel_mul_mv_q4_0_soa_w4_r2_yf32(
+        constant ggml_metal_kargs_mul_mv_ext & args,
+        device const char * src0,
+        device const half * src1,
+        device float * dst,
+        uint3 tgpig [[threadgroup_position_in_grid]],
+        ushort tiisg [[thread_index_in_simdgroup]]) {
+    float acc[8] = {};
+    const uint nblk = args.ne00/32;
+    const uint npack = 4*nblk;
+    const uint row0 = 2*tgpig.x;
+
+    for (uint p = tiisg; p < npack; p += 32) {
+        const uint block = p/4;
+        const uint k0 = 8*p;
+        float4 yv[8];
+        yv[0] = float4(*(device const half4 *)(src1 + 0*args.ne00 + k0));
+        yv[1] = float4(*(device const half4 *)(src1 + 0*args.ne00 + k0 + 4));
+        yv[2] = float4(*(device const half4 *)(src1 + 1*args.ne00 + k0));
+        yv[3] = float4(*(device const half4 *)(src1 + 1*args.ne00 + k0 + 4));
+        yv[4] = float4(*(device const half4 *)(src1 + 2*args.ne00 + k0));
+        yv[5] = float4(*(device const half4 *)(src1 + 2*args.ne00 + k0 + 4));
+        yv[6] = float4(*(device const half4 *)(src1 + 3*args.ne00 + k0));
+        yv[7] = float4(*(device const half4 *)(src1 + 3*args.ne00 + k0 + 4));
+        const float4 y0lo = yv[0];
+        const float4 y0hi = yv[1];
+        const float4 y1lo = yv[2];
+        const float4 y1hi = yv[3];
+        const float4 y2lo = yv[4];
+        const float4 y2hi = yv[5];
+        const float4 y3lo = yv[6];
+        const float4 y3hi = yv[7];
+
+#pragma unroll
+        for (short r = 0; r < 2; ++r) {
+            if (row0 + r >= args.ne01) {
+                continue;
+            }
+            device const char * row = src0 + (uint64_t)(row0 + r)*args.nb01;
+            const float d = *(device const half *)(row + 2*block);
+            const uint q = *(device const uint *)(row + 2*nblk + 4*p);
+            const half4 wlo = half4((uint4(q) >> uint4(0, 4, 8, 12)) & 0xf) - 8.h;
+            const half4 whi = half4((uint4(q) >> uint4(16, 20, 24, 28)) & 0xf) - 8.h;
+            acc[4*r + 0] += d*(dot(float4(wlo), y0lo) + dot(float4(whi), y0hi));
+            acc[4*r + 1] += d*(dot(float4(wlo), y1lo) + dot(float4(whi), y1hi));
+            acc[4*r + 2] += d*(dot(float4(wlo), y2lo) + dot(float4(whi), y2hi));
+            acc[4*r + 3] += d*(dot(float4(wlo), y3lo) + dot(float4(whi), y3hi));
+        }
+    }
+
+#pragma unroll
+    for (short i = 0; i < 8; ++i) {
+        const float v = simd_sum(acc[i]);
+        if (tiisg == i) {
+            const uint r = i/4;
+            const uint c = i%4;
+            if (row0 + r < args.ne01) {
+                dst[c*args.ne01 + row0 + r] = v;
+            }
+        }
+    }
+}
+
 // minimal fold probe: R2 expansion unchanged except the -8 subtract moves into d*sumy
 kernel void kernel_mul_mv_q4_0_soa_w4_r2_sumymin(
         constant ggml_metal_kargs_mul_mv_ext & args,
