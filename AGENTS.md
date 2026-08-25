@@ -12,7 +12,7 @@
 > - Do not pause for confirmation just because a change is large or introduces a new pattern. Experimental kernel and scheduling work is the entire point of this fork. Still pause for genuinely risky or ambiguous things: destructive operations, history rewrites, or a design decision that is really his to make.
 > - Branch hygiene: one branch per experiment, branched from `prod`. `prod` is the integration branch and holds the winners. Do not accumulate unrelated experiments on one branch.
 >
-> Keep following the **Code and Commit Standards** below (ASCII only, concise comments, match the surrounding code). Those keep diffs readable and individual commits cherry-pickable, which matters here because some of this work may get rebased onto upstream later.
+> Keep following the **Code and Commit Standards** below for code and comments (ASCII, concise comments, match the surrounding code). Those keep diffs readable and individual commits cherry-pickable, which matters here because some of this work may get rebased onto upstream later. Commit messages and fork-local docs are exempt from the ASCII rule - unicode such as ± is fine there - and the trailer convention is `Co-Authored-By:`, both per Johan (2026-08-25). If a commit is ever actually prepared for upstream, reword its message to upstream's standards at that point.
 >
 > Unchanged and non-negotiable, because it touches the upstream project and his standing in it: do not create pull requests, issues, or comments on `ggml-org/llama.cpp` by any means.
 
