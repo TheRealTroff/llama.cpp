@@ -2,9 +2,12 @@
 
 Status: ~~open~~ **superseded 2026-08-25 by `verify-width-instruction-economy.md`**,
 which counter-profiles the width-7 skinny pass for the first time (registers, issue,
-inflight, DRAM) and unifies this file's "50% of both roofs" observation with the width-4
-series: the kernels are instruction-throughput-bound, and time per weight byte tracks
-compiled instructions per weight byte. One separable finding: skinny at ffn_down
+inflight, DRAM, threadgroup-L1 rates). This file's "50% of both roofs / does not overlap
+the two" reading now has a measured mechanism, distinct from the mv family's: skinny's
+instruction economy is fine (~5-6 dynamic instr per weight byte via MMA); it is bound by
+the threadgroup-memory staging round-trip (3.2-3.8 tg-L1 loads + 2.6-3.1 stores per tick,
+vs ~0 for every mv kernel, and the faster shape shows the higher rate - a saturated
+staging port). The mv kernels are instead instruction-economy-bound. One separable finding: skinny at ffn_down
 (m=5120) is grid-starved (160 threadgroups, 1.79 simdgroups/core inflight vs ~3 for the
 larger shapes), worth ~12% on that shape alone.
 Previous status: **open. Runs 1-2 are in (2026-08-23) and they CORRECT this file's own diagnosis.**

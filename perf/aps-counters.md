@@ -438,5 +438,10 @@ name `aps-usc-values.py --counter` accepts. Values divide by ticks/sample (~4096
 | ALU Utilization input 3 | 102797 | `AA1E812506867A5F2C54D3BA3268DB5C4BB2C6B0E4F500340DD23C4E1E637D9D` |
 | ALU Utilization input 4 | 102793 | `79E88035C9BC883D403F17831B8C9264E643C6B76E9B3C1451B49B0F672C32BF` |
 
+| Threadgroup Memory L1 Load Bandwidth (derived 186473) | 109177 | `0D32627A10C5DB983D8E5DF466E154001CBB4E945D22A4E280A08C8D0F1701A7` |
+| Threadgroup Memory L1 Store Bandwidth (derived 186512) | 109179 | `B6C42286FD0AB628E79B9D4F5F10DC31C2DFD460570800BEB5C9E53651363C7D` |
+
 "Sum of four ALU raw inputs/tick" = the four ALU inputs added. First used in
-`m4-width4-ilp.md`; cross-kernel table in `verify-width-instruction-economy.md`.
+`m4-width4-ilp.md`; cross-kernel table in `verify-width-instruction-economy.md`. The
+tg-L1 rows are transaction rates (multiple lane accesses per instruction), so they are
+not directly comparable to issue/tick.

@@ -45,7 +45,8 @@ as w7 (+0.2-1.4%, the 8-column tile is full - padding is not the w7 problem).
 
 ## What it rules in
 
-**Time per weight byte tracks compiled instructions per weight byte.** nc2 vs R2 vs U2:
+**For the mv family, time per weight byte tracks compiled instructions per weight
+byte.** nc2 vs R2 vs U2:
 instr/B 20.8 / 33.9 / 34.4 -> x floor 1.16 / 1.82 / 1.79. The nc2:R2 ratio in instr/B
 (0.61) equals the ratio in x floor (0.63). K2 is the one anomaly (29.1 instr/B but no
 faster than R2; its threadgroup traffic may not price like ALU). Reading: at ~3 resident
@@ -60,6 +61,37 @@ Width is expensive because the y-side work per weight byte scales with columns: 
 added column adds dots, y loads and address work per byte of weights. That is why
 width 2 -> 4 costs +50-77% in every family (`m4-width4-latency.md`) and why batch-1
 saturates DRAM: at width 1 the instruction cost per byte is at its minimum.
+
+## Skinny is NOT the same wall (asked and measured, same day)
+
+The law does not extend to the mm kernel, and the counters say why. Skinny's dynamic
+instruction economy is excellent - the K-slice-64 body consumes 18 weight bytes per lane
+iteration in roughly 90-110 dynamic instructions, ~5-6 instr/B, four times better than
+nc2 - because `simdgroup_multiply_accumulate` packs an 8x8x8 MAC block into one
+instruction. What it buys with that, it spends on staging. Threadgroup L1 transaction
+rates per tick (raws 109177/109179, names now in `aps-counters.md`):
+
+| capture | tg-L1 loads/tick | tg-L1 stores/tick | x floor |
+|---|---:|---:|---:|
+| skinny gate/up w7 | 3.75 | 3.13 | 1.78 |
+| skinny ffn_down w7 | 3.15 | 2.63 | 2.10 |
+| R2 w4 | ~1.0 (act.) | ~0.2 | 1.82 |
+| nc2 w2 | 0 | 0 | 1.16 |
+
+The faster skinny shape shows the HIGHER tg-L1 rate - at healthy occupancy the staging
+path runs flat out, the signature of a saturated port rather than an incidental cost.
+Every K-slice pays two hard `threadgroup_barrier`s and a full A-tile + B-tile round trip
+through shmem before `simdgroup_load` can feed the MMAs; the software pipeline overlaps
+only the dequant, not the staging. So the two families hit two different walls with one
+symptom (~50% DRAM): **mv = instruction stream per byte; mm = threadgroup-memory
+round-trip**. This also sharpens `ffn-utilization.md`'s run-1/2 reading ("does not
+overlap the two") into a named, counter-measured mechanism.
+
+What would move skinny, in candidate order: (1) feed B without shmem - the f16y convert
+already materializes y in half precision for the mv path, and a device-direct
+`simdgroup_load` of a half B-tile would remove the B stage and one barrier phase;
+(2) double-buffer sa/sb so A-staging overlaps the MMA block instead of barrier-
+serializing; (3) the ffn_down grid fix (independent, ~12%).
 
 ## What would actually move width 4
 
