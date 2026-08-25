@@ -87,11 +87,15 @@ symptom (~50% DRAM): **mv = instruction stream per byte; mm = threadgroup-memory
 round-trip**. This also sharpens `ffn-utilization.md`'s run-1/2 reading ("does not
 overlap the two") into a named, counter-measured mechanism.
 
-What would move skinny, in candidate order: (1) feed B without shmem - the f16y convert
+~~What would move skinny, in candidate order: (1) feed B without shmem - the f16y convert
 already materializes y in half precision for the mv path, and a device-direct
 `simdgroup_load` of a half B-tile would remove the B stage and one barrier phase;
 (2) double-buffer sa/sb so A-staging overlaps the MMA block instead of barrier-
-serializing; (3) the ffn_down grid fix (independent, ~12%).
+serializing;~~ **(1) and (2) REFUTED 2026-08-25 (`skinny-staging-refuted.md`): both
+built, both flat (+/-0.5%) on all three shapes - the staging round-trip and barrier
+serialization were already fully hidden, so this section's mm mechanism is wrong.**
+Still open: (3) the ffn_down grid fix (independent, ~12%), and the actual mm wall is
+unidentified (skinny has the highest issue/tick and ALU-inputs/tick in the table).
 
 ## What would actually move width 4
 

@@ -283,7 +283,10 @@ Current state:
   bf16/f16-pair y CLOSED offline, f16 already folds to 16-bit operands
   (`width4-y-operand-width.md`); base-pointer addressing REFUTED flat-to-+8%
   (`width4-addressing-refuted.md`). The width-4 mv instruction stream is what the work
-  intrinsically costs. Still live: skinny grid starvation at ffn_down (~12% there).
+  intrinsically costs. The mm/skinny half is ALSO rewritten 2026-08-25
+  (`skinny-staging-refuted.md`): B-direct and sa double-buffering both measure flat, so
+  the tg-L1 staging mechanism is refuted and the skinny wall is unidentified. Still
+  live: skinny grid starvation at ffn_down (~12% there).
 - **`width4-gap-decomposition.md` - THE OPEN TASK (2026-08-25 pm).** The round gap is
   measured and named: q4_0 projections run at 51-53% of peak (1.65-2.0x bytes floor),
   112 of 142.5 serialized ms/round; everything else is second order. The kernel
