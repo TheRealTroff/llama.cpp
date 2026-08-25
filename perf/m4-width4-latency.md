@@ -39,8 +39,8 @@ Synthetic interleaved A/B vs R2 (`GGML_MV_REPACK=2`, exact shapes, us/run means)
 | attn_qkv (10240,5120) | 184.7 | 178.9 (-3.1%) | 187.9 (+1.8%) | 188.2 (+1.9%) |
 | attn_q (12288,5120) | 219.1 | 211.5 (-3.5%) | 217.6 (-0.5%) | 218.9 (+0.1%) |
 
-**Why U2 fails, measured** (headless replay of the exact ffn_down capture,
-`scratchpad -> to be archived`): the unrolled body compiles to **73 temporary registers
+**Why U2 fails, measured** (headless replay of the exact ffn_down capture, archived at
+`kvquant-experiments/profiles/aug25-m4-width4-latency/w4-ffn-down-r2u2`): the unrolled body compiles to **73 temporary registers
 against R2's 43** (550 instructions, 24 device loads, zero spill but 32 B thread-invariant
 spill), and DRAM busy-half drops from R2's 146.8 GB/s (54%) to **122.1 GB/s (45%)**. The
 extra in-flight state buys per-lane latency cover and pays for it in residency; the two
