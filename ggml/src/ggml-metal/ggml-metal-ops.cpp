@@ -2777,9 +2777,11 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
             bid_src1 = bid_y16;
         }
 
-        // =3: double-buffered sa on top of B-direct (non-di only)
+        // =3: double-buffered sa, =4: 16-row grid probe (both on top of B-direct, non-di only)
         static const int env_bdirect_mode = getenv("GGML_MM_SKINNY_BDIRECT") ? atoi(getenv("GGML_MM_SKINNY_BDIRECT")) : 0;
-        const int f16b = !use_bdirect ? 0 : (env_bdirect_mode == 3 && !use_di) ? 2 : 1;
+        const int f16b = !use_bdirect ? 0 :
+                         (env_bdirect_mode == 4 && !use_di) ? 3 :
+                         (env_bdirect_mode == 3 && !use_di) ? 2 : 1;
 
         auto pipeline = ggml_metal_library_get_pipeline_mul_mm_skinny(lib, op, use_di, f16b);
 
@@ -2808,7 +2810,7 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
 
         ggml_metal_encoder_set_threadgroup_memory_size(enc, pipeline.smem, 0);
 
-        ggml_metal_encoder_dispatch_threadgroups(enc, ((ne11 + 7)/8), ((ne01 + 31)/32), ne12*ne13, 32, 2, 1);
+        ggml_metal_encoder_dispatch_threadgroups(enc, ((ne11 + 7)/8), ((ne01 + pipeline.nr0 - 1)/pipeline.nr0), ne12*ne13, 32, pipeline.nsg, 1);
 
         return 1;
     }

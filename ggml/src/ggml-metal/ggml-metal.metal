@@ -12855,6 +12855,105 @@ kernel void kernel_mul_mm_skinny_q4_0_di_f32(
     }
 }
 
+// grid probe for the ffn_down starvation: 16 rows per threadgroup, one simdgroup,
+// twice the grid; B-direct base so there is no sb stage to redistribute
+kernel void kernel_mul_mm_skinny_q4_0_f16b_g16(
+        constant ggml_metal_kargs_mul_mm & args,
+        device const char * src0,
+        device const char * src1,
+        device       char * dst,
+        threadgroup  char * shmem [[threadgroup(0)]],
+        uint3  tgpig[[threadgroup_position_in_grid]],
+        ushort tiitg[[thread_index_in_threadgroup]],
+        ushort sgitg[[simdgroup_index_in_threadgroup]]) {
+
+    threadgroup half * sa = (threadgroup half *)(shmem);          // NR0 x NK = 2048 B
+
+    constexpr int NR0 = 16;
+    constexpr int NR1 = 8;
+    constexpr int NK  = 64;
+
+    const int im = tgpig.z;
+    const int r0 = tgpig.y*NR0;
+    const int r1 = tgpig.x*NR1;
+
+    const short nr0 = (args.ne0 - r0 < NR0) ? (args.ne0 - r0) : NR0;
+    const short nr1 = (args.ne1 - r1 < NR1) ? (args.ne1 - r1) : NR1;
+
+    const short ar  = tiitg/2;
+    const short il0 = tiitg%2;
+    const short lr0 = ar < nr0 ? ar : nr0 - 1;
+
+    device const block_q4_0 * x = (device const block_q4_0 *)(src0 + args.nb01*(r0 + lr0)) + il0;
+
+    device const half * yh = (device const half *)src1 + (uint64_t)r1*args.ne00;
+
+    simdgroup_half8x8 ma[2];
+    simdgroup_half8x8 mb;
+
+    simdgroup_float8x8 mc[2];
+    mc[0] = make_filled_simdgroup_matrix<float, 8>(0.f);
+    mc[1] = make_filled_simdgroup_matrix<float, 8>(0.f);
+
+    half4x4 ta0;
+    half4x4 ta1;
+    dequantize_q4_0(x, 0, ta0);
+    dequantize_q4_0(x, 1, ta1);
+    x += NK/32;
+
+    for (int loop_k = 0; loop_k < args.ne00; loop_k += NK) {
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        threadgroup half4 * pa = (threadgroup half4 *)(sa + ar*NK + 32*il0);
+        pa[0] = ta0[0];
+        pa[1] = ta0[1];
+        pa[2] = ta0[2];
+        pa[3] = ta0[3];
+        pa[4] = ta1[0];
+        pa[5] = ta1[1];
+        pa[6] = ta1[2];
+        pa[7] = ta1[3];
+
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        if (loop_k + NK < args.ne00) {
+            dequantize_q4_0(x, 0, ta0);
+            dequantize_q4_0(x, 1, ta1);
+            x += NK/32;
+        }
+
+        FOR_UNROLL (short ik = 0; ik < NK/8; ik++) {
+            simdgroup_barrier(mem_flags::mem_none);
+
+            simdgroup_load(ma[0], sa + 8*ik,        NK, 0, false);
+            simdgroup_load(ma[1], sa + 8*NK + 8*ik, NK, 0, false);
+            simdgroup_load(mb,    yh + loop_k + 8*ik, (ulong)args.ne00, 0, true);
+
+            simdgroup_barrier(mem_flags::mem_none);
+
+            simdgroup_multiply_accumulate(mc[0], ma[0], mb, mc[0]);
+            simdgroup_multiply_accumulate(mc[1], ma[1], mb, mc[1]);
+        }
+    }
+
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    threadgroup float * temp_all = (threadgroup float *) shmem;
+
+    simdgroup_store(mc[0], temp_all + 0*NR1, NR1, 0, false);
+    simdgroup_store(mc[1], temp_all + 8*NR1, NR1, 0, false);
+
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    for (short j = tiitg; j < nr1; j += 32) {
+        device float * D = (device float *) dst + r0 + (r1 + j)*args.ne0 + im*args.ne1*args.ne0;
+
+        for (short i = 0; i < nr0; ++i) {
+            D[i] = temp_all[i*NR1 + j];
+        }
+    }
+}
+
 // B-direct + double-buffered sa: one barrier per K slice; the slice t+1 store goes to the
 // other bank while the MMAs read the current one
 kernel void kernel_mul_mm_skinny_q4_0_f16b_db(
