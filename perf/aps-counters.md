@@ -421,3 +421,22 @@ The counter question is answered; what is left is optional depth.
 2. **Per-kick or per-encoder attribution** via `agxps_aps_timing_analyzer_*`, which would
    attribute occupancy to a single dispatch rather than a whole replay.
 3. ~~**The GTMio path.**~~ Dead - names and values both came from `libagxps`.
+
+### Issue and ALU raw counters, by name (recovered 2026-08-25)
+
+The 2026-08-25 morning session read "instruction issue/tick" and the "sum of four ALU raw
+inputs/tick" but did not record how; the join had to be re-derived the same day. Recipe,
+so it does not get lost again: `agxps-probe.py --find "<derived name>"` gives the derived
+ident; `raw_used_by(gpu, ident)` gives raw idents; `c_name(raw_ident)` gives the 64-hex
+name `aps-usc-values.py --counter` accepts. Values divide by ticks/sample (~4096).
+
+| counter | raw ident | name for --counter |
+|---|---|---|
+| Instruction Issue Utilization (derived 183014) | 102773 | `7FD8B674D9FE018B3D64EA31CB94787780CD12317B2764B9BAFB60C975CDC8EB` |
+| ALU Utilization input 1 (derived 184162) | 102801 | `3476066F46CC277DE7616AAAD8FCDF2C28DA42293B231F74A62159EB6EDAC78C` |
+| ALU Utilization input 2 | 102805 | `295D65BB175E4E4EEF9003E008E093043C9B8CE43190BE0A2D8F1771F9837033` |
+| ALU Utilization input 3 | 102797 | `AA1E812506867A5F2C54D3BA3268DB5C4BB2C6B0E4F500340DD23C4E1E637D9D` |
+| ALU Utilization input 4 | 102793 | `79E88035C9BC883D403F17831B8C9264E643C6B76E9B3C1451B49B0F672C32BF` |
+
+"Sum of four ALU raw inputs/tick" = the four ALU inputs added. First used in
+`m4-width4-ilp.md`; cross-kernel table in `verify-width-instruction-economy.md`.

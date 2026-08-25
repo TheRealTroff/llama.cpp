@@ -273,6 +273,13 @@ against it and reported a bogus +5.8%.
 Current state:
 
 - **prod-pick: this file** + `run-prod-pick.sh`
+- **`verify-width-instruction-economy.md` - READ WITH the open task (2026-08-25 eve).**
+  The first counter-profiled width-7 pass, and the unifying mechanism for the whole
+  width-4 refutation series: verify kernels are instruction-throughput-bound (~3
+  simdgroups/core inflight for every kernel, DRAM never the wall), and x-floor tracks
+  compiled instructions per weight byte (nc2 20.8 -> 1.16x, R2 33.9 -> 1.82x). Next
+  probes are instr/B reducers: sumy-fold dequant, base-pointer addressing, bf16/f16-pair
+  y. Also: skinny is grid-starved at ffn_down only (~12% there).
 - **`width4-gap-decomposition.md` - THE OPEN TASK (2026-08-25 pm).** The round gap is
   measured and named: q4_0 projections run at 51-53% of peak (1.65-2.0x bytes floor),
   112 of 142.5 serialized ms/round; everything else is second order. The kernel

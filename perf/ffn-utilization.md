@@ -1,6 +1,13 @@
 # The prod-width pass runs at half the memory roof, and the FFN is most of it
 
-Status: **open. Runs 1-2 are in (2026-08-23) and they CORRECT this file's own diagnosis.**
+Status: ~~open~~ **superseded 2026-08-25 by `verify-width-instruction-economy.md`**,
+which counter-profiles the width-7 skinny pass for the first time (registers, issue,
+inflight, DRAM) and unifies this file's "50% of both roofs" observation with the width-4
+series: the kernels are instruction-throughput-bound, and time per weight byte tracks
+compiled instructions per weight byte. One separable finding: skinny at ffn_down
+(m=5120) is grid-starved (160 threadgroups, 1.79 simdgroups/core inflight vs ~3 for the
+larger shapes), worth ~12% on that shape alone.
+Previous status: **open. Runs 1-2 are in (2026-08-23) and they CORRECT this file's own diagnosis.**
 The pass really does cost ~2x, and the FFN really is half the round - but it is not a memory
 utilization failure. `kernel_mul_mm_skinny` is at ~50% of the memory roof and ~50% of the
 **arithmetic** roof at the same time, because its fixed 8-column tile makes arithmetic a
