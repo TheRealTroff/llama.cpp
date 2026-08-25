@@ -8,10 +8,17 @@ description: Get per-kernel register counts, spill bytes and instruction mix for
 Three steps. Capture, replay, and parsing are headless.
 
 This gives **measured** per-thread register counts and the full instruction mix.
-`skills/metal-kernel-prescreen` answers the narrower "does this shape spill?" offline in
+The `metal-kernel-prescreen` skill answers the narrower "does this shape spill?" offline in
 0.12 s with no GPU and no Xcode - **use that first** when spill is the whole question.
 Come here when you need to know how close to the limit you are, or what the kernel
 actually executes.
+
+The scripts live in `references/` next to this SKILL.md; every `references/` path below
+is relative to this skill's directory, so resolve it against wherever this file loaded
+from. Step 1 additionally needs a built checkout of the private llama.cpp fork as the
+working directory; steps 2 and 3 work from anywhere. Inside the fork the same scripts
+are also reachable as `perf/<name>` via symlinks, and the `perf/*.md` probe docs cited
+below exist only in the fork.
 
 ## Step 1 - Capture (headless)
 
@@ -36,7 +43,7 @@ for this fork) and reject the capture unless the log names the intended pipeline
 ## Step 2 - Replay and profile (headless)
 
 ```sh
-./perf/metal-profile-headless.py \
+references/metal-profile-headless.py \
   /tmp/perf-metal-<pid>.gputrace /tmp/profile-output
 ```
 
@@ -61,13 +68,13 @@ separate replay-side raw-file notification used by direct-message diagnostics.
 ## Step 3 - Read it (headless)
 
 ```sh
-python3 perf/gpuprofiler-stats.py            # newest replay
-python3 perf/gpuprofiler-stats.py --all      # every field
-python3 perf/aps-dram-bandwidth.py <output>   # aggregate APS/RDE bandwidth counters
-python3 perf/aps-usc-values.py --list <output> # raw counters from every USC
+python3 references/gpuprofiler-stats.py            # newest replay
+python3 references/gpuprofiler-stats.py --all      # every field
+python3 references/aps-dram-bandwidth.py <output>   # aggregate APS/RDE bandwidth counters
+python3 references/aps-usc-values.py --list <output> # raw counters from every USC
 ```
 
-For legacy Xcode GUI replay, **start `perf/watch-replays.sh` before step 2** so output is
+For legacy Xcode GUI replay, **start `references/watch-replays.sh` before step 2** so output is
 archived out of `/tmp`. The replay output lives in
 `/tmp/com.apple.gputools.profiling` and does not survive. On 2026-08-23 a whole session of it
 was gone by morning and only eight hand-transcribed fields were left, with `--all` never run.

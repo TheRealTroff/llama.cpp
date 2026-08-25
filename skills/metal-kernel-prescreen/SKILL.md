@@ -13,21 +13,25 @@ turns "does this shape spill?" into a **0.12 s** question instead of a build plu
 Use this to kill bad kernel shapes cheaply and to check register-pressure claims that
 were never measured. Do NOT use it to predict speed - see "What this does not tell you".
 
-Harness: `perf/agx-spill-probe.py`. Background and the calibration that validated it:
-`perf/toolchain-isa-probe.md`.
+Harness: `references/agx-spill-probe.py`, next to this SKILL.md - resolve the path
+against this skill's directory (inside the fork it is also `perf/agx-spill-probe.py`,
+a symlink). Background and the calibration that validated it:
+`perf/toolchain-isa-probe.md` in the fork.
 
 **Validated against ground truth, 2026-08-23.** The spill number comes from an undocumented
 FlatBuffer field, so it was worth checking against the compiler itself. For
 `kernel_mul_mv_ext_q4_0_f16_r1_4` at `nr0=4`, this probe predicts **32 bytes/thread**, and
-the Metal compiler's own `Spilled bytes`, read back via `skills/metal-gpu-profile`, is
+the Metal compiler's own `Spilled bytes`, read back via the `metal-gpu-profile` skill, is
 **32** - with 0 predicted and 0 reported at `nr0=2`. The field is the real thing. Where that
-skill needs Xcode and ~1.7 GB per run, this stays a 0.12 s offline answer, so prefer it and
+skill needs an Xcode install and a full GPU replay per run, this stays a 0.12 s offline answer, so prefer it and
 escalate only when you need register counts or the instruction mix too.
 
 ## Prerequisites
 
 Xcode 26.x with the Metal Toolchain installed (`applegpu-nt` and `metal-arch` live next
-to `metal`; find them with `dirname $(xcrun --find metal)`).
+to `metal`; find them with `dirname $(xcrun --find metal)`). Step 2's compile command
+assumes the working directory is a checkout of the llama.cpp fork; the probe itself
+(step 3) runs on any metallib from anywhere.
 
 ## Step 1 - Get the host GPU arch. Do not guess it.
 
@@ -54,7 +58,7 @@ once per source variant, not once per kernel.
 ## Step 3 - Probe
 
 ```sh
-python3 perf/agx-spill-probe.py /tmp/x.metallib kernel_mul_mv_q4_0_f32_nc3 \
+python3 references/agx-spill-probe.py /tmp/x.metallib kernel_mul_mv_q4_0_f32_nc3 \
     --cv 600=2 --cv 602=1 --cv 603=1 --cv 604=1
 ```
 

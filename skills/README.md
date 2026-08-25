@@ -23,8 +23,11 @@ been moved to `~/.claude/skills/`, where they are available in every project.
 - `add-new-model` - adding a model architecture to llama.cpp.
 - `code-review` - llama.cpp conventions and reviewer pitfalls.
 
-## Candidates to move, not yet moved
+## Symlinked out (2026-08-25), canonical copy stays here
 
-- `metal-gpu-profile` and `metal-kernel-prescreen` are Apple-GPU techniques rather than
-  llama.cpp ones, and belong alongside `macos-reversing`. They reference llama.cpp paths in
-  their examples, so moving them needs those examples generalised first.
+- `metal-gpu-profile` and `metal-kernel-prescreen` are installed as symlinks:
+  `~/.claude/skills/<name> -> ~/play/llama.cpp-prod/skills/<name>`. The canonical copy is
+  this one, on `prod` - iterate here and the installed skill updates with it. Each skill
+  carries its scripts in its own `references/` directory; the old `perf/<name>` paths
+  still work as symlinks into `references/`, so perf docs that cite them stay correct.
+  The capture and compile steps still assume a fork checkout as cwd; the SKILL.mds say so.
