@@ -837,6 +837,13 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_
     return res.pipeline ? res : ggml_metal_library_compile_pipeline(lib, name, name, nullptr);
 }
 
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w4_bp(ggml_metal_library_t lib, int variant) {
+    const char * name = variant == 2 ? "kernel_mul_mv_q4_0_soa_w4_r2_bpq" :
+                                       "kernel_mul_mv_q4_0_soa_w4_r2_bp";
+    auto res = ggml_metal_library_get_pipeline(lib, name);
+    return res.pipeline ? res : ggml_metal_library_compile_pipeline(lib, name, name, nullptr);
+}
+
 ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w4_sumy(ggml_metal_library_t lib, int variant) {
     const char * name = variant == 4 ? "kernel_mul_mv_q4_0_soa_w4_r4_sumy" :
                         variant == 3 ? "kernel_mul_mv_q4_0_soa_w4_r2_sumymin" :

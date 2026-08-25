@@ -5825,6 +5825,160 @@ kernel void kernel_mul_mv_q4_0_soa_w4_r4_sumy(
     }
 }
 
+// addressing probe: all device addresses carried as strength-reduced pointers,
+// no per-iteration offset derivation
+kernel void kernel_mul_mv_q4_0_soa_w4_r2_bp(
+        constant ggml_metal_kargs_mul_mv_ext & args,
+        device const char * src0,
+        device const half * src1,
+        device float * dst,
+        uint3 tgpig [[threadgroup_position_in_grid]],
+        ushort tiisg [[thread_index_in_simdgroup]]) {
+    float acc[8] = {};
+    const uint nblk = args.ne00/32;
+    const uint npack = 4*nblk;
+    const uint row0 = 2*tgpig.x;
+
+    device const char * rp0 = src0 + (uint64_t)(row0 + 0)*args.nb01;
+    device const char * rp1 = src0 + (uint64_t)(row0 + 1)*args.nb01;
+    const bool has1 = row0 + 1 < args.ne01;
+
+    device const half * pd0 = (device const half *)rp0 + tiisg/4;
+    device const half * pd1 = (device const half *)rp1 + tiisg/4;
+    device const uint * pq0 = (device const uint *)(rp0 + 2*nblk) + tiisg;
+    device const uint * pq1 = (device const uint *)(rp1 + 2*nblk) + tiisg;
+    device const half * py0 = src1 + 0*args.ne00 + 8*tiisg;
+    device const half * py1 = src1 + 1*args.ne00 + 8*tiisg;
+    device const half * py2 = src1 + 2*args.ne00 + 8*tiisg;
+    device const half * py3 = src1 + 3*args.ne00 + 8*tiisg;
+
+    for (uint p = tiisg; p < npack; p += 32) {
+        const half4 y0lo = *(device const half4 *)(py0);
+        const half4 y0hi = *(device const half4 *)(py0 + 4);
+        const half4 y1lo = *(device const half4 *)(py1);
+        const half4 y1hi = *(device const half4 *)(py1 + 4);
+        const half4 y2lo = *(device const half4 *)(py2);
+        const half4 y2hi = *(device const half4 *)(py2 + 4);
+        const half4 y3lo = *(device const half4 *)(py3);
+        const half4 y3hi = *(device const half4 *)(py3 + 4);
+
+        {
+            const float d = *pd0;
+            const uint q = *pq0;
+            const half4 wlo = half4((uint4(q) >> uint4(0, 4, 8, 12)) & 0xf) - 8.h;
+            const half4 whi = half4((uint4(q) >> uint4(16, 20, 24, 28)) & 0xf) - 8.h;
+            acc[0] += d*(dot(float4(wlo), float4(y0lo)) + dot(float4(whi), float4(y0hi)));
+            acc[1] += d*(dot(float4(wlo), float4(y1lo)) + dot(float4(whi), float4(y1hi)));
+            acc[2] += d*(dot(float4(wlo), float4(y2lo)) + dot(float4(whi), float4(y2hi)));
+            acc[3] += d*(dot(float4(wlo), float4(y3lo)) + dot(float4(whi), float4(y3hi)));
+        }
+        if (has1) {
+            const float d = *pd1;
+            const uint q = *pq1;
+            const half4 wlo = half4((uint4(q) >> uint4(0, 4, 8, 12)) & 0xf) - 8.h;
+            const half4 whi = half4((uint4(q) >> uint4(16, 20, 24, 28)) & 0xf) - 8.h;
+            acc[4] += d*(dot(float4(wlo), float4(y0lo)) + dot(float4(whi), float4(y0hi)));
+            acc[5] += d*(dot(float4(wlo), float4(y1lo)) + dot(float4(whi), float4(y1hi)));
+            acc[6] += d*(dot(float4(wlo), float4(y2lo)) + dot(float4(whi), float4(y2hi)));
+            acc[7] += d*(dot(float4(wlo), float4(y3lo)) + dot(float4(whi), float4(y3hi)));
+        }
+
+        pd0 += 8;
+        pd1 += 8;
+        pq0 += 32;
+        pq1 += 32;
+        py0 += 256;
+        py1 += 256;
+        py2 += 256;
+        py3 += 256;
+    }
+
+#pragma unroll
+    for (short i = 0; i < 8; ++i) {
+        const float v = simd_sum(acc[i]);
+        if (tiisg == i) {
+            const uint r = i/4;
+            const uint c = i%4;
+            if (row0 + r < args.ne01) {
+                dst[c*args.ne01 + row0 + r] = v;
+            }
+        }
+    }
+}
+
+// addressing probe: only the per-row q/d pointers carried, y addressing as in R2
+kernel void kernel_mul_mv_q4_0_soa_w4_r2_bpq(
+        constant ggml_metal_kargs_mul_mv_ext & args,
+        device const char * src0,
+        device const half * src1,
+        device float * dst,
+        uint3 tgpig [[threadgroup_position_in_grid]],
+        ushort tiisg [[thread_index_in_simdgroup]]) {
+    float acc[8] = {};
+    const uint nblk = args.ne00/32;
+    const uint npack = 4*nblk;
+    const uint row0 = 2*tgpig.x;
+
+    device const char * rp0 = src0 + (uint64_t)(row0 + 0)*args.nb01;
+    device const char * rp1 = src0 + (uint64_t)(row0 + 1)*args.nb01;
+    const bool has1 = row0 + 1 < args.ne01;
+
+    device const half * pd0 = (device const half *)rp0 + tiisg/4;
+    device const half * pd1 = (device const half *)rp1 + tiisg/4;
+    device const uint * pq0 = (device const uint *)(rp0 + 2*nblk) + tiisg;
+    device const uint * pq1 = (device const uint *)(rp1 + 2*nblk) + tiisg;
+
+    for (uint p = tiisg; p < npack; p += 32) {
+        const uint k0 = 8*p;
+        const half4 y0lo = *(device const half4 *)(src1 + 0*args.ne00 + k0);
+        const half4 y0hi = *(device const half4 *)(src1 + 0*args.ne00 + k0 + 4);
+        const half4 y1lo = *(device const half4 *)(src1 + 1*args.ne00 + k0);
+        const half4 y1hi = *(device const half4 *)(src1 + 1*args.ne00 + k0 + 4);
+        const half4 y2lo = *(device const half4 *)(src1 + 2*args.ne00 + k0);
+        const half4 y2hi = *(device const half4 *)(src1 + 2*args.ne00 + k0 + 4);
+        const half4 y3lo = *(device const half4 *)(src1 + 3*args.ne00 + k0);
+        const half4 y3hi = *(device const half4 *)(src1 + 3*args.ne00 + k0 + 4);
+
+        {
+            const float d = *pd0;
+            const uint q = *pq0;
+            const half4 wlo = half4((uint4(q) >> uint4(0, 4, 8, 12)) & 0xf) - 8.h;
+            const half4 whi = half4((uint4(q) >> uint4(16, 20, 24, 28)) & 0xf) - 8.h;
+            acc[0] += d*(dot(float4(wlo), float4(y0lo)) + dot(float4(whi), float4(y0hi)));
+            acc[1] += d*(dot(float4(wlo), float4(y1lo)) + dot(float4(whi), float4(y1hi)));
+            acc[2] += d*(dot(float4(wlo), float4(y2lo)) + dot(float4(whi), float4(y2hi)));
+            acc[3] += d*(dot(float4(wlo), float4(y3lo)) + dot(float4(whi), float4(y3hi)));
+        }
+        if (has1) {
+            const float d = *pd1;
+            const uint q = *pq1;
+            const half4 wlo = half4((uint4(q) >> uint4(0, 4, 8, 12)) & 0xf) - 8.h;
+            const half4 whi = half4((uint4(q) >> uint4(16, 20, 24, 28)) & 0xf) - 8.h;
+            acc[4] += d*(dot(float4(wlo), float4(y0lo)) + dot(float4(whi), float4(y0hi)));
+            acc[5] += d*(dot(float4(wlo), float4(y1lo)) + dot(float4(whi), float4(y1hi)));
+            acc[6] += d*(dot(float4(wlo), float4(y2lo)) + dot(float4(whi), float4(y2hi)));
+            acc[7] += d*(dot(float4(wlo), float4(y3lo)) + dot(float4(whi), float4(y3hi)));
+        }
+
+        pd0 += 8;
+        pd1 += 8;
+        pq0 += 32;
+        pq1 += 32;
+    }
+
+#pragma unroll
+    for (short i = 0; i < 8; ++i) {
+        const float v = simd_sum(acc[i]);
+        if (tiisg == i) {
+            const uint r = i/4;
+            const uint c = i%4;
+            if (row0 + r < args.ne01) {
+                dst[c*args.ne01 + row0 + r] = v;
+            }
+        }
+    }
+}
+
 // negative control for the y operand width question: identical to R2 except y is
 // materialized in fp32 registers, forcing 32-bit FMA operand reads on the y side
 kernel void kernel_mul_mv_q4_0_soa_w4_r2_yf32(

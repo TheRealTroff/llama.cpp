@@ -2924,6 +2924,8 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
         static const int env_soa_w4_r2_scalar = getenv("GGML_MV_SOA_W4_R2_SCALAR") ? atoi(getenv("GGML_MV_SOA_W4_R2_SCALAR")) : 0;
         // 2 = r2_sumy, 3 = r2_sumymin, 4 = r4_sumy
         static const int env_soa_w4_sumy = getenv("GGML_MV_SOA_W4_SUMY") ? atoi(getenv("GGML_MV_SOA_W4_SUMY")) : 0;
+        // 1 = r2_bp (all pointers carried), 2 = r2_bpq (q/d pointers only)
+        static const int env_soa_w4_bp = getenv("GGML_MV_SOA_W4_BP") ? atoi(getenv("GGML_MV_SOA_W4_BP")) : 0;
         const bool use_soa_w4 = env_soa_w4 && ne11 == 4 && ne12 == 1 && ne13 == 1 && use_f16y && use_di &&
                                 op->src[0]->type == GGML_TYPE_Q4_0 && ne00%64 == 0 &&
                                 ggml_metal_mul_mat_soa_w4_rows(ne01);
@@ -2931,7 +2933,8 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
                             ne11 == 4 && use_di && env_di_v2 ? 3 :
                             ne11 == 4 && use_f16y && !use_di && op->src[0]->type == GGML_TYPE_Q4_0 && env_half_product ? 4 : 1;
 
-        auto pipeline = use_soa_w4 && env_soa_w4_sumy ? ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w4_sumy(lib, env_soa_w4_sumy) :
+        auto pipeline = use_soa_w4 && env_soa_w4_bp ? ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w4_bp(lib, env_soa_w4_bp) :
+                        use_soa_w4 && env_soa_w4_sumy ? ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w4_sumy(lib, env_soa_w4_sumy) :
                         use_soa_w4 && env_soa_w4_r3 ? ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w4_r3(lib) :
                         use_soa_w4 && env_soa_w4_r2 && env_soa_w4_r2_scalar ? ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w4_r2_scalar(lib) :
                         use_soa_w4 && env_soa_w4_r2 ? ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w4_r2(lib) :
@@ -2968,9 +2971,10 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
 
         if (use_soa_w4) {
             const bool sumy_r2 = env_soa_w4_sumy == 2 || env_soa_w4_sumy == 3;
-            ggml_metal_encoder_dispatch_threadgroups(enc, env_soa_w4_sumy ? (sumy_r2 ? (ne01 + 1)/2 : (ne01 + 3)/4) :
+            ggml_metal_encoder_dispatch_threadgroups(enc, env_soa_w4_bp ? (ne01 + 1)/2 :
+                                                     env_soa_w4_sumy ? (sumy_r2 ? (ne01 + 1)/2 : (ne01 + 3)/4) :
                                                      env_soa_w4_r3 ? (ne01 + 2)/3 : env_soa_w4_r2 ? (ne01 + 1)/2 : (ne01 + 3)/4,
-                                                     1, 1, 32, env_soa_w4_sumy || env_soa_w4_k1 || env_soa_w4_r2 || env_soa_w4_r3 ? 1 : 2, 1);
+                                                     1, 1, 32, env_soa_w4_bp || env_soa_w4_sumy || env_soa_w4_k1 || env_soa_w4_r2 || env_soa_w4_r3 ? 1 : 2, 1);
         } else {
             ggml_metal_encoder_dispatch_threadgroups(enc, ((ne01 + r0ptg - 1)/r0ptg), ((ne11 + r1ptg - 1)/r1ptg), ne12*ne13, 32, nsg, 1);
         }
