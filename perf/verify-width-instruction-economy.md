@@ -94,8 +94,11 @@ already materializes y in half precision for the mv path, and a device-direct
 serializing;~~ **(1) and (2) REFUTED 2026-08-25 (`skinny-staging-refuted.md`): both
 built, both flat (+/-0.5%) on all three shapes - the staging round-trip and barrier
 serialization were already fully hidden, so this section's mm mechanism is wrong.**
-Still open: (3) the ffn_down grid fix (independent, ~12%), and the actual mm wall is
-unidentified (skinny has the highest issue/tick and ALU-inputs/tick in the table).
+~~Still open: (3) the ffn_down grid fix (independent, ~12%)~~ **(3) ALSO REFUTED
+2026-08-25 (`skinny-grid-refuted.md`): doubling the grid raised inflight 1.79 -> 2.11
+with zero time change - the inflight correlation was not causation.** The actual mm
+wall is unidentified (skinny has the highest issue/tick and ALU-inputs/tick in the
+table), and no skinny lever with measured headroom remains.
 
 ## What would actually move width 4
 

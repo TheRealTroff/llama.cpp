@@ -285,8 +285,10 @@ Current state:
   (`width4-addressing-refuted.md`). The width-4 mv instruction stream is what the work
   intrinsically costs. The mm/skinny half is ALSO rewritten 2026-08-25
   (`skinny-staging-refuted.md`): B-direct and sa double-buffering both measure flat, so
-  the tg-L1 staging mechanism is refuted and the skinny wall is unidentified. Still
-  live: skinny grid starvation at ffn_down (~12% there).
+  the tg-L1 staging mechanism is refuted and the skinny wall is unidentified. The
+  ffn_down grid fix is refuted too (`skinny-grid-refuted.md` - inflight rose with zero
+  time change). **Every kernel-local lever on both walls is now measured and closed**;
+  what remains is the drafter head, operating points, and the deferred head-to-head.
 - **`width4-gap-decomposition.md` - THE OPEN TASK (2026-08-25 pm).** The round gap is
   measured and named: q4_0 projections run at 51-53% of peak (1.65-2.0x bytes floor),
   112 of 142.5 serialized ms/round; everything else is second order. The kernel
