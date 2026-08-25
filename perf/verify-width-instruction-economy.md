@@ -107,10 +107,15 @@ Cut instructions per weight byte from ~34 toward nc2's ~21. In candidate order:
    instructions but +32% time because its all-FP32 mix ALSO drops issue/tick 1.93 ->
    1.77 - instr/B predicts time only at comparable issue rates (same shape as the K2
    anomaly above, now with a measured mechanism).
-2. **Amortize the q fetch and nibble expansion across all four columns** is already done;
+2. ~~**Amortize the q fetch and nibble expansion across all four columns** is already done;
    what is NOT amortized in R2 is address generation per row per pack (`AGen` feeds the
    ALU-input counters; INT ops are 49 of R2's 271). Base-pointer + increment addressing
-   (the V2 rewrite pattern from `width4-verify.md` run 2) applied to the SoA kernel.
+   (the V2 rewrite pattern from `width4-verify.md` run 2) applied to the SoA kernel.~~
+   **REFUTED 2026-08-25** (`width4-addressing-refuted.md`): carried pointers are
+   flat-to-+8% - R2 already is the v2 pattern (base + running index, offsets folded into
+   load addressing), and the 49 INT ops are mostly the irreducible nibble shifts/masks.
+   With candidates 1 and 3 also answered, **this list is closed**: the width-4
+   instruction stream is what the work intrinsically costs on this compiler.
 3. ~~**f16 dot pairs / bf16 activations** - halves y-side operand width per MAC; their
    winning kernel is `_bf16`. The earlier `HALF_PRODUCT` refutation changed rounding on
    the product path; a bf16/f16-pair probe that keeps FP32 accumulation is a different

@@ -130,11 +130,13 @@ What this rules in and out for closing the ~40 ms:
    whole schedule plane is now measured and closed at +/-3% (`m4-width4-r2k2.md`,
    `m4-width4-latency.md`): K-split ~1% of the pass; unroll-2 costs 43 -> 73 registers
    and drops DRAM busy 54% -> 45%, netting ~0; threadgroup packing flat to negative;
-   wider loads already emitted by the compiler (8 device loads in the R2 body). What
-   remains on the kernel axis is arithmetic-format work: ~~nc-style masked-nibble/sumy in
-   the R2 tile~~ (REFUTED 2026-08-25, +15-32%/pass - `width4-sumy-fold-refuted.md`),
-   base-pointer addressing, and ~~the activation-format question (their winning kernel is
-   bf16)~~ (CLOSED 2026-08-25 offline - f16 y already folds to 16-bit operands, bf16
+   wider loads already emitted by the compiler (8 device loads in the R2 body). ~~What
+   remains on the kernel axis is arithmetic-format work~~ **The kernel axis is closed
+   (2026-08-25)**: ~~nc-style masked-nibble/sumy in
+   the R2 tile~~ (REFUTED, +15-32%/pass - `width4-sumy-fold-refuted.md`),
+   ~~base-pointer addressing~~ (REFUTED, flat-to-+8% - `width4-addressing-refuted.md`),
+   and ~~the activation-format question (their winning kernel is
+   bf16)~~ (CLOSED offline - f16 y already folds to 16-bit operands, bf16
    does not fold and costs more; `width4-y-operand-width.md`).
 2. **The drafter head**: 5.3 ms/round streams 715 MB to draft 3 tokens. Candidates:
    narrow-vocab draft head, reusing the verify pass's last-column logits for the staged
