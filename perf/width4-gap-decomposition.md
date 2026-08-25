@@ -103,11 +103,16 @@ than the width-4 SoA/R2 family does:
 | lm_head (248320,5120) | 5149 (1.97) | 2914 (**1.11**) |
 
 lm_head at width 2 costs the same as at width 1 (2914 vs 2935 us, both ~1.1x floor):
-width 1 -> 2 is free, width 2 -> 4 costs +77%. The "column reuse is nearly free" property
-of the nc kernels did not carry into the width-4 family, and closing that - not MLX
-mimicry - is the measured target. Applying w2-grade utilization (~1.2x) to the width-4
-byte budget prices the verify at ~63 ms proj + ~25 ms FA/GDN/elementwise = ~88 ms, right
-at their demonstrated 76-85.
+width 1 -> 2 is free, width 2 -> 4 costs +77%. ~~The "column reuse is nearly free"
+property of the nc kernels did not carry into the width-4 family, and closing that - not
+MLX mimicry - is the measured target. Applying w2-grade utilization (~1.2x) to the
+width-4 byte budget prices the verify at ~88 ms, right at their demonstrated 76-85.~~
+**Corrected same day (`m4-width4-latency.md`): the w2 evidence does not transfer to
+width 4.** The nc family itself pays +140% from 2 to 4 columns (nc4 re-measured at 2.79x
+floor under today's stack), and every schedule axis of the SoA family - K split, per-lane
+unroll, threadgroup packing - is measured at +/-3%. No kernel on this hardware is known
+to run width 4 near 1.2x floor; the best known anywhere is their ~1.36x (derived), which
+bounds the recoverable verify at ~25 ms, not ~40.
 
 **2. MTP's draft cost is bytes-bound, DFlash's is kernel-bound - and MTP buys more
 acceptance per draft millisecond.** The MTP head is one transformer layer plus a full
@@ -121,11 +126,13 @@ all three points, and a narrowed draft head pays MTP threefold.
 
 What this rules in and out for closing the ~40 ms:
 
-1. ~~More simdgroups on the projections~~ - measured, `m4-width4-r2k2.md`: K-split
-   doubles resident simdgroups and buys 1-4% per projection, ~1% of the pass. The
-   1.65-2.0x floor shortfall needs a different mechanism (latency hiding inside the
-   kernel: prefetch/pipelining across the K loop, wider/fewer loads, or two blocks in
-   flight per lane - unmeasured for the SoA family).
+1. ~~More simdgroups on the projections~~ ~~latency hiding inside the kernel~~ - the
+   whole schedule plane is now measured and closed at +/-3% (`m4-width4-r2k2.md`,
+   `m4-width4-latency.md`): K-split ~1% of the pass; unroll-2 costs 43 -> 73 registers
+   and drops DRAM busy 54% -> 45%, netting ~0; threadgroup packing flat to negative;
+   wider loads already emitted by the compiler (8 device loads in the R2 body). What
+   remains on the kernel axis is arithmetic-format work: nc-style masked-nibble/sumy in
+   the R2 tile, and the activation-format question (their winning kernel is bf16).
 2. **The drafter head**: 5.3 ms/round streams 715 MB to draft 3 tokens. Candidates:
    narrow-vocab draft head, reusing the verify pass's last-column logits for the staged
    token, or accepting the cost knowingly. Unstarted.

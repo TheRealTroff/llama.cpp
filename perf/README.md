@@ -275,9 +275,13 @@ Current state:
 - **prod-pick: this file** + `run-prod-pick.sh`
 - **`width4-gap-decomposition.md` - THE OPEN TASK (2026-08-25 pm).** The round gap is
   measured and named: q4_0 projections run at 51-53% of peak (1.65-2.0x bytes floor),
-  112 of 142.5 serialized ms/round; everything else is second order. Open: a latency-hiding
-  mechanism inside the SoA/mv kernels (occupancy alone is measured at ~1%,
-  `m4-width4-r2k2.md`), the drafter's 5.3 ms full-vocab head, the deferred head-to-head.
+  112 of 142.5 serialized ms/round; everything else is second order. The kernel
+  schedule plane is measured and CLOSED at +/-3% (branches `m4-width4-r2k2`,
+  `m4-width4-latency`: K-split, unroll, tg packing; nc4 re-refuted; even nc pays +140%
+  for 2 -> 4 columns - no known kernel runs width 4 near 1.2x floor). Open, in order:
+  arithmetic/format probes (masked-nibble in the R2 tile, bf16 y), the drafter's 5.3 ms
+  full-vocab head, operating points that avoid width 4 (MTP d1), the deferred
+  head-to-head.
 - **`m4-width4-ilp.md` - ~~THE OPEN TASK~~ (2026-08-25, stubs now answered in place).** The width-4 morphology answer is in
   and landed on `prod`: single-simdgroup 2x4 SoA **vector-dot R2**, +7.52% pp4 whole-graph,
   +4.75% e2e, whitelist-routed to the six projection row counts. MLX's own 4x4 tile and its
