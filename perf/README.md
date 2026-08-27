@@ -644,8 +644,11 @@ Tooling, not an experiment:
   wall needed; decode notes and struct layouts in `shaderprof-decode.md`, companion
   structural disassembler in `agx-disasm.py`/`agx-disasm.md` (exact offsets and bytes,
   NO mnemonics - blocked in the Xcode host helper, routes exhausted). First result:
-  `skinny-stall-attribution.md`. `shaderprof-typedump.py` dumps any ObjC class's method
-  type encodings for extending this.
+  `skinny-stall-attribution.md`. Fleet-wide result: **`instruction-economy-league.md`**
+  - every archived replay decoded; all kernels are 64-89% issue-bound, f16y's win is a
+  stall win, the mv family amortizes only ~1.5x from widening 1->4 while MMA does 3.6x.
+  `shaderprof-typedump.py` dumps any ObjC class's method type encodings for extending
+  this.
 
 - **`weighted-round.py` - "where does a round go", in seconds.** Runs each real projection
   once and multiplies by how often the engine actually runs it (weights from the tagged

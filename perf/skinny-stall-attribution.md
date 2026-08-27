@@ -93,3 +93,7 @@ FMA, and this kernel's remaining budget is spent on dequant+staging issue.
 - The profiler instruments the kernel into trace segments; per-instruction attribution
   within a segment inherits the profiler's own model. Treat single-instruction
   differences as suggestive, region sums as solid.
+
+Follow-up: `instruction-economy-league.md` runs the same decode over every archived
+replay - the issue-bound reading holds fleet-wide, and the w7 ffn_down shape carries
+11 points more stall than gate/up on identical code.

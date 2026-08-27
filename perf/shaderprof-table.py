@@ -94,7 +94,25 @@ class ObjC:
         return self.py_str(self.send(P, o, "description")) if o else None
 
 
+def bundle_dir(rawdir):
+    """dataFromArchivedDataURL: needs streamData NEXT TO the _f_N.raw files.
+    Older archives keep streamData one level up; assemble a symlink bundle."""
+    rawdir = os.path.abspath(rawdir)
+    if os.path.exists(os.path.join(rawdir, "streamData")):
+        return rawdir
+    sibling = os.path.join(os.path.dirname(rawdir), "streamData")
+    if not os.path.exists(sibling):
+        return rawdir
+    import tempfile
+    bundle = tempfile.mkdtemp(prefix="shaderprof-bundle-")
+    for name in os.listdir(rawdir):
+        os.symlink(os.path.join(rawdir, name), os.path.join(bundle, name))
+    os.symlink(sibling, os.path.join(bundle, "streamData"))
+    return bundle
+
+
 def process(objc, rawdir):
+    rawdir = bundle_dir(rawdir)
     url = objc.send(P, objc.cls("NSURL"), "fileURLWithPath:", (P, objc.nsstr(rawdir)))
     sd = objc.send(P, objc.cls("GTShaderProfilerStreamData"),
                    "dataFromArchivedDataURL:", (P, url))
@@ -163,6 +181,7 @@ def table_for_binary(objc, sb):
     return {
         "instructions": n_ii,
         "executed_total": objc.send(q, sb, "instructionExecuted"),
+        "dispatches": objc.send(q, sb, "traceCount"),
         "rows": rows,
     }
 
@@ -194,8 +213,8 @@ def main():
         exec_sum = sum(r["executed"] for r in live)
         ok = "OK" if exec_sum == t["executed_total"] else "MISMATCH"
         print("== PS %d %s (binary key %s, %s)" % (oid, name, key, role))
-        print("   instructions: %d decoded, %d live; executed sum %d vs binary total %d [%s]"
-              % (t["instructions"], len(live), exec_sum, t["executed_total"], ok))
+        print("   instructions: %d decoded, %d live; executed sum %d vs binary total %d [%s]; %d dispatches"
+              % (t["instructions"], len(live), exec_sum, t["executed_total"], ok, t["dispatches"]))
         print("   cost sum %.4f, cost2 sum %.4f" % (cost_sum, cost2_sum))
         print("   %-6s %-8s %-4s %-16s %-14s %-10s %s"
               % ("idx", "offset", "size", "regs(t0-t3)", "executed", "cost", "cost2"))
