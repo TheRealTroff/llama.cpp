@@ -101,6 +101,10 @@ wall is unidentified (skinny has the highest issue/tick and ALU-inputs/tick in t
 table), and no skinny lever with measured headroom remains. The surviving quantified
 frame is `ffn-utilization.md`'s serial stream+arith roofline (~54 ms/rd at w7 from
 overlap); the refutations narrow its cause to single-stream issue contention.
+**CONFIRMED per-instruction 2026-08-27 (`skinny-stall-attribution.md`): the w7 kernel
+is 77% issue / 23% diffuse stall, and dequant+staging issue costs the same as the MMA
+issue (36.9 vs 35.5 points of capture time). The instruction-economy frame of this
+file is the mm wall too.**
 
 ## What would actually move width 4
 

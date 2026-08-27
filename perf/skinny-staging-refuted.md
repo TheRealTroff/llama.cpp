@@ -64,6 +64,14 @@ ALU-inputs/tick (4.90) of every kernel in the table, and ~2-3 inflight simdgroup
 is not enough to overlap across streams. Deciding that needs per-line stall
 attribution (shaderProfilerData decode) or AGX disassembly, not more kernel variants.
 
+**DECIDED 2026-08-27 - the suspect is confirmed. See `skinny-stall-attribution.md`.**
+The per-instruction decode landed (`shaderprof-table.py`) and was pointed at the w7
+ffn_down capture: the kernel is 77% issue / 23% stall, the stall is diffuse (largest
+single site is a barrier at 2.8%), and the dequant+A-staging stream costs the same
+issue time as the MMA stream (36.9 vs 35.5 points). It is one instruction stream
+paying for everything; the only kernel-local lever of that shape is issuing fewer
+instructions.
+
 **Discrepancy flagged, not resolved:** `skinny-tpr-bsplit.md` measured -1.4 to -2.6%
 per projection from merely spreading the B stage over more threads, and +1.2% e2e
 (branch `metal-mm-skinny-tpr`, unmerged). Deleting the B stage outright measures 0.0%
