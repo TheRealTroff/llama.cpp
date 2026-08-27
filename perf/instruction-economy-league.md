@@ -81,6 +81,16 @@ compare their issue/stall, not their exec columns.
    (`skinny-grid-refuted.md` - grid change moved inflight, not time). The deficit is
    real and is stall; the grid was just not its cause. If ffn_down ever gets its own
    lever again, this is the number it must move.
+   **Localized by per-instruction diff against gate/up** (same binary, offsets match
+   1:1): the excess is NOT one site - every stall site roughly doubles. Barrier 0xafa
+   +1.6 points, the 0x7f4 load +1.0, 0x86a +0.6, and a diffuse +0.18-0.29 on each MMA
+   instruction; the sum of sites where gate/up stalls MORE is only 0.6 points. Uniform
+   scaling of all waits is the signature of less latency hiding overall - ffn_down
+   runs 160 threadgroups against gate/up's 544 for the same streamed bytes. Open
+   tension with `skinny-grid-refuted.md`: doubling the grid raised inflight with zero
+   time change, so either the extra inflight did not convert to hiding (issue-bound
+   ceiling), or the stall metric and the time are decoupled here - a replay of the
+   grid-fix arm would decide, and needs one GUI click on a new capture.
 
 ## Method notes
 
