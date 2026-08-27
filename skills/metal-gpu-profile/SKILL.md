@@ -86,7 +86,13 @@ python3 references/gpuprofiler-stats.py            # newest replay
 python3 references/gpuprofiler-stats.py --all      # every field
 python3 references/aps-dram-bandwidth.py <output>   # aggregate APS/RDE bandwidth counters
 python3 references/aps-usc-values.py --list <output> # raw counters from every USC
+python3 perf/shaderprof-table.py <output>/raw       # PER-INSTRUCTION exec counts + issue/stall shares
 ```
+
+`shaderprof-table.py` (run it with the non-SIP python) is the per-line profile Xcode's
+GUI shows, decoded headlessly: per instruction the offset, size, register pressure,
+execution count and issue/stall time shares. See `perf/shaderprof-decode.md` for the
+decode and `perf/skinny-stall-attribution.md` for a worked analysis.
 
 For legacy Xcode GUI replay, **start `references/watch-replays.sh` before step 2** so output is
 archived out of `/tmp`. The replay output lives in
@@ -118,8 +124,10 @@ The headless wrapper preserves replay output as `<output>/streamData` and `<outp
 
 - `streamData` - `NSKeyedArchiver` plist, `GTMutableShaderProfilerStreamData`. Holds
   `pipelinePerformanceStatistics` (what step 3 reads), plus `shaderProfilerData`,
-  `gpuTimelineData`, `encoderInfoData` and `batchIdFilteredCountersData`, none of which
-  the script decodes yet.
+  `gpuTimelineData`, `encoderInfoData` and `batchIdFilteredCountersData`.
+  `shaderProfilerData` is decoded by `perf/shaderprof-table.py` (via the whole `raw/`
+  bundle, NOT this file alone - the standalone streamData's copy is empty); the others
+  are still unread.
 - `Counters_f_*.raw`, `Timeline_f_*.raw`, `Profiling_f_*.raw` - 20 each, undocumented
   binary. `aps-usc-values.py` also accepts stream archives that carry APS_USC bytes inline
   as `ShaderProfilerData` instead of using `APSTraceDataFile` references.
