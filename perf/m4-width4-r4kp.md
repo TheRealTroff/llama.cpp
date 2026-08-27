@@ -193,9 +193,10 @@ What it settles:
 1. **Adoption is the owner's call**: ~~the sweep says the operating point is dflash n3
    with v3 + repack (+9.4% over the n6 point)~~ **superseded 2026-08-28: dflash n4 +
    w5r4h + v3 + repack beats the n3 point by +1.4% (`m4-width5-crossover.md`), and
-   depth 5 is open pending a width-6 kernel.** Before moving the pick: the v2-vs-v3
-   numerics call (price v3 with `run-quant-kld.sh`), and repack residency
-   (`repack-inplace.md` - these runs use the side-buffer variant).
+   depth 5 is open pending a width-6 kernel.** **The pick MOVED there 2026-08-28**
+   (README "The prod pick"); the v2-vs-v3 numerics call (price with
+   `run-quant-kld.sh`) and repack residency (`repack-inplace.md` - these runs use
+   the side-buffer variant) were accepted for now, not resolved.
 2. Whole-graph pp4 and a round decomposition at n3+v3, when next measured.
 3. Width-7 "why" (why the scalar form loses to MMA above width ~5 despite matching
    economy at 4) - parked by the owner for another session.

@@ -3,7 +3,8 @@
 Status: **answered 2026-08-28 - w5r4h wins 25-31% synthetic and +25% e2e, and dflash
 n4+w5 (25.632 t/s) BEATS dflash n3 (25.282) on the same board, overturning the depth
 re-sweep's deprioritization of this cell.** Branch `m4-width4-r4kp` (same branch as the
-width-4 result). Adoption remains the owner's call.
+width-4 result). **Adopted as the prod pick 2026-08-28 (owner: "pick this for now") -
+see README "The prod pick" for the flag set and the accepted caveats.**
 
 Opened from `m4-width4-r4kp.md`'s depth re-sweep, which DEPRIORITIZED this cell for the
 operating point (depth 4 is 4.7 t/s behind depth 3 and a ~20% kernel saving cannot close
@@ -146,10 +147,11 @@ twice. The depth-optimum question is open until the width-6 cell is measured.
 
 ## Open
 
-1. **Adoption (owner's call)**: dflash n4 + w5r4h beats the n3 point by +1.4% on
-   matched boards. Same caveats as `m4-width4-r4kp.md`: repack residency
-   (`repack-inplace.md`), and the half-product numerics call (see the byte-identical
-   note above - the skinny incumbent is already half-accumulate).
+1. ~~**Adoption (owner's call)**~~ **TAKEN 2026-08-28: the pick moved to dflash n4 +
+   w5r4h + v3 + repack ("pick this for now").** The caveats were accepted, not
+   resolved: repack residency stays open (`repack-inplace.md` is the fix path) and
+   the half-product numerics rest on the byte-identical note above plus the
+   half-accumulate incumbent, not a KLD study.
 2. **Width 6 (depth 5) cell** - promoted from "only if needed": two consecutive width
    cells beat their skinny arm by 25%+, and depth 5 needs only +16% to contend. Staging
    is mechanical from the w5/w7 template; prescreen r2/r4 first.

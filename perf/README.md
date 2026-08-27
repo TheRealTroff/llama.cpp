@@ -31,10 +31,26 @@ one level down, and it bit the `GGML_MV_EXT_V2` work on 2026-08-22.
 The fastest known configuration. **Every one of these env flags defaults to off/upstream
 in the source, so a forgotten flag is silent - you get a slower number, not an error.**
 
+**Moved 2026-08-28 (owner's decision, "pick this for now"): dflash n4 + the SoA scalar
+kernels + repack side buffer**, from the long-standing n6+skinny point. 25.632 t/s at
+n_predict 600 vs that point's 22.9 (`m4-width5-crossover.md`, commit `b4792fe67`).
+Accepted with it, explicitly for now: the repack side buffer's weight-residency cost
+(`repack-inplace.md` is the fix path) and the half-product numerics (byte-identical to
+the skinny incumbent on the measured trajectories; the incumbent MMA was already
+half-accumulate).
+
+```
+GGML_MV_NC=2 GGML_MM_SKINNY=6 GGML_FA_VEC_MAX=5 GGML_FA_MM_NWG=8 GGML_GDN_FUSE_WB=1 \
+GGML_MV_REPACK=1 GGML_MV_SOA_W4=1 GGML_MV_SOA_W4_R4KP=3 GGML_MV_SOA_W5=4 GGML_MV_SOA_W5_HALF=1 \
+  llama-server -m Qwen3.8-27B-uniform-Q4_0.gguf -c 10240 -fa on -ctk f16 -ctv f16 \
+    -md Qwen3.8-27B-DFlash2-pureQ4_0.gguf --spec-type draft-dflash --spec-draft-n-max 4
+```
+
+The previous pick (n6+skinny, no repack) was:
+
 ```
 GGML_MV_NC=2 GGML_MM_SKINNY=5 GGML_FA_VEC_MAX=5 GGML_FA_MM_NWG=8 GGML_GDN_FUSE_WB=1 \
-  llama-server -m Qwen3.8-27B-uniform-Q4_0.gguf -c 10240 -fa on -ctk f16 -ctv f16 \
-    -md Qwen3.8-27B-DFlash2-pureQ4_0.gguf --spec-type draft-dflash --spec-draft-n-max 6
+  ... --spec-draft-n-max 6
 ```
 
 To measure it: **`perf/run-prod-pick.sh`** (in this repo, so it is versioned with the code
@@ -48,7 +64,10 @@ What each flag buys, and where it came from:
 | flag | default | effect | writeup |
 |---|---|---|---|
 | `GGML_MV_NC=2` | 0 | mul_mv column loop, ne11=2 | results.md, mv-nc-cliff-probe.md |
-| `GGML_MM_SKINNY=5` | 0 | routes ne11 5..8 to the skinny mm kernel. **5, not 4** - at 4, 4-column batches misroute unless repack is on | dflash-vs-mtp-uniform.md |
+| `GGML_MM_SKINNY=6` | 0 | routes ne11 6..8 to the skinny mm kernel. **6, not 5, since the 2026-08-28 pick** - skinny takes ne11 >= value and must not swallow width 5 ahead of the w5 SoA route (the old pick used 5; the "5, not 4" misroute note there still holds) | dflash-vs-mtp-uniform.md, m4-width5-crossover.md |
+| `GGML_MV_REPACK=1` | 0 | deinterleaved/SoA persistent weight copy; the SoA kernels require it | width4-skinny-ab.md, repack-inplace.md |
+| `GGML_MV_SOA_W4=1` + `GGML_MV_SOA_W4_R4KP=3` | 0 | width-4 SoA scalar kernel, v3 (half product) - MTP draft path runs width-4 ops at every depth | m4-width4-r4kp.md |
+| `GGML_MV_SOA_W5=4` + `GGML_MV_SOA_W5_HALF=1` | 0 | width-5 SoA scalar kernel w5r4h on the six routed projections (the verify width at n4) | m4-width5-crossover.md |
 | `GGML_FA_VEC_MAX=5` | 20 | FA vec/mm routing cutoff. **5, not 4** - at 4 an MTP-path FA call reroutes and output changes | flash-attn-mm-split.md |
 | `GGML_FA_MM_NWG=8` | 1 | KV split for the mm FA kernel, -60% FA | flash-attn-mm-split.md |
 | `GGML_GDN_FUSE_WB=1` | off | GDN writes the state cache directly, drops ~2.1 GB/round | gdn-writeback-fusion.md |
@@ -84,7 +103,13 @@ d=8 drops onto mul_mm and the round cost doubles. dflash clamps itself to 7 via 
 drafter's block size; **MTP does not** - `--spec-draft-n-max 8` is accepted and lands at
 11.9 t/s, slower than not speculating at all (slope-sweep.md).
 
-### GGML_MV_REPACK is worth +9.3% and is NOT in the pick above (2026-08-23)
+### GGML_MV_REPACK is worth +9.3% and ~~is NOT in the pick above~~ (2026-08-23)
+
+> **In the pick since 2026-08-28** (the owner's "pick this for now" with the width-5
+> result): the SoA kernels require the repack layout, so the flag came in with them.
+> The residency objection below was NOT resolved - it was accepted for now, still as
+> the side-buffer variant; `repack-inplace.md` remains the fix path. The history below
+> stands.
 
 **Measured, clean controls (0.29% spread): dflash n6 + `GGML_MV_REPACK=1` is 27.07 t/s
 against a 24.74 same-run control** - round cost 151.5 -> 138.5 ms at identical
@@ -132,18 +157,21 @@ the engine, so it is the owner's call.
 
 ### Current number
 
-> **The operating point is in question since 2026-08-27 (`m4-width4-r4kp.md`): dflash
-> n3 with the unmerged v3 kernel + repack measures 24.82-25.15 t/s at n_predict 600
-> against this pick's 22.67-23.01 on the same board (+9.4%). The pick below is
-> unchanged pending the owner's v2-vs-v3 numerics call and repack residency.**
->
-> **Moved again 2026-08-28 (`m4-width5-crossover.md`): dflash n4 with the new w5r4h
-> kernel beats the n3 point on the same board (25.632 vs 25.282, +1.4%), so the
-> best-known config is n4 + w5r4h + v3 + repack. Depth 5 is open pending a width-6
-> kernel. Same adoption caveats.**
+**25.632 t/s** (dflash n4 + w5r4h + v3 + repack, `n_predict` **600** - note the units,
+trap 1 below; the old n6 pick reads 22.9 at 600). Branch `m4-width4-r4kp` commit
+`b4792fe67`'s source, measured by `run-m4-width5-e2e.sh` 2026-08-28, 4 fresh-server
+reps at 25.606-25.660, TSV `m4-w5-e2e-aug28.tsv`. **Adopted as the pick the same day
+(owner: "pick this for now").** `run-prod-pick.sh` encodes it; no n_predict-300
+measurement of this config exists yet - the first `run-prod-pick.sh` run will supply
+it. Depth 5 stays open pending a width-6 kernel (`m4-width5-crossover.md`).
 
-**25.02 t/s** (dflash n6, `n_predict` 300). prod `9f477ae5`, clean tree, build 2026-08-22
-16:02, measured by `run-prod-pick.sh` (`TAG=prodpick-aug22`), fresh server per run.
+> Operating-point history: in question 2026-08-27 when dflash n3 + v3 + repack beat
+> the n6 pick by +9.4% (`m4-width4-r4kp.md`); moved past n3 the next day by the
+> width-5 result; adopted 2026-08-28.
+
+Previous headline, kept for the record: **25.02 t/s** (dflash n6, `n_predict` 300).
+prod `9f477ae5`, clean tree, build 2026-08-22 16:02, measured by `run-prod-pick.sh`
+(`TAG=prodpick-aug22`), fresh server per run.
 
 | config | env | n_predict | t/s | acc | sha1 |
 |---|---|---:|---:|---:|---|
@@ -293,8 +321,8 @@ Current state:
   SoA scalar cell, built despite the re-sweep's deprioritization: w5r4h (4 rows, half
   product) wins all six projections 25-31% over skinny and +25.8%/+25.2% e2e at
   dflash n4 / MTP d4, byte-identical output, n3 control inert. **dflash n4+w5 beats
-  dflash n3 by +1.4% same-board - the operating point moved again**, and depth
-  5/width 6 is now the open cell. Pins the scalar-vs-MMA crossover between widths 5
+  dflash n3 by +1.4% same-board - the operating point moved again and was ADOPTED as
+  the prod pick 2026-08-28**, and depth 5/width 6 is now the open cell. Pins the scalar-vs-MMA crossover between widths 5
   and 7; the w5 winner is issue-saturated (89.5/10.5) at only 1.31-1.51x the stream
   floor, and per-column scalar economy IMPROVES through width 5 then collapses
   superlinearly by 7. Half-product inverts at 2 rows (+14%) while paying at 4 (-7%).
@@ -303,8 +331,8 @@ Current state:
   target is BEATEN: v3 runs ffn_down at 240 us (-28% vs R2, 1.13-1.27x faster than
   their kernel's own best config), e2e **+21.2% at dflash n3 (25.15 t/s) and +20.1%
   at MTP d3 (24.48)**, n6 control inert at +0.04% byte-identical. At matched
-  n_predict 600, n3+v3 BEATS the n6 operating point by +9.3% - the prod pick may
-  move, pending the repack-residency caveat and the owner's v2-vs-v3 numerics call.
+  n_predict 600, n3+v3 BEATS the n6 operating point by +9.3% - and the pick DID move
+  2026-08-28, one point further (n4+w5, see `m4-width5-crossover.md` above).
   The lever was NOT the K-split (~1%) or the tile (~4.6%): it is source-level codegen
   - signed-int indexing + planar row pointers hoisted out of the K loop - worth -21%
   alone, which every SoA/ext kernel had been leaving on the table. Width 7 does NOT
