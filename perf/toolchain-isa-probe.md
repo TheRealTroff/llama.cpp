@@ -56,6 +56,12 @@ Getting text assembly would mean calling hidden symbols by address or driving an
 Xcode ObjC framework headlessly. Not worth it: the metric below already answers the
 register question.
 
+**Follow-up, 2026-08-26:** the Xcode ObjC route is now driven headlessly by
+`perf/agx-disasm.py`. It returns authoritative instruction boundaries and register
+pressure, but the host helper's ISA string table is empty and every mnemonic is `-`.
+See `perf/agx-disasm.md` for the working structural decoder and the private paths that
+were exhausted. The "no readable AGX disassembly" verdict above still stands.
+
 ## What we got instead: per-thread spill bytes
 
 `__GPU_METADATA` is an undocumented FlatBuffer. One field tracks register pressure:

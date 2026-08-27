@@ -294,6 +294,10 @@ Current state:
   time change). **Every kernel-local lever on both walls is now measured and closed**;
   what remains is the drafter head, operating points, and the per-kernel decode of
   their capture (the head-to-head itself is done - `head-to-head-aug25.md`).
+  **The contention suspect is CONFIRMED per-instruction 2026-08-27
+  (`skinny-stall-attribution.md`)**: the w7 skinny kernel is 77% issue / 23% diffuse
+  stall (largest single stall site: a barrier at 2.8%), and the dequant+staging stream
+  costs the same issue time as the MMA stream. Both walls are instruction economy.
 - **`width4-gap-decomposition.md` - THE OPEN TASK (2026-08-25 pm).** The round gap is
   measured and named: q4_0 projections run at 51-53% of peak (1.65-2.0x bytes floor),
   112 of 142.5 serialized ms/round; everything else is second order. The kernel
@@ -632,6 +636,16 @@ Superseded, kept for history - do not quote numbers from these:
 - `baseline.md`, `mtp-kv-results.md`, `dflash-vs-mtp-uniform.md` - earlier configs.
 
 Tooling, not an experiment:
+
+- **`shaderprof-table.py` - per-instruction profile of any archived replay, headless.**
+  For every kernel in a `.gpuprofiler_raw` bundle: each native instruction's offset,
+  size, register pressure, execution count, and issue/stall time shares (~8 s per
+  archive, `--json` for machine use). This is the per-line stall attribution the skinny
+  wall needed; decode notes and struct layouts in `shaderprof-decode.md`, companion
+  structural disassembler in `agx-disasm.py`/`agx-disasm.md` (exact offsets and bytes,
+  NO mnemonics - blocked in the Xcode host helper, routes exhausted). First result:
+  `skinny-stall-attribution.md`. `shaderprof-typedump.py` dumps any ObjC class's method
+  type encodings for extending this.
 
 - **`weighted-round.py` - "where does a round go", in seconds.** Runs each real projection
   once and multiplies by how often the engine actually runs it (weights from the tagged
