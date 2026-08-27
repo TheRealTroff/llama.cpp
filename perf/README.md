@@ -292,8 +292,9 @@ Current state:
   issue/ALU-input contention as the suspect. The
   ffn_down grid fix is refuted too (`skinny-grid-refuted.md` - inflight rose with zero
   time change). **Every kernel-local lever on both walls is now measured and closed**;
-  what remains is the drafter head, operating points, and the per-kernel decode of
-  their capture (the head-to-head itself is done - `head-to-head-aug25.md`).
+  what remains is the drafter head, operating points, and ~~the per-kernel decode of
+  their capture~~ **DONE 2026-08-27, `omlx-verify-m4-decode.md`** (the head-to-head
+  itself is done - `head-to-head-aug25.md`).
   **The contention suspect is CONFIRMED per-instruction 2026-08-27
   (`skinny-stall-attribution.md`)**: the w7 skinny kernel is 77% issue / 23% diffuse
   stall (largest single stall site: a barrier at 2.8%), and the dequant+staging stream
@@ -310,8 +311,12 @@ Current state:
   closed), the drafter's 5.3 ms
   full-vocab head, operating points that avoid width 4 (MTP d1), and ~~the deferred
   head-to-head~~ (DONE 2026-08-25, `head-to-head-aug25.md`: their pinned 95.00
-  validates at 95.9 ms same-session, best-vs-best 1.323x; still open there is the
-  per-kernel decode of their block-4 capture).
+  validates at 95.9 ms same-session, best-vs-best 1.323x; ~~still open there is the
+  per-kernel decode of their block-4 capture~~ DONE 2026-08-27,
+  **`omlx-verify-m4-decode.md`**: verify_m4 decoded per-instruction WITHOUT their
+  engine - 283 us/call on both FFN shapes at 90/10 issue/stall, 1.1-1.3x our best
+  width-4 kernels, from K-split latency hiding plus a -19% dynamic stream; kernel
+  parity needs both levers at once, which is why every single-axis probe fell short).
 - **`m4-width4-ilp.md` - ~~THE OPEN TASK~~ (2026-08-25, stubs now answered in place).** The width-4 morphology answer is in
   and landed on `prod`: single-simdgroup 2x4 SoA **vector-dot R2**, +7.52% pp4 whole-graph,
   +4.75% e2e, whitelist-routed to the six projection row counts. MLX's own 4x4 tile and its
