@@ -1,6 +1,6 @@
 ---
 name: metal-gpu-profile
-description: Get per-kernel register counts, spill bytes and instruction mix for a Metal kernel by capturing a GPU trace and replaying it. Use when tuning a Metal kernel and you need measured register pressure or instruction counts, or when a perf claim rests on "the kernel is register/ALU/memory bound".
+description: Get per-kernel register counts, spill bytes, instruction mix and PER-INSTRUCTION issue/stall attribution for a Metal kernel by capturing a GPU trace and replaying it headlessly. Use when tuning a Metal kernel and you need measured register pressure, instruction counts, or per-line stall sites; when a perf claim rests on "the kernel is register/ALU/memory bound"; or when comparing your kernel per-instruction against a third-party (e.g. MLX) kernel, which can be captured standalone without its engine.
 ---
 
 # Profile a Metal kernel: registers, spill, instruction mix
@@ -54,6 +54,27 @@ Synthetic `test-backend-ops` tensors are not model `WEIGHTS`. If the selected ke
 on a persistent weight repack, use the branch's test-only repack mode (`GGML_MV_REPACK=2`
 for this fork) and reject the capture unless the log names the intended pipeline.
 
+### Capturing a THIRD-PARTY kernel standalone (e.g. an MLX competitor)
+
+Never capture a competitor's whole engine to profile one kernel: a full-cycle capture
+of a resident-model engine came out at **17 GB and its replay wrote another 32 GB
+before filling the disk** (2026-08-27). Instead drive the one kernel standalone on
+synthetic tensors of the real shapes: import their package, monkeypatch whatever
+debug/enable gate guards the kernel, build inputs with their own quantizer, set
+`MTL_CAPTURE_ENABLED=1`, and wrap the calls in an `MTLCaptureManager` scope. Worked
+example: `perf/capture-mlx-verify-kernel.py` in the fork (~600 MB capture, ~1 min,
+correctness cross-checked against their stock op). This respects a no-copying
+boundary - you run their code as-is and measure it; nothing is transplanted.
+
+Two facts that make the comparison valid and cheap:
+
+- MLX `mx.fast.metal_kernel` compiles through the SAME host Metal compiler as your
+  kernels, so per-instruction differences are source-form differences, not compiler
+  differences.
+- MLX builds a pipeline per `mx.eval` batch, so on their captures `traceCount`
+  counts eval batches and aux constant-programs appear once each; normalize per
+  dispatch before comparing.
+
 ## Step 2 - Replay and profile (headless)
 
 ```sh
@@ -93,6 +114,32 @@ python3 perf/shaderprof-table.py <output>/raw       # PER-INSTRUCTION exec count
 GUI shows, decoded headlessly: per instruction the offset, size, register pressure,
 execution count and issue/stall time shares. See `perf/shaderprof-decode.md` for the
 decode and `perf/skinny-stall-attribution.md` for a worked analysis.
+
+Reading recipes that carried the width-4 parity investigation (`perf/m4-width4-r4kp.md`,
+the fullest worked example - a cross-framework per-instruction diff that found a 21%
+kernel win):
+
+- **Normalize per dispatch** (`executed_total / dispatches`) before comparing captures;
+  captures repeat ops a shape-dependent number of times.
+- **Hot loop = rows with `executed >= 0.9 * max(executed)`.** Sum their `cost` (issue)
+  and `cost2` (stall) for the loop's share; histogram their `size` field for the
+  codegen fingerprint (6 B ~ f32 FMA short forms, 10 B ~ compact wide-operand
+  arithmetic, 14 B ~ device loads, 12 B ~ load-consumers/MMA lowering on g16s).
+- **issue share x issue rate, not instruction count or stall alone, predicts time.**
+  Measured both failure directions: an unroll cut dynamic instructions 15% and lost
+  (stall rose), a sumy variant issued 25% MORE instructions more smoothly and lost.
+- A stall share concentrated in 1-2 load-consumer sites usually means per-iteration
+  address recomputation feeding the loads - a SOURCE-form fix (see the
+  `metal-kernel-prescreen` skill, step 5), not a scheduling fix.
+
+M4 Pro (g16s) readings worth having before forming any hypothesis (all measured, see
+the fork's `perf/verify-width-instruction-economy.md` and `instruction-economy-league.md`):
+every mv/mm kernel in the measured fleet is issue-bound (64-89% issue share, stall > 50%
+never observed); inflight sits at ~3 simdgroups/core regardless of grid size, registers
+or family; there is no matrix hardware, `simdgroup_matrix` lowers to FMAs at ~2x the
+plain-FMA rate and wins only where its fixed 8-wide tile amortizes (above ~5 columns -
+scalar forms win below, measured both sides of the boundary); f16 sources fold into FMA
+operands for free, bf16 does not.
 
 For legacy Xcode GUI replay, **start `references/watch-replays.sh` before step 2** so output is
 archived out of `/tmp`. The replay output lives in

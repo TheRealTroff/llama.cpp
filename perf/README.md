@@ -132,6 +132,11 @@ the engine, so it is the owner's call.
 
 ### Current number
 
+> **The operating point is in question since 2026-08-27 (`m4-width4-r4kp.md`): dflash
+> n3 with the unmerged v3 kernel + repack measures 24.82-25.15 t/s at n_predict 600
+> against this pick's 22.67-23.01 on the same board (+9.4%). The pick below is
+> unchanged pending the owner's v2-vs-v3 numerics call and repack residency.**
+
 **25.02 t/s** (dflash n6, `n_predict` 300). prod `9f477ae5`, clean tree, build 2026-08-22
 16:02, measured by `run-prod-pick.sh` (`TAG=prodpick-aug22`), fresh server per run.
 

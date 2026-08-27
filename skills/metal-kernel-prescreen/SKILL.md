@@ -1,6 +1,6 @@
 ---
 name: metal-kernel-prescreen
-description: Measure register spilling in a Metal kernel offline, without building llama.cpp or running the GPU. Use when tuning Metal kernel shapes (tile sizes, unroll factors, rows/columns per threadgroup) or when a perf claim rests on register-pressure reasoning.
+description: Measure register spilling AND rank source-level codegen forms of a Metal kernel offline, without building llama.cpp or running the GPU. Use when tuning Metal kernel shapes (tile sizes, unroll factors, rows/columns per threadgroup), when iterating a kernel's inner-loop source form (indexing, pointer hoisting, operand types), or when a perf claim rests on register-pressure or instruction-count reasoning.
 ---
 
 # Pre-screen Metal kernels for register spilling
@@ -91,6 +91,50 @@ EOF.** Appending at end of file yields a metallib that `applegpu-nt` rejects wit
 "cannot find private metadata at offset N" for exactly the new functions. Inserting them
 after the last real kernel of the same family works.
 
+## Step 5 - Iterate codegen FORMS offline, not just shapes
+
+This is the highest-value use of the pipeline, found 2026-08-27 (the width-4 parity
+result, `perf/m4-width4-r4kp.md` in the fork): source-level FORM - how indexing,
+pointers and operands are written - moved a kernel 21% where every schedule-level
+lever (K-split, unroll, threadgroup packing) had measured +/-3%. The loop:
+
+1. Write candidate variants in a STANDALONE .metal file with plain constant args
+   (`constant int & ne00 [[buffer(3)]]` etc). You do not need the project's kargs
+   struct to rank codegen - validated: a standalone probe body compiled
+   byte-identical (3756 B) to the same body in-tree behind the real struct.
+2. Compile + translate each variant (steps 2-3 above), read `text` size and spill.
+3. For instruction-level detail, translate to a `.gpubin` with `applegpu-nt`
+   (the probe's own `translate()` shows the invocation) and run the fork's
+   `perf/agx-disasm.py --json` on it: exact per-instruction offsets, sizes and
+   register pressure - no GPU, no mnemonics needed.
+4. Compare **encoding-size histograms**, not just counts. On g16s the families are
+   a fingerprint: ~6 B = f32 FMA short forms, ~10 B = compact wide-operand
+   arithmetic, ~14 B tracks device loads, ~12 B load-consumers/MMA lowering. A hot
+   loop flooded with 4/6 B helper ops next to a competitor dominated by 10 B forms
+   means fat address/convert codegen, not more intrinsic work.
+5. Transplant only the winning form in-tree and benchmark. Static text does NOT
+   predict dynamic cost (see below) - the probe RANKS forms; the benchmark decides.
+
+Forms measured to matter on AGX/g16s (each worth re-trying on any slow inner loop):
+
+- **Signed-int indexing + per-row planar pointers hoisted out of the K loop**
+  (`sp[block]` / `qp[p]` instead of recomputing `base + f(p)` byte offsets per row
+  per iteration): -13% static instructions, **-21% measured time** on a q4_0 mv
+  kernel. Per-iteration 64-bit address recomputation was both the instruction fat
+  AND the load-consumer stall sites. This beat every schedule-level lever combined.
+- **f16 sources fold into FMA operands for free; bf16 does not** (and an explicit
+  `float(h)` cast does not block the fold). A scalar convert-per-element loop on
+  bf16 cost a competitor kernel +16%.
+- **Half-precision products** (`float(a_h * b_h)` accumulated in f32): ~-4%, but it
+  changes rounding - a numerics decision, not a free lever.
+- Tile shape and K-split across simdgroups: single digits at best (~4.6% and ~1%
+  respectively at width 4). Measure them AFTER the form is right.
+
+One caution: the same-compiler assumption holds across frameworks. MLX
+`mx.fast.metal_kernel` sources compile through the host's Metal compiler, so probing
+a transliteration of a competitor's source form against yours is a valid controlled
+comparison (respect any no-copying boundary - probe the FORM, not their code).
+
 ## Reading the numbers honestly
 
 - **Always regression-check first.** The spill number comes from an unnamed field in an
@@ -115,11 +159,18 @@ after the last real kernel of the same family works.
   measurable change at the shape where neither version spilled, +17.7% at the shape where
   the spill was removed - but the same run also showed the now-faster kernel still losing
   to the default path, so "stopped spilling" is not the same as "worth routing".
-- **Not instructions.** There is no AGX disassembly. `metal-objdump --disassemble`
-  registers the agx1/agx2/agx3 targets but ships no instruction printer, and the
-  translator plugin refuses `AIRNTEmitAssembly`. The printer exists inside
-  `libapplegpu-nt.dylib` but that library exports no `LLVM*` symbols, so it cannot be
-  driven from outside.
+- **Not mnemonics.** ~~There is no AGX disassembly.~~ Since 2026-08-26 the fork's
+  `perf/agx-disasm.py` decodes a `.gpubin` STRUCTURALLY - exact per-instruction
+  offsets, sizes and register pressure (step 5 uses this) - but still no mnemonics:
+  `metal-objdump --disassemble` registers the agx targets but ships no instruction
+  printer, the translator plugin refuses `AIRNTEmitAssembly`, and the printer inside
+  `libapplegpu-nt.dylib` exports no `LLVM*` symbols. Size-family histograms are the
+  working substitute for a mnemonic census.
+- **Static counts are not dynamic cost.** A 2-row variant with R2-equivalent static
+  text measured -21% because the saved instructions were IN the hot loop and attached
+  to stall sites; conversely an unroll that cut dynamic instructions 15% measured
+  slower because stalls rose. Rank offline, then benchmark, then (if the result
+  surprises) attribute per-instruction with the `metal-gpu-profile` skill.
 - **Not GPR counts or occupancy.** The plugin contains an AGX3 static performance model
   that reports `AvgGPRDynPressure` and `MeanOccupancyRequirement` into the (empty)
   `__GPU_STATS_MD` segment, but its options are unreachable: `-mllvm` only reaches the
