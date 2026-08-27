@@ -1,6 +1,17 @@
 # Matched skinny width captures, and two things they showed before any counter (2026-08-23)
 
-Status: **open** - captures made, counters pending agent C's headless APS payload.
+Status: **done 2026-08-27.** The captures are replayed (headless -
+`perf/metal-profile-headless.py`, no GUI click; plain-arm bundles archived at
+`traces/aug23-skinny/replays/`, di replay bundles deleted as byte-duplicates and
+regenerable in ~12 s) and decoded per-instruction (`perf/shaderprof-table.py`).
+**The section-1 question is answered at the strongest reading: dynamic instructions
+per dispatch are 19.19M at widths 4, 6 and 8, identical to 4+ digits - ratio 1.000,
+the fixed 8-wide tile executes the same stream whatever the width.** Issue/stall is
+flat too (73.7/26.3 -> 72.5/27.5 across w4/w6/w8), and the GUI-replayed w5 capture
+from aug23 gives the same 19.19M/dispatch, cross-validating headless replay against
+click replay. The trap-2 prediction also confirms: the `_di` arms' replays are
+byte-identical to plain (same exec sums), so those captures really did run the
+non-repack pipeline. Series rows live in `instruction-economy-league.md`.
 Harness `perf/run-capture-skinny.sh`, archived to
 `~/play/kvquant-experiments/traces/aug23-skinny/` (298 MB, 6 captures).
 

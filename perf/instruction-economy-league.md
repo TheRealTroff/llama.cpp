@@ -30,7 +30,10 @@ compare their issue/stall, not their exec columns.
 | w4 r2u2 | mul_mv_q4_0_soa_w4_r2u2 | 4 | 391 | 68.6 | 31.4 | 25.8M | 6.4M |
 | w4 r2_sumy | ..._w4_r2_sumy | 4 | 315 | 84.3 | 15.7 | 38.0M | 9.5M |
 | w4 r2_sumymin | ..._w4_r2_sumymin | 4 | 293 | 82.0 | 18.0 | 34.2M | 8.6M |
-| w5 skinny | mul_mm_skinny_q4_0_f32 | 5 | 507 | 72.7 | 27.3 | 19.2M | 3.8M |
+| w4 skinny | mul_mm_skinny_q4_0_f32 | 4 | 507 | 73.7 | 26.3 | 19.19M | 4.8M |
+| w5 skinny | mul_mm_skinny_q4_0_f32 | 5 | 507 | 72.7 | 27.3 | 19.19M | 3.8M |
+| w6 skinny | mul_mm_skinny_q4_0_f32 | 6 | 507 | 73.2 | 26.8 | 19.19M | 3.2M |
+| w8 skinny | mul_mm_skinny_q4_0_f32 | 8 | 507 | 72.5 | 27.5 | 19.19M | 2.4M |
 | w7 skinny ffn_down | mul_mm_skinny_q4_0_di_f32 | 7 | 433 | 77.3 | 22.7 | 22.1M | 3.2M |
 | w7 skinny attn_q | mul_mm_skinny_q4_0_di_f32 | 7 | 433 | 86.3 | 13.7 | 15.8M | 2.3M |
 | w7 skinny gate/up | mul_mm_skinny_q4_0_di_f32 | 7 | 433 | 88.6 | 11.4 | 22.3M | 3.2M |
@@ -58,11 +61,18 @@ compare their issue/stall, not their exec columns.
    11.6M -> nc2 8.4M (widening 1->2 buys only 1.4x) -> ext-f16/r2 at width 4 ~7.6-8.0M
    (1->4 buys only 1.5x) -> skinny at w7 3.2M (3.6x). The whole width-4 kernel series
    moved the per-column stream by ~7%/column-added; `simdgroup_multiply_accumulate`'s
-   fixed 8-wide tile is what an actual amortization looks like. (At width 4 skinny
-   still loses e2e - its fixed tile executes the same total for 4 real columns, ~5.6M
-   per real column, and its issue rate differs - but the 2.4x class gap says a
-   width-4-shaped kernel that amortizes like MMA is the only kind that could close the
-   1.42x, consistent with `w4-ffn-scratch.md`'s arithmetic-rate ceiling.)
+   fixed 8-wide tile is what an actual amortization looks like.
+   **The fixed tile is now measured dynamically across the whole width axis
+   (2026-08-27, aug23-skinny captures replayed headless):** skinny executes
+   **19.19M instructions per dispatch at widths 4, 6 and 8, identical to 4+ digits**,
+   with issue/stall flat (73.7/26.3 -> 72.5/27.5) - the ratio-1.000 outcome
+   `skinny-width-captures.md` defined as "fixed tile". At width 4 that is 4.8M per
+   REAL column, still 1.6x fewer than r2's 7.6M - **skinny at width 4 executes fewer
+   instructions per column than the best mv kernel and still loses e2e (349 vs 314
+   us)**, so the mv/MMA cost difference at w4 is per-instruction issue cost (the MMA
+   lowering's wider operands), not count. A width-4 winner would need MMA-class
+   amortization at mv-class issue cost, consistent with `w4-ffn-scratch.md`'s
+   arithmetic-rate ceiling.
 
 5. **The r2u2 unroll refinement:** it EXECUTES 15% fewer instructions than r2 (25.8M
    vs 30.4M/dispatch) and still lost, because stall rose 23.0 -> 31.4%. The unroll
@@ -90,7 +100,8 @@ compare their issue/stall, not their exec columns.
    tension with `skinny-grid-refuted.md`: doubling the grid raised inflight with zero
    time change, so either the extra inflight did not convert to hiding (issue-bound
    ceiling), or the stall metric and the time are decoupled here - a replay of the
-   grid-fix arm would decide, and needs one GUI click on a new capture.
+   grid-fix arm would decide, and the whole chain (capture -> replay -> decode) is now
+   headless: `perf/metal-profile-headless.py` then `perf/shaderprof-table.py`.
 
 ## Method notes
 
@@ -103,5 +114,9 @@ compare their issue/stall, not their exec columns.
   mnemonics (`agx-disasm.md`). The 14-byte encoding family tracks device loads and the
   12-byte family tracks the MMA lowering, which is enough for region-level reading
   (`skinny-stall-attribution.md`) but not for a strict ALU census.
-- aug23-skinny's 6 matched-width captures were never GUI-replayed and have no raw
-  bundles; replaying them would give this table skinny at w4/w6/w8 on one shape.
+- aug23-skinny's 6 matched-width captures were replayed HEADLESS on 2026-08-27
+  (`metal-profile-headless.py`, ~12 s each, no GUI) - that is where the w4/w6/w8
+  skinny rows come from. Plain-arm bundles archived at `traces/aug23-skinny/replays/`;
+  the `_di` arms replayed byte-identical to plain (the trap-2 duplicate confirmed) and
+  their bundles were deleted to save disk. The headless-replay output cross-validates
+  against the GUI-replayed w5 capture: same 19.19M exec/dispatch, same kernel decode.
