@@ -126,3 +126,7 @@ alongside count and stall. Note the w7 `_di` rows above come from the
   the `_di` arms replayed byte-identical to plain (the trap-2 duplicate confirmed) and
   their bundles were deleted to save disk. The headless-replay output cross-validates
   against the GUI-replayed w5 capture: same 19.19M exec/dispatch, same kernel decode.
+- 2026-08-27 evening: the cold capture/replay sets were compressed to per-set
+  `.tar.zst` files (see `kvquant-experiments/README.txt`). The per-instruction decode
+  JSONs for every row in this table live UNCOMPRESSED at
+  `kvquant-experiments/profiles/shaderprof-decoded/` - use those, not the tarballs.
