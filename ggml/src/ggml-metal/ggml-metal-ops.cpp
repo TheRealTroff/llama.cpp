@@ -2922,6 +2922,7 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
         static const int env_soa_w4_r2 = getenv("GGML_MV_SOA_W4_R2") ? atoi(getenv("GGML_MV_SOA_W4_R2")) : 0;
         static const int env_soa_w4_r3 = getenv("GGML_MV_SOA_W4_R3") ? atoi(getenv("GGML_MV_SOA_W4_R3")) : 0;
         static const int env_soa_w4_r2_scalar = getenv("GGML_MV_SOA_W4_R2_SCALAR") ? atoi(getenv("GGML_MV_SOA_W4_R2_SCALAR")) : 0;
+        static const int env_soa_w4_r4kp = getenv("GGML_MV_SOA_W4_R4KP") ? atoi(getenv("GGML_MV_SOA_W4_R4KP")) : 0;
         const bool use_soa_w4 = env_soa_w4 && ne11 == 4 && ne12 == 1 && ne13 == 1 && use_f16y && use_di &&
                                 op->src[0]->type == GGML_TYPE_Q4_0 && ne00%64 == 0 &&
                                 ggml_metal_mul_mat_soa_w4_rows(ne01);
@@ -2929,7 +2930,8 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
                             ne11 == 4 && use_di && env_di_v2 ? 3 :
                             ne11 == 4 && use_f16y && !use_di && op->src[0]->type == GGML_TYPE_Q4_0 && env_half_product ? 4 : 1;
 
-        auto pipeline = use_soa_w4 && env_soa_w4_r3 ? ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w4_r3(lib) :
+        auto pipeline = use_soa_w4 && env_soa_w4_r4kp ? ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w4_r4kp(lib, env_soa_w4_r4kp) :
+                        use_soa_w4 && env_soa_w4_r3 ? ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w4_r3(lib) :
                         use_soa_w4 && env_soa_w4_r2 && env_soa_w4_r2_scalar ? ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w4_r2_scalar(lib) :
                         use_soa_w4 && env_soa_w4_r2 ? ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w4_r2(lib) :
                         use_soa_w4 && env_soa_w4_k1 ? ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w4_k1(lib) :
@@ -2964,8 +2966,11 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
         ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         3);
 
         if (use_soa_w4) {
-            ggml_metal_encoder_dispatch_threadgroups(enc, env_soa_w4_r3 ? (ne01 + 2)/3 : env_soa_w4_r2 ? (ne01 + 1)/2 : (ne01 + 3)/4,
-                                                     1, 1, 32, env_soa_w4_k1 || env_soa_w4_r2 || env_soa_w4_r3 ? 1 : 2, 1);
+            const int rpt = env_soa_w4_r4kp == 4 ? 2 : env_soa_w4_r4kp     ? 4 :
+                            env_soa_w4_r3       ? 3 : env_soa_w4_r2        ? 2 : 4;
+            const int nsgk = env_soa_w4_r4kp ? (env_soa_w4_r4kp <= 3 ? 2 : 1) :
+                             (env_soa_w4_k1 || env_soa_w4_r2 || env_soa_w4_r3) ? 1 : 2;
+            ggml_metal_encoder_dispatch_threadgroups(enc, (ne01 + rpt - 1)/rpt, 1, 1, 32, nsgk, 1);
         } else {
             ggml_metal_encoder_dispatch_threadgroups(enc, ((ne01 + r0ptg - 1)/r0ptg), ((ne11 + r1ptg - 1)/r1ptg), ne12*ne13, 32, nsg, 1);
         }
