@@ -96,12 +96,13 @@ run_one() {
         echo "[$label] ABORT: another process owns port $PORT"; return 1
     fi
 
+    local response=$OUT/$TAG-$label.json
     python3 -c "import json; print(json.dumps({'prompt': open('$PROMPT').read(), 'n_predict': $NPRED, 'temperature': 0}))" \
-        | curl -sS -X POST "http://127.0.0.1:$PORT/completion" -d @- \
-        | python3 - "$TSV" "$label" "$spec" "$depth" <<'PY'
+        | curl -sS -o "$response" -X POST "http://127.0.0.1:$PORT/completion" -d @-
+    python3 - "$response" "$TSV" "$label" "$spec" "$depth" <<'PY'
 import hashlib, json, sys
-tsv, label, spec, depth = sys.argv[1:]
-d = json.load(sys.stdin)
+response, tsv, label, spec, depth = sys.argv[1:]
+d = json.load(open(response))
 if "error" in d:
     raise SystemExit(f"[{label}] ERROR {json.dumps(d['error'])[:200]}")
 t = d.get("timings", {})
