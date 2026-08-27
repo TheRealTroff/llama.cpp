@@ -163,7 +163,9 @@ trap 1 below; the old n6 pick reads 22.9 at 600). Branch `m4-width4-r4kp` commit
 reps at 25.606-25.660, TSV `m4-w5-e2e-aug28.tsv`. **Adopted as the pick the same day
 (owner: "pick this for now").** `run-prod-pick.sh` encodes it; no n_predict-300
 measurement of this config exists yet - the first `run-prod-pick.sh` run will supply
-it. Depth 5 stays open pending a width-6 kernel (`m4-width5-crossover.md`).
+it. ~~Depth 5 stays open pending a width-6 kernel~~ - width 6 was built and REFUTED
+the same night (loses to skinny on 5 of 6 shapes; the wall is named -
+`m4-width5-crossover.md`), so **n4 is the settled optimum of this family**.
 
 > Operating-point history: in question 2026-08-27 when dflash n3 + v3 + repack beat
 > the n6 pick by +9.4% (`m4-width4-r4kp.md`); moved past n3 the next day by the
@@ -322,10 +324,15 @@ Current state:
   product) wins all six projections 25-31% over skinny and +25.8%/+25.2% e2e at
   dflash n4 / MTP d4, byte-identical output, n3 control inert. **dflash n4+w5 beats
   dflash n3 by +1.4% same-board - the operating point moved again and was ADOPTED as
-  the prod pick 2026-08-28**, and depth 5/width 6 is now the open cell. Pins the scalar-vs-MMA crossover between widths 5
-  and 7; the w5 winner is issue-saturated (89.5/10.5) at only 1.31-1.51x the stream
-  floor, and per-column scalar economy IMPROVES through width 5 then collapses
-  superlinearly by 7. Half-product inverts at 2 rows (+14%) while paying at 4 (-7%).
+  the prod pick 2026-08-28**. The width-6 cell was built the same night on the owner's
+  ask and REFUTED (w6r4h loses to skinny on 5 of 6 shapes, -8 to -14%; depth 5 cannot
+  contend; e2e skipped, harness staged): **the crossover is between widths 5 and 6,
+  and the WALL IS NAMED** - the w5/w6 decode pair shows the whole superlinear cost is
+  diffuse stall (10.5% -> 22.1% at LOWER register count and better per-column
+  economy): single-simdgroup load-latency hiding runs out of register-bounded
+  software-pipelining distance, which skinny's threadgroup staging sidesteps
+  structurally - closing the parked "why does MMA win above ~5" question.
+  Half-product inverts at 2 rows (+14%) while paying at 4 (-7%).
 - **`m4-width4-r4kp.md` - the width-4 result and the largest single result on record
   (2026-08-27 eve, branch `m4-width4-r4kp`, unmerged).** The 283 us verify_m4 parity
   target is BEATEN: v3 runs ffn_down at 240 us (-28% vs R2, 1.13-1.27x faster than

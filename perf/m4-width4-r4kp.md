@@ -185,15 +185,17 @@ What it settles:
    anyway and the "~20%" estimate was low - w5r4h wins 25-31% per shape and +25.8%
    e2e, and dflash n4+w5 (25.632) beats dflash n3 (25.282) on the same board by
    +1.4%.** The "cannot reach the optimum" arithmetic assumed the skinny-arm n4; the
-   measured kernel win closes the 4.7 t/s gap and passes. Width 6 / depth 5 is now
-   the open cell by the same logic.
+   measured kernel win closes the 4.7 t/s gap and passes. Width 6 was then built the
+   same night and refuted - the crossover is between 5 and 6 and the wall is named;
+   n4 is the settled optimum of this family.
 
 ## Open
 
 1. **Adoption is the owner's call**: ~~the sweep says the operating point is dflash n3
    with v3 + repack (+9.4% over the n6 point)~~ **superseded 2026-08-28: dflash n4 +
    w5r4h + v3 + repack beats the n3 point by +1.4% (`m4-width5-crossover.md`), and
-   depth 5 is open pending a width-6 kernel.** **The pick MOVED there 2026-08-28**
+   depth 5 was then closed by the refuted width-6 cell.** **The pick MOVED to n4
+   2026-08-28**
    (README "The prod pick"); the v2-vs-v3 numerics call (price with
    `run-quant-kld.sh`) and repack residency (`repack-inplace.md` - these runs use
    the side-buffer variant) were accepted for now, not resolved.

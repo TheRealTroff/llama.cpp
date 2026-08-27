@@ -1,4 +1,4 @@
-# Width 5: the SoA scalar cell, and the scalar-vs-MMA crossover pinned between 5 and 7
+# Width 5: the SoA scalar cell, and the scalar-vs-MMA crossover pinned between 5 and 6
 
 Status: **answered 2026-08-28 - w5r4h wins 25-31% synthetic and +25% e2e, and dflash
 n4+w5 (25.632 t/s) BEATS dflash n3 (25.282) on the same board, overturning the depth
@@ -145,6 +145,52 @@ cell: the w6 kernel does not exist, and the re-sweep's n5 (21.86 on skinny) woul
 ~+16% from a w6 kernel to reach 25.3 - inside the 25-31% this family has delivered
 twice. The depth-optimum question is open until the width-6 cell is measured.
 
+## Width 6 (2026-08-28, same day): REFUTED for the operating point, and it names the wall
+
+Owner asked for the cell immediately ("I want it now"). Kernels
+`kernel_mul_mv_q4_0_soa_w6_{r2,r4,r2h,r4h}` staged identically (zero spill - text
+2112/4028/2156/4070; 1155/1155 each, `-b MTL0`), routed behind `GGML_MV_SOA_W6` +
+`GGML_MV_SOA_W6_HALF`, try_repack ne11==6 case. In w6 arms `GGML_MM_SKINNY=7`.
+
+Synthetic (interleaved, 3 reps, `results/m4-w6-ab-aug28.tsv`; skinny arm noisier than
+usual this run, spreads to 6.8% on small shapes - deltas dwarf it): **w6r4h loses to
+skinny on five of six projections** (-8.9 to -13.8%), scraping +2.8% only on ffn_down.
+Weighted per round: skinny 93.8 ms, w6r4h 100.9 (+7.6%). Depth 5 needed ~+16% from the
+kernel to contend and gets ~-8: **the depth-4 pick stands; e2e skipped (owner's call),
+harness `run-m4-width6-e2e.sh` staged if ever wanted.**
+
+The family curve: scalar vs skinny +25..31% (w5), -10% (w6), -50% (w7). **The
+crossover is between widths 5 and 6.**
+
+### The wall, named (decode `profiles/shaderprof-decoded/w6-r4h-ffndown.json`,
+archive `aug28-w6-cell.tar.zst`)
+
+| ffn_down | w5r4h | w6r4h |
+|---|--:|--:|
+| exec/dispatch | 27.50M (5.50M/col) | 30.47M (**5.08M/col - still improving**) |
+| temp registers | 80 | **78** |
+| issue/stall | 89.5/10.5 | **77.9/22.1** |
+| worst stall site | 0.91% | 1.30% (diffuse) |
+| issue us/M instr | 9.68 | 10.30 |
+
+Issue time 266 -> 314 us (+18% = +11% instructions x +6% per instruction). **Stall time
+31 -> 89 us - the whole superlinear blowup is stall.** Not registers (down), not spill
+(zero), not economy (per-column exec falls), not one site (diffuse).
+
+**The wall is load-latency hiding inside a single simdgroup.** The scalar family hides
+y/q/scale latency purely with intra-thread ILP: the compiler software-pipelines
+next-iteration loads behind the FMA block, and the distance it can afford is bounded by
+register slack. At w5, 80 regs buys full cover (10.5% stall). At w6 the allocator caps
+pressure (78 regs) and pays by shortening the pipeline - trading registers for stalls -
+and with the fleet-constant ~3 inflight simdgroups/core there is nothing else to hide
+latency with. r2 corroborates: half the weight reuse per load, degrades faster 5->6
+(+39% vs r4's +32%). This resolves the parked "why does MMA win above width ~5":
+skinny's threadgroup staging is a STRUCTURAL latency-hiding mechanism (bulk B loads
+behind a barrier, then dense MMA bursts), so its stall profile is roughly
+width-invariant while scalar's grows superlinearly once register slack runs out.
+Scalar wins exactly where its economy edge exceeds its stall penalty; they cross
+between 5 and 6.
+
 ## Open
 
 1. ~~**Adoption (owner's call)**~~ **TAKEN 2026-08-28: the pick moved to dflash n4 +
@@ -152,9 +198,10 @@ twice. The depth-optimum question is open until the width-6 cell is measured.
    resolved: repack residency stays open (`repack-inplace.md` is the fix path) and
    the half-product numerics rest on the byte-identical note above plus the
    half-accumulate incumbent, not a KLD study.
-2. **Width 6 (depth 5) cell** - promoted from "only if needed": two consecutive width
-   cells beat their skinny arm by 25%+, and depth 5 needs only +16% to contend. Staging
-   is mechanical from the w5/w7 template; prescreen r2/r4 first.
-3. The "why" decode pair: capture skinny + scalar at width 7 and diff against this
-   file's w5 decode when the owner reopens the parked question. The w5 datum says
-   scalar economy IMPROVES per column through 5 and collapses superlinearly by 7.
+2. ~~Width 6 (depth 5) cell~~ **DONE same day - refuted for the operating point, wall
+   named (section above).**
+3. ~~The "why" decode pair~~ **ANSWERED by the w5/w6 decode pair (above) - the parked
+   width-7 "why" is closed by the same mechanism.** A speculative lever if width 6 is
+   ever wanted anyway: restore prefetch distance without registers (kp2-style K-split
+   across two simdgroups, or explicit threadgroup staging of y with scalar dequant) -
+   long shot given the ~10% deficit, parked.

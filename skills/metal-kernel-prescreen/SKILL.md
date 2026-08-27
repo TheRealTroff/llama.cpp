@@ -176,6 +176,16 @@ comparison (respect any no-copying boundary - probe the FORM, not their code).
   to stall sites; conversely an unroll that cut dynamic instructions 15% measured
   slower because stalls rose. Rank offline, then benchmark, then (if the result
   surprises) attribute per-instruction with the `metal-gpu-profile` skill.
+- **Flat registers + better static economy can hide a stall cliff.** Measured
+  2026-08-28 (`perf/m4-width5-crossover.md` in the fork): widening a zero-spill mv
+  kernel 5->6 columns IMPROVED per-column instruction count and LOWERED the register
+  count (80->78), yet wall time rose 40% - the allocator held pressure flat by
+  shortening the software-pipelining distance for next-iteration loads, and diffuse
+  load-consumer stall went 10.5% -> 22.1%. Single-simdgroup scalar kernels hide
+  latency only with register-bounded intra-thread ILP (~3 simdgroups/core inflight is
+  a fleet constant), so every added live load stream spends the same slack twice.
+  The offline probe CANNOT see this; when live vector streams grow, benchmark and
+  check the issue/stall pair before trusting any static ranking.
 - **Not GPR counts or occupancy.** The plugin contains an AGX3 static performance model
   that reports `AvgGPRDynPressure` and `MeanOccupancyRequirement` into the (empty)
   `__GPU_STATS_MD` segment, but its options are unreachable: `-mllvm` only reaches the

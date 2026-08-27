@@ -6675,6 +6675,366 @@ kernel void kernel_mul_mv_q4_0_soa_w5_r4h(
     }
 }
 
+// Width-6 cell of the same family (depth-5 verify). Same form as w5; opened after the
+// w5 result moved the pick to n4 and left depth 5 as the one cell that could contend.
+kernel void kernel_mul_mv_q4_0_soa_w6_r2(
+        constant ggml_metal_kargs_mul_mv_ext & args,
+        device const char * src0,
+        device const half * src1,
+        device float * dst,
+        uint3 tgpig [[threadgroup_position_in_grid]],
+        ushort tiisg [[thread_index_in_simdgroup]]) {
+    float acc[2*6] = {};
+    const int nblk = args.ne00/32;
+    const int npack = 4*nblk;
+    const int row0 = 2*(int)tgpig.x;
+    device const half * sp0 = (device const half *)(src0 + (uint64_t)(row0 + 0)*args.nb01);
+    device const half * sp1 = (device const half *)(src0 + (uint64_t)(row0 + 1)*args.nb01);
+    device const uint * qp0 = (device const uint *)(sp0 + nblk);
+    device const uint * qp1 = (device const uint *)(sp1 + nblk);
+    using half8 = vec<half, 8>;
+    const device half8 * xv = (const device half8 *)src1;
+    const int K8 = args.ne00/8;
+
+    for (int p = (int)tiisg; p < npack; p += 32) {
+        const int block = p/4;
+        const half8 v0 = xv[0*K8 + p];
+        const half8 v1 = xv[1*K8 + p];
+        const half8 v2 = xv[2*K8 + p];
+        const half8 v3 = xv[3*K8 + p];
+        const half8 v4 = xv[4*K8 + p];
+        const half8 v5 = xv[5*K8 + p];
+        const uint q0 = qp0[p];
+        const uint q1 = qp1[p];
+        const float s0 = float(sp0[block]);
+        const float s1 = float(sp1[block]);
+        const float b0 = -8.f*s0;
+        const float b1 = -8.f*s1;
+        {
+            const uint q = q0; const float s = s0; const float b = b0;
+#pragma unroll
+            for (int ki = 0; ki < 8; ++ki) {
+                const float wv = float((q >> (ki*4)) & 0xFu)*s + b;
+                acc[0*6 + 0] += float(v0[ki])*wv;
+                acc[0*6 + 1] += float(v1[ki])*wv;
+                acc[0*6 + 2] += float(v2[ki])*wv;
+                acc[0*6 + 3] += float(v3[ki])*wv;
+                acc[0*6 + 4] += float(v4[ki])*wv;
+                acc[0*6 + 5] += float(v5[ki])*wv;
+            }
+        }
+        {
+            const uint q = q1; const float s = s1; const float b = b1;
+#pragma unroll
+            for (int ki = 0; ki < 8; ++ki) {
+                const float wv = float((q >> (ki*4)) & 0xFu)*s + b;
+                acc[1*6 + 0] += float(v0[ki])*wv;
+                acc[1*6 + 1] += float(v1[ki])*wv;
+                acc[1*6 + 2] += float(v2[ki])*wv;
+                acc[1*6 + 3] += float(v3[ki])*wv;
+                acc[1*6 + 4] += float(v4[ki])*wv;
+                acc[1*6 + 5] += float(v5[ki])*wv;
+            }
+        }
+    }
+
+    for (int i = 0; i < 2*6; ++i) {
+        acc[i] = simd_sum(acc[i]);
+    }
+    if (tiisg < 2*6) {
+        const int r = (int)tiisg/6;
+        const int c = (int)tiisg%6;
+        if (row0 + r < args.ne01) {
+            dst[c*args.ne01 + row0 + r] = acc[tiisg];
+        }
+    }
+}
+
+kernel void kernel_mul_mv_q4_0_soa_w6_r4(
+        constant ggml_metal_kargs_mul_mv_ext & args,
+        device const char * src0,
+        device const half * src1,
+        device float * dst,
+        uint3 tgpig [[threadgroup_position_in_grid]],
+        ushort tiisg [[thread_index_in_simdgroup]]) {
+    float acc[4*6] = {};
+    const int nblk = args.ne00/32;
+    const int npack = 4*nblk;
+    const int row0 = 4*(int)tgpig.x;
+    device const half * sp0 = (device const half *)(src0 + (uint64_t)(row0 + 0)*args.nb01);
+    device const half * sp1 = (device const half *)(src0 + (uint64_t)(row0 + 1)*args.nb01);
+    device const half * sp2 = (device const half *)(src0 + (uint64_t)(row0 + 2)*args.nb01);
+    device const half * sp3 = (device const half *)(src0 + (uint64_t)(row0 + 3)*args.nb01);
+    device const uint * qp0 = (device const uint *)(sp0 + nblk);
+    device const uint * qp1 = (device const uint *)(sp1 + nblk);
+    device const uint * qp2 = (device const uint *)(sp2 + nblk);
+    device const uint * qp3 = (device const uint *)(sp3 + nblk);
+    using half8 = vec<half, 8>;
+    const device half8 * xv = (const device half8 *)src1;
+    const int K8 = args.ne00/8;
+
+    for (int p = (int)tiisg; p < npack; p += 32) {
+        const int block = p/4;
+        const half8 v0 = xv[0*K8 + p];
+        const half8 v1 = xv[1*K8 + p];
+        const half8 v2 = xv[2*K8 + p];
+        const half8 v3 = xv[3*K8 + p];
+        const half8 v4 = xv[4*K8 + p];
+        const half8 v5 = xv[5*K8 + p];
+        const uint q0 = qp0[p];
+        const uint q1 = qp1[p];
+        const uint q2 = qp2[p];
+        const uint q3 = qp3[p];
+        const float s0 = float(sp0[block]);
+        const float s1 = float(sp1[block]);
+        const float s2 = float(sp2[block]);
+        const float s3 = float(sp3[block]);
+        const float b0 = -8.f*s0;
+        const float b1 = -8.f*s1;
+        const float b2 = -8.f*s2;
+        const float b3 = -8.f*s3;
+        {
+            const uint q = q0; const float s = s0; const float b = b0;
+#pragma unroll
+            for (int ki = 0; ki < 8; ++ki) {
+                const float wv = float((q >> (ki*4)) & 0xFu)*s + b;
+                acc[0*6 + 0] += float(v0[ki])*wv;
+                acc[0*6 + 1] += float(v1[ki])*wv;
+                acc[0*6 + 2] += float(v2[ki])*wv;
+                acc[0*6 + 3] += float(v3[ki])*wv;
+                acc[0*6 + 4] += float(v4[ki])*wv;
+                acc[0*6 + 5] += float(v5[ki])*wv;
+            }
+        }
+        {
+            const uint q = q1; const float s = s1; const float b = b1;
+#pragma unroll
+            for (int ki = 0; ki < 8; ++ki) {
+                const float wv = float((q >> (ki*4)) & 0xFu)*s + b;
+                acc[1*6 + 0] += float(v0[ki])*wv;
+                acc[1*6 + 1] += float(v1[ki])*wv;
+                acc[1*6 + 2] += float(v2[ki])*wv;
+                acc[1*6 + 3] += float(v3[ki])*wv;
+                acc[1*6 + 4] += float(v4[ki])*wv;
+                acc[1*6 + 5] += float(v5[ki])*wv;
+            }
+        }
+        {
+            const uint q = q2; const float s = s2; const float b = b2;
+#pragma unroll
+            for (int ki = 0; ki < 8; ++ki) {
+                const float wv = float((q >> (ki*4)) & 0xFu)*s + b;
+                acc[2*6 + 0] += float(v0[ki])*wv;
+                acc[2*6 + 1] += float(v1[ki])*wv;
+                acc[2*6 + 2] += float(v2[ki])*wv;
+                acc[2*6 + 3] += float(v3[ki])*wv;
+                acc[2*6 + 4] += float(v4[ki])*wv;
+                acc[2*6 + 5] += float(v5[ki])*wv;
+            }
+        }
+        {
+            const uint q = q3; const float s = s3; const float b = b3;
+#pragma unroll
+            for (int ki = 0; ki < 8; ++ki) {
+                const float wv = float((q >> (ki*4)) & 0xFu)*s + b;
+                acc[3*6 + 0] += float(v0[ki])*wv;
+                acc[3*6 + 1] += float(v1[ki])*wv;
+                acc[3*6 + 2] += float(v2[ki])*wv;
+                acc[3*6 + 3] += float(v3[ki])*wv;
+                acc[3*6 + 4] += float(v4[ki])*wv;
+                acc[3*6 + 5] += float(v5[ki])*wv;
+            }
+        }
+    }
+
+    for (int i = 0; i < 4*6; ++i) {
+        acc[i] = simd_sum(acc[i]);
+    }
+    if (tiisg < 4*6) {
+        const int r = (int)tiisg/6;
+        const int c = (int)tiisg%6;
+        if (row0 + r < args.ne01) {
+            dst[c*args.ne01 + row0 + r] = acc[tiisg];
+        }
+    }
+}
+
+kernel void kernel_mul_mv_q4_0_soa_w6_r2h(
+        constant ggml_metal_kargs_mul_mv_ext & args,
+        device const char * src0,
+        device const half * src1,
+        device float * dst,
+        uint3 tgpig [[threadgroup_position_in_grid]],
+        ushort tiisg [[thread_index_in_simdgroup]]) {
+    float acc[2*6] = {};
+    const int nblk = args.ne00/32;
+    const int npack = 4*nblk;
+    const int row0 = 2*(int)tgpig.x;
+    device const half * sp0 = (device const half *)(src0 + (uint64_t)(row0 + 0)*args.nb01);
+    device const half * sp1 = (device const half *)(src0 + (uint64_t)(row0 + 1)*args.nb01);
+    device const uint * qp0 = (device const uint *)(sp0 + nblk);
+    device const uint * qp1 = (device const uint *)(sp1 + nblk);
+    using half8 = vec<half, 8>;
+    const device half8 * xv = (const device half8 *)src1;
+    const int K8 = args.ne00/8;
+
+    for (int p = (int)tiisg; p < npack; p += 32) {
+        const int block = p/4;
+        const half8 v0 = xv[0*K8 + p];
+        const half8 v1 = xv[1*K8 + p];
+        const half8 v2 = xv[2*K8 + p];
+        const half8 v3 = xv[3*K8 + p];
+        const half8 v4 = xv[4*K8 + p];
+        const half8 v5 = xv[5*K8 + p];
+        const uint q0 = qp0[p];
+        const uint q1 = qp1[p];
+        const half s0 = sp0[block];
+        const half s1 = sp1[block];
+        {
+            const uint q = q0; const half s = s0;
+#pragma unroll
+            for (int ki = 0; ki < 8; ++ki) {
+                const half wv = (half((q >> (ki*4)) & 0xFu) - 8.h)*s;
+                acc[0*6 + 0] += float(v0[ki]*wv);
+                acc[0*6 + 1] += float(v1[ki]*wv);
+                acc[0*6 + 2] += float(v2[ki]*wv);
+                acc[0*6 + 3] += float(v3[ki]*wv);
+                acc[0*6 + 4] += float(v4[ki]*wv);
+                acc[0*6 + 5] += float(v5[ki]*wv);
+            }
+        }
+        {
+            const uint q = q1; const half s = s1;
+#pragma unroll
+            for (int ki = 0; ki < 8; ++ki) {
+                const half wv = (half((q >> (ki*4)) & 0xFu) - 8.h)*s;
+                acc[1*6 + 0] += float(v0[ki]*wv);
+                acc[1*6 + 1] += float(v1[ki]*wv);
+                acc[1*6 + 2] += float(v2[ki]*wv);
+                acc[1*6 + 3] += float(v3[ki]*wv);
+                acc[1*6 + 4] += float(v4[ki]*wv);
+                acc[1*6 + 5] += float(v5[ki]*wv);
+            }
+        }
+    }
+
+    for (int i = 0; i < 2*6; ++i) {
+        acc[i] = simd_sum(acc[i]);
+    }
+    if (tiisg < 2*6) {
+        const int r = (int)tiisg/6;
+        const int c = (int)tiisg%6;
+        if (row0 + r < args.ne01) {
+            dst[c*args.ne01 + row0 + r] = acc[tiisg];
+        }
+    }
+}
+
+kernel void kernel_mul_mv_q4_0_soa_w6_r4h(
+        constant ggml_metal_kargs_mul_mv_ext & args,
+        device const char * src0,
+        device const half * src1,
+        device float * dst,
+        uint3 tgpig [[threadgroup_position_in_grid]],
+        ushort tiisg [[thread_index_in_simdgroup]]) {
+    float acc[4*6] = {};
+    const int nblk = args.ne00/32;
+    const int npack = 4*nblk;
+    const int row0 = 4*(int)tgpig.x;
+    device const half * sp0 = (device const half *)(src0 + (uint64_t)(row0 + 0)*args.nb01);
+    device const half * sp1 = (device const half *)(src0 + (uint64_t)(row0 + 1)*args.nb01);
+    device const half * sp2 = (device const half *)(src0 + (uint64_t)(row0 + 2)*args.nb01);
+    device const half * sp3 = (device const half *)(src0 + (uint64_t)(row0 + 3)*args.nb01);
+    device const uint * qp0 = (device const uint *)(sp0 + nblk);
+    device const uint * qp1 = (device const uint *)(sp1 + nblk);
+    device const uint * qp2 = (device const uint *)(sp2 + nblk);
+    device const uint * qp3 = (device const uint *)(sp3 + nblk);
+    using half8 = vec<half, 8>;
+    const device half8 * xv = (const device half8 *)src1;
+    const int K8 = args.ne00/8;
+
+    for (int p = (int)tiisg; p < npack; p += 32) {
+        const int block = p/4;
+        const half8 v0 = xv[0*K8 + p];
+        const half8 v1 = xv[1*K8 + p];
+        const half8 v2 = xv[2*K8 + p];
+        const half8 v3 = xv[3*K8 + p];
+        const half8 v4 = xv[4*K8 + p];
+        const half8 v5 = xv[5*K8 + p];
+        const uint q0 = qp0[p];
+        const uint q1 = qp1[p];
+        const uint q2 = qp2[p];
+        const uint q3 = qp3[p];
+        const half s0 = sp0[block];
+        const half s1 = sp1[block];
+        const half s2 = sp2[block];
+        const half s3 = sp3[block];
+        {
+            const uint q = q0; const half s = s0;
+#pragma unroll
+            for (int ki = 0; ki < 8; ++ki) {
+                const half wv = (half((q >> (ki*4)) & 0xFu) - 8.h)*s;
+                acc[0*6 + 0] += float(v0[ki]*wv);
+                acc[0*6 + 1] += float(v1[ki]*wv);
+                acc[0*6 + 2] += float(v2[ki]*wv);
+                acc[0*6 + 3] += float(v3[ki]*wv);
+                acc[0*6 + 4] += float(v4[ki]*wv);
+                acc[0*6 + 5] += float(v5[ki]*wv);
+            }
+        }
+        {
+            const uint q = q1; const half s = s1;
+#pragma unroll
+            for (int ki = 0; ki < 8; ++ki) {
+                const half wv = (half((q >> (ki*4)) & 0xFu) - 8.h)*s;
+                acc[1*6 + 0] += float(v0[ki]*wv);
+                acc[1*6 + 1] += float(v1[ki]*wv);
+                acc[1*6 + 2] += float(v2[ki]*wv);
+                acc[1*6 + 3] += float(v3[ki]*wv);
+                acc[1*6 + 4] += float(v4[ki]*wv);
+                acc[1*6 + 5] += float(v5[ki]*wv);
+            }
+        }
+        {
+            const uint q = q2; const half s = s2;
+#pragma unroll
+            for (int ki = 0; ki < 8; ++ki) {
+                const half wv = (half((q >> (ki*4)) & 0xFu) - 8.h)*s;
+                acc[2*6 + 0] += float(v0[ki]*wv);
+                acc[2*6 + 1] += float(v1[ki]*wv);
+                acc[2*6 + 2] += float(v2[ki]*wv);
+                acc[2*6 + 3] += float(v3[ki]*wv);
+                acc[2*6 + 4] += float(v4[ki]*wv);
+                acc[2*6 + 5] += float(v5[ki]*wv);
+            }
+        }
+        {
+            const uint q = q3; const half s = s3;
+#pragma unroll
+            for (int ki = 0; ki < 8; ++ki) {
+                const half wv = (half((q >> (ki*4)) & 0xFu) - 8.h)*s;
+                acc[3*6 + 0] += float(v0[ki]*wv);
+                acc[3*6 + 1] += float(v1[ki]*wv);
+                acc[3*6 + 2] += float(v2[ki]*wv);
+                acc[3*6 + 3] += float(v3[ki]*wv);
+                acc[3*6 + 4] += float(v4[ki]*wv);
+                acc[3*6 + 5] += float(v5[ki]*wv);
+            }
+        }
+    }
+
+    for (int i = 0; i < 4*6; ++i) {
+        acc[i] = simd_sum(acc[i]);
+    }
+    if (tiisg < 4*6) {
+        const int r = (int)tiisg/6;
+        const int c = (int)tiisg%6;
+        if (row0 + r < args.ne01) {
+            dst[c*args.ne01 + row0 + r] = acc[tiisg];
+        }
+    }
+}
+
 // deinterleaved q4_0: one aligned 8-byte qs load covers a pair of 4-elem sub-chunks (il even),
 // scale passed by value (loaded once per block instead of per deq call)
 void dequantize_q4_0_di_t8(device const uint16_t * qs, half dh, short il, thread float4 & r0, thread float4 & r1) {
