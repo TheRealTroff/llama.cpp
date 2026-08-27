@@ -691,10 +691,17 @@ Tooling, not an experiment:
   dumps it both ways. Matching is automatic - the archive records its own `traceName`.
   **Corollary for captures: never leave a `.gputrace` in `/tmp` either.**
   `run-capture-set.sh` archives to `~/play/kvquant-experiments/traces/<date>/`.
-- **`headless-replay-probe.md` - OPEN, and the most actionable thread here.** Removing the
-  "Profile GPU Trace" click, which is no longer a convenience: it gates the entire GPU
-  counter path (`aps-counters.md`), so every counter measurement costs a human at the
-  machine. **2026-08-23: Xcode never calls `-launchReplayService:`.** Traced with
+- **`headless-replay-probe.md` - RESOLVED: the replay is fully headless.**
+  `perf/metal-profile-headless.py` (falls back to the DY path on Xcode 26) replays a
+  `.gputrace` in ~12 s with no GUI, and its output carries the FULL shader-profiling
+  payload, not just APS counters - verified 2026-08-27 by replaying all six
+  aug23-skinny captures headless and decoding them with `shaderprof-table.py`; the
+  numbers match a GUI-click replay of the same kernel exactly
+  (`instruction-economy-league.md`). Capture -> replay -> per-instruction profile now
+  runs end to end with no human. The rest of this entry is the investigation history.
+  ~~Removing the "Profile GPU Trace" click, which is no longer a convenience: it gates
+  the entire GPU counter path (`aps-counters.md`), so every counter measurement costs
+  a human at the machine.~~ **2026-08-23: Xcode never calls `-launchReplayService:`.** Traced with
   `NSObjCMessageLoggingEnabled=YES` over a real click - 97,196,011 message sends, and
   `launchReplayService` / `GTLaunchService` / `GTMTLReplayService` / `GTLocalXPCConnection`
   / `MTLReplayerTrampoline` all appear **zero** times, against 268 `DYXPCTransport`. The
