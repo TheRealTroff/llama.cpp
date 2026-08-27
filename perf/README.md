@@ -273,6 +273,18 @@ against it and reported a bogus +5.8%.
 Current state:
 
 - **prod-pick: this file** + `run-prod-pick.sh`
+- **`m4-width4-r4kp.md` - THE OPEN TASK and the largest single result on record
+  (2026-08-27 eve, branch `m4-width4-r4kp`, unmerged).** The 283 us verify_m4 parity
+  target is BEATEN: v3 runs ffn_down at 240 us (-28% vs R2, 1.13-1.27x faster than
+  their kernel's own best config), e2e **+21.2% at dflash n3 (25.15 t/s) and +20.1%
+  at MTP d3 (24.48)**, n6 control inert at +0.04% byte-identical. At matched
+  n_predict 600, n3+v3 BEATS the n6 operating point by +9.3% - the prod pick may
+  move, pending the repack-residency caveat and the owner's v2-vs-v3 numerics call.
+  The lever was NOT the K-split (~1%) or the tile (~4.6%): it is source-level codegen
+  - signed-int indexing + planar row pointers hoisted out of the K loop - worth -21%
+  alone, which every SoA/ext kernel had been leaving on the table. Width 7 does NOT
+  transfer (skinny wins 1.5-1.7x, MMA amortization; measured, closed). Open there:
+  widths 5/6 (crossover ~w6, w5 est -20%), both depth re-sweeps, adoption.
 - **`verify-width-instruction-economy.md` - READ WITH the open task (2026-08-25 eve).**
   The first counter-profiled width-7 pass, and the unifying mechanism for the whole
   width-4 refutation series: verify kernels are instruction-throughput-bound (~3
@@ -282,8 +294,10 @@ Current state:
   list is closed**: sumy-fold REFUTED +15-32%/pass (`width4-sumy-fold-refuted.md`);
   bf16/f16-pair y CLOSED offline, f16 already folds to 16-bit operands
   (`width4-y-operand-width.md`); base-pointer addressing REFUTED flat-to-+8%
-  (`width4-addressing-refuted.md`). The width-4 mv instruction stream is what the work
-  intrinsically costs. The mm/skinny half is ALSO rewritten 2026-08-25
+  (`width4-addressing-refuted.md`). ~~The width-4 mv instruction stream is what the work
+  intrinsically costs.~~ **REFUTED 2026-08-27 (`m4-width4-r4kp.md`): the stream was
+  address-generation codegen, not intrinsic work - int indexing + hoisted planar
+  pointers cut it 30.4M -> 24.9M and -28%/pass.** The mm/skinny half is ALSO rewritten 2026-08-25
   (`skinny-staging-refuted.md`): B-direct and sa double-buffering both measure flat, so
   the tg-L1 staging mechanism is refuted and ~~the skinny wall is unidentified~~ the
   surviving skinny frame is `ffn-utilization.md`'s: stream + arith paid in series,
@@ -299,12 +313,14 @@ Current state:
   (`skinny-stall-attribution.md`)**: the w7 skinny kernel is 77% issue / 23% diffuse
   stall (largest single stall site: a barrier at 2.8%), and the dequant+staging stream
   costs the same issue time as the MMA stream. Both walls are instruction economy.
-- **`width4-gap-decomposition.md` - THE OPEN TASK (2026-08-25 pm).** The round gap is
+- **`width4-gap-decomposition.md` - ~~THE OPEN TASK~~ (2026-08-25 pm; the open task
+  moved to `m4-width4-r4kp.md`, which supersedes this file's projection pricing).** The round gap is
   measured and named: q4_0 projections run at 51-53% of peak (1.65-2.0x bytes floor),
   112 of 142.5 serialized ms/round; everything else is second order. The kernel
   schedule plane is measured and CLOSED at +/-3% (branches `m4-width4-r2k2`,
   `m4-width4-latency`: K-split, unroll, tg packing; nc4 re-refuted; even nc pays +140%
-  for 2 -> 4 columns - no known kernel runs width 4 near 1.2x floor). Open, in order:
+  for 2 -> 4 columns - ~~no known kernel runs width 4 near 1.2x floor~~ **r4kp v3 now
+  does, ~1.2x floor, 2026-08-27**). Open, in order:
   ~~arithmetic/format probes~~ (all answered 2026-08-25: masked-nibble/sumy and
   addressing refuted, bf16 y closed - `width4-sumy-fold-refuted.md`,
   `width4-addressing-refuted.md`, `width4-y-operand-width.md`; the kernel axis is

@@ -69,8 +69,9 @@ The refutation holds - and the width-2 row is the important part: **even the nc 
 pays +140% to go from 2 to 4 columns.** "Columns are nearly free" is true only up to 2,
 in every family we can measure. Their kp{2,4}/bf16 `verify_m4` is ~1.36x floor at width 4
 by the run-2 marginal-cost arithmetic - and their 4x4 tile and scalar inner schedule both
-lose inside our stack. **No kernel on this hardware is known to run width 4 near 1.2x
-floor.** This corrects `width4-gap-decomposition.md`'s "w2-grade utilization prices the
+lose inside our stack. ~~**No kernel on this hardware is known to run width 4 near 1.2x
+floor.**~~ **SUPERSEDED 2026-08-27: `m4-width4-r4kp.md`'s v3 runs ffn_down at 240 us
+= ~1.2x floor, from codegen form alone.** This corrects `width4-gap-decomposition.md`'s "w2-grade utilization prices the
 w4 verify at ~88 ms" - struck there; the defensible statement is that ~1.36x (their
 level) leaves ~25 ms on the table against our 1.65-2.0x, not ~40.
 

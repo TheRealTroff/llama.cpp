@@ -127,8 +127,14 @@ Cut instructions per weight byte from ~34 toward nc2's ~21. In candidate order:
    **REFUTED 2026-08-25** (`width4-addressing-refuted.md`): carried pointers are
    flat-to-+8% - R2 already is the v2 pattern (base + running index, offsets folded into
    load addressing), and the 49 INT ops are mostly the irreducible nibble shifts/masks.
-   With candidates 1 and 3 also answered, **this list is closed**: the width-4
-   instruction stream is what the work intrinsically costs on this compiler.
+   ~~With candidates 1 and 3 also answered, **this list is closed**: the width-4
+   instruction stream is what the work intrinsically costs on this compiler.~~
+   **REFUTED 2026-08-27 (`m4-width4-r4kp.md`): the stream was NOT intrinsic - it was
+   address-generation codegen. Signed-int indexing + hoisted planar row pointers cut
+   exec/dispatch 30.4M -> 24.9M and stall 23 -> 13, worth -28% per pass and +21% e2e.
+   The candidates above were arithmetic-format probes; nobody had probed the
+   addressing FORM (as opposed to `width4-addressing-refuted.md`'s carried-pointer
+   variant, which changed the wrong half).**
 3. ~~**f16 dot pairs / bf16 activations** - halves y-side operand width per MAC; their
    winning kernel is `_bf16`. The earlier `HALF_PRODUCT` refutation changed rounding on
    the product path; a bf16/f16-pair probe that keeps FP32 accumulation is a different

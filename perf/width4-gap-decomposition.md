@@ -1,6 +1,9 @@
 # Where the width-4 round gap actually is
 
-Status: **answered 2026-08-25 for our side; their side still runs on pinned numbers.**
+Status: **answered 2026-08-25; PARTLY SUPERSEDED 2026-08-27 by `m4-width4-r4kp.md`:
+the q4_0 projection kernels this file prices at 51-53% of peak now run ~26-28% faster
+(codegen form), the n3 round is ~112 ms not ~135, and the cross-framework width-4 gap
+is ~1.18x not 1.42x. The decomposition METHOD and the non-projection numbers stand.**
 Same-session decomposition of the post-R2 width-4 round on prod `745fd2ce8` (+ the
 `m4-width4-r2k2` results). Instruments and raw logs:
 `perf/run-width4-gap-decomp.sh`, parsed by `perf/metalprof-buckets.py`; logs under

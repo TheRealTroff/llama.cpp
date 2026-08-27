@@ -1,5 +1,9 @@
 # Small-batch slope and the skinny cliff, re-measured (2026-08-22)
 
+**STALE FOR WIDTHS 2-4 SINCE 2026-08-27 (`m4-width4-r4kp.md`): the width-4 verify is
+~26-28% cheaper, dflash n3 reads 25.15 t/s and MTP d3 24.48 at n_predict 600 - both
+depth optima need re-sweeping with GGML_MV_SOA_W4 + R4KP set.**
+
 Where the slope sits at the current prod pick, and where speculation depth falls off the
 skinny routing window. Harness `perf/run-slope-sweep.sh` (`TAG=slope-aug22`), prod
 `7788371f`, build 2026-08-22 16:02. 15 e2e runs, zero failures.

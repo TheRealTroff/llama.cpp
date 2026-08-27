@@ -1,7 +1,7 @@
 # Width 4: the verify_m4 parity kernel - and the lever was codegen, not K-split
 
-Status: **open 2026-08-27 - kernel-level result in, e2e running.** Branch `m4-width4-r4kp`
-off prod `15bfa8cee`.
+Status: **answered 2026-08-27 evening - e2e +21.2% at the width-4 point, adoption is the
+owner's call.** Branch `m4-width4-r4kp` off prod `15bfa8cee`. Open stubs at the end.
 
 Opened from `omlx-verify-m4-decode.md`'s conclusion: a kernel combining r2's economy with
 kp2-style K-split latency hiding, target 283 us on ffn_down. **The target is beaten -
@@ -100,20 +100,59 @@ recomputation chains feeding the loads, i.e. the priced quantity is dynamic issu
 cost, and address-generation instructions were both numerous IN THE LOOP and attached to
 the two load-consumer stall sites (R2's 0x44a/0x1e8 at 8.2 points, v3's worst site 1.1).
 
+## End-to-end (2026-08-27 evening, `run-m4-width4-r4kp-e2e.sh`, TSV
+`kvquant-experiments/results/m4-w4-r4kp-e2e-aug27.tsv`)
+
+DFlash n3 (width-4 point), n_predict 600, 4 order-balanced reps per arm, fresh server
+per run, binary = commit `1f8532463`'s source:
+
+| arm | t/s (4 runs) | mean | delta | sha1 |
+|---|---|---:|---:|---|
+| r2 | 20.817, 20.742, 20.719, 20.684 | 20.741 | - | `462183a49c4c` (= landed R2 record) |
+| v2 | 24.216, 24.264, 24.248, 24.223 | 24.238 | **+16.86%** | `3776c0adb7ee` (= K2 trajectory) |
+| v3 | 25.163, 25.161, 25.157, 25.106 | **25.147** | **+21.24%** | `a08f1b87121c` (own, 4/4 identical) |
+
+The n6 width-7 control is **+0.04% and byte-identical across arms** - the selector is
+inert where it must be. **At matched n_predict 600 the n3+v3 point (25.15) now BEATS
+the n6 operating point (23.01 in the same harness, same session) by +9.3%** - do NOT
+compare against the prod pick's headline 25.02, which is an n_predict-300 number
+(trap 1); at 600 the pick reads 22.90. If this holds under the repack-residency caveat
+(these arms run GGML_MV_REPACK=1, the side-buffer variant; `repack-inplace.md` is the
+answer to that), the best-known operating point has moved from n6 to n3. The
+round-level cross-framework gap at width 4 drops from 1.42x to **~1.18x** (round
+~135.5 -> ~112 ms against their pinned 95.00).
+
+**MTP transfers 1:1, measured same evening.** MTP d3 (width 4): r2 20.40, v3 **24.48
+(+20.1%)**, output shas identical to the dflash n3 arms per kernel - same depth + same
+kernels -> byte-identical text across speculation types. MTP d3+v3 now beats MTP d1
+(21.88), so the MTP depth optimum has moved and `slope-sweep.md`'s depth tables are
+stale. Caveat: the d1 "control" pair is NOT inert - acceptance moved 86.6 -> 86.0 and
+the trajectory changed, so width-4 ops occur inside the MTP draft path at every depth;
+d1 measured -0.36% t/s, within trajectory luck.
+
+## Width 7 does NOT transfer - refuted the same evening
+
+The scalar form at the prod verify width (`kernel_mul_mv_q4_0_soa_w7_r{2,4}`,
+`GGML_MV_SOA_W7={2,4}`, staged in `8c7d54428`, 1155/1155 correct, zero spill): **skinny
+wins 1.5-1.7x on every projection** (ffn_down 386 vs 580/604, gate/up 332 vs 562/577).
+Above width ~4 the per-column FMA stream dominates and `simdgroup_matrix`'s 8-wide
+amortization is unbeatable by scalar FMAs - exactly `instruction-economy-league.md`
+reading 4. The prod-pick width-7 wall stays with skinny. Kernels kept for the record;
+do not route them.
+
 ## Open
 
-1. **e2e A/B running** (`run-m4-width4-r4kp-e2e.sh`, arms r2/v2/v3, DFlash n3 point,
-   n6 inertness control). Expected order ~-15 to -20 ms on the ~135 ms n3 round if the
-   ~57 us/pass serialized saving translates; trajectory sha will differ from R2's (the
-   scalar accumulation order and kp2 partial add change FP association; v3 additionally
-   rounds the product to half - `test-backend-ops` NMSE passes, KLD unmeasured).
-2. **Numerics choice is the owner's**: v2 keeps f32 products (association-only change);
-   v3 adds half-product rounding for ~4%. If v3 is adopted, price it with
-   `run-quant-kld.sh` first.
-3. **The codegen form should transfer to every kernel in this family** - width 2/3 (nc,
-   ext), the drafter's projections, and above all **the width-7 skinny wall**: a 7-column
-   scalar-broadcast mv kernel with this form was never buildable before because the
-   economy wasn't there; at v3's instr/B it may now beat `mul_mm_skinny`'s staging
-   round-trip at the prod width. That is the next experiment and the first one with a
-   shot at moving the prod pick itself.
-4. Whole-graph pp4 and the round decomposition after e2e completes.
+1. **Widths 5 and 6** (MTP d4/d5, dflash n4/n5): the scalar form scales ~linearly with
+   columns (w4 ~250 -> w5 ~310 est) against skinny's flat ~385 fixed tile, so the
+   crossover is around width 6 and **width 5 should win ~20%**. Whole family prescreened
+   zero-spill at rows 2/4 (w8r4 16 B, threshold noise). Wiring not yet built - decide
+   the routing design (function-constant width vs per-width flags) before adding cells.
+2. **Depth/operating-point re-sweep for BOTH spec types** with the new kernels -
+   `slope-sweep.md`'s optima were priced against kernels that no longer define the
+   curve. MTP d3/d4 and dflash n3/n4 are the candidates; dflash n4 needs the w5 cell.
+3. **Adoption is the owner's call**: v2 keeps f32 products (FP-association change
+   only); v3 adds half-product rounding for +4.4 pp of the e2e win.
+   `test-backend-ops` NMSE passes; price v3 with `run-quant-kld.sh` before adopting.
+   Note the prod pick (n6/width 7) is untouched either way - adoption changes the n3/d3
+   operating points, and the pick itself only changes if the re-sweep moves it.
+4. Whole-graph pp4 and a round decomposition at n3+v3, when next measured.

@@ -1,6 +1,11 @@
 # Their verify_m4, decoded per-instruction - the width-4 target has a shape now
 
-Status: **done 2026-08-27.** The open "per-kernel decode of their block-4 capture" lead
+Status: **done 2026-08-27.** **CORRECTED same evening by `m4-width4-r4kp.md`: the
+target is beaten (240 us, e2e +21.2%), but BOTH attributions below are refuted -
+the K-split structure is worth ~1% (built exactly, measured), and the count/stall
+edges are NOT format-coupled (their gs32 variant decodes identically to gs64). The
+real lever was source-level codegen: signed-int indexing + hoisted planar row
+pointers. Read that file for the mechanism; the measurements below remain valid.** The open "per-kernel decode of their block-4 capture" lead
 is answered WITHOUT their engine, their model, or a 17 GB capture:
 `perf/capture-mlx-verify-kernel.py` drives `dflash_mlx.verify_qmm.verify_matmul`
 standalone on synthetic tensors of the real shapes (their package as-is, debug gate

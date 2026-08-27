@@ -39,6 +39,12 @@ compare their issue/stall, not their exec columns.
 | w7 skinny gate/up | mul_mm_skinny_q4_0_di_f32 | 7 | 433 | 88.6 | 11.4 | 22.3M | 3.2M |
 | w7 f16b B-direct probe | mul_mm_skinny_q4_0_f16b_g16 | 7 | 443 | 82.9 | 17.1 | 20.2M | 2.9M |
 
+Addendum 2026-08-27 evening (`m4-width4-r4kp.md`): `soa_w4_r4kp_v3` joins at
+**24.92M exec/disp, 87.0/13.0, 240 us** - the first mv kernel at verify_m4's economy
+point (theirs: 24.58M, 90.1/9.9, 283 us), reached by codegen form (signed-int
+indexing + hoisted planar pointers), not schedule. Its w7 sibling is REFUTED 1.5-1.7x
+by skinny - reading 4's MMA-amortization boundary holds above width ~5.
+
 Follow-up 2026-08-27: `skinny-di-attribution.md` adds the same-tree plain-vs-_di pair -
 _di executes +15% MORE dynamic instructions and is +10% faster on the pass, so
 per-instruction issue cost (~25% cheaper without the interleave unpack) is a live axis
