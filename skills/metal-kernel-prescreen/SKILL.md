@@ -125,8 +125,13 @@ Forms measured to matter on AGX/g16s (each worth re-trying on any slow inner loo
 - **f16 sources fold into FMA operands for free; bf16 does not** (and an explicit
   `float(h)` cast does not block the fold). A scalar convert-per-element loop on
   bf16 cost a competitor kernel +16%.
-- **Half-precision products** (`float(a_h * b_h)` accumulated in f32): ~-4%, but it
-  changes rounding - a numerics decision, not a free lever.
+- **Half-precision products** (`float(a_h * b_h)` accumulated in f32): ~-4 to -7%,
+  but ONLY with enough independent accumulator chains - measured at width 5 the same
+  form pays -6.7% on a 4-row body and INVERTS to +13.8% on the 2-row body
+  (2026-08-28, `perf/m4-width5-crossover.md` in the fork). Do not apply it to
+  low-row-count bodies on trend; benchmark the row-count pair. It changes rounding -
+  a numerics decision, not a free lever - though where the incumbent route is
+  `simdgroup_half8x8` MMA, the incumbent is already half-accumulate.
 - Tile shape and K-split across simdgroups: single digits at best (~4.6% and ~1%
   respectively at width 4). Measure them AFTER the form is right.
 

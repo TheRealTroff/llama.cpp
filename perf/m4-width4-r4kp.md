@@ -177,15 +177,23 @@ What it settles:
    with the deficit WIDENING with depth (d7: 31.8 vs 36.1). The old n_predict-300
    sweep had MTP ahead everywhere - that read does not survive matched-trajectory
    measurement.
-4. **The widths-5/6 cells are DEPRIORITIZED by this table.** Depth 4 (width 5) sits
+4. ~~**The widths-5/6 cells are DEPRIORITIZED by this table.** Depth 4 (width 5) sits
    4.7 t/s behind depth 3; the estimated ~20% w5 kernel saving moves n4 by a few
    percent at most and cannot reach the optimum. Same logic for w3/depth 2. The
-   prescreens stay on record if an operating point ever moves there.
+   prescreens stay on record if an operating point ever moves there.~~
+   **REFUTED next day (`m4-width5-crossover.md`, 2026-08-28): the w5 cell was built
+   anyway and the "~20%" estimate was low - w5r4h wins 25-31% per shape and +25.8%
+   e2e, and dflash n4+w5 (25.632) beats dflash n3 (25.282) on the same board by
+   +1.4%.** The "cannot reach the optimum" arithmetic assumed the skinny-arm n4; the
+   measured kernel win closes the 4.7 t/s gap and passes. Width 6 / depth 5 is now
+   the open cell by the same logic.
 
 ## Open
 
-1. **Adoption is the owner's call**: the sweep says the operating point is dflash n3
-   with v3 + repack (+9.4% over the n6 point). Before moving the pick: the v2-vs-v3
+1. **Adoption is the owner's call**: ~~the sweep says the operating point is dflash n3
+   with v3 + repack (+9.4% over the n6 point)~~ **superseded 2026-08-28: dflash n4 +
+   w5r4h + v3 + repack beats the n3 point by +1.4% (`m4-width5-crossover.md`), and
+   depth 5 is open pending a width-6 kernel.** Before moving the pick: the v2-vs-v3
    numerics call (price v3 with `run-quant-kld.sh`), and repack residency
    (`repack-inplace.md` - these runs use the side-buffer variant).
 2. Whole-graph pp4 and a round decomposition at n3+v3, when next measured.

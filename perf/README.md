@@ -136,6 +136,11 @@ the engine, so it is the owner's call.
 > n3 with the unmerged v3 kernel + repack measures 24.82-25.15 t/s at n_predict 600
 > against this pick's 22.67-23.01 on the same board (+9.4%). The pick below is
 > unchanged pending the owner's v2-vs-v3 numerics call and repack residency.**
+>
+> **Moved again 2026-08-28 (`m4-width5-crossover.md`): dflash n4 with the new w5r4h
+> kernel beats the n3 point on the same board (25.632 vs 25.282, +1.4%), so the
+> best-known config is n4 + w5r4h + v3 + repack. Depth 5 is open pending a width-6
+> kernel. Same adoption caveats.**
 
 **25.02 t/s** (dflash n6, `n_predict` 300). prod `9f477ae5`, clean tree, build 2026-08-22
 16:02, measured by `run-prod-pick.sh` (`TAG=prodpick-aug22`), fresh server per run.
@@ -239,6 +244,12 @@ against it and reported a bogus +5.8%.
 
 ## Methodology rules, learned the hard way
 
+- **`test-backend-ops -b Metal` is a vacuous pass (2026-08-28).** The backend is named
+  `MTL0`, so `-b Metal` matches nothing, every backend prints `Skipping`, and the run
+  still ends `3/3 backends passed OK`. A green correctness run proves nothing unless
+  the per-backend line shows a real test count (`1155/1155 tests passed`). Use
+  `-b MTL0`.
+
 - **`GGML_METAL_PROFILE=1` invalidates all CPU-side timings.** It creates one encoder per
   op, inflating CPU encode 6-8x, and that cost lands on the submit path specifically, so
   uniform tick-deflation cannot correct it - it just relabels profiler overhead as "CPU
@@ -278,7 +289,16 @@ against it and reported a bogus +5.8%.
 Current state:
 
 - **prod-pick: this file** + `run-prod-pick.sh`
-- **`m4-width4-r4kp.md` - THE OPEN TASK and the largest single result on record
+- **`m4-width5-crossover.md` - NEWEST RESULT (2026-08-28, same branch).** The width-5
+  SoA scalar cell, built despite the re-sweep's deprioritization: w5r4h (4 rows, half
+  product) wins all six projections 25-31% over skinny and +25.8%/+25.2% e2e at
+  dflash n4 / MTP d4, byte-identical output, n3 control inert. **dflash n4+w5 beats
+  dflash n3 by +1.4% same-board - the operating point moved again**, and depth
+  5/width 6 is now the open cell. Pins the scalar-vs-MMA crossover between widths 5
+  and 7; the w5 winner is issue-saturated (89.5/10.5) at only 1.31-1.51x the stream
+  floor, and per-column scalar economy IMPROVES through width 5 then collapses
+  superlinearly by 7. Half-product inverts at 2 rows (+14%) while paying at 4 (-7%).
+- **`m4-width4-r4kp.md` - the width-4 result and the largest single result on record
   (2026-08-27 eve, branch `m4-width4-r4kp`, unmerged).** The 283 us verify_m4 parity
   target is BEATEN: v3 runs ffn_down at 240 us (-28% vs R2, 1.13-1.27x faster than
   their kernel's own best config), e2e **+21.2% at dflash n3 (25.15 t/s) and +20.1%
@@ -294,7 +314,8 @@ Current state:
   MTP-vs-dflash acceptance curves cross between depth 2 and 3 on matched text, and
   the widths-5/6 cells are deprioritized (n4 is 4.7 t/s behind n3 - a ~20% kernel
   saving cannot reach the optimum).** Open: adoption only (v2-vs-v3 numerics,
-  repack residency).
+  repack residency). **The deprioritization and the depth-3 optimum did not survive
+  the next day - see `m4-width5-crossover.md` above.**
 - **`verify-width-instruction-economy.md` - READ WITH the open task (2026-08-25 eve).**
   The first counter-profiled width-7 pass, and the unifying mechanism for the whole
   width-4 refutation series: verify kernels are instruction-throughput-bound (~3
