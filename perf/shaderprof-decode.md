@@ -1,20 +1,21 @@
 # Decoding the per-instruction shader profile - de-risked end to end
 
-Status: **open, but the hard part is done (2026-08-25 late).** The per-line/
-per-instruction profile that Xcode's GUI shows exists in our ARCHIVED replays and is
-reachable headless. Every stage of the chain now runs from Python/ctypes with no Xcode
-UI: load framework -> ingest archive -> process -> named kernels with per-segment cost
-slots. What remains is mechanical (below). Probe: `perf/shaderprof-decode-probe.py`
-(run with the non-SIP python + `DYLD_FRAMEWORK_PATH` incl.
-`GPUDebugger.ideplugin/Contents/Frameworks`; see the script).
+Status: **profile ingestion works; readable ISA attribution is blocked (updated
+2026-08-26).** The per-line/per-instruction profile that Xcode's GUI shows exists in
+our archived replays and is reachable headless. Every profile stage runs from
+Python/ctypes with no Xcode UI: load framework -> ingest archive -> process -> named
+kernels with per-segment cost slots. The earlier version of this note incorrectly
+treated instruction-boundary analysis as readable disassembly. Xcode's public-host
+helper returns `-` for every mnemonic; `perf/agx-disasm.py` and
+`perf/agx-disasm.md` record the working structural decoder and the exhausted mnemonic
+routes.
 
 ## The chain, all verified live
 
-1. `GTShaderProfiler.framework` (inside `GPUDebugger.ideplugin`) loads via ctypes. It
-   embeds LLVM with an AGX target: processing our archives prints llvm-mca warnings for
-   processor `g16s-b1` - **the framework disassembles AGX machine code in-process**,
-   which also makes it the engine for the disassembly tool (#1), not just the profile
-   decode (#2).
+1. `GTShaderProfiler.framework` (inside `GPUDebugger.ideplugin`) loads via ctypes. Its
+   bundled LLVM recognizes AGX instruction boundaries and processing prints llvm-mca
+   warnings for processor `g16s-b1`. It does **not** expose readable AGX3 instruction
+   text on a public macOS host.
 2. Our wrapper's `raw/` dir (streamData + 20x Counters/Timeline/Profiling `_f_N.raw`)
    is a complete `.gpuprofiler_raw` bundle. **Do NOT unarchive the top-level streamData
    file for this - its `shaderProfilerData` array is empty.** The whole bundle loads
@@ -35,34 +36,32 @@ slots. What remains is mechanical (below). Probe: `perf/shaderprof-decode-probe.
 
 ## The API surface on GTMioShaderBinaryData (the prize)
 
-Per instruction: `isaForInstructionAtIndex:(count:)`, `instructionCosts`,
+Per instruction: `isaForInstructionAtIndex:(count:)` (currently always `-`), `instructionCosts`,
 `instructionCostsForPipelineState:/ForEncoder:/ForDraw:`, `addressForInstructionAtIndex:`,
 `registerCountForInstructionAtIndex:type:`, `debugRangeForInstructionAtIndex:`.
 Per line: `costForLine:fullPathIndex:scope:scopeIdentifier:cost:numInstructions:`,
 `enumerateLinesForFile:enumerator:`, `debugLocations`/`debugStrings` (the compiler
 Remarks in the stream carry `DebugLoc` -> source lines). Segment plumbing:
 `usedInPipelineState:`, `enumerateTraces:`, `traces`. Sibling classes:
-`GTShaderProfilerMCABinary generateAssemblyContent` / `generateAPSAssembly` (ISA text
-via the embedded LLVM), `GTShaderProfilerBinaryAnalysisResult
+`GTShaderProfilerMCABinary generateAssemblyContent` / `generateAPSAssembly` (format a
+pre-existing cached ISA vector; they do not generate mnemonics),
+`GTShaderProfilerBinaryAnalysisResult
 analyzeBinary:targetIndex:isaPrinter:` (instructions, clauses, branch targets,
 per-instruction register pressure).
 
-## What remains (mechanical)
+## What remains
 
-- ISA strings read `-` until generation is triggered. `mcaBinaryForBinaryKey:` with a
-  SEGMENT key ("328") returns nil (tried 2026-08-25 late; a "Task 0 terminated" from the
-  GTLLVMHelper subprocess suggests the helper session had already ended). Next routes:
-  find the key format mcaBinaryForBinaryKey: actually wants (read its disassembly), or
-  construct `GTShaderProfilerMCABinary initWithAPSBinary:programType:uniqueIdentifier:`
-  directly, or `GTShaderProfilerBinaryAnalysisResult analyzeBinary:targetIndex:isaPrinter:`,
-  or check `cachedISAFileURL` after a processor run with an isaPrinter set.
 - Read the cost VALUES: `instructionCosts` shape not yet dumped (likely NSArray or a
-  C-array accessor); `costForLine:...` has out-params - prototype carefully.
-- Join segments -> kernel with `usedInPipelineState:` and emit the deliverable: a
-  per-instruction (ISA, cost, samples) table for one kernel, validated against the
+  C-array accessor); `costForLine:...` has out-params - prototype carefully. The
+  helper-confirmed offsets and bytes from `perf/agx-disasm.py` can be used for the join,
+  but there are no mnemonics.
+- Join segments -> kernel with `usedInPipelineState:` and emit a per-instruction
+  (offset, bytes, cost, samples) table for one kernel, validated against the
   known aggregates (r2_sumy: 315 instructions, issue/tick 1.77).
 - Then point it at a SKINNY capture: the single-stream-contention question from
   `skinny-staging-refuted.md` is the first customer.
+- Readable AGX3 mnemonics require a new decoder or a future Xcode helper that populates
+  its ISA string table; further calls within the current framework do not generate it.
 
 ## Gotchas already paid for
 
