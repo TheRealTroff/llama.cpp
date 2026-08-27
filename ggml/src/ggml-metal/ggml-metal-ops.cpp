@@ -2540,8 +2540,9 @@ static bool ggml_metal_mul_mat_soa_w4_rows(int64_t ne01) {
 static bool ggml_metal_op_mul_mat_try_repack_q4_0(ggml_metal_op_t ctx, const ggml_tensor * op, ggml_metal_buffer_id & bid_src0, uint64_t & nb01_eff) {
     static const int env_repack = getenv("GGML_MV_REPACK") ? atoi(getenv("GGML_MV_REPACK")) : 0;
     static const int env_soa_w4 = getenv("GGML_MV_SOA_W4") ? atoi(getenv("GGML_MV_SOA_W4")) : 0;
+    static const int env_soa_w5 = getenv("GGML_MV_SOA_W5") ? atoi(getenv("GGML_MV_SOA_W5")) : 0;
     static const int env_soa_w7 = getenv("GGML_MV_SOA_W7") ? atoi(getenv("GGML_MV_SOA_W7")) : 0;
-    const bool soa_width = (env_soa_w4 && op->src[1]->ne[1] == 4) || (env_soa_w7 && op->src[1]->ne[1] == 7);
+    const bool soa_width = (env_soa_w4 && op->src[1]->ne[1] == 4) || (env_soa_w5 && op->src[1]->ne[1] == 5) || (env_soa_w7 && op->src[1]->ne[1] == 7);
     const bool use_soa = soa_width && op->src[1]->ne[2] == 1 &&
                          op->src[1]->ne[3] == 1 && op->src[0]->ne[0]%64 == 0 &&
                          ggml_metal_mul_mat_soa_w4_rows(op->src[0]->ne[1]);
@@ -2932,11 +2933,17 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
         const bool use_soa_w7 = env_soa_w7 && ne11 == 7 && ne12 == 1 && ne13 == 1 && use_f16y && use_di &&
                                 op->src[0]->type == GGML_TYPE_Q4_0 && ne00%64 == 0 &&
                                 ggml_metal_mul_mat_soa_w4_rows(ne01);
+        static const int env_soa_w5 = getenv("GGML_MV_SOA_W5") ? atoi(getenv("GGML_MV_SOA_W5")) : 0;
+        static const int env_soa_w5_hp = getenv("GGML_MV_SOA_W5_HALF") ? atoi(getenv("GGML_MV_SOA_W5_HALF")) : 0;
+        const bool use_soa_w5 = env_soa_w5 && ne11 == 5 && ne12 == 1 && ne13 == 1 && use_f16y && use_di &&
+                                op->src[0]->type == GGML_TYPE_Q4_0 && ne00%64 == 0 &&
+                                ggml_metal_mul_mat_soa_w4_rows(ne01);
         const int variant = ne11 == 4 && use_f16y && !use_di && op->src[0]->type == GGML_TYPE_Q4_0 && env_ilp == 2 ? 2 :
                             ne11 == 4 && use_di && env_di_v2 ? 3 :
                             ne11 == 4 && use_f16y && !use_di && op->src[0]->type == GGML_TYPE_Q4_0 && env_half_product ? 4 : 1;
 
         auto pipeline = use_soa_w7 ? ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w7(lib, env_soa_w7) :
+                        use_soa_w5 ? ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w5(lib, env_soa_w5, env_soa_w5_hp != 0) :
                         use_soa_w4 && env_soa_w4_r4kp ? ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w4_r4kp(lib, env_soa_w4_r4kp) :
                         use_soa_w4 && env_soa_w4_r3 ? ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w4_r3(lib) :
                         use_soa_w4 && env_soa_w4_r2 && env_soa_w4_r2_scalar ? ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w4_r2_scalar(lib) :
@@ -2972,8 +2979,9 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
         ggml_metal_encoder_set_buffer  (enc, bid_src1,                             2);
         ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         3);
 
-        if (use_soa_w7) {
-            const int rpt = env_soa_w7 == 4 ? 4 : 2;
+        if (use_soa_w7 || use_soa_w5) {
+            const int rows = use_soa_w7 ? env_soa_w7 : env_soa_w5;
+            const int rpt  = rows == 4 ? 4 : 2;
             ggml_metal_encoder_dispatch_threadgroups(enc, (ne01 + rpt - 1)/rpt, 1, 1, 32, 1, 1);
         } else if (use_soa_w4) {
             const int rpt = env_soa_w4_r4kp == 4 ? 2 : env_soa_w4_r4kp     ? 4 :

@@ -146,6 +146,7 @@ struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_q4
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w4_r2_scalar(ggml_metal_library_t lib);
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w4_r4kp(ggml_metal_library_t lib, int variant);
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w7(ggml_metal_library_t lib, int rows);
+struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w5(ggml_metal_library_t lib, int rows, bool hp);
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_nc         (ggml_metal_library_t lib, const struct ggml_tensor * op, int nc);
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm_skinny     (ggml_metal_library_t lib, const struct ggml_tensor * op, bool di);
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv            (ggml_metal_library_t lib, const struct ggml_tensor * op, bool di);
