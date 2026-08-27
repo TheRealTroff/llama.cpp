@@ -39,6 +39,12 @@ compare their issue/stall, not their exec columns.
 | w7 skinny gate/up | mul_mm_skinny_q4_0_di_f32 | 7 | 433 | 88.6 | 11.4 | 22.3M | 3.2M |
 | w7 f16b B-direct probe | mul_mm_skinny_q4_0_f16b_g16 | 7 | 443 | 82.9 | 17.1 | 20.2M | 2.9M |
 
+Follow-up 2026-08-27: `skinny-di-attribution.md` adds the same-tree plain-vs-_di pair -
+_di executes +15% MORE dynamic instructions and is +10% faster on the pass, so
+per-instruction issue cost (~25% cheaper without the interleave unpack) is a live axis
+alongside count and stall. Note the w7 `_di` rows above come from the
+`metal-repack-inplace` branch, not prod.
+
 ## Readings
 
 1. **Every kernel in the fleet is issue-dominated: 64-89% of its own time is spent
