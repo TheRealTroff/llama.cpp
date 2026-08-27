@@ -283,8 +283,13 @@ Current state:
   The lever was NOT the K-split (~1%) or the tile (~4.6%): it is source-level codegen
   - signed-int indexing + planar row pointers hoisted out of the K loop - worth -21%
   alone, which every SoA/ext kernel had been leaving on the table. Width 7 does NOT
-  transfer (skinny wins 1.5-1.7x, MMA amortization; measured, closed). Open there:
-  widths 5/6 (crossover ~w6, w5 est -20%), both depth re-sweeps, adoption.
+  transfer (skinny wins 1.5-1.7x, MMA amortization; measured, closed). **The depth
+  re-sweep is DONE same night (`run-depth-resweep.sh`): depth 3 is the new optimum
+  for BOTH spec types (dflash n3 24.82, MTP d3 24.09, next-best point 22.78), the
+  MTP-vs-dflash acceptance curves cross between depth 2 and 3 on matched text, and
+  the widths-5/6 cells are deprioritized (n4 is 4.7 t/s behind n3 - a ~20% kernel
+  saving cannot reach the optimum).** Open: adoption only (v2-vs-v3 numerics,
+  repack residency).
 - **`verify-width-instruction-economy.md` - READ WITH the open task (2026-08-25 eve).**
   The first counter-profiled width-7 pass, and the unifying mechanism for the whole
   width-4 refutation series: verify kernels are instruction-throughput-bound (~3

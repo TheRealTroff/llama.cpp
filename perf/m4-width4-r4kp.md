@@ -140,19 +140,54 @@ amortization is unbeatable by scalar FMAs - exactly `instruction-economy-league.
 reading 4. The prod-pick width-7 wall stays with skinny. Kernels kept for the record;
 do not route them.
 
+## The depth re-sweep (2026-08-27 night, `run-depth-resweep.sh`,
+`kvquant-experiments/results/depth-resweep-aug27b.tsv`) - open item 2 ANSWERED
+
+Both spec types, depths 1-7, one env (prod-pick flags + REPACK=1 + SOA_W4 + R4KP=3),
+n_predict 600, top-2 points confirmed by repeat. Machine ran ~1.3% slower than the
+afternoon e2e (n3 24.82 vs 25.15, n6 22.67 vs 23.01 - same margin, ordinary
+cross-session drift; within-run ordering is the signal).
+
+| depth | dflash t/s | acc | MTP t/s | acc |
+|---|---:|---:|---:|---:|
+| 1 | 20.374 | 85.4 | 21.447 | 86.0 |
+| 2 | 18.595 | 69.9 | 19.363 | 72.4 |
+| 3 | **24.820** (confirm 24.749) | 60.2 | **24.094** (confirm 24.016) | 59.3 |
+| 4 | 20.095 | 49.8 | 19.279 | 49.0 |
+| 5 | 21.858 | 45.7 | 19.380 | 42.0 |
+| 6 | 22.672 | 41.3 | 19.313 | 37.3 |
+| 7 | 22.783 | 36.1 | 18.493 | 31.8 |
+
+batch-1 floor on this board: 13.165. Per depth the two spec types emit IDENTICAL text
+(same sha at every depth), so the per-depth acceptance columns compare the drafters on
+the same trajectory - the cleanest such read on record.
+
+What it settles:
+
+1. **Depth 3 is the new optimum for BOTH spec types**, by 2.0 t/s over the next
+   dflash point and 4.7 over the next MTP point. The old n6 operating point reads
+   22.67 on this board: **the best-known config is dflash n3 + v3 + repack, +9.4%
+   over the n6 point** - round ~113 ms, 1.19x their pinned 95.00.
+2. **dflash n3 beats MTP d3 by ~3%** (24.82/24.75 vs 24.09/24.02). MTP's acceptance
+   edge inverts at depth 3 and its residual fixed overhead (~2-3 ms/round) persists,
+   so MTP peaks as a close second. MTP wins at depths 1-2 (its high-acceptance zone),
+   but both are dominated by depth 3.
+3. **The MTP-vs-dflash acceptance curves cross between depth 2 and 3** on matched
+   text: MTP ahead 86.0/72.4 vs 85.4/69.9 at d1/d2, behind from d3 on (59.3 vs 60.2)
+   with the deficit WIDENING with depth (d7: 31.8 vs 36.1). The old n_predict-300
+   sweep had MTP ahead everywhere - that read does not survive matched-trajectory
+   measurement.
+4. **The widths-5/6 cells are DEPRIORITIZED by this table.** Depth 4 (width 5) sits
+   4.7 t/s behind depth 3; the estimated ~20% w5 kernel saving moves n4 by a few
+   percent at most and cannot reach the optimum. Same logic for w3/depth 2. The
+   prescreens stay on record if an operating point ever moves there.
+
 ## Open
 
-1. **Widths 5 and 6** (MTP d4/d5, dflash n4/n5): the scalar form scales ~linearly with
-   columns (w4 ~250 -> w5 ~310 est) against skinny's flat ~385 fixed tile, so the
-   crossover is around width 6 and **width 5 should win ~20%**. Whole family prescreened
-   zero-spill at rows 2/4 (w8r4 16 B, threshold noise). Wiring not yet built - decide
-   the routing design (function-constant width vs per-width flags) before adding cells.
-2. **Depth/operating-point re-sweep for BOTH spec types** with the new kernels -
-   `slope-sweep.md`'s optima were priced against kernels that no longer define the
-   curve. MTP d3/d4 and dflash n3/n4 are the candidates; dflash n4 needs the w5 cell.
-3. **Adoption is the owner's call**: v2 keeps f32 products (FP-association change
-   only); v3 adds half-product rounding for +4.4 pp of the e2e win.
-   `test-backend-ops` NMSE passes; price v3 with `run-quant-kld.sh` before adopting.
-   Note the prod pick (n6/width 7) is untouched either way - adoption changes the n3/d3
-   operating points, and the pick itself only changes if the re-sweep moves it.
-4. Whole-graph pp4 and a round decomposition at n3+v3, when next measured.
+1. **Adoption is the owner's call**: the sweep says the operating point is dflash n3
+   with v3 + repack (+9.4% over the n6 point). Before moving the pick: the v2-vs-v3
+   numerics call (price v3 with `run-quant-kld.sh`), and repack residency
+   (`repack-inplace.md` - these runs use the side-buffer variant).
+2. Whole-graph pp4 and a round decomposition at n3+v3, when next measured.
+3. Width-7 "why" (why the scalar form loses to MMA above width ~5 despite matching
+   economy at 4) - parked by the owner for another session.
