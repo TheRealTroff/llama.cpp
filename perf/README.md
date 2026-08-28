@@ -72,6 +72,11 @@ What each flag buys, and where it came from:
 | `GGML_FA_MM_NWG=8` | 1 | KV split for the mm FA kernel, -60% FA | flash-attn-mm-split.md |
 | `GGML_GDN_FUSE_WB=1` | off | GDN writes the state cache directly, drops ~2.1 GB/round | gdn-writeback-fusion.md |
 
+> **Pending pick candidate (2026-08-28 morning): `GGML_MV_SOA_WL_XL=1` measures +3.04%
+> on top of this pick** (24.93 -> 25.68 at n_predict 600, byte-identical, b1 inert) by
+> routing the target lm_head to w5r4h - see `shortk-head.md`, branch `mv-shortk-head`.
+> Adding it to the pick env is the owner's call and has not been taken.
+
 Model files are not interchangeable: the target must be the byte-uniform Q4_0 build and
 the drafter must be the pure-Q4_0 requant. Both fast paths are hard-gated on
 `GGML_TYPE_Q4_0`, so a K-quant drafter silently misses them (drafter-quant-routing.md).
@@ -320,15 +325,29 @@ against it and reported a bogus +5.8%.
 Current state:
 
 - **prod-pick: this file** + `run-prod-pick.sh`
+- **`shortk-head.md` - the lm_head whitelist lever: +3.04% e2e MEASURED, adoption
+  pending (2026-08-28 morning, branch `mv-shortk-head`).** The previous night's
+  "whitelist-XL refuted at 1.89x floor / short-K wall" was a PHANTOM - its synthetic
+  ran `GGML_MV_REPACK=1`, which silently un-routes SoA arms in test-backend-ops, so
+  ext was A/B'd against ext. Engaged for real, the head runs w5r4h at 1.21x floor
+  (-36%/call); a second silent fallback (mixed-width repack cache conflict - the
+  head's first repack call is width 1-3 and pinned the di layout) then blocked the
+  win in-server and was fixed by pinning XL tensors to the SoA layout at creation.
+  **`GGML_MV_SOA_WL_XL=1` now measures +3.04% at the pick (24.93 -> 25.68 at 600
+  units), byte-identical, b1 control inert. Owner's call to add it to the pick.**
+  Also: the drafter head runs at ne11=2 at 1.09x floor (never a lever), and the
+  short-K kernel cells (r6/r8rs/r8cs, `GGML_MV_SOA_SKH`) are refuted - kept
+  unrouted. Both silent-fallback lessons are in the metal-kernel-prescreen skill.
 - **`round-decomp-w5n4.md` - the round decomposition AT THE NEW PICK (2026-08-28
   night).** Round 120.2 ms real at 300 units (26.847 t/s anchor, 1.56 b1 floors):
   verify GPU 93.9 (six w5 projections 56.8-68, lm_head 3.9, FA 6.3, GDN 3.3,
   small-op tail ~12), drafter 16.6, CPU submit 9.4, accept 0.35. **The non-kernel
   ledger is 48 ms = 40% of the round** (was 31% at n6) - the next frontier is
   drafter + FA + the small-op tail + submit, not the mv kernels. (Corrected same
-  night: the dflash drafter drafts at width 5 and its FFN already rides w5r4h -
-  the open lever is the whitelist gap: drafter lm_head ~3.7 ms + small shapes,
-  target attn_k/v smalls.)
+  night: the dflash drafter drafts at width 5 and its FFN already rides w5r4h.
+  ~~The open lever is the whitelist gap: drafter lm_head ~3.7 ms + small shapes~~
+  ANSWERED next morning, `shortk-head.md`: the target-head half of that lever is
+  real and measures +3.04% e2e; the drafter-head half never existed.)
 - **`m4-width5-crossover.md` - the width-5/6 result (2026-08-28, same branch).** The width-5
   SoA scalar cell, built despite the re-sweep's deprioritization: w5r4h (4 rows, half
   product) wins all six projections 25-31% over skinny and +25.8%/+25.2% e2e at

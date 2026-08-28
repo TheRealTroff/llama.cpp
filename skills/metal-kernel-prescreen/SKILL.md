@@ -192,6 +192,36 @@ comparison (respect any no-copying boundary - probe the FORM, not their code).
   AIR-level stage and `-mtranslator` is a closed whitelist. `AGX3_TEMP_REG_LIMIT` is
   ignored by the offline tool (it is read by the in-driver runtime compiler only).
 
+## The benchmark arm must prove its own routing
+
+A synthetic A/B is only as real as the kernel each arm actually ran, and env-gated
+routes fail SILENTLY - a declined gate falls through to the default kernel and returns a
+plausible number. Measured cost of this failure mode (2026-08-28, `perf/shortk-head.md`
+in the fork): a `test-backend-ops` arm carrying `GGML_MV_REPACK=1` never engaged the SoA
+kernel under test, because REPACK=1 only accepts weight buffers and test tensors are not
+weights - the "A/B" compared the fallback against itself, measured FLAT, and a false
+"all routes converge" mechanism was coined from it and briefly stood on record. Two
+rules:
+
+- In `test-backend-ops` runs, any repack-gated arm needs `GGML_MV_REPACK=2` (the
+  test-buffer variant), not the production `=1`.
+- Read the compiled pipeline name from the stderr OF THE TIMING INVOCATION ITSELF
+  (`compiling pipeline: ... name = kernel_...`). An engagement check done as a separate
+  run with "the same" env is exactly how the phantom slipped through; two arms that
+  measure identical to the microsecond are a routing alarm, not a convergence finding.
+
+The same lever then failed silently a SECOND way at the e2e level (same file): in-server
+the tensor's first repack-eligible call arrived at a width outside the SoA set, cached
+the di layout, and every later SoA-width call mismatched and fell back - a flat e2e that
+was nearly recorded as "the win is absorbed by concurrent dispatch". The mixed-width
+cache-conflict section below is not hypothetical; it fires on any tensor used at widths
+on both sides of a layout decision (the lm_head: prompt-final logits at width 1, verify
+at width 5). Before believing a flat e2e for a routed kernel, confirm the route engaged
+IN THE SERVER RUN - a per-op profile of the target shape, or a temporary log on the
+routing decision (note: ggml INFO logs are dropped at llama-server's default verbosity;
+use `-lv 5`). Pipeline-compile lines cannot confirm this when the pipeline is shared
+with other shapes.
+
 ## Persistent-layout correctness is a separate gate
 
 When a kernel consumes a transformed persistent buffer, treat the byte layout as cache

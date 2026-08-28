@@ -70,25 +70,28 @@ round. The three levers, largest first:
    DFlash2 drafter shares the target's hidden dims and drafts at WIDTH 5, so its
    FFN projections (5120<->17408, 10 layers) already ride w5r4h - same us/call as
    the target's verify (248.9 vs 243.5 profiled). What is NOT covered is every
-   drafter shape outside the whitelist: its 248320-vocab lm_head (~3.7 ms/round
-   real, one 715 MB stream at ~1.4x floor - the biggest single drafter op), the
+   drafter shape outside the whitelist: its 248320-vocab lm_head ~~(~3.7 ms/round
+   real, one 715 MB stream at ~1.4x floor - the biggest single drafter op)~~
+   (CORRECTED in `shortk-head.md`: the drafter head runs at ne11=2 on the nc
+   route at 1.09x its stream floor - there was never a drafter-head lever), the
    small projections (1024/1280/4096/25600-row, ~2 ms combined), FA and the
    TOP_K/lattice tail. ~~Lever: extend the whitelist with the drafter ne01s~~
-   **TRIED AND REFUTED same night.** `GGML_MV_SOA_WL_XL=1` adds ne01 4096 and
-   248320 (sub-16M shapes stay blocked by the f16y size gate before the list is
-   consulted); 1155/1155 correct; the head ENGAGES w5r4h (replay-verified
-   pipeline name) and measures FLAT vs the ext-di incumbent: 4963+-2 vs
-   4964+-1 us over 3 interleaved reps, both 1.89x the 2620 us stream floor.
-   Mechanism: the head is a SHORT-K shape - k=5120 is 20 K-iterations/thread
-   (ffn_down: 136), so per-threadgroup fixed cost (setup + reduction tail)
-   dominates and all scalar routes converge; the w5 codegen win lives in the
-   long-K loop body. The remaining XL payload (drafter 4096-row, ~0.4 ms/round)
-   sits under the small-ne01 e2e-invisibility caveat - e2e not run. The flag
-   stays as an off-by-default probe; NOT in the pick.
-   **New open stub from the same measurement: both lm_heads (~7.6 ms/round
-   combined) run at 1.89x floor. A short-K-tuned scalar variant (more rows/tg,
-   cheaper tail) reaching the FFN shapes' 1.3-1.5x would be worth ~2 ms/round
-   (~+1.7% e2e).**
+   ~~**TRIED AND REFUTED same night.** `GGML_MV_SOA_WL_XL=1` ... measures FLAT vs
+   the ext-di incumbent: 4963+-2 vs 4964+-1 us ... both 1.89x the 2620 us stream
+   floor. Mechanism: the head is a SHORT-K shape ... all scalar routes converge~~
+   **THE REFUTATION WAS A PHANTOM (`shortk-head.md`, next morning): that
+   synthetic ran `GGML_MV_REPACK=1`, which declines test-backend-ops' non-weight
+   buffers, so the "w5r4h arm" silently measured ext - the A/B compared ext
+   against ext.** With `GGML_MV_REPACK=2` the head engages w5r4h and reads
+   **3175 us vs ext-di's 4967 = 1.21x floor, -36%, ~1.79 ms/call** - the w5 win
+   transfers to the head at full size; there is no short-K wall (gate/up has the
+   same k=5120 and the same 20 K-iterations/thread). The short-K-tuned cells
+   were built anyway and rank r8rs -0.8% / r6 +4% / r8cs +52% vs w5r4h, closing
+   the amortization question: no fixed cost worth chasing. A SECOND silent
+   fallback (mixed-width repack cache conflict) then blocked the lever in-server;
+   with it fixed (SoA creation pin), **XL measures +3.04% e2e at the pick,
+   byte-identical, b1 control inert - adoption is the owner's call.** Full
+   story, both fallbacks, and the pricing: `shortk-head.md`.
 3. **CPU submit, 9.4 ms** - flat since 2026-08-22 across three picks; per-round graph
    build/encode. Fixed cost, so its share grows with every kernel win (7.8% now).
 
