@@ -55,9 +55,18 @@ in the interleaved A/B, byte-identical** (`cpu-round-overhead.md`, commit
 **27.02/27.55 at 300, 25.75/25.80 at 600, batch-1 12.46**, all shas canonical.
 **Read this mint with its drift caveat**: the b1 anchor - GMC-insensitive at +0.4% -
 came in 4% under the morning's 12.97, and the same config read 26.06/26.45 at 600
-two hours earlier, so the machine ran slower for this mint (afternoon thermal/state
-drift; the interleaved A/B is the config-attributable number). A cooled re-mint is
-queued; treat cross-session comparisons per the standing ~3% drift rule.
+two hours earlier, so the machine ran slower for this mint. **The drift was then
+chased and every single-mechanism explanation was REFUTED same day** (TAG
+`prodpick-aug28-gmc-cooled`: 25.32/25.63 at 600, b1 13.04): sleep (pmset log: zero
+events in any benchmark window), display state (the pmset display log brackets
+every harness window ON to the second - each harness's `caffeinate -u` wakes the
+panel, confirmed by eye), thermal (b1 RECOVERED after idle while spec-600 did not,
+and b1 had also dropped after an earlier idle), and memory pressure (21.7 GB free,
+compressor 1.6 GB, swap 108 MB after ~20 server cycles). Verdict: same-config
+absolutes wander +/-2-4% within one day with unattributed structure. **Size levers
+ONLY from within-harness interleaved deltas** (how the +3.3% was measured); treat
+canonical mints as anchors carrying the day's spread, and record the mint-adjacent
+b1 as the machine-state anchor every time.
 
 ```
 GGML_MV_NC=2 GGML_MM_SKINNY=6 GGML_FA_VEC_MAX=5 GGML_FA_MM_NWG=8 GGML_GDN_FUSE_WB=1 \
