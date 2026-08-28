@@ -30,6 +30,16 @@ unexplained" note in `cpu-round-overhead.md`.
      accumulate over K up to 17408, overflow risk in pathological activations) -
      **adoption is the owner's quality call**; decode is untouched at the pick
      (skinny/mv own ne11 <= 8, so in-server this reaches prefill/large-batch only).
+   - **KLD PRICED (owner: "run the KLD to weed out pathologies"; TAG
+     `kldacch-aug28`, 24x2048 wikitext vs q8_0 logits, same binary, env the only
+     variable): NO pathologies** - max KLD unchanged (24.06 -> 23.81), no inf,
+     tail ratios preserved. The cost is real and broadband: mean KLD 0.05397 ->
+     0.06031 (**+11.8%, ~1/8 of Q4_0's own quant cost**; the control arm
+     reproduced the recorded 0.05397 to 5 digits), median +27%, Same-top-p
+     90.75 -> 89.88 (-0.86 pt). The shift is well BELOW the raw sqrt(K) f16
+     arithmetic (~1% RMS per matmul) - the inter-layer RMSNorms absorb most of
+     it, which also argues the same trick is cheap on the FA ladder (item 2).
+     **Trade on the table: +8.3% prefill for +0.006 mean KLD - owner's call.**
 2. The FA ladder (~3.8 s, quadratic in context) and GATED_DELTA_NET (~2.4 s).
 3. The pre-batch-1 gap (~4.1 s once per request: tokenize + slot setup + first
    update_slots sync) - unsampled (the window started after it), minor, still open.
