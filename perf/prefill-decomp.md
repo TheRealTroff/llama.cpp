@@ -17,7 +17,19 @@ unexplained" note in `cpu-round-overhead.md`.
    M4 Pro's presumed hardware peak is 8.1-9.2 (`ffn-utilization.md:137`) - the 15-25%
    between them is the same instruction-economy wall as decode
    (`skinny-stall-attribution.md`: 77% issue-bound). A mul_mm win transfers ~1:1 to
-   prefill wall.
+   prefill wall. **PROBED same evening (owner: "reuse one of the tricks"; branch
+   `mm-acc-half`, UNMERGED - quality gate pending).** Per-instruction profile of the
+   captured n=512 kernel (`traces/aug28/mm-n512-*`): one 174-instruction K-loop,
+   98.6% issue / 0.9% stall - pure instruction economy. Measured levers:
+   - dequant tax ~5% (f16 weights 7.22 vs q4_0 6.87 TFLOPS, new perf cases);
+   - **half-accumulate MMA (`GGML_MM_ACC_HALF=1`): 6.87 -> 7.25 / 6.79 -> 7.17
+     TFLOPS, real prefill 67.7 -> 62.5 s = +8.3% (132.6 t/s) - 8.8% FASTER THAN
+     MLX's 68.0 on the same prompt.** The 2x f16 FMA rate question is answered NO
+     (the win is accumulator instruction width, not rate). All 1157 MUL_MAT evals
+     pass NMSE, but the OUTPUT TEXT CHANGES (target hidden-state numerics; f16
+     accumulate over K up to 17408, overflow risk in pathological activations) -
+     **adoption is the owner's quality call**; decode is untouched at the pick
+     (skinny/mv own ne11 <= 8, so in-server this reaches prefill/large-batch only).
 2. The FA ladder (~3.8 s, quadratic in context) and GATED_DELTA_NET (~2.4 s).
 3. The pre-batch-1 gap (~4.1 s once per request: tokenize + slot setup + first
    update_slots sync) - unsampled (the window started after it), minor, still open.
