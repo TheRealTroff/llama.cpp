@@ -76,3 +76,37 @@ where our kernel is worst (`occupancy-next.md`: width 4 costs 141.0 ms/round aga
 95.00). The high-acceptance end wants width 7-8, where our 8-wide tile is nearly full and we
 are fine. **So the tile problem specifically taxes conversational and creative traffic**, and
 a width-4 kernel is worth more on that traffic than the benchmark suggests.
+
+## Refreshed at the adopted pick: n4 + drafter window (2026-08-28, TAG `corpacc-aug28`)
+
+Harness `run-corpus-acceptance.sh`: every prompt run twice at depth 4, with the pick's
+`LLAMA_DRAFT_WINDOW=1024` and without. n_predict 300, same method as above.
+
+| prompt | acc | committed/rd | acc per pos (n4) | vs n6 committed/rd |
+|---|--:|--:|---|--:|
+| `benchprompt` window | **57.5%** | **3.26** | (.890 .692 .429 .275) | 3.75 |
+| `benchprompt` no-win | 55.7% | 3.19 | (.849 .667 .430 .269) | |
+| `01-code-explain` | 49.8% | 2.97 | (.760 .540 .400 .290) | 3.12 |
+| `02-prose-creative` | 40.1% | 2.59 | (.713 .443 .270 .174) | 2.80 |
+| `03-chat-support` | 42.6% | 2.69 | (.733 .486 .324 .162) | 2.79 |
+| `04-math-derivation` | 91.1% | 4.55 | (.969 .923 .892 .815) | 6.25 |
+| `05-json-boilerplate` | 97.1% | 4.76 | (1.00 .984 .967 .934) | 6.67 |
+
+Three findings:
+
+1. **The window is INERT on the whole tiny corpus - measured, not assumed.** Win and
+   no-win arms are byte-identical (sha, acc, survival curve) on all five prompts:
+   `apply_window` returns until n_past > sink+window = 1088, and prompt+300 never gets
+   there. The window's acceptance gain exists only at benchprompt scale, where it is
+   real: 55.7 -> 57.5, committed/rd 3.19 -> 3.26, and the improvement is concentrated
+   at POSITION 1 (.849 -> .890) - trimming stale context helps the first draft most.
+2. **Depth 4 taxes the saturated workloads hard.** Math and JSON, which committed
+   6.25/6.67 per round at n6, commit 4.55/4.76 at n4 (the ceiling is 5) - ~35% more
+   rounds on exactly the traffic where rounds are cheapest to amortize. The n4
+   optimum was measured on benchprompt-style text; on a math/JSON-heavy workload the
+   depth re-sweep would likely land deeper. Reinforces this file's adaptive-depth
+   conclusion; the pick stays n4 for the benchmark workload.
+3. **The n4 tail survives better than n6's tail did.** At matched positions 3-4,
+   n4's curves sit above n6's on every free-form prompt (e.g. 01: .400/.290 vs
+   .337/.242) - the shorter noise block conditions the tail positions better. Part
+   of why n4 wins e2e despite committing less per round.
