@@ -341,7 +341,10 @@ against it and reported a bogus +5.8%.
   (`run-head-to-head.sh`: 180 s up front, 120 s between runs). A battery run would have slept
   mid-harness and the next arm would have measured a cold cache and a ramping clock, with no
   error anywhere. **No recorded number is affected by sleep** - `pmset -g log` reports
-  `Total Sleep/Wakes since boot: 0` over the machine's whole uptime - but nothing in the
+  `Total Sleep/Wakes since boot: 0` over the machine's whole uptime (counter re-checked
+  2026-08-28: now 3, but all three events are 2026-08-24 18:46-18:48 on battery - a
+  plug/unplug moment, none during any benchmark window, so the claim still holds for
+  every recorded number) - but nothing in the
   harness was enforcing that; it was the AC setting doing it. Verify with that counter, not
   by reasoning about whether the display was on.
   **Open, and not answered by that counter: throttling with the display off.** Sleep and
