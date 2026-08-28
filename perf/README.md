@@ -385,9 +385,14 @@ Current state:
   Alone it is flat, but it removes the readback sync that blocked ASYNC_INJECT and
   the pair goes submit-only: **+0.76% e2e at 600 (interleaved, repeats +-0.005),
   byte-identical, both canonical shas hold** - adoption into the pick is the
-  owner's call (`DFLASH_FUSED_INJECT=1 DFLASH_ASYNC_INJECT=1`). Remaining open
-  items: the decode's non-mv tail (TOP_K 1.09 ms/round, FA over full ~8.4k KV,
-  elementwise) and drafter-design questions (head ~30% of the drafter).
+  owner's call (`DFLASH_FUSED_INJECT=1 DFLASH_ASYNC_INJECT=1`). Both remaining
+  doors opened same evening (owner's ask): **drafter attention window
+  `LLAMA_DRAFT_WINDOW=1024` measures +1.94% e2e with acceptance IMPROVED (50.1 vs
+  49.8), knee bracketed (512 +1.25%, 2048 +0.94%), sha-safe by construction,
+  `run-draft-window.sh` - adoption owner's call**; TOP_K's 1.09 ms is a serialized
+  merge-ladder structure (~5 MB data), streaming two-dispatch design scoped in the
+  stub, prize ~+0.8%. Remaining: elementwise tail, drafter-design questions (head
+  ~30% of the drafter).
   Speculation is lossless, so the canonical shas gate any drafting change;
   acceptance is the quantity to watch. Read `drafter-pipelining.md` first
   (serialization anatomy, the section-3 queue blocker; its correction (a)

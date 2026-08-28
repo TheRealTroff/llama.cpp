@@ -76,11 +76,29 @@ whose inside decomposes as above, plus ~1.2 ms of enc/inject slivers.
 ## Open questions, reframed (in order)
 
 1. **TOP_K, 1.09 ms/round on [248320,5]** - a fixed per-round cost ~1% of e2e on its
-   own. Kernel-level (partial top-k / fused with the head read?) or algorithmic
-   (does the selector need full-vocab top-16 every row?).
-2. **Drafter FA runs over the full ~8.4k KV** (s1=[128,8448..8704] at benchprompt).
-   Why is the ring window not bounding it at this shape (`full_ctx_min`?), and what
-   would windowed drafting cost in acceptance - drafter design, the owner's call.
+   own. **Scoped 2026-08-28 evening (owner: "what's hiding behind those 2 doors?"):**
+   the Metal op is NOT a naive full argsort - it is block-bitonic top-k (1024-wide
+   blocks, keep 16 -> 243 blocks -> 3888 candidates) followed by a merge ladder of
+   **8 serialized dispatches** (`ggml-metal-ops.cpp` ggml_metal_op_top_k, each round
+   a concurrency reset, tail rounds single-threadgroup latency-bound). The data is
+   only ~5 MB (~20 us at peak), so the 1.09 ms is dispatch/serialization structure.
+   Design on the shelf: streaming two-dispatch top-k (each threadgroup scans a strip
+   keeping a local top-16, one merge of the ~1-4k candidates) - expect ~0.1-0.15 ms,
+   **prize ~0.9 ms/round ~ +0.8% e2e**. Confirm attribution with the per-instruction
+   profiler before building. Algorithmic sub-door (does the selector need exact
+   full-vocab top-16?) is drafter design - owner's.
+2. ~~**Drafter FA runs over the full ~8.4k KV**~~ **MEASURED same evening
+   (`run-draft-window.sh`, interleaved 600 units, sha canonical in EVERY arm - text
+   is verify-gated, so windowing is sha-safe by construction):** the already-built
+   `LLAMA_DRAFT_WINDOW` machinery was simply never benchmarked. Sweep: w512 +1.25%
+   (acc 49.6), **w1024 +1.94% e2e (acc 50.1 - acceptance IMPROVES over full-context
+   49.8)**, w2048 +0.94% (acc 49.8); drafter lattice 13.1-13.4 -> 11.7-11.8 ms.
+   Clean knee at 1024. **The largest single lever measured on the drafter plane -
+   adoption is the owner's call (`LLAMA_DRAFT_WINDOW=1024`).** Two follow-ups if
+   adopted: (a) window mode currently falls back off `DFLASH_FUSED_INJECT` (ring
+   needs g rows on host) - plumb the g readback through the nextn output to stack
+   the +0.76%; (b) the window's win should GROW with context (FA scales linearly),
+   so re-check at longer prompts; sink=64 default and `full_ctx_min` untouched.
 3. **The elementwise/REPEAT/ADD tail** (~1-2 ms profiled). Serialization caveat in
    full force (small-ne01 lesson): line items are upper bounds, some of this hides
    under concurrent dispatch. Only e2e deltas count.
