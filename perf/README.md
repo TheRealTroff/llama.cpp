@@ -51,8 +51,13 @@ canonical `9ad7e023c6ab` - output identity holds against the whole slope-sweep r
 `GGML_METAL_GET_MEMCPY=1`**, which performs the per-round logits readback as a
 memcpy after the sync wait instead of upstream's blit-behind-the-graph: **+3.3% e2e
 in the interleaved A/B, byte-identical** (`cpu-round-overhead.md`, commit
-`116bf753c`). Canonical numbers with the flag in: TAG `prodpick-aug28-gmc` (minted
-on adoption - see the Current number section).
+`116bf753c`). Canonical mint TAG `prodpick-aug28-gmc` (commit `44e49bc90`):
+**27.02/27.55 at 300, 25.75/25.80 at 600, batch-1 12.46**, all shas canonical.
+**Read this mint with its drift caveat**: the b1 anchor - GMC-insensitive at +0.4% -
+came in 4% under the morning's 12.97, and the same config read 26.06/26.45 at 600
+two hours earlier, so the machine ran slower for this mint (afternoon thermal/state
+drift; the interleaved A/B is the config-attributable number). A cooled re-mint is
+queued; treat cross-session comparisons per the standing ~3% drift rule.
 
 ```
 GGML_MV_NC=2 GGML_MM_SKINNY=6 GGML_FA_VEC_MAX=5 GGML_FA_MM_NWG=8 GGML_GDN_FUSE_WB=1 \
