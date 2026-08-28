@@ -88,8 +88,14 @@ Gaps sum to the 18.4 s independently of the wall arithmetic. Key facts:
 2. ~~**Confirm the GPU actually idles during the gaps**~~ ANSWERED: it does not -
    op-sum ~ wall within 5%, GPU continuously busy.
 3. **The FA ladder (~3.8 s)** quadratic in context - grows fast beyond 8k. Secondary.
-4. Roof work (the mm 50 s vs the 8.1-9.2 hardware peak) - the real prefill lever,
-   owner's machine-understanding thread.
+4. Roof work (the mm 50 s vs the 8.1-9.2 hardware peak) - the real prefill lever.
+   **PROBED on branch `mm-acc-half` (2026-08-28 late, owner: "reuse one of the
+   tricks"; UNMERGED, quality gate = owner's call): `GGML_MM_ACC_HALF=1`
+   (simdgroup_half8x8 accumulators) measures +5.5% on the kernel and +8.3% on the
+   real prefill wall, 67.7 -> 62.5 s - 8.8% faster than MLX. Output text changes
+   (f16 accumulate numerics; all 1157 MUL_MAT NMSE evals pass). The 2x f16 FMA
+   rate does NOT materialize; dequant tax measured ~5%. Full record in that
+   branch's copy of this file.**
 5. The pre-batch-1 ~4.1 s (once per request) - unsampled, minor.
 
 ## Method notes
