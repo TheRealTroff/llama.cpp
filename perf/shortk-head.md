@@ -132,10 +132,12 @@ measurable.
   and the README pick block. Canonical post-adoption numbers (TAG
   `prodpick-aug28-xl`): 27.67/27.80 at 300 units (pre-XL 26.847, +3.3%), 25.79/25.74
   at 600, b1 12.97 unchanged, 300-unit sha = canonical `9ad7e023c6ab`.
-- Interaction for the standing q6_K-head quality decision (`weight-quant-kld.md`): a
-  q6_K `output.weight` leaves the Q4_0 fast path, so adopting it now also forfeits the
-  target-head half of this win (~+1.5%; the drafter head keeps its half) - the head
-  upgrade's speed cost is no longer just its bytes. Re-price before taking that call.
+- ~~Interaction for the standing q6_K-head quality decision: re-price before taking
+  that call.~~ **Settled by the owner 2026-08-28: the q6_K head is deprioritized
+  ("quality benchmarks were kind of meh"). The quality path, when taken, is the
+  Unsloth UD build with its many per-tensor formats, gated on machine understanding
+  from the q4 work - see the README quality blockquote.** The interaction stands as
+  the reason the q6 head got more expensive, not as an open decision.
 - The decomposition's non-kernel ledger needs re-reading at the extended pick: the
   verify-GPU term shrinks ~1.5 ms real, draft_call ~1.5 ms real, and both lm_head
   lines move to ~1.2x floor. The commit `a2e13ef0a` message carries the

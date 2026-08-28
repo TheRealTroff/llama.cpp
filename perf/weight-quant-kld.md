@@ -1,6 +1,12 @@
 # What Q4_0 actually costs: +2.5% PPL, and 1 token in 11 with a different argmax
 
-Status: **open.** Measured 2026-08-23 at prod `c244170f0`, `perf/run-quant-kld.sh`,
+Status: ~~open~~ **CLOSED as a decision 2026-08-28 - the owner deprioritized the q6_K
+head ("quality benchmarks were kind of meh"; with WL_XL in the pick it would also cost
+the target-head half of `shortk-head.md`'s +3%). The quality direction, when taken, is
+the Unsloth UD build with its many per-tensor formats, gated on understanding the
+machine well enough to generalize the fast path beyond uniform Q4_0 - do not
+re-propose the q6 head.** The measurements below stand as the price list.
+Measured 2026-08-23 at prod `c244170f0`, `perf/run-quant-kld.sh`,
 24 chunks x 2048 tokens (49152 tokens) of wikitext-2, `-fa on -ctk f16 -ctv f16` both sides
 so the only variable is the weight format. Reference logits kept (26 GB, path in the run log)
 so a follow-up arm does not have to regenerate them.

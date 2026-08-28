@@ -104,8 +104,16 @@ the drafter must be the pure-Q4_0 requant. Both fast paths are hard-gated on
 > K-quant dequant is free. **Adopt the head, skip the body**: the head's 2.1% is exactly its
 > bytes, while the body costs 7.5% before any verify-width penalty and forfeits skinny and
 > repack for +1.45 pp and a *worse* extreme tail (99.9% KLD +29%, max +34%).
-> `~/play/Qwen3.8-27B-uniform-Q4_0-q6Khead.gguf` exists; **moving the prod pick to it is the
-> owner's call and has not been taken unilaterally.** Speculation itself is lossless (byte-identical output across configs), so
+> `~/play/Qwen3.8-27B-uniform-Q4_0-q6Khead.gguf` exists; ~~moving the prod pick to it is the
+> owner's call and has not been taken unilaterally~~ **DEPRIORITIZED by the owner
+> 2026-08-28 ("not that interested... quality benchmarks were kind of meh"): do not
+> re-propose the q6_K head.** With WL_XL in the pick it would also forfeit the
+> target-head half of `shortk-head.md`'s +3%. **The quality direction, when taken, is
+> the Unsloth UD build with its many per-tensor formats** - and that work is gated on
+> understanding the machine well enough to generalize the fast path beyond uniform
+> Q4_0, which is one big part of what the q4 work is for (`ffn-utilization.md` already
+> located UD's gain in the FFN, exactly the bytes the fast path owns). Speculation
+> itself is lossless (byte-identical output across configs), so
 > the weight format is the only place in this stack where speed is bought with quality.
 
 **Depth must stay <= 7.** Skinny routes `ne11 <= 8` and depth d verifies d+1 columns, so
@@ -493,7 +501,10 @@ Current state:
   nxpsg reading at width 3 as well as 4 (registers identical, instruction count slightly
   *higher* at nxpsg=16, so the win is grid geometry) and measure f16y halving device loads
   16 -> 8.
-- **`weight-quant-kld.md` - OPEN, and it is about the actual goal rather than about kernels.**
+- **`weight-quant-kld.md` - ~~OPEN~~ CLOSED as a decision 2026-08-28 (owner: q6_K head
+  deprioritized, "quality benchmarks were kind of meh"; the quality path when taken is
+  Unsloth UD, gated on machine understanding - see the pick's quality blockquote). The
+  file stands as the price list.**
   What the Q4_0 gate costs, measured against q8_0 logits: +2.5% PPL, mean KLD 0.054, and
   **90.75% same top token**. The tail is heavy (99% KLD 0.454, 99.9% 4.386, max 24.1) and PPL
   is blind to it, which retires `mtp-kv-results.md`'s "premium tensors bought nothing
