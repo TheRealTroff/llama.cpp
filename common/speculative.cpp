@@ -951,6 +951,12 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
     int32_t n_window     = 0; // 0 = disabled
     int32_t full_ctx_min = 0; // > 0: keep the full drafter context once n_past reaches this
 
+    // DFLASH_ASYNC_INJECT: drop the explicit sync after the drafter inject decode. The next
+    // read of the drafter output syncs anyway, so this only moves the wait later; it is safe
+    // because llama_decode copies the batch into device memory before it returns, and both
+    // contexts share one Metal queue, so graphs still execute in submit order.
+    bool async_inject = false;
+
     struct feat_row {
         llama_pos pos;
         std::vector<float> row;
@@ -1027,6 +1033,11 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
 
         selector_rng.resize(n_seq);
         selector_reset.assign(n_seq, true);
+
+        if (const char * env = std::getenv("DFLASH_ASYNC_INJECT")) {
+            async_inject = std::atoi(env) != 0;
+            LOG_INF("%s: - drafter async inject: %s\n", __func__, async_inject ? "on" : "off");
+        }
 
         if (const char * env = std::getenv("LLAMA_DRAFT_WINDOW")) {
             n_window = std::atoi(env);
@@ -1159,7 +1170,9 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
             }
             const int32_t rc = llama_decode(params.ctx_dft, batch_inject);
             GGML_ASSERT(rc == 0 && "DFlash: sink+window re-injection failed");
-            llama_synchronize(params.ctx_dft);
+            if (!async_inject) {
+                llama_synchronize(params.ctx_dft);
+            }
             batch_inject.n_tokens = 0;
         };
         auto push = [&](const feat_row & fr) {
@@ -1274,7 +1287,9 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
                 return false;
             }
             // The server may switch contexts before the next draft decode.
-            llama_synchronize(ctx_dft);
+            if (!async_inject) {
+                llama_synchronize(ctx_dft);
+            }
 
             if (n_chunk <= 16) { // generation-size chunks only, keep prefill out of the averages
                 static int64_t t_enc = 0, t_inj = 0, n_prof = 0;
