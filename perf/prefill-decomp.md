@@ -17,12 +17,31 @@ benchprompt (8288 tokens), prefill wall 68.1 s = 121.7 t/s at the adopted pick:
 | drafter (enc/inject during prefill) | **~0.4 s = free** | probe: pick 68.10 s vs nodraft 67.67 s |
 | **outside llama_decode entirely** | **~18.4 s, ~4.6 s/batch** | wall 68.1 - dec_sub_pp 49.7; identical in BOTH arms |
 
-Key facts about the 18.4 s:
+**VERIFIED 2026-08-28 late (owner: "can you verify that's real?") from the probe
+log's own timestamps** - decode entry = print time minus dec_sub; the timer bracket
+is tight around llama_decode (`server-context.cpp:3746`, inside yield_to_queue):
 
-- `dec_sub_pp` = 4 batches x ~12.3 s each, **including batch 1 against an idle GPU** -
-  llama_decode synchronizes its own batch (the old "alloc-waits-on-previous" story is
-  dead; the GPU busy time is INSIDE dec_sub_pp). So the 18.4 s is not queue drain -
-  it sits BETWEEN decode calls, in update_slots or request handling.
+| segment | tokens | gap before | dec_sub | (gap+dec)/token |
+|---|--:|--:|--:|--:|
+| batch 1 | 2048 | **4.14 s** (task start -> entry; NO GPU work exists yet - pure CPU) | 12.00 | 8.06 ms |
+| batch 2 | 2048 | 4.39 | 12.17 | 8.08 ms |
+| batch 3 | 2048 | 4.57 | 12.29 | 8.23 ms |
+| batch 4 | 1628 | **0.93** | 12.83 | 8.45 ms |
+| chunk 5 | 512 | 4.35 | **0.005** | 8.51 ms |
+
+Gaps sum to the 18.4 s independently of the wall arithmetic. Key facts:
+
+- ~~llama_decode synchronizes its own batch~~ WRONG (struck): chunk 5 went through
+  llama_decode in 4.7 ms - decode CAN return submit-only. The ~12 s dec_subs are
+  internal ubatch-pipeline waits, not a per-batch sync.
+- **Wall/token is nearly constant (8.1-8.5 ms) across every segment while the
+  gap/decode split wanders** - the batch-4 outlier is the accounting boundary
+  moving, not different work. Best-fit model: ~4.3-4.6 s of real CPU work per
+  batch between decodes, under which the previous batch's ~3 s GPU tail hides
+  (GPU idles ~1+ s/batch). The pre-batch-1 gap proves at least ~4.1 s of it is
+  pure CPU (tokenization of 8k is ~0.1 s - something else eats ~4 s).
+- The 18.4 s is not queue drain - it sits BETWEEN decode calls, in update_slots
+  or request handling.
 - Drafter-independent (nodraft arm identical), so it is not layer_inp extraction,
   not process()/injection, not the ring.
 - MLX prefills the same model/prompt in **68.0 s** (`mlx-cycle-capture.md:238`) - the
