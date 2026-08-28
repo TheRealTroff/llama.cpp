@@ -205,3 +205,13 @@ between 5 and 6.
    ever wanted anyway: restore prefetch distance without registers (kp2-style K-split
    across two simdgroups, or explicit threadgroup staging of y with scalar dequant) -
    long shot given the ~10% deficit, parked.
+4. **Two unprobed micro-levers on the named wall (2026-08-28, listed while ranking
+   frontiers - neither measured, both cheap to rank):** (a) wider weight loads - the
+   w5 kernels load q as a single 4-byte uint per row per pack; the SoA layout permits
+   uint2/uint4 (2-4 packs per instruction), same prefetch depth for fewer tracked
+   in-flight ops. Unroll was closed +/-3% but load WIDTH was never isolated; rank
+   offline first via the 14-byte-form count in the disasm histogram. (b)
+   `AGX3_TEMP_REG_LIMIT` at runtime - the offline tool ignores it because the
+   in-driver runtime compiler reads it (`toolchain-isa-probe.md`); nobody has probed
+   whether it moves the allocator's pressure/pipelining trade on a live pipeline. If
+   it does anything, it is the only direct register knob we have.
