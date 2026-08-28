@@ -18,7 +18,7 @@ unexplained" note in `cpu-round-overhead.md`.
    between them is the same instruction-economy wall as decode
    (`skinny-stall-attribution.md`: 77% issue-bound). A mul_mm win transfers ~1:1 to
    prefill wall. **PROBED same evening (owner: "reuse one of the tricks"; branch
-   `mm-acc-half`, UNMERGED - quality gate pending).** Per-instruction profile of the
+   `mm-acc-half`, MERGED to prod on adoption).** Per-instruction profile of the
    captured n=512 kernel (`traces/aug28/mm-n512-*`): one 174-instruction K-loop,
    98.6% issue / 0.9% stall - pure instruction economy. Measured levers:
    - dequant tax ~5% (f16 weights 7.22 vs q4_0 6.87 TFLOPS, new perf cases);
@@ -28,7 +28,7 @@ unexplained" note in `cpu-round-overhead.md`.
      (the win is accumulator instruction width, not rate). All 1157 MUL_MAT evals
      pass NMSE, but the OUTPUT TEXT CHANGES (target hidden-state numerics; f16
      accumulate over K up to 17408, overflow risk in pathological activations) -
-     **adoption is the owner's quality call**; decode is untouched at the pick
+     ~~adoption is the owner's quality call~~ **ADOPTED 2026-08-28 night (owner: "I will absolutely take the prefill win") - in PICK_ENV, new canonical sha lineage minted as `prodpick-aug28-acch` (README pick block)**; decode is untouched at the pick
      (skinny/mv own ne11 <= 8, so in-server this reaches prefill/large-batch only).
    - **KLD PRICED (owner: "run the KLD to weed out pathologies"; TAG
      `kldacch-aug28`, 24x2048 wikitext vs q8_0 logits, same binary, env the only
@@ -39,7 +39,7 @@ unexplained" note in `cpu-round-overhead.md`.
      90.75 -> 89.88 (-0.86 pt). The shift is well BELOW the raw sqrt(K) f16
      arithmetic (~1% RMS per matmul) - the inter-layer RMSNorms absorb most of
      it, which also argues the same trick is cheap on the FA ladder (item 2).
-     **Trade on the table: +8.3% prefill for +0.006 mean KLD - owner's call.**
+     ~~Trade on the table: +8.3% prefill for +0.006 mean KLD - owner's call.~~ **TAKEN (owner, same night).**
 2. The FA ladder (~3.8 s, quadratic in context) and GATED_DELTA_NET (~2.4 s).
    **FA half-accumulate probed same night (owner: "do the FA as well") - CLOSED
    for now, two results:** (a) the FULL-half pack (qk+s+o) is a LAYOUT TRAP, not
