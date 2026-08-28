@@ -956,6 +956,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
     // because llama_decode copies the batch into device memory before it returns, and both
     // contexts share one Metal queue, so graphs still execute in submit order.
     bool async_inject = false;
+    bool fused_inject = false; // enc fc+norm runs inside the injection graph, no host round-trip for g
 
     struct feat_row {
         llama_pos pos;
@@ -1019,8 +1020,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
             this->params.n_min = std::min(this->params.n_min, n_draft_max);
         }
 
-        batch        = llama_batch_init(llama_n_batch(ctx_dft), 0,          n_seq);
-        batch_inject = llama_batch_init(llama_n_batch(ctx_dft), n_embd_dec, n_seq);
+        batch = llama_batch_init(llama_n_batch(ctx_dft), 0, n_seq);
 
         smpls.resize(n_seq);
         for (auto & s : smpls) {
@@ -1053,6 +1053,24 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
             LOG_INF("%s: - drafter context window: sink=%d window=%d full_ctx_min=%d\n",
                     __func__, n_sink, n_window, full_ctx_min);
         }
+
+        if (const char * env = std::getenv("DFLASH_FUSED_INJECT")) {
+            fused_inject = std::atoi(env) != 0;
+        }
+        if (fused_inject && n_window > 0) {
+            LOG_WRN("%s: - fused inject disabled: the drafter window path needs g rows on the host\n", __func__);
+            fused_inject = false;
+        }
+        if (fused_inject) {
+            llama_set_dflash_inject_wide(ctx_dft, true);
+            LOG_INF("%s: - drafter fused inject: on\n", __func__);
+        }
+
+        // fused mode carries encoder-width feature rows; process() chunks by n_ubatch
+        batch_inject = fused_inject
+            ? llama_batch_init(llama_n_ubatch(ctx_dft), n_embd_enc, n_seq)
+            : llama_batch_init(llama_n_batch (ctx_dft), n_embd_dec, n_seq);
+
         ring_sink.resize(n_seq);
         ring_win.resize(n_seq);
         ring_pos_last.assign(n_seq, -1);
@@ -1229,42 +1247,51 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
         // Flatten token-wise encoder work into shared chunks while preserving each row's position and sequence.
         for (int32_t offset = 0; offset < n_tokens; offset += n_ubatch) {
             const int32_t n_chunk = std::min(n_ubatch, n_tokens - offset);
-            features_buf.resize((size_t) n_chunk * n_embd_enc);
+            // fused mode feeds the raw features to the injection graph; the encoder fc+norm runs there
+            float * feat_dst = batch_inject.embd;
+            if (!fused_inject) {
+                features_buf.resize((size_t) n_chunk * n_embd_enc);
+                feat_dst = features_buf.data();
+            }
             for (uint32_t k = 0; k < target_layer_ids_n; ++k) {
                 const float * layer = llama_get_embeddings_layer_inp(ctx_tgt, (uint32_t) target_layer_ids[k]);
                 if (!layer) {
                     GGML_ABORT("DFlash: target layer %d input not extracted.", target_layer_ids[k]);
                 }
                 for (int32_t i = 0; i < n_chunk; ++i) {
-                    float       * dst = features_buf.data() + (size_t) i * n_embd_enc + k * (size_t) n_embd_tgt;
+                    float       * dst = feat_dst + (size_t) i * n_embd_enc + k * (size_t) n_embd_tgt;
                     const float * src = layer + (size_t) (offset + i) * n_embd_tgt;
                     std::memcpy(dst, src, (size_t) n_embd_tgt * sizeof(float));
                 }
             }
 
-            llama_batch enc_batch = {
-                /*.n_tokens =*/ n_chunk,
-                /*.token    =*/ nullptr,
-                /*.embd     =*/ features_buf.data(),
-                /*.pos      =*/ nullptr,
-                /*.n_seq_id =*/ nullptr,
-                /*.seq_id   =*/ nullptr,
-                /*.logits   =*/ nullptr,
-            };
-
             const int64_t t_enc0 = ggml_time_us();
-            int32_t rc = llama_encode(ctx_dft, enc_batch);
-            if (rc != 0) {
-                LOG_ERR("%s: llama_encode(ctx_dft) failed rc=%d (n_tokens=%d, offset=%d)\n",
-                        __func__, rc, (int) n_chunk, (int) offset);
-                return false;
+            const float * inp_g = nullptr;
+            if (!fused_inject) {
+                llama_batch enc_batch = {
+                    /*.n_tokens =*/ n_chunk,
+                    /*.token    =*/ nullptr,
+                    /*.embd     =*/ features_buf.data(),
+                    /*.pos      =*/ nullptr,
+                    /*.n_seq_id =*/ nullptr,
+                    /*.seq_id   =*/ nullptr,
+                    /*.logits   =*/ nullptr,
+                };
+
+                int32_t rc_enc = llama_encode(ctx_dft, enc_batch);
+                if (rc_enc != 0) {
+                    LOG_ERR("%s: llama_encode(ctx_dft) failed rc=%d (n_tokens=%d, offset=%d)\n",
+                            __func__, rc_enc, (int) n_chunk, (int) offset);
+                    return false;
+                }
+
+                inp_g = llama_get_embeddings_nextn(ctx_dft);
+                GGML_ASSERT(inp_g && "DFlash encoder produced no output.");
+
+                std::memcpy(batch_inject.embd, inp_g, (size_t) n_chunk * n_embd_dec * sizeof(float));
             }
 
-            const float * inp_g = llama_get_embeddings_nextn(ctx_dft);
-            GGML_ASSERT(inp_g && "DFlash encoder produced no output.");
-
             batch_inject.n_tokens = n_chunk;
-            std::memcpy(batch_inject.embd, inp_g, (size_t) n_chunk * n_embd_dec * sizeof(float));
             for (int32_t i = 0; i < n_chunk; ++i) {
                 const int32_t j = offset + i;
                 GGML_ASSERT(batch_in.n_seq_id[j] == 1);
@@ -1280,7 +1307,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
             }
 
             const int64_t t_inj0 = ggml_time_us();
-            rc = llama_decode(ctx_dft, batch_inject);
+            const int32_t rc = llama_decode(ctx_dft, batch_inject);
             if (rc != 0) {
                 LOG_ERR("%s: llama_decode(ctx_dft) failed rc=%d (n_tokens=%d, offset=%d)\n",
                         __func__, rc, (int) n_chunk, (int) offset);

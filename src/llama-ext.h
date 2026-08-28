@@ -108,6 +108,10 @@ LLAMA_API float * llama_get_embeddings_nextn(struct llama_context * ctx);
 LLAMA_API float * llama_get_embeddings_nextn_ith(struct llama_context * ctx, int32_t i);
 
 // Set whether the context outputs the input embeddings of a specific layer
+// DFlash: decode embd batches carry encoder-width feature rows and the encoder fc+norm
+// runs inside the injection graph (fused enc+inject, no host round-trip for g)
+LLAMA_API void llama_set_dflash_inject_wide(struct llama_context * ctx, bool value);
+
 LLAMA_API void llama_set_embeddings_layer_inp(struct llama_context * ctx, uint32_t lid, bool value);
 
 // mirrors:

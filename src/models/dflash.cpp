@@ -472,15 +472,28 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
 
     // KV cache injection
     if (ubatch.embd) {
-        auto inp = std::make_unique<llm_graph_input_embd>(n_embd);
+        // wide mode: the batch carries raw target features and the encoder fc+norm runs here,
+        // fused into the injection graph (no host round-trip for g)
+        const bool    wide      = cparams.dflash_inject_wide;
+        const int64_t n_embd_in = wide ? hparams.n_embd_inp_enc() : n_embd;
 
-        inp->embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd, n_tokens);
+        auto inp = std::make_unique<llm_graph_input_embd>(n_embd_in);
+
+        inp->embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd_in, n_tokens);
         ggml_set_input(inp->embd);
 
         ggml_tensor * inp_g = inp->embd;
         cb(inp_g, "inp_g_embeddings", -1);
 
         res->add_input(std::move(inp));
+
+        if (wide) {
+            inp_g = build_lora_mm(model.fc, inp_g, model.fc_s);
+            cb(inp_g, "fc_out", -1);
+
+            inp_g = build_norm(inp_g, model.output_norm_enc, NULL, LLM_NORM_RMS, -1);
+            cb(inp_g, "enc_norm_out", -1);
+        }
 
         for (int il = 0; il < n_layer; ++il) {
             const auto & layer = model.layers[il];
