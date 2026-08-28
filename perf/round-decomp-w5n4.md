@@ -70,10 +70,10 @@ round. The three levers, largest first:
    DFlash2 drafter shares the target's hidden dims and drafts at WIDTH 5, so its
    FFN projections (5120<->17408, 10 layers) already ride w5r4h - same us/call as
    the target's verify (248.9 vs 243.5 profiled). What is NOT covered is every
-   drafter shape outside the whitelist: its 248320-vocab lm_head ~~(~3.7 ms/round
-   real, one 715 MB stream at ~1.4x floor - the biggest single drafter op)~~
-   (CORRECTED in `shortk-head.md`: the drafter head runs at ne11=2 on the nc
-   route at 1.09x its stream floor - there was never a drafter-head lever), the
+   drafter shape outside the whitelist: its 248320-vocab lm_head (one width-5
+   call per round, 4833 us profiled - `shortk-head.md`; ~~an intermediate
+   "ne11=2, 1.09x floor, never a lever" correction was a truncated-grep
+   artifact~~), the
    small projections (1024/1280/4096/25600-row, ~2 ms combined), FA and the
    TOP_K/lattice tail. ~~Lever: extend the whitelist with the drafter ne01s~~
    ~~**TRIED AND REFUTED same night.** `GGML_MV_SOA_WL_XL=1` ... measures FLAT vs
@@ -89,8 +89,9 @@ round. The three levers, largest first:
    were built anyway and rank r8rs -0.8% / r6 +4% / r8cs +52% vs w5r4h, closing
    the amortization question: no fixed cost worth chasing. A SECOND silent
    fallback (mixed-width repack cache conflict) then blocked the lever in-server;
-   with it fixed (SoA creation pin), **XL measures +3.04% e2e at the pick,
-   byte-identical, b1 control inert - adoption is the owner's call.** Full
+   with it fixed (SoA creation pin), **XL measures +3.04% e2e - BOTH heads ride
+   w5r4h (the drafter's is also one width-5 call/round) - byte-identical, b1
+   control inert. ADOPTED into the pick 2026-08-28 (owner: "add it").** Full
    story, both fallbacks, and the pricing: `shortk-head.md`.
 3. **CPU submit, 9.4 ms** - flat since 2026-08-22 across three picks; per-round graph
    build/encode. Fixed cost, so its share grows with every kernel win (7.8% now).

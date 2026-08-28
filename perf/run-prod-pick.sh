@@ -43,9 +43,11 @@ mkdir -p "$OUT"
 # dflash n4 + the SoA scalar kernels (w4 v3 at draft-path width 4, w5r4h at verify
 # width 5) + repack side buffer - see perf/m4-width5-crossover.md. SKINNY=6, not 5:
 # skinny takes ne11 >= value and must not swallow width 5 ahead of the w5 route.
+# WL_XL added 2026-08-28 (owner's decision): routes both 248320-vocab lm_heads to
+# w5r4h, +3.04% e2e - see perf/shortk-head.md.
 PICK_ENV=(GGML_MV_NC=2 GGML_MM_SKINNY=6 GGML_FA_VEC_MAX=5 GGML_FA_MM_NWG=8 GGML_GDN_FUSE_WB=1
           GGML_MV_REPACK=1 GGML_MV_SOA_W4=1 GGML_MV_SOA_W4_R4KP=3
-          GGML_MV_SOA_W5=4 GGML_MV_SOA_W5_HALF=1)
+          GGML_MV_SOA_W5=4 GGML_MV_SOA_W5_HALF=1 GGML_MV_SOA_WL_XL=1)
 # What the older harnesses set, kept to show the delta is the missing flags.
 PART_ENV=(GGML_MV_NC=2 GGML_MM_SKINNY=5)
 

@@ -62,17 +62,20 @@ At 1.21x floor the head now sits where the w4/w5 family's routed projections sit
 (1.2-1.5x); the residual is the same scalar-route issue economy priced in
 `m4-width4-r4kp.md`, not a head-specific wall.
 
-## Only ONE head sits behind the whitelist gap
+## BOTH heads sit behind the whitelist gap (corrected twice, second one struck)
 
-The aug28 profiled dump (re-read while pricing the e2e) corrects the decomposition's
-drafter claim a second time: the DRAFTER's head runs at **ne11=2** (`m2 MUL_MAT
-s0=[5120,248320] s1=[5120,2]`, 2851 us/call) - it rides the `GGML_MV_NC=2` route and is
-at **1.09x its stream floor already**. "One 715 MB stream at ~1.4x floor - the biggest
-single drafter op" was wrong on both counts; there was never a drafter-head lever. Only
-the TARGET's verify head ([5120,248320] at ne11=5, 92 calls, 5022 us/call profiled -
-matching the ext-di synthetic) is behind the whitelist gap. XL's honest ceiling is
-therefore ~1.8 ms serialized ~= 1.5 ms real on a 120.2 ms round ~= **+1.2% e2e**, not
-the stub's ~2 ms / +1.7%.
+~~First correction while pricing the e2e: the drafter head runs at ne11=2 (2851
+us/call, nc route, 1.09x floor) - never a lever; only the target head counts, XL
+ceiling ~+1.2%.~~ **WRONG - a truncated-grep artifact** (a `grep 248320 | tail -6`
+that only surfaced the small rows at the bottom of the per-op dump). The full m2
+section shows the DRAFTER's head at **`s1=[5120,5]`, 93 calls, 4833 us/call** - one
+width-5 call per round, same shape, same blocked routing as the target's; the
+`[5120,2]` row is a single one-time call. The dflash drafter drafts at width 5, so
+BOTH lm_heads are behind the whitelist gap: **~2 x 1.8 ms serialized ~= ~3.0 ms real
+~= +2.5-3% e2e ceiling** - which the measured +3.04% matches cleanly. The target head:
+92 calls at 5022 us profiled (matching the ext-di synthetic). What survives of the
+first correction: the drafter head's per-round path is one call at width 5, not the
+old n6-decomp's "~2 calls/round" framing.
 
 ## First e2e: flat - and that was a SECOND silent routing failure, not absorption
 
@@ -113,23 +116,27 @@ pick uses.
 
 Byte-identical across all runs (`3776c0adb7ee` spec / `319b45fd5909` b1), acceptance
 pinned at 49.8%, xl spread 0.04 t/s over 4 order-balanced reps, fresh server per run.
-The win EXCEEDS the +1.2% serialized estimate (~1.5 real ms): consistent with the ext
-head having been worth more than its share-anchored 3.9 ms on the round's critical path
-(it sits at a concurrency boundary before sampling; the profiled shares under-priced
-it). The b1 control also says the pin's cost is nil there - the head's di layout at
-batch 1 was worth nothing measurable.
+~~The win exceeds the +1.2% estimate because the ext head sat at a concurrency
+boundary~~ - no: the win matches the TWO-head arithmetic (previous section); the +1.2%
+"only the target head" estimate rested on the truncated-grep error. The b1 control
+says the pin's cost is nil there - the head's di layout at batch 1 was worth nothing
+measurable.
 
 ## Status
 
 - **Kernel outcome: the SKH cells are refuted for routing** (r8rs -0.8% is sub-noise;
   r6/r8cs lose). Kernels stay in-tree unrouted, like the w7 scalar cells.
-- **Lever outcome: `GGML_MV_SOA_WL_XL=1` + the SoA creation pin is worth +3.0% e2e at
-  the pick** (25.68 vs 24.93 at n_predict 600, this board). **Adding it to the prod
-  pick is the owner's call, not taken here** - if adopted, the flag joins the pick env
-  and the README pick block.
+- **Lever outcome: ADOPTED.** `GGML_MV_SOA_WL_XL=1` + the SoA creation pin is worth
+  +3.04% e2e (25.68 vs 24.93 at n_predict 600, this board). **The owner took the call
+  2026-08-28 morning ("add it")**: the flag is in the pick env in `run-prod-pick.sh`
+  and the README pick block. Canonical post-adoption numbers (TAG
+  `prodpick-aug28-xl`): 27.67/27.80 at 300 units (pre-XL 26.847, +3.3%), 25.79/25.74
+  at 600, b1 12.97 unchanged, 300-unit sha = canonical `9ad7e023c6ab`.
 - Interaction for the standing q6_K-head quality decision (`weight-quant-kld.md`): a
-  q6_K `output.weight` leaves the Q4_0 fast path, so adopting it now also forfeits this
-  +3.0% - the head upgrade's speed cost is no longer just its bytes. Re-price before
-  taking either call.
-- The decomposition's non-kernel ledger needs re-reading after adoption: the verify-GPU
-  term shrinks ~3.5 ms and the lm_head line moves to ~1.2x floor.
+  q6_K `output.weight` leaves the Q4_0 fast path, so adopting it now also forfeits the
+  target-head half of this win (~+1.5%; the drafter head keeps its half) - the head
+  upgrade's speed cost is no longer just its bytes. Re-price before taking that call.
+- The decomposition's non-kernel ledger needs re-reading at the extended pick: the
+  verify-GPU term shrinks ~1.5 ms real, draft_call ~1.5 ms real, and both lm_head
+  lines move to ~1.2x floor. The commit `a2e13ef0a` message carries the
+  "never a drafter-head lever" error; this file is the correction.
