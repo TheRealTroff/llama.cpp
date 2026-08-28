@@ -27,6 +27,7 @@ mkdir -p "$OUT"
 PICK_ENV=(GGML_MV_NC=2 GGML_MM_SKINNY=6 GGML_FA_VEC_MAX=5 GGML_FA_MM_NWG=8 GGML_GDN_FUSE_WB=1
           GGML_MV_REPACK=1 GGML_MV_SOA_W4=1 GGML_MV_SOA_W4_R4KP=3
           GGML_MV_SOA_W5=4 GGML_MV_SOA_W5_HALF=1 GGML_MV_SOA_WL_XL=1
+          GGML_METAL_GET_MEMCPY=1
           LLAMA_DECODE_PROF=1)
 
 PICK_SPEC=(-md "$MD" --spec-type draft-dflash --spec-draft-n-max 4)
@@ -106,12 +107,13 @@ SPROF_ENV=("${PICK_ENV[@]}" GGML_METAL_SUBMIT_PROF=1)
 run_one "sprof-n4" 600 PICK_SPEC SPROF_ENV
 run_one "sprof-b1" 300 BASE_SPEC SPROF_ENV
 
-# get-memcpy A/B: deferred host memcpy vs the upstream blit for logits readback
-# (GGML_METAL_GET_MEMCPY=1). Interleaved reps - run-to-run spread today is ~2%.
-GMC_ENV=("${PICK_ENV[@]}" GGML_METAL_GET_MEMCPY=1)
-run_one "gmc-ctrl-a" 600 PICK_SPEC
-run_one "gmc-on-a"   600 PICK_SPEC GMC_ENV
-run_one "gmc-ctrl-b" 600 PICK_SPEC
-run_one "gmc-on-b"   600 PICK_SPEC GMC_ENV
-run_one "gmc-b1-ctrl" 300 BASE_SPEC
-run_one "gmc-b1-on"   300 BASE_SPEC GMC_ENV
+# get-memcpy A/B: deferred host memcpy vs the upstream blit for logits readback.
+# GET_MEMCPY is in the pick since 2026-08-28 pm, so the ctrl arms now disable it
+# explicitly (a trailing =0 wins). Interleaved reps - run-to-run spread is ~2%.
+GMC_OFF_ENV=("${PICK_ENV[@]}" GGML_METAL_GET_MEMCPY=0)
+run_one "gmc-ctrl-a" 600 PICK_SPEC GMC_OFF_ENV
+run_one "gmc-on-a"   600 PICK_SPEC
+run_one "gmc-ctrl-b" 600 PICK_SPEC GMC_OFF_ENV
+run_one "gmc-on-b"   600 PICK_SPEC
+run_one "gmc-b1-ctrl" 300 BASE_SPEC GMC_OFF_ENV
+run_one "gmc-b1-on"   300 BASE_SPEC

@@ -155,3 +155,33 @@ process footprint at all.
 it: `ggml_metal_op_prepack_q4_0: repacked 369 q4_0 weights (13642.03 MiB) to the deinterleaved
 layout in place` on the target model alone. The output sha is the better tell in a harness: a
 repacked run emits `a08f1b87121c` where an unrepacked one emits `3776c0adb7ee`.
+
+## Owner's direction 2026-08-28: make it a file, not a load-time pass
+
+> "Arguably this is a one time operation whose result would be writable to disk and
+> memmapped."
+
+Correct, and it dissolves the worse of the two adoption blockers. The deinterleave is
+a size-preserving permutation, so an offline converter can write the permuted GGUF
+once and the server then mmaps THAT file read-only:
+
+- **The `--load-mode none` requirement disappears** - no runtime writes, pages stay
+  file-backed and page-cache-warm, and the load-time conversion pass itself goes away.
+  The runtime diff shrinks to _di routing plus a load-time check, which also makes the
+  79-commit rebase easier than reviving the full in-place pass.
+- **Residency cost goes to zero** - no side buffer, not even the in-place +0.6 GiB.
+- **What it does NOT answer: the 3.4%.** mmap-ed weights are CPU-coherent shared
+  memory like the in-place buffer, so expect in-place-class speed, not side-buffer
+  class, until item 1 above is understood. Still ~+10% for +0 GiB.
+- **The file is no longer standard Q4_0** - any consumer without _di routing (stock
+  llama.cpp, the CPU backend) would read garbage. It needs a loud marker: a GGUF KV
+  (e.g. `general.q4_0_layout=di`) or per-tensor metadata that this fork requires
+  before routing and everything else refuses. Upstream precedent exists: the old
+  Q4_0_4_4/Q4_0_8_8 types were exactly on-disk repacked layouts (later moved to
+  runtime repack - we would be moving back, deliberately, for mmap's sake).
+- **Conversion policy must be per-tensor at build time**, mirroring the runtime gate
+  (>= 16 M elements, nblk % 8 == 0) and skipping tensors consumed by ops with no _di
+  variant - `token_embd.weight` (GET_ROWS gather) is the case to be explicit about.
+- Disk cost: a second ~15 GB target GGUF (+1 GB drafter), or keep only the _di files.
+
+Not started; recorded as the adoption path in place of the load-time in-place pass.

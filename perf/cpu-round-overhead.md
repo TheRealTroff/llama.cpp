@@ -142,8 +142,11 @@ ran on CPU-visible memory, upstream just routed it through the GPU queue.
 within-harness deltas are the measurement.) Batch-1 control (`cpuovh-aug28g`):
 13.397 -> 13.452 (+0.4%), sha canonical - coherent, the b1 copy is one row (~1 MB)
 so the saving scales with copy size as the mechanism predicts.
-**Unmerged, branch `cpu-round-overhead` - adoption into the pick is the owner's
-call** (like BSPLIT it is a pure code-default question, no trade-off found).
+~~**Unmerged, branch `cpu-round-overhead` - adoption into the pick is the owner's
+call** (like BSPLIT it is a pure code-default question, no trade-off found).~~
+**ADOPTED 2026-08-28 afternoon (owner: "pick get_memcpy")**: in `run-prod-pick.sh`
+PICK_ENV and the README pick block; branch merged to prod; canonical numbers TAG
+`prodpick-aug28-gmc`.
 
 **Adjacent non-CPU observation, for the drafter plane:** the drafter streams its
 ~1 GB of weights ~3.1 times per round (3.1 graphs x 4.4 ms at ~235 GB/s - near

@@ -47,10 +47,17 @@ w5r4h via the whitelist extension plus the SoA creation pin: **+3.04% e2e in the
 **25.79/25.74 at 600**, batch-1 12.97 unchanged, and the 300-unit output sha is the
 canonical `9ad7e023c6ab` - output identity holds against the whole slope-sweep record.
 
+**Extended again 2026-08-28 afternoon (owner: "pick get_memcpy"): +
+`GGML_METAL_GET_MEMCPY=1`**, which performs the per-round logits readback as a
+memcpy after the sync wait instead of upstream's blit-behind-the-graph: **+3.3% e2e
+in the interleaved A/B, byte-identical** (`cpu-round-overhead.md`, commit
+`116bf753c`). Canonical numbers with the flag in: TAG `prodpick-aug28-gmc` (minted
+on adoption - see the Current number section).
+
 ```
 GGML_MV_NC=2 GGML_MM_SKINNY=6 GGML_FA_VEC_MAX=5 GGML_FA_MM_NWG=8 GGML_GDN_FUSE_WB=1 \
 GGML_MV_REPACK=1 GGML_MV_SOA_W4=1 GGML_MV_SOA_W4_R4KP=3 GGML_MV_SOA_W5=4 GGML_MV_SOA_W5_HALF=1 \
-GGML_MV_SOA_WL_XL=1 \
+GGML_MV_SOA_WL_XL=1 GGML_METAL_GET_MEMCPY=1 \
   llama-server -m Qwen3.8-27B-uniform-Q4_0.gguf -c 10240 -fa on -ctk f16 -ctv f16 \
     -md Qwen3.8-27B-DFlash2-pureQ4_0.gguf --spec-type draft-dflash --spec-draft-n-max 4
 ```
@@ -78,6 +85,7 @@ What each flag buys, and where it came from:
 | `GGML_MV_SOA_W4=1` + `GGML_MV_SOA_W4_R4KP=3` | 0 | width-4 SoA scalar kernel, v3 (half product) - MTP draft path runs width-4 ops at every depth | m4-width4-r4kp.md |
 | `GGML_MV_SOA_W5=4` + `GGML_MV_SOA_W5_HALF=1` | 0 | width-5 SoA scalar kernel w5r4h on the six routed projections (the verify width at n4) | m4-width5-crossover.md |
 | `GGML_MV_SOA_WL_XL=1` | 0 | extends the SoA whitelist with ne01 248320 + 4096 and pins those tensors to the SoA repack layout at creation - both lm_heads ride w5r4h, +3.04% e2e | shortk-head.md |
+| `GGML_METAL_GET_MEMCPY=1` | 0 | get_tensor_async readbacks (logits, 5 MB/round) as memcpy-after-wait instead of a blit command buffer queued behind the graph, +3.3% e2e | cpu-round-overhead.md |
 | `GGML_FA_VEC_MAX=5` | 20 | FA vec/mm routing cutoff. **5, not 4** - at 4 an MTP-path FA call reroutes and output changes | flash-attn-mm-split.md |
 | `GGML_FA_MM_NWG=8` | 1 | KV split for the mm FA kernel, -60% FA | flash-attn-mm-split.md |
 | `GGML_GDN_FUSE_WB=1` | off | GDN writes the state cache directly, drops ~2.1 GB/round | gdn-writeback-fusion.md |
@@ -641,6 +649,9 @@ Current state:
   24.64), most likely private vs CPU-coherent storage. Branch `metal-repack-inplace`,
   unmerged; `GGML_MV_REPACK=2` is a test hook that finally makes the `_di` kernels reachable
   from `test-backend-ops` (trap 3 below), and `=3` is the old side buffer, kept for A/B.
+  **Direction set 2026-08-28 (owner): do the permutation OFFLINE - write the deinterleaved
+  GGUF to disk once and mmap it.** Kills the `--load-mode none` blocker and all residency
+  cost; the 3.4% question and the _di-coverage gates remain. See the file's closing section.
 - **`skinny-tpr-bsplit.md` - CLOSED. The last tuning axis on the skinny kernel is refuted,
   and the win is beside it.** `ext-at-width7-refuted.md` left one untested lever: the A-tile
   loader's threads-per-row (`GGML_MM_SKINNY_TPR`, branch `metal-mm-skinny-tpr`, unmerged),
