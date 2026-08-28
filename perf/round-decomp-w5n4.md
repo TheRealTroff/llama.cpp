@@ -24,9 +24,16 @@ acceptance mix, do not cross-compare absolutes; README trap 1).
 |---|---:|---:|---:|
 | verify GPU (dec_syn_tg) | 93.9 | 78.1% | 121.8 |
 | draft_call (drafter fwd + lattice) | 16.6 | 13.8% | 18.0 |
-| CPU graph build/submit (dec_sub_tg) | 9.4 | 7.8% | 9.6 |
+| ~~CPU graph build/submit (dec_sub_tg)~~ | ~~9.4~~ | ~~7.8%~~ | ~~9.6~~ |
 | accept + checkpoints | 0.35 | 0.3% | 0.3 |
 | **round** | **120.2** | | 150.3 |
+
+> **The dec_sub_tg row (and the n6 column's 9.6) is a PROFILER ARTIFACT - corrected
+> 2026-08-28 (`cpu-round-overhead.md`).** These CPU terms came from the profiled run
+> deflated by the round ratio, which the README rule explicitly says cannot correct
+> the submit path. Measured unprofiled at this pick: **2.2-2.6 ms**, and mostly
+> hidden under GPU execution. The dec_syn/draft rows survive (GPU-wait dominated);
+> the corrected wall is in `cpu-round-overhead.md`.
 
 Round = 1.56 b1 floors (was 2.05 at n6). Speculation buys 2.07x over the floor at
 the 300-unit point.
@@ -93,8 +100,11 @@ round. The three levers, largest first:
    w5r4h (the drafter's is also one width-5 call/round) - byte-identical, b1
    control inert. ADOPTED into the pick 2026-08-28 (owner: "add it").** Full
    story, both fallbacks, and the pricing: `shortk-head.md`.
-3. **CPU submit, 9.4 ms** - flat since 2026-08-22 across three picks; per-round graph
-   build/encode. Fixed cost, so its share grows with every kernel win (7.8% now).
+3. ~~**CPU submit, 9.4 ms** - flat since 2026-08-22 across three picks; per-round graph
+   build/encode. Fixed cost, so its share grows with every kernel win (7.8% now).~~
+   ARTIFACT - see the blockquote under the round wall table; real 2.2-2.6 ms,
+   mostly hidden (`cpu-round-overhead.md`). "Flat across picks" was the artifact
+   being flat: profiler encode inflation depends only on node count.
 
 Artifacts: `results/rounddecomp-aug28-{anchor,prof}-{n4,b1}.server.log`. Harness
 note: RUN_ROUND_DECOMP_W5N4.sh takes a second arg to filter runs (`anchor`/`prof`);

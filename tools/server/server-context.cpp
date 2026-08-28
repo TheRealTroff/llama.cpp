@@ -2772,6 +2772,9 @@ private:
     int64_t t_dec_sub_pp  = 0; // llama_decode submit, large batch
     int64_t t_dec_syn_pp  = 0; // llama_synchronize wait, large batch
     int64_t t_accept_blk  = 0; // sampler clone + sample_and_accept_n + rollback
+    int64_t t_loop_gap    = 0; // wall between update_slots calls (queue/results work between iterations)
+    int64_t t_loop_body   = 0; // whole update_slots call
+    int64_t t_loop_exit   = 0;
     int64_t n_ck_save_pre = 0;
     int64_t n_draft_call  = 0;
     int64_t n_ck_post     = 0;
@@ -2780,6 +2783,7 @@ private:
     int64_t n_dec_sub_pp  = 0;
     int64_t n_dec_syn_pp  = 0;
     int64_t n_accept_blk  = 0;
+    int64_t n_loop        = 0;
 #define DEBUG_TIMINGS
 #ifdef DEBUG_TIMINGS
     struct scoped_timer {
@@ -2805,18 +2809,32 @@ private:
 #ifdef DEBUG_TIMINGS
         static int64_t t_prev = 0;
         int64_t t_start = ggml_time_us();
+        // gap > 1 s means the server was idle, not between rounds
+        if (t_loop_exit > 0 && t_start - t_loop_exit < 1000000) {
+            t_loop_gap += t_start - t_loop_exit;
+            n_loop++;
+        }
+        struct loop_mark {
+            int64_t * t_body;
+            int64_t * t_exit;
+            int64_t   t0;
+            ~loop_mark() {
+                const int64_t t = ggml_time_us();
+                *t_body += t - t0;
+                *t_exit  = t;
+            }
+        } lm { &t_loop_body, &t_loop_exit, t_start };
         if (t_start - t_prev > 5 * 1000 * 1000) { // every 5 seconds
             t_prev = t_start;
-            SRV_INF("n_pre_decode      = %" PRId64 "\n", n_pre_decode);
-            SRV_INF("avg t_pre_decode  = %f ms\n", (double) t_pre_decode / n_pre_decode / 1000.0);
-            SRV_INF("avg t_decode      = %f ms\n", (double) t_decode / n_decode / 1000.0);
-            SRV_INF("avg t_post_decode = %f ms\n", (double) t_post_decode / n_post_decode / 1000.0);
-            SRV_INF("avg t_sampl       = %f ms\n", (double) t_sampl / n_sampl / 1000.0);
             auto dump = [](const char * name, int64_t t, int64_t n) {
                 if (n > 0) {
                     SRV_INF("spec-prof %-14s n = %6" PRId64 ", avg = %8.3f ms, total = %9.1f ms\n", name, n, (double) t / n / 1000.0, (double) t / 1000.0);
                 }
             };
+            dump("pre_decode",  t_pre_decode,  n_pre_decode);
+            dump("decode",      t_decode,      n_decode);
+            dump("post_decode", t_post_decode, n_post_decode);
+            dump("sampl",       t_sampl,       n_sampl);
             dump("ck_save_pre", t_ck_save_pre, n_ck_save_pre);
             dump("draft_call",  t_draft_call,  n_draft_call);
             dump("ck_post",     t_ck_post,     n_ck_post);
@@ -2825,6 +2843,8 @@ private:
             dump("dec_sub_pp",  t_dec_sub_pp,  n_dec_sub_pp);
             dump("dec_syn_pp",  t_dec_syn_pp,  n_dec_syn_pp);
             dump("accept_blk",  t_accept_blk,  n_accept_blk);
+            dump("loop_gap",    t_loop_gap,    n_loop);
+            dump("loop_body",   t_loop_body,   n_loop);
         }
 #endif
 

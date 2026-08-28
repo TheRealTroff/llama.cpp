@@ -11,6 +11,9 @@
 
 #import <Metal/Metal.h>
 
+#include <mach/mach_time.h>
+#include <stdatomic.h>
+
 #undef MIN
 #undef MAX
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
@@ -18,6 +21,9 @@
 
 // max number of MTLCommandBuffer used to submit a graph for processing
 #define GGML_METAL_MAX_COMMAND_BUFFERS 8
+
+// max deferred host-side get_tensor copies (GGML_METAL_GET_MEMCPY=1)
+#define GGML_METAL_MAX_DEFERRED_GETS 16
 
 // per-op GPU time profiling (GGML_METAL_PROFILE=1)
 // one encoder per op with timestamp samples at the encoder boundaries
@@ -83,6 +89,46 @@ static int ggml_metal_prof_cmp(const void * a, const void * b) {
     const struct ggml_metal_prof_entry * eb = b;
     return ea->ticks < eb->ticks ? 1 : ea->ticks > eb->ticks ? -1 : 0;
 }
+
+// submit-prof (GGML_METAL_SUBMIT_PROF=1): per-graph GPU timeline against the host encode window,
+// to measure how much of the CPU submit is exposed on the round vs hidden under GPU execution.
+// per-buffer GPU times come from MTLCommandBuffer GPUStartTime/GPUEndTime (same timebase as
+// mach_absolute_time), so this adds no encoders and does not perturb the timings it measures.
+struct ggml_metal_submit_rec {
+    double entry;       // graph_compute entry (host)
+    double encode_done; // dispatch_apply returned, all buffers committed (host)
+    // slot 0 is the main-thread buffer (first nodes, executes first), slot 1+i is worker i
+    double t0[GGML_METAL_MAX_COMMAND_BUFFERS + 1];
+    double t1[GGML_METAL_MAX_COMMAND_BUFFERS + 1];
+    int    n_bufs;
+    int    n_nodes;
+    struct ggml_metal * ctx;
+    atomic_int n_done;
+};
+
+static NSLock * g_sprof_lock = nil;
+
+static bool ggml_metal_submit_prof_enabled(void) {
+    static int res = -1;
+    if (res < 0) {
+        const char * val = getenv("GGML_METAL_SUBMIT_PROF");
+        res = val ? atoi(val) : 0;
+        if (res) {
+            g_sprof_lock = [[NSLock alloc] init];
+        }
+    }
+    return res > 0;
+}
+
+static double ggml_metal_submit_prof_now(void) {
+    static mach_timebase_info_data_t tb;
+    if (tb.denom == 0) {
+        mach_timebase_info(&tb);
+    }
+    return 1e-9 * mach_absolute_time() * tb.numer / tb.denom;
+}
+
+static void ggml_metal_submit_prof_complete(struct ggml_metal_submit_rec * rec);
 
 // device limits: at most 32 live sample buffers, at most 4096 samples each -> one buffer per command buffer
 #define GGML_METAL_PROF_MAX_SAMPLES 4096
@@ -201,7 +247,106 @@ struct ggml_metal {
 
     // ordinal for the profiler key - separates per-model rows (target/drafter dims collide)
     int prof_id;
+
+    // submit-prof accumulators (GGML_METAL_SUBMIT_PROF=1), guarded by g_sprof_lock
+    struct {
+        int    n;
+        double nodes;   // graph nodes
+        double sub;     // host encode window: entry -> dispatch_apply done
+        double pre;     // GPU idle before the first buffer starts
+        double gaps;    // GPU idle between buffers
+        double busy;    // sum of per-buffer GPU time
+        double tail;    // GPU time left after the host encode window closes
+        double span;    // entry -> last GPU end
+        double exposed; // pre + gaps + host encode past the last GPU end
+    } sprof;
+
+    // deferred host-side get_tensor copies (GGML_METAL_GET_MEMCPY=1): instead of encoding a
+    // blit into an extra command buffer behind the graph, remember the copy and do a plain
+    // memcpy in synchronize after the wait - the source buffer is CPU-visible (unified memory)
+    struct {
+        void *        dst;
+        id<MTLBuffer> src;
+        size_t        offs;
+        size_t        size;
+    } get_deferred[GGML_METAL_MAX_DEFERRED_GETS];
+    int n_get_deferred;
 };
+
+static bool ggml_metal_get_memcpy_enabled(void) {
+    static int res = -1;
+    if (res < 0) {
+        const char * val = getenv("GGML_METAL_GET_MEMCPY");
+        res = val ? atoi(val) : 0;
+    }
+    return res > 0;
+}
+
+static void ggml_metal_drain_deferred_gets(struct ggml_metal * ctx) {
+    for (int i = 0; i < ctx->n_get_deferred; ++i) {
+        memcpy(ctx->get_deferred[i].dst, (const char *) [ctx->get_deferred[i].src contents] + ctx->get_deferred[i].offs, ctx->get_deferred[i].size);
+    }
+    ctx->n_get_deferred = 0;
+}
+
+static void ggml_metal_submit_prof_finalize(struct ggml_metal_submit_rec * rec) {
+    const int n = rec->n_bufs;
+
+    double busy = 0.0;
+    double gaps = 0.0;
+    double t_first =  1e30;
+    double t_last  = -1e30;
+    for (int i = 0; i < n; ++i) {
+        busy   += rec->t1[i] - rec->t0[i];
+        t_first = MIN(t_first, rec->t0[i]);
+        t_last  = MAX(t_last,  rec->t1[i]);
+    }
+    for (int i = 1; i < n; ++i) {
+        gaps += MAX(0.0, rec->t0[i] - rec->t1[i - 1]);
+    }
+
+    struct ggml_metal * ctx = rec->ctx;
+
+    [g_sprof_lock lock];
+
+    ctx->sprof.n       += 1;
+    ctx->sprof.nodes   += rec->n_nodes;
+    ctx->sprof.sub     += rec->encode_done - rec->entry;
+    ctx->sprof.pre     += t_first - rec->entry;
+    ctx->sprof.gaps    += gaps;
+    ctx->sprof.busy    += busy;
+    ctx->sprof.tail    += MAX(0.0, t_last - rec->encode_done);
+    ctx->sprof.span    += t_last - rec->entry;
+    ctx->sprof.exposed += (t_first - rec->entry) + gaps + MAX(0.0, rec->encode_done - t_last);
+
+    // windowed averages: the first window absorbs load/prefill warmup (pipeline JIT), later windows are steady state
+    if (ctx->sprof.n % 64 == 0) {
+        const double k = 1e3/ctx->sprof.n;
+        fprintf(stderr, "ggml-metal submit-prof m%d n=%d nodes=%d avg ms: sub %.3f pre %.3f gaps %.3f busy %.3f tail %.3f span %.3f exposed %.3f\n",
+            ctx->prof_id, ctx->sprof.n, (int) (ctx->sprof.nodes/ctx->sprof.n),
+            k*ctx->sprof.sub, k*ctx->sprof.pre, k*ctx->sprof.gaps, k*ctx->sprof.busy,
+            k*ctx->sprof.tail, k*ctx->sprof.span, k*ctx->sprof.exposed);
+        memset(&ctx->sprof, 0, sizeof(ctx->sprof));
+    }
+
+    [g_sprof_lock unlock];
+}
+
+static void ggml_metal_submit_prof_complete(struct ggml_metal_submit_rec * rec) {
+    // parties: one completed-handler per buffer, plus the encoding thread; the last one finalizes
+    if (atomic_fetch_add(&rec->n_done, 1) == rec->n_bufs) {
+        ggml_metal_submit_prof_finalize(rec);
+        free(rec);
+    }
+}
+
+static void ggml_metal_submit_prof_attach(struct ggml_metal_submit_rec * rec, id<MTLCommandBuffer> cmd_buf, int slot) {
+    [cmd_buf addCompletedHandler:^(id<MTLCommandBuffer> cb) {
+        rec->t0[slot] = [cb GPUStartTime];
+        rec->t1[slot] = [cb GPUEndTime];
+        ggml_metal_submit_prof_complete(rec);
+    }];
+}
 
 ggml_metal_t ggml_metal_init(ggml_metal_device_t dev) {
     GGML_LOG_INFO("%s: allocating\n", __func__);
@@ -378,6 +523,8 @@ void ggml_metal_synchronize(ggml_metal_t ctx) {
         ctx->cmd_buf_last = nil;
     }
 
+    ggml_metal_drain_deferred_gets(ctx);
+
     // check status of all command buffers
     {
         const int n_cb = ctx->n_cb;
@@ -484,6 +631,22 @@ void ggml_metal_set_tensor_async(ggml_metal_t ctx, struct ggml_tensor * tensor, 
 }
 
 void ggml_metal_get_tensor_async(ggml_metal_t ctx, const struct ggml_tensor * tensor, void * data, size_t offset, size_t size) {
+    if (ggml_metal_get_memcpy_enabled() && ctx->n_get_deferred < GGML_METAL_MAX_DEFERRED_GETS) {
+        struct ggml_metal_buffer_id bid_src = ggml_metal_get_buffer_id(tensor);
+        if (bid_src.metal == nil) {
+            GGML_ABORT("%s: failed to find buffer for tensor '%s'\n", __func__, tensor->name);
+        }
+
+        ctx->get_deferred[ctx->n_get_deferred++] = (__typeof__(ctx->get_deferred[0])) {
+            /*.dst  =*/ data,
+            /*.src  =*/ bid_src.metal,
+            /*.offs =*/ bid_src.offs + offset,
+            /*.size =*/ size,
+        };
+
+        return;
+    }
+
     @autoreleasepool {
         id<MTLDevice> device = ggml_metal_device_get_obj(ctx->dev);
         id<MTLBuffer> buf_dst = [device newBufferWithBytesNoCopy:data
@@ -576,11 +739,29 @@ enum ggml_status ggml_metal_graph_compute(ggml_metal_t ctx, struct ggml_cgraph *
         return GGML_STATUS_FAILED;
     }
 
+    // a deferred get with no synchronize since means the caller relies on queue order - drain it
+    // before this graph can overwrite the source
+    if (ctx->n_get_deferred > 0) {
+        if (ctx->cmd_buf_last) {
+            [ctx->cmd_buf_last waitUntilCompleted];
+        }
+        ggml_metal_drain_deferred_gets(ctx);
+    }
+
     // number of nodes encoded by the main thread (empirically determined)
     const int n_main = MAX(64, 0.1*gf->n_nodes);
 
     // number of threads in addition to the main thread
     const int n_cb = ctx->n_cb;
+
+    struct ggml_metal_submit_rec * srec = NULL;
+    if (ggml_metal_submit_prof_enabled() && ctx->capture_compute < 0 && !(ctx->abort_callback && n_cb > 2)) {
+        srec = calloc(1, sizeof(*srec));
+        srec->entry   = ggml_metal_submit_prof_now();
+        srec->n_bufs  = n_cb + 1;
+        srec->n_nodes = gf->n_nodes;
+        srec->ctx     = ctx;
+    }
 
     // keep the memory wired
     ggml_metal_device_rsets_keep_alive(ctx->dev);
@@ -652,6 +833,10 @@ enum ggml_status ggml_metal_graph_compute(ggml_metal_t ctx, struct ggml_cgraph *
             }
             ctx->cmd_bufs[n_cb].obj = cmd_buf;
 
+            if (srec) {
+                ggml_metal_submit_prof_attach(srec, cmd_buf, 0);
+            }
+
             [cmd_buf enqueue];
 
             ctx->encode_async(n_cb);
@@ -671,6 +856,10 @@ enum ggml_status ggml_metal_graph_compute(ggml_metal_t ctx, struct ggml_cgraph *
             }
             ctx->cmd_bufs[cb_idx].obj = cmd_buf;
 
+            if (srec) {
+                ggml_metal_submit_prof_attach(srec, cmd_buf, 1 + cb_idx);
+            }
+
             // always enqueue the first two command buffers
             // enqueue all of the command buffers if we don't need to abort
             if (cb_idx < 2 || ctx->abort_callback == NULL) {
@@ -683,6 +872,11 @@ enum ggml_status ggml_metal_graph_compute(ggml_metal_t ctx, struct ggml_cgraph *
         }
 
         dispatch_apply(n_cb, ctx->d_queue, ctx->encode_async);
+
+        if (srec) {
+            srec->encode_done = ggml_metal_submit_prof_now();
+            ggml_metal_submit_prof_complete(srec);
+        }
 
         // for debugging: block until graph is computed
         //[ctx->cmd_buf_last waitUntilCompleted];

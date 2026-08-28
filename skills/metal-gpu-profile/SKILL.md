@@ -262,3 +262,41 @@ from the failed GT proxy that headless replay is impossible.
 - **Confirm which kernel you captured.** Pipeline names carry the config, e.g.
   `kernel_mul_mv_ext_q4_0_f16_r1_4_nsg=2_nxpsg=8_nr0=2`. Env routing flags change it, so
   set the same ones you benchmark with.
+
+## CPU-side timing: what the GPU profiler CANNOT measure (2026-08-28)
+
+`GGML_METAL_PROFILE=1` creates one encoder per op and inflates CPU encode 6-8x, and
+that cost lands on the submit path specifically - **no deflation ratio can correct a
+CPU term from a profiled run** (uniform tick-deflation just relabels profiler overhead
+as "CPU submit"). This is not hypothetical: the prod round decompositions carried a
+"9.4 ms CPU submit, flat across four picks" line for a week that was pure artifact -
+the real, unprofiled number was 2.2-2.6 ms (`perf/cpu-round-overhead.md`). The
+flatness itself was the tell: profiler encode inflation depends only on node count.
+
+Measure CPU-side costs with these instead, both non-perturbing (canonical sha and
+e2e t/s unchanged):
+
+- **`LLAMA_DECODE_PROF=1`** (src/llama-context.cpp): per-context
+  apply/reuse/set_inputs/submit/rest split of every small decode, printed every 64
+  decodes. Separates target from drafter for free.
+- **`GGML_METAL_SUBMIT_PROF=1`** (ggml-metal-context.m): per-graph GPU timeline vs
+  the host encode window from MTLCommandBuffer GPUStartTime/GPUEndTime - per ctx,
+  windowed every 64 graphs: `sub` (encode wall), `pre` (entry -> first GPU start),
+  `gaps` (GPU idle between command buffers), `busy`, `tail`, `exposed`. This is the
+  tool that says whether a CPU cost is ON the round or hidden under GPU execution -
+  at the prod pick the whole 1.7 ms encode is hidden and only `pre` (~0.9 ms) is
+  exposed. First window includes load/prefill warmup; read the later windows.
+- Server side, `tools/server/server-context.cpp` spec-prof dump: `loop_gap` /
+  `loop_body` prove whether any wall time escapes update_slots (at the pick: none,
+  loop_gap 0.001 ms).
+
+Two more traps caught by these tools the day they were built:
+- **Count rounds from the run's own counters** (`draft acceptance ... mean len` /
+  spec-prof `n =`), never from another run's acceptance rate - a wrong divisor
+  manufactured a phantom "11 ms/round untimed" finding for an afternoon.
+- **`ggml_metal_get_tensor_async` routes host-visible readbacks through the GPU
+  queue** (fresh `newBufferWithBytesNoCopy` + blit command buffer queued behind the
+  whole graph): the per-round logits readback cost ~3.4 ms of pure serial latency.
+  `GGML_METAL_GET_MEMCPY=1` (branch `cpu-round-overhead`) defers to a plain memcpy
+  after the sync wait: +3.3% e2e, byte-identical. When hunting CPU overhead, look
+  for work that is QUEUED BEHIND the graph, not just work beside it.

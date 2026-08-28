@@ -338,12 +338,21 @@ against it and reported a bogus +5.8%.
 Current state:
 
 - **prod-pick: this file** + `run-prod-pick.sh`
-- **`cpu-round-overhead.md` - THE OPEN STUB (2026-08-28, owner-directed).** CPU-side
-  per-round cost ~17 ms = submit 9.4 (flat across four picks, never decomposed) +
-  drafter CPU ~8 (attribution blocked by the profiler key collision; the per-context
-  tag from `round-decomp-fused.md` is the first move). The mv plane is walled at
-  1.3-1.5x; this is first-look territory. Re-run the round decomposition at the
-  extended pick together with this work, not before.
+- **`cpu-round-overhead.md` - THE OPEN STUB (2026-08-28, owner-directed), and its
+  premises fell the same day - read its Status block first.** ~~CPU-side per-round
+  cost ~17 ms = submit 9.4 (flat across four picks, never decomposed) + drafter CPU
+  ~8 (attribution blocked by the profiler key collision; the per-context tag from
+  `round-decomp-fused.md` is the first move).~~ The 9.4 was a PROFILER ARTIFACT
+  (deflated-profiled CPU, the method this README bans; real 2.2-2.6 ms and mostly
+  hidden - measured by the new `GGML_METAL_SUBMIT_PROF=1` GPU-timeline profiler),
+  the drafter CPU was ~0.7 (the stub quoted the attribution `round-decomp-fused.md`
+  itself struck), and the per-context tag had already landed 2026-08-22. Corrected
+  round at 600 units: 115.5 = ~110.2 GPU busy + ~5.3 CPU-exposed; the largest CPU
+  item (~3.6 ms) is `ggml_metal_get_tensor_async`'s blit-behind-the-graph logits
+  readback - the `GGML_METAL_GET_MEMCPY=1` experiment replaces it with a
+  memcpy-after-wait (branch `cpu-round-overhead`). The mv plane is walled at
+  1.3-1.5x; this plane's honest ceiling is ~4% e2e. Re-run the round decomposition
+  at the extended pick together with this work, not before.
 - **`shortk-head.md` - the lm_head whitelist lever: +3.04% e2e, ADOPTED into the pick
   (2026-08-28 morning, branch `mv-shortk-head`, owner: "add it").** The previous
   night's "whitelist-XL refuted at 1.89x floor / short-K wall" was a PHANTOM - its
