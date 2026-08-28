@@ -153,6 +153,16 @@ Owner's design area, noted only.
 
 ## Open questions, in order
 
+> All five answered in the first session (2026-08-28) - see Findings. 1: decomposed
+> (artifact + encode split). 2: reuse already engages every steady round, both ctxs
+> (91 reuses / 92 rounds; drafter reuse-check 0.16 ms, no build spikes). 3: submit is
+> NOT serialized with GPU idle - encode is fully hidden, only `pre` (~0.9 ms) and the
+> post-GPU readback (~3.6 ms, now the GET_MEMCPY lever) are exposed. 4: struck
+> (answered 2026-08-22). 5: loop_gap/loop_body prove no harness/server noise inside
+> the measured round. What remains open: GET_MEMCPY adoption (owner), the ~2 ms of
+> micro-items (pre, accept_blk, post_decode), the drafter graph-count observation
+> (owner's plane), the prefill anomaly, and the round-decomp re-run when this lands.
+
 1. **Decompose the 9.4 ms.** llama.cpp rebuilds the ggml graph and ggml-metal re-encodes
    it every decode: graph build vs metal encode vs concurrency analysis vs command-buffer
    commit/wait - which dominates? Method: `LLAMA_DECODE_PROF=1` gives host-side per-call
