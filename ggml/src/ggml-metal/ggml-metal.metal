@@ -10722,8 +10722,9 @@ void kernel_flash_attn_ext_impl(
 
                 const float m = M[jj];
 
-                // scale and apply the logitcap / mask
-                float2 s2 = ss2[j*SH/2 + tiisg]*args.scale;
+                // scale and apply the logitcap / mask. the math stays float (running max/sum
+                // are scalar); s2_t is only the threadgroup storage type
+                float2 s2 = float2(ss2[j*SH/2 + tiisg])*args.scale;
 
                 if (FC_flash_attn_ext_has_scap) {
                     s2 = args.logit_softcap*precise::tanh(s2);
@@ -10732,9 +10733,9 @@ void kernel_flash_attn_ext_impl(
                 // mqk = mqk + slope*mask
                 if (blk_cur != 2) {
                     if (FC_flash_attn_ext_has_bias) {
-                        s2 += s2_t(sm2[j*SH + tiisg])*slope;
+                        s2 += float2(sm2[j*SH + tiisg])*slope;
                     } else {
-                        s2 += s2_t(sm2[j*SH + tiisg]);
+                        s2 += float2(sm2[j*SH + tiisg]);
                     }
                 }
 
@@ -10746,17 +10747,17 @@ void kernel_flash_attn_ext_impl(
                 S[jj] = S[jj]*ms + simd_sum(vs2[0] + vs2[1]);
 
                 // the P matrix from the paper (Q rows, C columns)
-                ss2[j*SH/2 + tiisg] = vs2;
+                ss2[j*SH/2 + tiisg] = s2_t(vs2);
 
                 if (DV4 % NW == 0) {
                     FOR_UNROLL (short ii = 0; ii < DV4/NW; ++ii) {
                         const short i = ii*NW + tiisg;
 
-                        so4[j*PV4 + i] *= ms;
+                        so4[j*PV4 + i] *= (o_t) ms;
                     }
                 } else {
                     for (short i = tiisg; i < DV4; i += NW) {
-                        so4[j*PV4 + i] *= ms;
+                        so4[j*PV4 + i] *= (o_t) ms;
                     }
                 }
             }
@@ -10929,7 +10930,7 @@ void kernel_flash_attn_ext_impl(
                 S[jj] = S[jj]*ms + simd_sum(vs);
 
                 for (short i = tiisg; i < DV4; i += NW) {
-                    so4[j*PV4 + i] *= ms;
+                    so4[j*PV4 + i] *= (o_t) ms;
                 }
             }
         }
