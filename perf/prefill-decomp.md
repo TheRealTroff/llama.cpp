@@ -41,6 +41,20 @@ unexplained" note in `cpu-round-overhead.md`.
      it, which also argues the same trick is cheap on the FA ladder (item 2).
      **Trade on the table: +8.3% prefill for +0.006 mean KLD - owner's call.**
 2. The FA ladder (~3.8 s, quadratic in context) and GATED_DELTA_NET (~2.4 s).
+   **FA half-accumulate probed same night (owner: "do the FA as well") - CLOSED
+   for now, two results:** (a) the FULL-half pack (qk+s+o) is a LAYOUT TRAP, not
+   a precision question: the scratch region interleaves scores with the hardcoded
+   half2 mask at stride SH, aligned only when s_t is float - s_t=half shears the
+   mask rows, NMSE ~0.99 garbage, and the first battery's catastrophic KLD (mean
+   0.94, same-top 64.7%) was this bug, VOID as a precision measurement. A real
+   attempt needs the scratch layout reworked + Q pre-scaled before the QK MMA
+   (raw q.k dot products can exceed f16 range). (b) the safe o-half pack
+   (BF16-pack precedent, `GGML_FA_ACC_HALF=1`, all NMSE tests pass) is
+   quality-FREE (mean KLD 0.05414 vs control 0.05397, same-top identical) and
+   speed-FREE (wall 65.67 vs 65.76 s control, flat; combined arm = mm-half
+   alone: 62.30 s, KLD 0.06038 vs 0.06031). The PV MMA is too small a slice of
+   the FA issue budget to matter. The ~3.8 s FA ladder stays on the table for a
+   future layout-surgery attempt.
 3. The pre-batch-1 gap (~4.1 s once per request: tokenize + slot setup + first
    update_slots sync) - unsampled (the window started after it), minor, still open.
 
