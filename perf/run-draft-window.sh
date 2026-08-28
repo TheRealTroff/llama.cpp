@@ -29,6 +29,9 @@ PICK_ENV=(GGML_MV_NC=2 GGML_MM_SKINNY=6 GGML_FA_VEC_MAX=5 GGML_FA_MM_NWG=8 GGML_
 W512_ENV=("${PICK_ENV[@]}" LLAMA_DRAFT_WINDOW=512)
 W1024_ENV=("${PICK_ENV[@]}" LLAMA_DRAFT_WINDOW=1024)
 W2048_ENV=("${PICK_ENV[@]}" LLAMA_DRAFT_WINDOW=2048)
+# the stack: window + fused inject + async. The ring stores feature rows in fused mode
+# so all three compose (no g readback, no sync in process()).
+STACK_ENV=("${PICK_ENV[@]}" LLAMA_DRAFT_WINDOW=1024 DFLASH_FUSED_INJECT=1 DFLASH_ASYNC_INJECT=1)
 
 PICK_SPEC=(-md "$MD" --spec-type draft-dflash --spec-draft-n-max 4)
 
@@ -98,6 +101,13 @@ run_one "ctrl-c"   600 PICK_ENV
 run_one "w2048-a"  600 W2048_ENV
 run_one "ctrl-d"   600 PICK_ENV
 run_one "w2048-b"  600 W2048_ENV
+run_one "stack-300" 300 STACK_ENV
+run_one "ctrl-e"   600 PICK_ENV
+run_one "stack-a"  600 STACK_ENV
+run_one "w1024-c"  600 W1024_ENV
+run_one "ctrl-f"   600 PICK_ENV
+run_one "stack-b"  600 STACK_ENV
+run_one "w1024-d"  600 W1024_ENV
 
 echo
 echo "--- output identity ---"

@@ -958,6 +958,8 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
     bool async_inject = false;
     bool fused_inject = false; // enc fc+norm runs inside the injection graph, no host round-trip for g
 
+    int32_t ring_row_width = 0; // g rows (n_embd_dec), or raw feature rows (n_embd_enc) when fused
+
     struct feat_row {
         llama_pos pos;
         std::vector<float> row;
@@ -1057,14 +1059,15 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
         if (const char * env = std::getenv("DFLASH_FUSED_INJECT")) {
             fused_inject = std::atoi(env) != 0;
         }
-        if (fused_inject && n_window > 0) {
-            LOG_WRN("%s: - fused inject disabled: the drafter window path needs g rows on the host\n", __func__);
-            fused_inject = false;
-        }
         if (fused_inject) {
             llama_set_dflash_inject_wide(ctx_dft, true);
             LOG_INF("%s: - drafter fused inject: on\n", __func__);
         }
+
+        // in fused mode g never lands on the host, so the window ring keeps the raw feature
+        // rows instead and a rebuild replays them through the fused graph (KV at p is a pure
+        // function of the injected row at p either way). Costs enc-width ring memory.
+        ring_row_width = fused_inject ? n_embd_enc : n_embd_dec;
 
         // fused mode carries encoder-width feature rows; process() chunks by n_ubatch
         batch_inject = fused_inject
@@ -1154,9 +1157,9 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
         }
         ring_pos_last[seq_id] = pos;
         if (pos < n_sink) {
-            sink.push_back({pos, std::vector<float>(row, row + n_embd_dec)});
+            sink.push_back({pos, std::vector<float>(row, row + ring_row_width)});
         }
-        win.push_back({pos, std::vector<float>(row, row + n_embd_dec)});
+        win.push_back({pos, std::vector<float>(row, row + ring_row_width)});
         while ((int32_t) win.size() > n_window) {
             win.pop_front();
         }
@@ -1198,7 +1201,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
                 return; // stale rows from a rejected draft, purged on the next process()
             }
             const int32_t i = batch_inject.n_tokens++;
-            std::memcpy(batch_inject.embd + (size_t) i * n_embd_dec, fr.row.data(), (size_t) n_embd_dec * sizeof(float));
+            std::memcpy(batch_inject.embd + (size_t) i * ring_row_width, fr.row.data(), (size_t) ring_row_width * sizeof(float));
             batch_inject.pos[i]       = fr.pos;
             batch_inject.n_seq_id[i]  = 1;
             batch_inject.seq_id[i][0] = seq_id;
@@ -1302,7 +1305,10 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
                 batch_inject.seq_id[i][0] = seq_id;
                 batch_inject.logits[i]    = false;
                 if (n_window > 0) {
-                    ring_push(seq_id, batch_in.pos[j], inp_g + (size_t) i * n_embd_dec);
+                    const float * ring_src = fused_inject
+                        ? batch_inject.embd + (size_t) i * n_embd_enc // decode copies the batch out, ring first
+                        : inp_g             + (size_t) i * n_embd_dec;
+                    ring_push(seq_id, batch_in.pos[j], ring_src);
                 }
             }
 
