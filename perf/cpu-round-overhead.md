@@ -148,11 +148,15 @@ call** (like BSPLIT it is a pure code-default question, no trade-off found).~~
 PICK_ENV and the README pick block; branch merged to prod; canonical numbers TAG
 `prodpick-aug28-gmc`.
 
-**Adjacent non-CPU observation, for the drafter plane:** the drafter streams its
+**Adjacent non-CPU observation, for the drafter plane:** ~~the drafter streams its
 ~1 GB of weights ~3.1 times per round (3.1 graphs x 4.4 ms at ~235 GB/s - near
 peak). Its 13.6 ms/round is bandwidth x graph COUNT; a lattice that drafted in
-fewer forwards would save ~4.4 ms per graph removed, dwarfing every CPU lever here.
-Owner's design area, noted only.
+fewer forwards would save ~4.4 ms per graph removed~~ **REFUTED same evening
+(`drafter-graph-count.md` correction block): those were this profiler's 64-graph
+WINDOW AVERAGES read as per-graph facts.** Real split (dflash-prof, same log):
+draft decode ~13 ms, enc ~0.6, inject ~0.55 - one full stream plus two slivers.
+The submit-prof numbers here stay valid for what they claim (per-ctx totals and
+CPU exposure); only the per-graph uniformity inference was wrong.
 
 ## Open questions, in order
 

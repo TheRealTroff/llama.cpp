@@ -372,15 +372,26 @@ against it and reported a bogus +5.8%.
 Current state:
 
 - **prod-pick: this file** + `run-prod-pick.sh`
-- **`drafter-graph-count.md` - THE OPEN STUB (2026-08-28 pm, owner: "stub it").**
-  The drafter runs ~3.1 full ~1 GB weight-streams per round (enc + inject + draft
-  decode, each 4.4-4.6 ms at ~235 GB/s) = 13.6 ms, 11.6% of the round; each graph
-  removed is ~+3.8% e2e, a single-forward drafter ~+8% - the largest open lever on
-  the board. Speculation is lossless, so the canonical shas gate any drafting
-  change; acceptance is the quantity to watch. Read `drafter-pipelining.md` first
-  (merged from its stranded branch the same day: serialization anatomy, the
-  target-hidden-state dependency, the section-3 blocker, ASYNC_INJECT retired at
-  +0.38%).
+- **`drafter-graph-count.md` - THE OPEN STUB (2026-08-28 pm, owner: "stub it"), and
+  its premise fell the same evening - read its correction block first.** ~~The
+  drafter runs ~3.1 full ~1 GB weight-streams per round (enc + inject + draft
+  decode, each 4.4-4.6 ms at ~235 GB/s); each graph removed ~+3.8% e2e, single
+  forward ~+8%~~ - that read submit-prof's 64-graph window averages as per-graph
+  facts. Real split (dflash-prof, same log + m2 dump): draft decode ~13 ms, enc
+  ~0.6, inject ~0.55; total ~14.6 ms/round ~12.5%. The fusion lever collapsed to a
+  ~1.2 ms ceiling and was then BUILT the same evening (owner: "just do it"; branch
+  `drafter-fused-inject`, harness `run-fused-inject.sh`): `DFLASH_FUSED_INJECT=1`
+  runs the enc fc+norm inside the injection graph, one decode per process() chunk.
+  Alone it is flat, but it removes the readback sync that blocked ASYNC_INJECT and
+  the pair goes submit-only: **+0.76% e2e at 600 (interleaved, repeats +-0.005),
+  byte-identical, both canonical shas hold** - adoption into the pick is the
+  owner's call (`DFLASH_FUSED_INJECT=1 DFLASH_ASYNC_INJECT=1`). Remaining open
+  items: the decode's non-mv tail (TOP_K 1.09 ms/round, FA over full ~8.4k KV,
+  elementwise) and drafter-design questions (head ~30% of the drafter).
+  Speculation is lossless, so the canonical shas gate any drafting change;
+  acceptance is the quantity to watch. Read `drafter-pipelining.md` first
+  (serialization anatomy, the section-3 queue blocker; its correction (a)
+  "fusion impossible" is struck - the wide-decode route sidesteps it).
 - **`cpu-round-overhead.md` - the CPU stub, opened and ANSWERED 2026-08-28, and its
   premises fell the same day - read its Status block first.** ~~CPU-side per-round
   cost ~17 ms = submit 9.4 (flat across four picks, never decomposed) + drafter CPU

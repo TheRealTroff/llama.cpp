@@ -184,16 +184,21 @@ prerequisite for everything below.
 > Two of the steps below were scoped wrong, and a third fact turned up that changes step 0's
 > risk profile.
 >
-> **(a) Step 1 cannot "fuse encode+inject into one graph".** The encoder's output has to come
-> back to host: `process()` reads `llama_get_embeddings_nextn(ctx_dft)` (`speculative.cpp`,
-> the `inp_g` read) and memcpys it into `batch_inject.embd` before the inject decode. That is
-> the *same* foreign-tensor limitation as step 3, one level down. What is actually available
-> at step-1 risk is only **dropping the two redundant `llama_synchronize(ctx_dft)` calls**
+> **(a) ~~Step 1 cannot "fuse encode+inject into one graph".~~ DONE 2026-08-28 via a route
+> this correction missed** (branch `drafter-fused-inject`, `perf/drafter-graph-count.md`
+> item 4): the claim was true for fusing the two EXISTING graphs (the inp_g host read is
+> forced by the two-call API), but moving the encoder fc+norm INTO the injection graph
+> sidesteps it - `DFLASH_FUSED_INJECT=1` feeds raw encoder-width features to one
+> llama_decode and g never exists on the host. Fused alone is flat; fused + ASYNC_INJECT
+> makes process() submit-only, **+0.76% e2e, shas hold**. The original text follows for
+> the API anatomy, which is still accurate. What is available at step-1 risk without the
+> fusion is only **dropping the two redundant `llama_synchronize(ctx_dft)` calls**
 > (after the inject decode in `process()`, and in `apply_window()`'s `flush()`). That is
 > implemented behind **`DFLASH_ASYNC_INJECT=1`**, default off, harness
 > `perf/run-async-inject.sh`. It does not remove the wait - it moves it to the next read of
 > the drafter output - so the win is bounded by the CPU work between `process()` and the next
-> `draft()`, i.e. the accept/sampling path. Expect small.
+> `draft()`, i.e. the accept/sampling path. Expect small (measured +0.38% alone;
+> its real value arrived with the fusion above).
 >
 > **(b) Step 2's reorder is impossible without step 3.** Verified in
 > `server-context.cpp`: the draft runs at `:3083-3088` and the verify at `:3723-3733` **in

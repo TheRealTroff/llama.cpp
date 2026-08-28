@@ -290,7 +290,16 @@ e2e t/s unchanged):
   `loop_body` prove whether any wall time escapes update_slots (at the pick: none,
   loop_gap 0.001 ms).
 
-Two more traps caught by these tools the day they were built:
+Three more traps caught by these tools the day they were built:
+- **Submit-prof prints 64-graph WINDOW AVERAGES, not per-graph facts** (`sum/n` at
+  `sprof.n % 64`, no per-topology breakdown). A ctx that cycles unequal graphs
+  per round (the dflash drafter: enc ~0.4 ms, inject ~0.5, draft decode ~13) shows
+  cycling near-identical averages (busy 4.4-4.6) that LOOK like three uniform
+  graphs - that misread cost the drafter-graph-count stub its premise for a day.
+  Before building a lever on any counter, read its printing code for the
+  aggregation (windowed? summed? serialized?), and get per-phase truth from the
+  in-tree per-phase counters (`dflash-prof` enc/inject/lattice lines) or a per-op
+  dump first.
 - **Count rounds from the run's own counters** (`draft acceptance ... mean len` /
   spec-prof `n =`), never from another run's acceptance rate - a wrong divisor
   manufactured a phantom "11 ms/round untimed" finding for an afternoon.
