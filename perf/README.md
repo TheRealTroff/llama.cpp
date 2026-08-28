@@ -161,8 +161,9 @@ the engine, so it is the owner's call.
 trap 1 below; the old n6 pick reads 22.9 at 600). Branch `m4-width4-r4kp` commit
 `b4792fe67`'s source, measured by `run-m4-width5-e2e.sh` 2026-08-28, 4 fresh-server
 reps at 25.606-25.660, TSV `m4-w5-e2e-aug28.tsv`. **Adopted as the pick the same day
-(owner: "pick this for now").** `run-prod-pick.sh` encodes it; no n_predict-300
-measurement of this config exists yet - the first `run-prod-pick.sh` run will supply
+(owner: "pick this for now").** `run-prod-pick.sh` encodes it; at n_predict 300 the
+pick reads **26.847 t/s** (round-decomp anchor, `round-decomp-w5n4.md` - vs the old
+pick's 25.02, +7.3%); a full `run-prod-pick.sh` run would still supply
 it. ~~Depth 5 stays open pending a width-6 kernel~~ - width 6 was built and REFUTED
 the same night (loses to skinny on 5 of 6 shapes; the wall is named -
 `m4-width5-crossover.md`), so **n4 is the settled optimum of this family**.
@@ -319,7 +320,13 @@ against it and reported a bogus +5.8%.
 Current state:
 
 - **prod-pick: this file** + `run-prod-pick.sh`
-- **`m4-width5-crossover.md` - NEWEST RESULT (2026-08-28, same branch).** The width-5
+- **`round-decomp-w5n4.md` - the round decomposition AT THE NEW PICK (2026-08-28
+  night).** Round 120.2 ms real at 300 units (26.847 t/s anchor, 1.56 b1 floors):
+  verify GPU 93.9 (six w5 projections 56.8-68, lm_head 3.9, FA 6.3, GDN 3.3,
+  small-op tail ~12), drafter 16.6, CPU submit 9.4, accept 0.35. **The non-kernel
+  ledger is 48 ms = 40% of the round** (was 31% at n6) - the next frontier is
+  drafter + FA + the small-op tail + submit, not the mv kernels.
+- **`m4-width5-crossover.md` - the width-5/6 result (2026-08-28, same branch).** The width-5
   SoA scalar cell, built despite the re-sweep's deprioritization: w5r4h (4 rows, half
   product) wins all six projections 25-31% over skinny and +25.8%/+25.2% e2e at
   dflash n4 / MTP d4, byte-identical output, n3 control inert. **dflash n4+w5 beats
