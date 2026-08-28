@@ -78,7 +78,9 @@ lever is the fixed per-graph `pre`, worth at most ~1 ms/round on the target.
 3.1 x 4.4 = 13.6 ms = the whole 13.4 ms draft_call. Graph reuse engages for ctx_dft
 (reuse-check 0.16-0.19 ms, no build spikes). Drafter CPU exposure: ~0.45 ms/round.
 
-**Prefill submits: anomalous, unexplained, out of scope for the round work.**
+**Prefill submits: ~~anomalous, unexplained~~ DECOMPOSED 2026-08-28 evening - see
+`prefill-decomp.md` (THE prefill stub): mm at 96.5% of the roof inside dec_sub_pp,
+~18.4 s of wall outside llama_decode entirely, drafter-free.** Original note:
 dec_sub_pp reads ~9.7 s per prefill batch (48 s total for the ~10k benchprompt) with
 dec_syn_pp at zero - the wait is inside llama_decode, before the syn timer. A
 plausible alloc-waits-on-previous-GPU story does not survive the arithmetic (the

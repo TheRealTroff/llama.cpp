@@ -388,7 +388,16 @@ against it and reported a bogus +5.8%.
 Current state:
 
 - **prod-pick: this file** + `run-prod-pick.sh`
-- **`drafter-graph-count.md` - THE OPEN STUB (2026-08-28 pm, owner: "stub it"), and
+- **`prefill-decomp.md` - THE OPEN STUB (2026-08-28 evening, owner: "anything
+  prefill is arguably a bigger win for me").** Prefill wall 68.1 s decomposed:
+  the matmuls run at 96.5% of the measured 6.96 TFLOPS roof (~50 s, no kernel
+  lever), the drafter is free, and **~18.4 s (~4.6 s per 2048-token batch) sits
+  OUTSIDE llama_decode entirely - unattributed, drafter-independent, the only
+  cheap money in prefill**. MLX prefills the same prompt in 68.0 s - fixing our
+  18 s alone would be 68 -> ~50 s (+36% prefill, first-token latency) and a
+  head-to-head differentiator. First move: bracket the between-batch gap (the
+  existing timers print every 64 events - lower the cadence first).
+- **`drafter-graph-count.md` - the drafter-plane stub (2026-08-28 pm, owner: "stub it"), and
   its premise fell the same evening - read its correction block first.** ~~The
   drafter runs ~3.1 full ~1 GB weight-streams per round (enc + inject + draft
   decode, each 4.4-4.6 ms at ~235 GB/s); each graph removed ~+3.8% e2e, single
