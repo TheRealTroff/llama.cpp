@@ -1,9 +1,29 @@
-# Prefill decomposition: the matmuls are at the roof, ~18 s of wall is unattributed
+# Prefill decomposition: ~~18 s unattributed~~ RESOLVED - the wall is GPU-busy end to end
 
-Status: **OPEN STUB** - opened 2026-08-28 evening (owner: "anything prefill is arguably
-a bigger win for me") from the first probe (`run-prefill-probe.sh`, TAG `prefill-aug28`)
-plus the m1 per-op dump already on disk (`rounddecomp-aug28-prof-n4.server.log`).
-Supersedes the "Prefill submits: anomalous, unexplained" note in `cpu-round-overhead.md`.
+Status: **RESOLVED same evening it opened** - the "18.4 s outside llama_decode" is a
+second, unbracketed GPU wait, not CPU work. A 40 s `sample` of the server mid-prefill
+(scratchpad `prefill.sample.txt`, method below) split the main thread 21404 samples
+in-decode GPU wait + 9264 samples in `update_slots()` -> `llama_context::synchronize()`
+-> `waitUntilCompleted` = **30668 of 30668 - the prefill main thread is 100% GPU-wait,
+zero CPU mystery**. Cross-check: the serialized m1 prefill op-sum (65.4 s) matches the
+66 s wall within 5% - the GPU is continuously busy for the whole prefill. Opened
+2026-08-28 evening (owner: "anything prefill is arguably a bigger win for me") from the
+first probe (`run-prefill-probe.sh`, TAG `prefill-aug28`) plus the m1 per-op dump
+(`rounddecomp-aug28-prof-n4.server.log`). Supersedes the "Prefill submits: anomalous,
+unexplained" note in `cpu-round-overhead.md`.
+
+**What prefill money remains (kernel territory, not server plumbing):**
+1. Our mul_mm n=512 runs prefill at 6.7-7.1 TFLOPS ~ its own measured 6.96 roof; the
+   M4 Pro's presumed hardware peak is 8.1-9.2 (`ffn-utilization.md:137`) - the 15-25%
+   between them is the same instruction-economy wall as decode
+   (`skinny-stall-attribution.md`: 77% issue-bound). A mul_mm win transfers ~1:1 to
+   prefill wall.
+2. The FA ladder (~3.8 s, quadratic in context) and GATED_DELTA_NET (~2.4 s).
+3. The pre-batch-1 gap (~4.1 s once per request: tokenize + slot setup + first
+   update_slots sync) - unsampled (the window started after it), minor, still open.
+
+MLX at the same 68.0 s wall now makes sense: both engines run the mm near the same
+achievable throughput. Beating them on prefill = beating the mul_mm roof.
 
 ## The measurement
 
@@ -56,22 +76,21 @@ Gaps sum to the 18.4 s independently of the wall arithmetic. Key facts:
   territory, the owner's "understand the machine" thread). The other quarter of the
   wall is not compute at all.
 
-## Open questions, in order
+## Open questions ~~, in order~~ - 1 and 2 ANSWERED by the sample (see Status)
 
-1. **Name the 4.6 s/batch.** It is CPU-side (or idle-GPU) work between prefill decode
-   calls, present with spec off. Candidates, none verified: KV find_slot over 10240
-   cells per ubatch, batch/ubatch building, output-buffer management, first-touch
-   page faults on KV buffers, server-side batch assembly. First move: bracket it -
-   the loop timers (`loop_gap`/`loop_body`) and `LLAMA_DECODE_PROF` splits exist but
-   print every 64 events and prefill has ~4 - lower the cadence for a prefill run
-   (env or a one-line change), or one `sample`/Instruments capture of the server
-   during prefill. Cheap and decisive.
-2. **Confirm the GPU actually idles during the gaps** (submit-prof per-graph would
-   show it, but the 64-graph window cadence hides prefill - same fix as above; the
-   probe harness note records this trap).
+1. ~~**Name the 4.6 s/batch.**~~ ANSWERED: `llama_context::synchronize()` called from
+   `update_slots` (offset +2660) - a bare GPU wait outside every spec-prof timer.
+   The "best-fit model: ~4.3-4.6 s CPU per batch" in the verification section was
+   WRONG; the constant wall/token was the tell that it was all one pipeline.
+   Method that answered it in one shot: `sample <pid> 40 -mayDie` mid-prefill -
+   for main-thread attribution questions, sample FIRST before building timer
+   cadence changes.
+2. ~~**Confirm the GPU actually idles during the gaps**~~ ANSWERED: it does not -
+   op-sum ~ wall within 5%, GPU continuously busy.
 3. **The FA ladder (~3.8 s)** quadratic in context - grows fast beyond 8k. Secondary.
-4. Roof work (int8/precision paths for the mm 50 s) - out of scope here, owner's
-   machine-understanding thread.
+4. Roof work (the mm 50 s vs the 8.1-9.2 hardware peak) - the real prefill lever,
+   owner's machine-understanding thread.
+5. The pre-batch-1 ~4.1 s (once per request) - unsampled, minor.
 
 ## Method notes
 

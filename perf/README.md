@@ -388,15 +388,18 @@ against it and reported a bogus +5.8%.
 Current state:
 
 - **prod-pick: this file** + `run-prod-pick.sh`
-- **`prefill-decomp.md` - THE OPEN STUB (2026-08-28 evening, owner: "anything
-  prefill is arguably a bigger win for me").** Prefill wall 68.1 s decomposed:
-  the matmuls run at 96.5% of the measured 6.96 TFLOPS roof (~50 s, no kernel
-  lever), the drafter is free, and **~18.4 s (~4.6 s per 2048-token batch) sits
-  OUTSIDE llama_decode entirely - unattributed, drafter-independent, the only
-  cheap money in prefill**. MLX prefills the same prompt in 68.0 s - fixing our
-  18 s alone would be 68 -> ~50 s (+36% prefill, first-token latency) and a
-  head-to-head differentiator. First move: bracket the between-batch gap (the
-  existing timers print every 64 events - lower the cadence first).
+- **`prefill-decomp.md` - opened AND RESOLVED 2026-08-28 evening (owner: "anything
+  prefill is arguably a bigger win for me" ... "can you verify that's real?").**
+  Prefill wall 68.1 s decomposed in three passes: ~~18.4 s of cheap unattributed
+  CPU between batches~~ - a 40 s `sample` mid-prefill showed the main thread is
+  **100% GPU-wait** (the "gap" is a bare `llama_context::synchronize()` in
+  update_slots that no spec-prof timer brackets), and the op-sum matches the wall
+  within 5%: **prefill is GPU-busy end to end, mm at ~97% of our own 6.96 TFLOPS
+  mul_mm roof, drafter free. No server-side money.** The remaining prefill levers
+  are kernel-plane: mul_mm vs the 8.1-9.2 hardware peak (the decode
+  instruction-economy wall, ~1:1 transfer to prefill), the FA ladder (~3.8 s,
+  quadratic), GDN (~2.4 s). MLX's identical 68.0 s wall is explained. Method
+  lesson inside: for main-thread attribution, `sample` FIRST.
 - **`drafter-graph-count.md` - the drafter-plane stub (2026-08-28 pm, owner: "stub it"), and
   its premise fell the same evening - read its correction block first.** ~~The
   drafter runs ~3.1 full ~1 GB weight-streams per round (enc + inject + draft
