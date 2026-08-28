@@ -1680,6 +1680,17 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext(
                 dv);
     }
 
+    // decode stays on the vec path (GGML_FA_VEC_MAX), so this reaches prefill/large-batch only
+    static const bool fa_acc_half = getenv("GGML_FA_ACC_HALF") != nullptr;
+    if (fa_acc_half && op->src[1]->type == GGML_TYPE_F16 && op->src[2]->type == GGML_TYPE_F16 && dk == dv && (dk == 128 || dk == 256)) {
+        snprintf(base, 256, "kernel_flash_attn_ext_acch_f16_dk%d_dv%d", dk, dv);
+        static bool logged = false;
+        if (!logged) {
+            GGML_LOG_INFO("%s: FA half-accumulate engaged (dk=%d)\n", __func__, dk);
+            logged = true;
+        }
+    }
+
     snprintf(name, 256, "%s_mask=%d_sinks=%d_bias=%d_scap=%d_kvpad=%d_bcm=%d_ns10=%d_ns20=%d_nsg=%d_nwg=%d",
             base,
             has_mask,

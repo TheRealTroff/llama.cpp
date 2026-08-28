@@ -11071,6 +11071,16 @@ kernel void kernel_flash_attn_ext(
     float,  float4,    simdgroup_float8x8
     //half,   half4,     simdgroup_half8x8
 
+// half-accumulation probe (GGML_FA_ACC_HALF=1): QK, softmax and O all accumulate in half,
+// making both MMA sites all-half. See perf/prefill-decomp.md.
+#define FA_TYPES_ACCH \
+    half,   half4,     simdgroup_half8x8,  \
+    half,   half4x4,   simdgroup_half8x8,  \
+    half,   half4x4,   simdgroup_half8x8,  \
+    half,              simdgroup_half8x8,  \
+    half,   half2,     simdgroup_half8x8,  \
+    half,   half4,     simdgroup_half8x8
+
 typedef decltype(kernel_flash_attn_ext<FA_TYPES, half4x4, 1, dequantize_f16, half4x4, 1, dequantize_f16, 64, 64>) flash_attn_ext_t;
 
 template [[host_name("kernel_flash_attn_ext_f32_dk32_dv32"  )]]  kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES_F32, float4x4,   1, dequantize_f32,  float4x4,   1, dequantize_f32,  32,  32>;
@@ -11104,6 +11114,9 @@ template [[host_name("kernel_flash_attn_ext_f16_dk256_dv256")]]  kernel flash_at
 template [[host_name("kernel_flash_attn_ext_f16_dk320_dv256")]]  kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES,    half4x4,    1, dequantize_f16,  half4x4,    1, dequantize_f16,  320, 256>;
 template [[host_name("kernel_flash_attn_ext_f16_dk512_dv512")]]  kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES,    half4x4,    1, dequantize_f16,  half4x4,    1, dequantize_f16,  512, 512>;
 template [[host_name("kernel_flash_attn_ext_f16_dk576_dv512")]]  kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES,    half4x4,    1, dequantize_f16,  half4x4,    1, dequantize_f16,  576, 512>;
+
+template [[host_name("kernel_flash_attn_ext_acch_f16_dk128_dv128")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES_ACCH, half4x4, 1, dequantize_f16, half4x4, 1, dequantize_f16, 128, 128>;
+template [[host_name("kernel_flash_attn_ext_acch_f16_dk256_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES_ACCH, half4x4, 1, dequantize_f16, half4x4, 1, dequantize_f16, 256, 256>;
 
 #if defined(GGML_METAL_HAS_BF16)
 template [[host_name("kernel_flash_attn_ext_bf16_dk32_dv32"  )]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES_BF, bfloat4x4,  1, dequantize_bf16, bfloat4x4,  1, dequantize_bf16, 32,  32>;
@@ -11226,6 +11239,7 @@ template [[host_name("kernel_flash_attn_ext_q8_0_dk576_dv512")]] kernel flash_at
 #undef FA_TYPES
 #undef FA_TYPES_BF
 #undef FA_TYPES_F32
+#undef FA_TYPES_ACCH
 
 constant bool FC_flash_attn_ext_vec_has_mask  [[function_constant(FC_FLASH_ATTN_EXT_VEC + 0)]];
 constant bool FC_flash_attn_ext_vec_has_sinks [[function_constant(FC_FLASH_ATTN_EXT_VEC + 1)]];
