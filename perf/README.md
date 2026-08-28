@@ -91,9 +91,18 @@ the same prompt.** Priced and accepted: mean KLD 0.05397 -> 0.06031 (+0.006, ~1/
 Q4_0's own quant cost), Same-top-p -0.86 pt, no pathologies (`prefill-decomp.md`,
 branch `mm-acc-half`, TAG `kldacch-aug28`). **THIS CHANGES PREFILL NUMERICS AND
 STARTS A NEW CANONICAL SHA LINEAGE** - the old shas `9ad7e023c6ab` (300) /
-`3776c0adb7ee` (600) gate pre-acch configs only; the current canonical shas are in
-the `prodpick-aug28-acch` mint below. The losslessness gate itself is unchanged:
-drafting changes must hold the CURRENT lineage's shas.
+`3776c0adb7ee` (600) gate pre-acch configs only. **Mint TAG `prodpick-aug28-acch`
+(commit `c6f15e1b4`): canonical shas `95eb7e65977e` (300) / `6678b0507d41` (600);
+the b1 no-spec arm emits the SAME 300 sha (losslessness holds within the lineage)
+and the partial-env arm still emits the old `9ad7e023c6ab` (the lineage splits
+exactly at the flag). b1 anchor 12.980 - identical to the morning's 12.979:
+machine clean, decode untouched by acch.** TRAP: the mint's spec-arm t/s
+(25.5/26.6 at 300, 29.0/29.2 at 600) are NOT comparable to prior mints - the
+TEXT changed, and acceptance is a property of the text (new texts draft at
+51.4%@300 / 58.2%@600 vs 57.5/50.1 before; the 300/600 acceptance ordering
+INVERTED). Across sha lineages, only the b1 anchor and interleaved same-config
+A/Bs compare; acch's real effect is prefill 67.7 -> 62.5 s. The losslessness
+gate itself is unchanged: drafting changes must hold the CURRENT lineage's shas.
 
 ```
 GGML_MV_NC=2 GGML_MM_SKINNY=6 GGML_FA_VEC_MAX=5 GGML_FA_MM_NWG=8 GGML_GDN_FUSE_WB=1 \
