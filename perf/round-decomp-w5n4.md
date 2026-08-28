@@ -65,8 +65,22 @@ round. The three levers, largest first:
    serialization caveat applies: some of this tail is already hidden under
    concurrent dispatch and the profiler cannot see it (small-ne01 lesson) - treat
    line items as upper bounds, and treat only measured e2e deltas as real.
-2. **Drafter, 16.6 ms** - a whole second model forward per round. Untouched by any
-   width work; `drafter-quant-routing.md` levers were the last movement here.
+2. **Drafter, 16.6 ms** - a whole second model forward per round. ~~Untouched by
+   width work~~ WRONG, corrected same night from this run's own m2 dump: the
+   DFlash2 drafter shares the target's hidden dims and drafts at WIDTH 5, so its
+   FFN projections (5120<->17408, 10 layers) already ride w5r4h - same us/call as
+   the target's verify (248.9 vs 243.5 profiled). What is NOT covered is every
+   drafter shape outside the whitelist: its 248320-vocab lm_head (~3.7 ms/round
+   real, one 715 MB stream at ~1.4x floor - the biggest single drafter op), the
+   small projections (1024/1280/4096/25600-row, ~2 ms combined), FA and the
+   TOP_K/lattice tail. **Lever: extend `ggml_metal_mul_mat_soa_w4_rows` with the
+   drafter ne01s** (all %4; the head also needs nothing else - ne00=5120) - est.
+   ~1 ms/round if the w5 win transfers, more honest sizing needs the same
+   synthetic A/B at those shapes. The target-side twin of this lever is the m1
+   "other mm" 11.5 ms (attn_k/v smalls at width 5, same whitelist gap) - but the
+   small-ne01 caveat applies to both: per-call wins on ops hidden under
+   concurrent dispatch can be e2e-invisible; the drafter HEAD is the one
+   bandwidth-shaped item that should translate.
 3. **CPU submit, 9.4 ms** - flat since 2026-08-22 across three picks; per-round graph
    build/encode. Fixed cost, so its share grows with every kernel win (7.8% now).
 

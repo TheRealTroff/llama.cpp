@@ -325,7 +325,10 @@ Current state:
   verify GPU 93.9 (six w5 projections 56.8-68, lm_head 3.9, FA 6.3, GDN 3.3,
   small-op tail ~12), drafter 16.6, CPU submit 9.4, accept 0.35. **The non-kernel
   ledger is 48 ms = 40% of the round** (was 31% at n6) - the next frontier is
-  drafter + FA + the small-op tail + submit, not the mv kernels.
+  drafter + FA + the small-op tail + submit, not the mv kernels. (Corrected same
+  night: the dflash drafter drafts at width 5 and its FFN already rides w5r4h -
+  the open lever is the whitelist gap: drafter lm_head ~3.7 ms + small shapes,
+  target attn_k/v smalls.)
 - **`m4-width5-crossover.md` - the width-5/6 result (2026-08-28, same branch).** The width-5
   SoA scalar cell, built despite the re-sweep's deprioritization: w5r4h (4 rows, half
   product) wins all six projections 25-31% over skinny and +25.8%/+25.2% e2e at
