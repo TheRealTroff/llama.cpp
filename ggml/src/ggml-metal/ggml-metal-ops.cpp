@@ -2522,6 +2522,11 @@ size_t ggml_metal_op_mul_mat_extra_src1f16(const ggml_tensor * op) {
 }
 
 static bool ggml_metal_mul_mat_soa_w4_rows(int64_t ne01) {
+    // GGML_MV_SOA_WL_XL=1 extends the whitelist beyond the six verify projections:
+    // the 248320-vocab lm_head (target AND drafter share the shape) and the drafter's
+    // 4096-row projection. Sub-16M shapes (1024/1280/256 rows) stay excluded - the
+    // f16y size gate blocks them before this list is consulted anyway.
+    static const int env_xl = getenv("GGML_MV_SOA_WL_XL") ? atoi(getenv("GGML_MV_SOA_WL_XL")) : 0;
     switch (ne01) {
         case  5120:
         case  6144:
@@ -2529,6 +2534,9 @@ static bool ggml_metal_mul_mat_soa_w4_rows(int64_t ne01) {
         case 12288:
         case 17408:
             return true;
+        case   4096:
+        case 248320:
+            return env_xl != 0;
         default:
             return false;
     }

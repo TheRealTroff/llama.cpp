@@ -73,14 +73,22 @@ round. The three levers, largest first:
    drafter shape outside the whitelist: its 248320-vocab lm_head (~3.7 ms/round
    real, one 715 MB stream at ~1.4x floor - the biggest single drafter op), the
    small projections (1024/1280/4096/25600-row, ~2 ms combined), FA and the
-   TOP_K/lattice tail. **Lever: extend `ggml_metal_mul_mat_soa_w4_rows` with the
-   drafter ne01s** (all %4; the head also needs nothing else - ne00=5120) - est.
-   ~1 ms/round if the w5 win transfers, more honest sizing needs the same
-   synthetic A/B at those shapes. The target-side twin of this lever is the m1
-   "other mm" 11.5 ms (attn_k/v smalls at width 5, same whitelist gap) - but the
-   small-ne01 caveat applies to both: per-call wins on ops hidden under
-   concurrent dispatch can be e2e-invisible; the drafter HEAD is the one
-   bandwidth-shaped item that should translate.
+   TOP_K/lattice tail. ~~Lever: extend the whitelist with the drafter ne01s~~
+   **TRIED AND REFUTED same night.** `GGML_MV_SOA_WL_XL=1` adds ne01 4096 and
+   248320 (sub-16M shapes stay blocked by the f16y size gate before the list is
+   consulted); 1155/1155 correct; the head ENGAGES w5r4h (replay-verified
+   pipeline name) and measures FLAT vs the ext-di incumbent: 4963+-2 vs
+   4964+-1 us over 3 interleaved reps, both 1.89x the 2620 us stream floor.
+   Mechanism: the head is a SHORT-K shape - k=5120 is 20 K-iterations/thread
+   (ffn_down: 136), so per-threadgroup fixed cost (setup + reduction tail)
+   dominates and all scalar routes converge; the w5 codegen win lives in the
+   long-K loop body. The remaining XL payload (drafter 4096-row, ~0.4 ms/round)
+   sits under the small-ne01 e2e-invisibility caveat - e2e not run. The flag
+   stays as an off-by-default probe; NOT in the pick.
+   **New open stub from the same measurement: both lm_heads (~7.6 ms/round
+   combined) run at 1.89x floor. A short-K-tuned scalar variant (more rows/tg,
+   cheaper tail) reaching the FFN shapes' 1.3-1.5x would be worth ~2 ms/round
+   (~+1.7% e2e).**
 3. **CPU submit, 9.4 ms** - flat since 2026-08-22 across three picks; per-round graph
    build/encode. Fixed cost, so its share grows with every kernel win (7.8% now).
 
