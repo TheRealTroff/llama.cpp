@@ -173,6 +173,15 @@ because of a trade-off: unlike repack it costs no residency and no quality. Maki
 default is a one-line change to `ggml-metal-device.cpp`, and it changes every skinny call in
 the engine, so it is the owner's call.
 
+> **STALE AT THE CURRENT PICK (2026-08-28): the e2e number is ~0 now, not +1.0-1.6%.**
+> Both e2e figures were measured at the n6 pick, where skinny carried the FFN. The
+> n4+w5 pick routes every steady-state MUL_MAT at ne11 1-5 (verified against the
+> aug28 per-op dump: no shape in skinny's 6..8 window), so **skinny takes zero
+> decode calls** - `GGML_MM_SKINNY=6` survives in the env only as a guard so skinny
+> does not swallow width 5. The per-call win stands and applies again the moment an
+> ne11 6-8 operating point returns (n6 arm, depth sweeps). Adopt-for-free no longer
+> holds as an e2e claim.
+
 ### Current number
 
 **25.632 t/s** (dflash n4 + w5r4h + v3 + repack, `n_predict` **600** - note the units,
