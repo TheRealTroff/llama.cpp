@@ -10224,6 +10224,15 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     // a case labelled "attn q" at m=3072 - NO tensor in this model has a 3072 dim, and the
     // real attn_q is four times wider - while three of the seven real projections were
     // missing entirely. do not add a shape here without checking it against the model.
+    // prefill: the same projections at the n_ubatch width. mm at n=512 runs at ~97% of
+    // its own 6.96 TFLOPS roof and sets the 66 s prefill wall - see perf/prefill-decomp.md
+    for (int bs : {512}) {
+        for (ggml_type type_a : {GGML_TYPE_Q4_0, GGML_TYPE_F16}) {
+            test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32, 17408, bs,  5120, {1, 1}, {1, 1}));
+            test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32,  5120, bs, 17408, {1, 1}, {1, 1}));
+        }
+    }
+
     for (int bs : {1, 2, 3, 4, 5, 6, 7, 8}) {
         for (ggml_type type_a : {GGML_TYPE_Q4_0}) {
             test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32, 17408, bs,  5120, {1, 1}, {1, 1})); // ffn_gate + ffn_up   x128

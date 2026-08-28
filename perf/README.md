@@ -83,11 +83,24 @@ at 300 units too), 26.27/26.22 at 600 (acc 50.1), batch-1 anchor 12.98** (health
 matches the morning's 12.97/13.04 - this mint carries no drift caveat), all shas
 canonical. Vs the cooled gmc mint at comparable b1: +2.4% at 600.
 
+**Extended a fourth time 2026-08-28 night (owner: "I will absolutely take the
+prefill win"): + `GGML_MM_ACC_HALF=1`** - half-accumulate mul_mm for all q4_0 f32
+matmuls at mm widths (in-server: prefill and large batches; decode's skinny/mv paths
+untouched): **prefill 67.7 -> 62.5 s = +8.3%, ~9% faster than dflash_mlx's 68.0 on
+the same prompt.** Priced and accepted: mean KLD 0.05397 -> 0.06031 (+0.006, ~1/8 of
+Q4_0's own quant cost), Same-top-p -0.86 pt, no pathologies (`prefill-decomp.md`,
+branch `mm-acc-half`, TAG `kldacch-aug28`). **THIS CHANGES PREFILL NUMERICS AND
+STARTS A NEW CANONICAL SHA LINEAGE** - the old shas `9ad7e023c6ab` (300) /
+`3776c0adb7ee` (600) gate pre-acch configs only; the current canonical shas are in
+the `prodpick-aug28-acch` mint below. The losslessness gate itself is unchanged:
+drafting changes must hold the CURRENT lineage's shas.
+
 ```
 GGML_MV_NC=2 GGML_MM_SKINNY=6 GGML_FA_VEC_MAX=5 GGML_FA_MM_NWG=8 GGML_GDN_FUSE_WB=1 \
 GGML_MV_REPACK=1 GGML_MV_SOA_W4=1 GGML_MV_SOA_W4_R4KP=3 GGML_MV_SOA_W5=4 GGML_MV_SOA_W5_HALF=1 \
 GGML_MV_SOA_WL_XL=1 GGML_METAL_GET_MEMCPY=1 \
 DFLASH_FUSED_INJECT=1 DFLASH_ASYNC_INJECT=1 LLAMA_DRAFT_WINDOW=1024 \
+GGML_MM_ACC_HALF=1 \
   llama-server -m Qwen3.8-27B-uniform-Q4_0.gguf -c 10240 -fa on -ctk f16 -ctv f16 \
     -md Qwen3.8-27B-DFlash2-pureQ4_0.gguf --spec-type draft-dflash --spec-draft-n-max 4
 ```

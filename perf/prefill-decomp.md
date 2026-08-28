@@ -17,8 +17,44 @@ unexplained" note in `cpu-round-overhead.md`.
    M4 Pro's presumed hardware peak is 8.1-9.2 (`ffn-utilization.md:137`) - the 15-25%
    between them is the same instruction-economy wall as decode
    (`skinny-stall-attribution.md`: 77% issue-bound). A mul_mm win transfers ~1:1 to
-   prefill wall.
+   prefill wall. **PROBED same evening (owner: "reuse one of the tricks"; branch
+   `mm-acc-half`, UNMERGED - quality gate pending).** Per-instruction profile of the
+   captured n=512 kernel (`traces/aug28/mm-n512-*`): one 174-instruction K-loop,
+   98.6% issue / 0.9% stall - pure instruction economy. Measured levers:
+   - dequant tax ~5% (f16 weights 7.22 vs q4_0 6.87 TFLOPS, new perf cases);
+   - **half-accumulate MMA (`GGML_MM_ACC_HALF=1`): 6.87 -> 7.25 / 6.79 -> 7.17
+     TFLOPS, real prefill 67.7 -> 62.5 s = +8.3% (132.6 t/s) - 8.8% FASTER THAN
+     MLX's 68.0 on the same prompt.** The 2x f16 FMA rate question is answered NO
+     (the win is accumulator instruction width, not rate). All 1157 MUL_MAT evals
+     pass NMSE, but the OUTPUT TEXT CHANGES (target hidden-state numerics; f16
+     accumulate over K up to 17408, overflow risk in pathological activations) -
+     **adoption is the owner's quality call**; decode is untouched at the pick
+     (skinny/mv own ne11 <= 8, so in-server this reaches prefill/large-batch only).
+   - **KLD PRICED (owner: "run the KLD to weed out pathologies"; TAG
+     `kldacch-aug28`, 24x2048 wikitext vs q8_0 logits, same binary, env the only
+     variable): NO pathologies** - max KLD unchanged (24.06 -> 23.81), no inf,
+     tail ratios preserved. The cost is real and broadband: mean KLD 0.05397 ->
+     0.06031 (**+11.8%, ~1/8 of Q4_0's own quant cost**; the control arm
+     reproduced the recorded 0.05397 to 5 digits), median +27%, Same-top-p
+     90.75 -> 89.88 (-0.86 pt). The shift is well BELOW the raw sqrt(K) f16
+     arithmetic (~1% RMS per matmul) - the inter-layer RMSNorms absorb most of
+     it, which also argues the same trick is cheap on the FA ladder (item 2).
+     **Trade on the table: +8.3% prefill for +0.006 mean KLD - owner's call.**
 2. The FA ladder (~3.8 s, quadratic in context) and GATED_DELTA_NET (~2.4 s).
+   **FA half-accumulate probed same night (owner: "do the FA as well") - CLOSED
+   for now, two results:** (a) the FULL-half pack (qk+s+o) is a LAYOUT TRAP, not
+   a precision question: the scratch region interleaves scores with the hardcoded
+   half2 mask at stride SH, aligned only when s_t is float - s_t=half shears the
+   mask rows, NMSE ~0.99 garbage, and the first battery's catastrophic KLD (mean
+   0.94, same-top 64.7%) was this bug, VOID as a precision measurement. A real
+   attempt needs the scratch layout reworked + Q pre-scaled before the QK MMA
+   (raw q.k dot products can exceed f16 range). (b) the safe o-half pack
+   (BF16-pack precedent, `GGML_FA_ACC_HALF=1`, all NMSE tests pass) is
+   quality-FREE (mean KLD 0.05414 vs control 0.05397, same-top identical) and
+   speed-FREE (wall 65.67 vs 65.76 s control, flat; combined arm = mm-half
+   alone: 62.30 s, KLD 0.06038 vs 0.06031). The PV MMA is too small a slice of
+   the FA issue budget to matter. The ~3.8 s FA ladder stays on the table for a
+   future layout-surgery attempt.
 3. The pre-batch-1 gap (~4.1 s once per request: tokenize + slot setup + first
    update_slots sync) - unsampled (the window started after it), minor, still open.
 

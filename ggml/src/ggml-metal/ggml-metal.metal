@@ -10722,8 +10722,9 @@ void kernel_flash_attn_ext_impl(
 
                 const float m = M[jj];
 
-                // scale and apply the logitcap / mask
-                float2 s2 = ss2[j*SH/2 + tiisg]*args.scale;
+                // scale and apply the logitcap / mask. the math stays float (running max/sum
+                // are scalar); s2_t is only the threadgroup storage type
+                float2 s2 = float2(ss2[j*SH/2 + tiisg])*args.scale;
 
                 if (FC_flash_attn_ext_has_scap) {
                     s2 = args.logit_softcap*precise::tanh(s2);
@@ -10732,9 +10733,9 @@ void kernel_flash_attn_ext_impl(
                 // mqk = mqk + slope*mask
                 if (blk_cur != 2) {
                     if (FC_flash_attn_ext_has_bias) {
-                        s2 += s2_t(sm2[j*SH + tiisg])*slope;
+                        s2 += float2(sm2[j*SH + tiisg])*slope;
                     } else {
-                        s2 += s2_t(sm2[j*SH + tiisg]);
+                        s2 += float2(sm2[j*SH + tiisg]);
                     }
                 }
 
@@ -10746,17 +10747,17 @@ void kernel_flash_attn_ext_impl(
                 S[jj] = S[jj]*ms + simd_sum(vs2[0] + vs2[1]);
 
                 // the P matrix from the paper (Q rows, C columns)
-                ss2[j*SH/2 + tiisg] = vs2;
+                ss2[j*SH/2 + tiisg] = s2_t(vs2);
 
                 if (DV4 % NW == 0) {
                     FOR_UNROLL (short ii = 0; ii < DV4/NW; ++ii) {
                         const short i = ii*NW + tiisg;
 
-                        so4[j*PV4 + i] *= ms;
+                        so4[j*PV4 + i] *= (o_t) ms;
                     }
                 } else {
                     for (short i = tiisg; i < DV4; i += NW) {
-                        so4[j*PV4 + i] *= ms;
+                        so4[j*PV4 + i] *= (o_t) ms;
                     }
                 }
             }
@@ -10929,7 +10930,7 @@ void kernel_flash_attn_ext_impl(
                 S[jj] = S[jj]*ms + simd_sum(vs);
 
                 for (short i = tiisg; i < DV4; i += NW) {
-                    so4[j*PV4 + i] *= ms;
+                    so4[j*PV4 + i] *= (o_t) ms;
                 }
             }
         }
@@ -11071,6 +11072,19 @@ kernel void kernel_flash_attn_ext(
     float,  float4,    simdgroup_float8x8
     //half,   half4,     simdgroup_half8x8
 
+// half-accumulation probe (GGML_FA_ACC_HALF=1): O accumulates in half (the PV MMA site),
+// mirroring the FA_TYPES_BF choice. qk and s MUST stay float: the scratch region
+// interleaves scores with the half2 mask at stride SH, which only aligns when s_t is
+// float - s_t=half shears the mask rows and produces garbage (NMSE ~0.99, measured).
+// See perf/prefill-decomp.md.
+#define FA_TYPES_ACCH \
+    half,   half4,     simdgroup_half8x8,  \
+    half,   half4x4,   simdgroup_half8x8,  \
+    half,   half4x4,   simdgroup_half8x8,  \
+    float,             simdgroup_float8x8, \
+    float,  float2,    simdgroup_float8x8, \
+    half,   half4,     simdgroup_half8x8
+
 typedef decltype(kernel_flash_attn_ext<FA_TYPES, half4x4, 1, dequantize_f16, half4x4, 1, dequantize_f16, 64, 64>) flash_attn_ext_t;
 
 template [[host_name("kernel_flash_attn_ext_f32_dk32_dv32"  )]]  kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES_F32, float4x4,   1, dequantize_f32,  float4x4,   1, dequantize_f32,  32,  32>;
@@ -11104,6 +11118,9 @@ template [[host_name("kernel_flash_attn_ext_f16_dk256_dv256")]]  kernel flash_at
 template [[host_name("kernel_flash_attn_ext_f16_dk320_dv256")]]  kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES,    half4x4,    1, dequantize_f16,  half4x4,    1, dequantize_f16,  320, 256>;
 template [[host_name("kernel_flash_attn_ext_f16_dk512_dv512")]]  kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES,    half4x4,    1, dequantize_f16,  half4x4,    1, dequantize_f16,  512, 512>;
 template [[host_name("kernel_flash_attn_ext_f16_dk576_dv512")]]  kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES,    half4x4,    1, dequantize_f16,  half4x4,    1, dequantize_f16,  576, 512>;
+
+template [[host_name("kernel_flash_attn_ext_acch_f16_dk128_dv128")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES_ACCH, half4x4, 1, dequantize_f16, half4x4, 1, dequantize_f16, 128, 128>;
+template [[host_name("kernel_flash_attn_ext_acch_f16_dk256_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES_ACCH, half4x4, 1, dequantize_f16, half4x4, 1, dequantize_f16, 256, 256>;
 
 #if defined(GGML_METAL_HAS_BF16)
 template [[host_name("kernel_flash_attn_ext_bf16_dk32_dv32"  )]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES_BF, bfloat4x4,  1, dequantize_bf16, bfloat4x4,  1, dequantize_bf16, 32,  32>;
@@ -11226,6 +11243,7 @@ template [[host_name("kernel_flash_attn_ext_q8_0_dk576_dv512")]] kernel flash_at
 #undef FA_TYPES
 #undef FA_TYPES_BF
 #undef FA_TYPES_F32
+#undef FA_TYPES_ACCH
 
 constant bool FC_flash_attn_ext_vec_has_mask  [[function_constant(FC_FLASH_ATTN_EXT_VEC + 0)]];
 constant bool FC_flash_attn_ext_vec_has_sinks [[function_constant(FC_FLASH_ATTN_EXT_VEC + 1)]];
@@ -14392,11 +14410,23 @@ kernel void kernel_mul_mm(
 
 #else
 
+// direct device store of the accumulator tiles; the half-accumulate variant never takes
+// this path (its condition is compile-time false), the overload only keeps the code valid
+static inline void mul_mm_store_direct(thread simdgroup_float8x8 (&mc)[8], device float * C, int ne0) {
+    for (short i = 0; i < 8; i++) {
+        simdgroup_store(mc[i], C + 8*(i%4) + 8*ne0*(i/4), ne0, 0, false);
+    }
+}
+static inline void mul_mm_store_direct(thread simdgroup_half8x8 (&mc)[8], device float * C, int ne0) {
+    (void) mc; (void) C; (void) ne0;
+}
+
 template<
     typename S0, typename S0_4x4, typename S0_8x8,
     typename S1, typename S1_2x4, typename S1_8x8,
     typename block_q, short nl, void (*dequantize_func)(device const block_q *, short, thread S0_4x4 &),
-    typename T0, typename T0_4x4, typename T1, typename T1_2x4>
+    typename T0, typename T0_4x4, typename T1, typename T1_2x4,
+    typename ACC = float, typename ACC8x8 = simdgroup_float8x8>
 kernel void kernel_mul_mm(
         constant ggml_metal_kargs_mul_mm & args,
         device const char * src0,
@@ -14452,10 +14482,10 @@ kernel void kernel_mul_mm(
     S0_8x8 ma[4];
     S1_8x8 mb[2];
 
-    simdgroup_float8x8 mc[8];
+    ACC8x8 mc[8];
 
     for (short i = 0; i < 8; i++){
-        mc[i] = make_filled_simdgroup_matrix<float, 8>(0.f);
+        mc[i] = make_filled_simdgroup_matrix<ACC, 8>((ACC) 0.f);
     }
 
     for (int loop_k = 0; loop_k < args.ne00; loop_k += NK) {
@@ -14564,20 +14594,19 @@ kernel void kernel_mul_mm(
         }
     }
 
-    if (!FC_mul_mm_bc_out || (r0 + NR0 <= args.ne0 && r1 + NR1 <= args.ne1)) {
+    if (is_same<ACC, float>::value && (!FC_mul_mm_bc_out || (r0 + NR0 <= args.ne0 && r1 + NR1 <= args.ne1))) {
         // if no bounds checks on the output are needed, we can directly write to device memory
         device float * C = (device float *) dst +
             (r0 + 32*(sgitg &  1)) + \
             (r1 + 16*(sgitg >> 1)) * args.ne0 + im*args.ne1*args.ne0;
 
-        for (short i = 0; i < 8; i++) {
-            simdgroup_store(mc[i], C + 8*(i%4) + 8*args.ne0*(i/4), args.ne0, 0, false);
-        }
+        mul_mm_store_direct(mc, C, args.ne0);
     } else {
-        // block is smaller than 64x32, we should avoid writing data outside of the matrix
+        // block is smaller than 64x32, we should avoid writing data outside of the matrix.
+        // the half-accumulate variant always lands here (its tile converts to f32 on the way out)
         threadgroup_barrier(mem_flags::mem_threadgroup);
 
-        threadgroup float * temp_str = ((threadgroup float *) shmem) + 32*(sgitg&1) + (16*(sgitg >> 1))*NR0;
+        threadgroup ACC * temp_str = ((threadgroup ACC *) shmem) + 32*(sgitg&1) + (16*(sgitg >> 1))*NR0;
 
         for (short i = 0; i < 8; i++) {
             simdgroup_store(mc[i], temp_str + 8*(i%4) + 8*NR0*(i/4), NR0, 0, false);
@@ -14590,17 +14619,17 @@ kernel void kernel_mul_mm(
                 device float  * D  = (device float  *) dst + r0 + (r1 + j)*args.ne0 + im*args.ne1*args.ne0;
                 device float4 * D4 = (device float4 *) D;
 
-                threadgroup float  * C  = temp_str + (j*NR0);
-                threadgroup float4 * C4 = (threadgroup float4 *) C;
+                threadgroup ACC  * C  = temp_str + (j*NR0);
+                threadgroup vec<ACC, 4> * C4 = (threadgroup vec<ACC, 4> *) C;
 
                 int i = 0;
                 for (; i < nr0/4; i++) {
-                    *(D4 + i) = *(C4 + i);
+                    *(D4 + i) = (float4) *(C4 + i);
                 }
 
                 i *= 4;
                 for (; i < nr0; i++) {
-                    *(D + i) = *(C + i);
+                    *(D + i) = (float) *(C + i);
                 }
             }
         }
@@ -15305,6 +15334,8 @@ template [[host_name("kernel_mul_mm_bf16_f32")]]    kernel mul_mm_t kernel_mul_m
 template [[host_name("kernel_mul_mm_q1_0_f32")]]    kernel mul_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   half,   half2x4,   simdgroup_half8x8,   block_q1_0,    8,     dequantize_q1_0,    float,  float4x4,  float, float2x4>;
 template [[host_name("kernel_mul_mm_q2_0_f32")]]    kernel mul_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   half,   half2x4,   simdgroup_half8x8,   block_q2_0,    4,     dequantize_q2_0,    float,  float4x4,  float, float2x4>;
 template [[host_name("kernel_mul_mm_q4_0_f32")]]    kernel mul_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   half,   half2x4,   simdgroup_half8x8,   block_q4_0,    2,     dequantize_q4_0,    float,  float4x4,  float, float2x4>;
+// half-accumulate probe (GGML_MM_ACC_HALF=1): does the MMA lowering reach the 2x f16 FMA rate?
+template [[host_name("kernel_mul_mm_acch_q4_0_f32")]] kernel mul_mm_t kernel_mul_mm<half, half4x4,   simdgroup_half8x8,   half,   half2x4,   simdgroup_half8x8,   block_q4_0,    2,     dequantize_q4_0,    float,  float4x4,  float, float2x4, half, simdgroup_half8x8>;
 template [[host_name("kernel_mul_mm_q4_1_f32")]]    kernel mul_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   half,   half2x4,   simdgroup_half8x8,   block_q4_1,    2,     dequantize_q4_1,    float,  float4x4,  float, float2x4>;
 template [[host_name("kernel_mul_mm_q5_0_f32")]]    kernel mul_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   half,   half2x4,   simdgroup_half8x8,   block_q5_0,    2,     dequantize_q5_0,    float,  float4x4,  float, float2x4>;
 template [[host_name("kernel_mul_mm_q5_1_f32")]]    kernel mul_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   half,   half2x4,   simdgroup_half8x8,   block_q5_1,    2,     dequantize_q5_1,    float,  float4x4,  float, float2x4>;

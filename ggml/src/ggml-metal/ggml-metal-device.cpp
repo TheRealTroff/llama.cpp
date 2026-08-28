@@ -940,7 +940,12 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm(ggml_meta
     const int16_t r2   = (int16_t) (ne12 / op->src[0]->ne[2]);
     const int16_t r3   = (int16_t) (ne13 / op->src[0]->ne[3]);
 
-    snprintf(base, 256, "kernel_mul_mm_%s_%s", ggml_type_name(tsrc0), ggml_type_name(tsrc1));
+    static const bool acc_half = getenv("GGML_MM_ACC_HALF") != nullptr;
+    if (acc_half && tsrc0 == GGML_TYPE_Q4_0 && tsrc1 == GGML_TYPE_F32 && !has_tensor) {
+        snprintf(base, 256, "kernel_mul_mm_acch_q4_0_f32");
+    } else {
+        snprintf(base, 256, "kernel_mul_mm_%s_%s", ggml_type_name(tsrc0), ggml_type_name(tsrc1));
+    }
     snprintf(name, 256, "%s_bci=%d_bco=%d_ne12=%d_ne13=%d_r2=%d_r3=%d",
              base, bc_inp, bc_out, ne12, ne13, r2, r3);
 
@@ -1673,6 +1678,17 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext(
                 ggml_type_name(op->src[1]->type),
                 dk,
                 dv);
+    }
+
+    // decode stays on the vec path (GGML_FA_VEC_MAX), so this reaches prefill/large-batch only
+    static const bool fa_acc_half = getenv("GGML_FA_ACC_HALF") != nullptr;
+    if (fa_acc_half && op->src[1]->type == GGML_TYPE_F16 && op->src[2]->type == GGML_TYPE_F16 && dk == dv && (dk == 128 || dk == 256)) {
+        snprintf(base, 256, "kernel_flash_attn_ext_acch_f16_dk%d_dv%d", dk, dv);
+        static bool logged = false;
+        if (!logged) {
+            GGML_LOG_INFO("%s: FA half-accumulate engaged (dk=%d)\n", __func__, dk);
+            logged = true;
+        }
     }
 
     snprintf(name, 256, "%s_mask=%d_sinks=%d_bias=%d_scap=%d_kvpad=%d_bcm=%d_ns10=%d_ns20=%d_nsg=%d_nwg=%d",
