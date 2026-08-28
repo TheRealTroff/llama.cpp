@@ -48,10 +48,14 @@ mkdir -p "$OUT"
 # GET_MEMCPY added 2026-08-28 afternoon (owner: "pick get_memcpy"): logits readback
 # as memcpy-after-wait instead of a blit behind the graph, +3.3% e2e -
 # see perf/cpu-round-overhead.md.
+# Drafter stack added 2026-08-28 evening (owner: "do the others"): fused inject +
+# async (process() submit-only) + attention window 1024 (acceptance improves),
+# +1.87% e2e together, shas hold in every arm - see perf/drafter-graph-count.md.
 PICK_ENV=(GGML_MV_NC=2 GGML_MM_SKINNY=6 GGML_FA_VEC_MAX=5 GGML_FA_MM_NWG=8 GGML_GDN_FUSE_WB=1
           GGML_MV_REPACK=1 GGML_MV_SOA_W4=1 GGML_MV_SOA_W4_R4KP=3
           GGML_MV_SOA_W5=4 GGML_MV_SOA_W5_HALF=1 GGML_MV_SOA_WL_XL=1
-          GGML_METAL_GET_MEMCPY=1)
+          GGML_METAL_GET_MEMCPY=1
+          DFLASH_FUSED_INJECT=1 DFLASH_ASYNC_INJECT=1 LLAMA_DRAFT_WINDOW=1024)
 # What the older harnesses set, kept to show the delta is the missing flags.
 PART_ENV=(GGML_MV_NC=2 GGML_MM_SKINNY=5)
 

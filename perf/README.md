@@ -68,10 +68,26 @@ ONLY from within-harness interleaved deltas** (how the +3.3% was measured); trea
 canonical mints as anchors carrying the day's spread, and record the mint-adjacent
 b1 as the machine-state anchor every time.
 
+**Extended a third time 2026-08-28 evening (owner: "do the others"): + the drafter
+stack `DFLASH_FUSED_INJECT=1 DFLASH_ASYNC_INJECT=1 LLAMA_DRAFT_WINDOW=1024`** - the
+encoder fc+norm runs inside the injection graph, process() goes submit-only, and the
+drafter attends over a 64-sink + 1024-window KV instead of the full context
+(acceptance IMPROVES, 50.1 vs 49.8; the ring stores enc-width feature rows in fused
+mode so all three compose): **+1.87% e2e in the interleaved A/B (stack 26.216/26.279
+vs ctrl 25.80/25.731 at 600), +0.73% of it on top of the window alone; every arm's
+sha canonical, including the 300-unit gate that exercises the ring rebuild through
+the fused graph** (`drafter-graph-count.md`, branch `drafter-fused-inject`,
+harness `run-draft-window.sh`). Canonical mint TAG `prodpick-aug28-drafter`:
+**28.60/28.39 at 300 (acceptance 57.5, up from 55.7 - the window helps acceptance
+at 300 units too), 26.27/26.22 at 600 (acc 50.1), batch-1 anchor 12.98** (healthy,
+matches the morning's 12.97/13.04 - this mint carries no drift caveat), all shas
+canonical. Vs the cooled gmc mint at comparable b1: +2.4% at 600.
+
 ```
 GGML_MV_NC=2 GGML_MM_SKINNY=6 GGML_FA_VEC_MAX=5 GGML_FA_MM_NWG=8 GGML_GDN_FUSE_WB=1 \
 GGML_MV_REPACK=1 GGML_MV_SOA_W4=1 GGML_MV_SOA_W4_R4KP=3 GGML_MV_SOA_W5=4 GGML_MV_SOA_W5_HALF=1 \
 GGML_MV_SOA_WL_XL=1 GGML_METAL_GET_MEMCPY=1 \
+DFLASH_FUSED_INJECT=1 DFLASH_ASYNC_INJECT=1 LLAMA_DRAFT_WINDOW=1024 \
   llama-server -m Qwen3.8-27B-uniform-Q4_0.gguf -c 10240 -fa on -ctk f16 -ctv f16 \
     -md Qwen3.8-27B-DFlash2-pureQ4_0.gguf --spec-type draft-dflash --spec-draft-n-max 4
 ```
