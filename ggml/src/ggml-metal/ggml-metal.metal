@@ -11072,14 +11072,17 @@ kernel void kernel_flash_attn_ext(
     float,  float4,    simdgroup_float8x8
     //half,   half4,     simdgroup_half8x8
 
-// half-accumulation probe (GGML_FA_ACC_HALF=1): QK, softmax and O all accumulate in half,
-// making both MMA sites all-half. See perf/prefill-decomp.md.
+// half-accumulation probe (GGML_FA_ACC_HALF=1): O accumulates in half (the PV MMA site),
+// mirroring the FA_TYPES_BF choice. qk and s MUST stay float: the scratch region
+// interleaves scores with the half2 mask at stride SH, which only aligns when s_t is
+// float - s_t=half shears the mask rows and produces garbage (NMSE ~0.99, measured).
+// See perf/prefill-decomp.md.
 #define FA_TYPES_ACCH \
     half,   half4,     simdgroup_half8x8,  \
     half,   half4x4,   simdgroup_half8x8,  \
     half,   half4x4,   simdgroup_half8x8,  \
-    half,              simdgroup_half8x8,  \
-    half,   half2,     simdgroup_half8x8,  \
+    float,             simdgroup_float8x8, \
+    float,  float2,    simdgroup_float8x8, \
     half,   half4,     simdgroup_half8x8
 
 typedef decltype(kernel_flash_attn_ext<FA_TYPES, half4x4, 1, dequantize_f16, half4x4, 1, dequantize_f16, 64, 64>) flash_attn_ext_t;
