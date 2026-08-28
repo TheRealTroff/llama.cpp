@@ -6675,6 +6675,216 @@ kernel void kernel_mul_mv_q4_0_soa_w5_r4h(
     }
 }
 
+// Wider-weight-load cells of the w5r4h form (m4-width5-crossover.md open item 4a):
+// one uint2/uint4 load per row covers 2/4 packs, and all packs of a block share one
+// scale load - loads per row per block drop 8 -> 2 (q4). The y stream cannot widen
+// past 16 B and is unchanged.
+kernel void kernel_mul_mv_q4_0_soa_w5_r4hq2(
+        constant ggml_metal_kargs_mul_mv_ext & args,
+        device const char * src0,
+        device const half * src1,
+        device float * dst,
+        uint3 tgpig [[threadgroup_position_in_grid]],
+        ushort tiisg [[thread_index_in_simdgroup]]) {
+    float acc[4*5] = {};
+    const int nblk = args.ne00/32;
+    const int row0 = 4*(int)tgpig.x;
+    device const half * sp0 = (device const half *)(src0 + (uint64_t)(row0 + 0)*args.nb01);
+    device const half * sp1 = (device const half *)(src0 + (uint64_t)(row0 + 1)*args.nb01);
+    device const half * sp2 = (device const half *)(src0 + (uint64_t)(row0 + 2)*args.nb01);
+    device const half * sp3 = (device const half *)(src0 + (uint64_t)(row0 + 3)*args.nb01);
+    device const uint2 * qp0 = (device const uint2 *)(sp0 + nblk);
+    device const uint2 * qp1 = (device const uint2 *)(sp1 + nblk);
+    device const uint2 * qp2 = (device const uint2 *)(sp2 + nblk);
+    device const uint2 * qp3 = (device const uint2 *)(sp3 + nblk);
+    using half8 = vec<half, 8>;
+    const device half8 * xv = (const device half8 *)src1;
+    const int K8 = args.ne00/8;
+
+    const int nhalf = 2*nblk;
+    for (int h = (int)tiisg; h < nhalf; h += 32) {
+        const int block = h/2;
+        const uint2 qq0 = qp0[h];
+        const uint2 qq1 = qp1[h];
+        const uint2 qq2 = qp2[h];
+        const uint2 qq3 = qp3[h];
+        const half s0 = sp0[block];
+        const half s1 = sp1[block];
+        const half s2 = sp2[block];
+        const half s3 = sp3[block];
+#pragma unroll
+        for (int j = 0; j < 2; ++j) {
+            const int p = 2*h + j;
+            const half8 v0 = xv[0*K8 + p];
+            const half8 v1 = xv[1*K8 + p];
+            const half8 v2 = xv[2*K8 + p];
+            const half8 v3 = xv[3*K8 + p];
+            const half8 v4 = xv[4*K8 + p];
+            {
+                const uint q = qq0[j]; const half s = s0;
+#pragma unroll
+                for (int ki = 0; ki < 8; ++ki) {
+                    const half wv = (half((q >> (ki*4)) & 0xFu) - 8.h)*s;
+                    acc[0*5 + 0] += float(v0[ki]*wv);
+                    acc[0*5 + 1] += float(v1[ki]*wv);
+                    acc[0*5 + 2] += float(v2[ki]*wv);
+                    acc[0*5 + 3] += float(v3[ki]*wv);
+                    acc[0*5 + 4] += float(v4[ki]*wv);
+                }
+            }
+            {
+                const uint q = qq1[j]; const half s = s1;
+#pragma unroll
+                for (int ki = 0; ki < 8; ++ki) {
+                    const half wv = (half((q >> (ki*4)) & 0xFu) - 8.h)*s;
+                    acc[1*5 + 0] += float(v0[ki]*wv);
+                    acc[1*5 + 1] += float(v1[ki]*wv);
+                    acc[1*5 + 2] += float(v2[ki]*wv);
+                    acc[1*5 + 3] += float(v3[ki]*wv);
+                    acc[1*5 + 4] += float(v4[ki]*wv);
+                }
+            }
+            {
+                const uint q = qq2[j]; const half s = s2;
+#pragma unroll
+                for (int ki = 0; ki < 8; ++ki) {
+                    const half wv = (half((q >> (ki*4)) & 0xFu) - 8.h)*s;
+                    acc[2*5 + 0] += float(v0[ki]*wv);
+                    acc[2*5 + 1] += float(v1[ki]*wv);
+                    acc[2*5 + 2] += float(v2[ki]*wv);
+                    acc[2*5 + 3] += float(v3[ki]*wv);
+                    acc[2*5 + 4] += float(v4[ki]*wv);
+                }
+            }
+            {
+                const uint q = qq3[j]; const half s = s3;
+#pragma unroll
+                for (int ki = 0; ki < 8; ++ki) {
+                    const half wv = (half((q >> (ki*4)) & 0xFu) - 8.h)*s;
+                    acc[3*5 + 0] += float(v0[ki]*wv);
+                    acc[3*5 + 1] += float(v1[ki]*wv);
+                    acc[3*5 + 2] += float(v2[ki]*wv);
+                    acc[3*5 + 3] += float(v3[ki]*wv);
+                    acc[3*5 + 4] += float(v4[ki]*wv);
+                }
+            }
+        }
+    }
+
+    for (int i = 0; i < 4*5; ++i) {
+        acc[i] = simd_sum(acc[i]);
+    }
+    if (tiisg < 4*5) {
+        const int r = (int)tiisg/5;
+        const int c = (int)tiisg%5;
+        if (row0 + r < args.ne01) {
+            dst[c*args.ne01 + row0 + r] = acc[tiisg];
+        }
+    }
+}
+
+kernel void kernel_mul_mv_q4_0_soa_w5_r4hq4(
+        constant ggml_metal_kargs_mul_mv_ext & args,
+        device const char * src0,
+        device const half * src1,
+        device float * dst,
+        uint3 tgpig [[threadgroup_position_in_grid]],
+        ushort tiisg [[thread_index_in_simdgroup]]) {
+    float acc[4*5] = {};
+    const int nblk = args.ne00/32;
+    const int row0 = 4*(int)tgpig.x;
+    device const half * sp0 = (device const half *)(src0 + (uint64_t)(row0 + 0)*args.nb01);
+    device const half * sp1 = (device const half *)(src0 + (uint64_t)(row0 + 1)*args.nb01);
+    device const half * sp2 = (device const half *)(src0 + (uint64_t)(row0 + 2)*args.nb01);
+    device const half * sp3 = (device const half *)(src0 + (uint64_t)(row0 + 3)*args.nb01);
+    device const uint4 * qp0 = (device const uint4 *)(sp0 + nblk);
+    device const uint4 * qp1 = (device const uint4 *)(sp1 + nblk);
+    device const uint4 * qp2 = (device const uint4 *)(sp2 + nblk);
+    device const uint4 * qp3 = (device const uint4 *)(sp3 + nblk);
+    using half8 = vec<half, 8>;
+    const device half8 * xv = (const device half8 *)src1;
+    const int K8 = args.ne00/8;
+
+    for (int b = (int)tiisg; b < nblk; b += 32) {
+        const uint4 qq0 = qp0[b];
+        const uint4 qq1 = qp1[b];
+        const uint4 qq2 = qp2[b];
+        const uint4 qq3 = qp3[b];
+        const half s0 = sp0[b];
+        const half s1 = sp1[b];
+        const half s2 = sp2[b];
+        const half s3 = sp3[b];
+#pragma unroll
+        for (int j = 0; j < 4; ++j) {
+            const int p = 4*b + j;
+            const half8 v0 = xv[0*K8 + p];
+            const half8 v1 = xv[1*K8 + p];
+            const half8 v2 = xv[2*K8 + p];
+            const half8 v3 = xv[3*K8 + p];
+            const half8 v4 = xv[4*K8 + p];
+            {
+                const uint q = qq0[j]; const half s = s0;
+#pragma unroll
+                for (int ki = 0; ki < 8; ++ki) {
+                    const half wv = (half((q >> (ki*4)) & 0xFu) - 8.h)*s;
+                    acc[0*5 + 0] += float(v0[ki]*wv);
+                    acc[0*5 + 1] += float(v1[ki]*wv);
+                    acc[0*5 + 2] += float(v2[ki]*wv);
+                    acc[0*5 + 3] += float(v3[ki]*wv);
+                    acc[0*5 + 4] += float(v4[ki]*wv);
+                }
+            }
+            {
+                const uint q = qq1[j]; const half s = s1;
+#pragma unroll
+                for (int ki = 0; ki < 8; ++ki) {
+                    const half wv = (half((q >> (ki*4)) & 0xFu) - 8.h)*s;
+                    acc[1*5 + 0] += float(v0[ki]*wv);
+                    acc[1*5 + 1] += float(v1[ki]*wv);
+                    acc[1*5 + 2] += float(v2[ki]*wv);
+                    acc[1*5 + 3] += float(v3[ki]*wv);
+                    acc[1*5 + 4] += float(v4[ki]*wv);
+                }
+            }
+            {
+                const uint q = qq2[j]; const half s = s2;
+#pragma unroll
+                for (int ki = 0; ki < 8; ++ki) {
+                    const half wv = (half((q >> (ki*4)) & 0xFu) - 8.h)*s;
+                    acc[2*5 + 0] += float(v0[ki]*wv);
+                    acc[2*5 + 1] += float(v1[ki]*wv);
+                    acc[2*5 + 2] += float(v2[ki]*wv);
+                    acc[2*5 + 3] += float(v3[ki]*wv);
+                    acc[2*5 + 4] += float(v4[ki]*wv);
+                }
+            }
+            {
+                const uint q = qq3[j]; const half s = s3;
+#pragma unroll
+                for (int ki = 0; ki < 8; ++ki) {
+                    const half wv = (half((q >> (ki*4)) & 0xFu) - 8.h)*s;
+                    acc[3*5 + 0] += float(v0[ki]*wv);
+                    acc[3*5 + 1] += float(v1[ki]*wv);
+                    acc[3*5 + 2] += float(v2[ki]*wv);
+                    acc[3*5 + 3] += float(v3[ki]*wv);
+                    acc[3*5 + 4] += float(v4[ki]*wv);
+                }
+            }
+        }
+    }
+
+    for (int i = 0; i < 4*5; ++i) {
+        acc[i] = simd_sum(acc[i]);
+    }
+    if (tiisg < 4*5) {
+        const int r = (int)tiisg/5;
+        const int c = (int)tiisg%5;
+        if (row0 + r < args.ne01) {
+            dst[c*args.ne01 + row0 + r] = acc[tiisg];
+        }
+    }
+}
+
 // Short-K head cells (perf/round-decomp-w5n4.md stub). At k=5120 the head pays the
 // per-threadgroup fixed cost and the full 5-column y re-read once per 4 rows. The three
 // cells separate the mechanisms: r6 amortizes both over 6 rows in one simdgroup (the

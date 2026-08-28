@@ -205,13 +205,25 @@ between 5 and 6.
    ever wanted anyway: restore prefetch distance without registers (kp2-style K-split
    across two simdgroups, or explicit threadgroup staging of y with scalar dequant) -
    long shot given the ~10% deficit, parked.
-4. **Two unprobed micro-levers on the named wall (2026-08-28, listed while ranking
-   frontiers - neither measured, both cheap to rank):** (a) wider weight loads - the
-   w5 kernels load q as a single 4-byte uint per row per pack; the SoA layout permits
-   uint2/uint4 (2-4 packs per instruction), same prefetch depth for fewer tracked
-   in-flight ops. Unroll was closed +/-3% but load WIDTH was never isolated; rank
-   offline first via the 14-byte-form count in the disasm histogram. (b)
-   `AGX3_TEMP_REG_LIMIT` at runtime - the offline tool ignores it because the
-   in-driver runtime compiler reads it (`toolchain-isa-probe.md`); nobody has probed
-   whether it moves the allocator's pressure/pipelining trade on a live pipeline. If
-   it does anything, it is the only direct register knob we have.
+4. ~~Two unprobed micro-levers on the named wall~~ **BOTH ANSWERED same day
+   (2026-08-28, branch `mv-shortk-head`), and the wall stands:**
+   (a) **Wider weight loads REFUTED, decisively.** uint2/uint4 q loads on the 4-row
+   half-product body (`kernel_mul_mv_q4_0_soa_w5_r4hq{2,4}`, `GGML_MV_SOA_W5_QW={2,4}`,
+   1155/1155, kept unrouted): loads per row per block drop 8 -> 2, offline text is
+   near-baseline (4012 vs 3690 B, 16/32 B spill) - and every shape LOSES: gate/up
+   240 -> 263/281 us (+9/+17%), head 3195 -> 3510/3680 (+10/+15%), and long-K
+   ffn_down 263 -> 436/489 (**+66/+86%**), worst exactly where the pipeline is
+   deepest. Mechanism: the wider load's payload stays LIVE across its 2-4
+   sub-iterations, and liveness costs more slack than the saved load instructions
+   buy - the register-bounded-pipelining wall confirmed from a third direction
+   (after w6's shortened prefetch distance and r8's spill). The incumbent's narrow,
+   short-lived per-pack loads are the right form: independent small loads give the
+   software pipeliner freedom that wide loads take away.
+   (b) **`AGX3_TEMP_REG_LIMIT` at runtime: NO EFFECT.** Swept
+   none/64/96/128/160/256 on the live w5 pipelines: flat 240-243/262-266 us - 64
+   would have forced heavy spills if honored. The driver ignores it on this path;
+   there is no runtime register knob, the allocator's pressure/pipelining trade is
+   out of reach. The mv plane is now closed at every level probed: schedule (+/-3%),
+   codegen form (found, -21%), instr/B reducers, row count, load width, register
+   cap. What remains is structural (staging/cooperative forms with bad prior odds)
+   or acceptance-side.

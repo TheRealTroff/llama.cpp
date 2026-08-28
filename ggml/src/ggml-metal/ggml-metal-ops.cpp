@@ -2986,9 +2986,15 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
                             ne11 == 4 && use_di && env_di_v2 ? 3 :
                             ne11 == 4 && use_f16y && !use_di && op->src[0]->type == GGML_TYPE_Q4_0 && env_half_product ? 4 : 1;
 
+        // wider-weight-load probe (GGML_MV_SOA_W5_QW=2/4): uint2/uint4 q loads on the
+        // 4-row half-product body
+        static const int env_soa_w5_qw = getenv("GGML_MV_SOA_W5_QW") ? atoi(getenv("GGML_MV_SOA_W5_QW")) : 0;
+        const bool use_soa_w5_qw = use_soa_w5 && env_soa_w5_qw && env_soa_w5 == 4 && env_soa_w5_hp && !use_soa_skh;
+
         auto pipeline = use_soa_w7 ? ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w7(lib, env_soa_w7) :
                         use_soa_w6 ? ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w6(lib, env_soa_w6, env_soa_w6_hp != 0) :
                         use_soa_skh ? ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w5_skh(lib, env_soa_skh) :
+                        use_soa_w5_qw ? ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w5_qw(lib, env_soa_w5_qw) :
                         use_soa_w5 ? ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w5(lib, env_soa_w5, env_soa_w5_hp != 0) :
                         use_soa_w4 && env_soa_w4_r4kp ? ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w4_r4kp(lib, env_soa_w4_r4kp) :
                         use_soa_w4 && env_soa_w4_r3 ? ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w4_r3(lib) :
