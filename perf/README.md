@@ -372,7 +372,16 @@ against it and reported a bogus +5.8%.
 Current state:
 
 - **prod-pick: this file** + `run-prod-pick.sh`
-- **`cpu-round-overhead.md` - THE OPEN STUB (2026-08-28, owner-directed), and its
+- **`drafter-graph-count.md` - THE OPEN STUB (2026-08-28 pm, owner: "stub it").**
+  The drafter runs ~3.1 full ~1 GB weight-streams per round (enc + inject + draft
+  decode, each 4.4-4.6 ms at ~235 GB/s) = 13.6 ms, 11.6% of the round; each graph
+  removed is ~+3.8% e2e, a single-forward drafter ~+8% - the largest open lever on
+  the board. Speculation is lossless, so the canonical shas gate any drafting
+  change; acceptance is the quantity to watch. Read `drafter-pipelining.md` first
+  (merged from its stranded branch the same day: serialization anatomy, the
+  target-hidden-state dependency, the section-3 blocker, ASYNC_INJECT retired at
+  +0.38%).
+- **`cpu-round-overhead.md` - the CPU stub, opened and ANSWERED 2026-08-28, and its
   premises fell the same day - read its Status block first.** ~~CPU-side per-round
   cost ~17 ms = submit 9.4 (flat across four picks, never decomposed) + drafter CPU
   ~8 (attribution blocked by the profiler key collision; the per-context tag from
