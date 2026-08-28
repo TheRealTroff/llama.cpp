@@ -14392,11 +14392,23 @@ kernel void kernel_mul_mm(
 
 #else
 
+// direct device store of the accumulator tiles; the half-accumulate variant never takes
+// this path (its condition is compile-time false), the overload only keeps the code valid
+static inline void mul_mm_store_direct(thread simdgroup_float8x8 (&mc)[8], device float * C, int ne0) {
+    for (short i = 0; i < 8; i++) {
+        simdgroup_store(mc[i], C + 8*(i%4) + 8*ne0*(i/4), ne0, 0, false);
+    }
+}
+static inline void mul_mm_store_direct(thread simdgroup_half8x8 (&mc)[8], device float * C, int ne0) {
+    (void) mc; (void) C; (void) ne0;
+}
+
 template<
     typename S0, typename S0_4x4, typename S0_8x8,
     typename S1, typename S1_2x4, typename S1_8x8,
     typename block_q, short nl, void (*dequantize_func)(device const block_q *, short, thread S0_4x4 &),
-    typename T0, typename T0_4x4, typename T1, typename T1_2x4>
+    typename T0, typename T0_4x4, typename T1, typename T1_2x4,
+    typename ACC = float, typename ACC8x8 = simdgroup_float8x8>
 kernel void kernel_mul_mm(
         constant ggml_metal_kargs_mul_mm & args,
         device const char * src0,
@@ -14452,10 +14464,10 @@ kernel void kernel_mul_mm(
     S0_8x8 ma[4];
     S1_8x8 mb[2];
 
-    simdgroup_float8x8 mc[8];
+    ACC8x8 mc[8];
 
     for (short i = 0; i < 8; i++){
-        mc[i] = make_filled_simdgroup_matrix<float, 8>(0.f);
+        mc[i] = make_filled_simdgroup_matrix<ACC, 8>((ACC) 0.f);
     }
 
     for (int loop_k = 0; loop_k < args.ne00; loop_k += NK) {
@@ -14564,20 +14576,19 @@ kernel void kernel_mul_mm(
         }
     }
 
-    if (!FC_mul_mm_bc_out || (r0 + NR0 <= args.ne0 && r1 + NR1 <= args.ne1)) {
+    if (is_same<ACC, float>::value && (!FC_mul_mm_bc_out || (r0 + NR0 <= args.ne0 && r1 + NR1 <= args.ne1))) {
         // if no bounds checks on the output are needed, we can directly write to device memory
         device float * C = (device float *) dst +
             (r0 + 32*(sgitg &  1)) + \
             (r1 + 16*(sgitg >> 1)) * args.ne0 + im*args.ne1*args.ne0;
 
-        for (short i = 0; i < 8; i++) {
-            simdgroup_store(mc[i], C + 8*(i%4) + 8*args.ne0*(i/4), args.ne0, 0, false);
-        }
+        mul_mm_store_direct(mc, C, args.ne0);
     } else {
-        // block is smaller than 64x32, we should avoid writing data outside of the matrix
+        // block is smaller than 64x32, we should avoid writing data outside of the matrix.
+        // the half-accumulate variant always lands here (its tile converts to f32 on the way out)
         threadgroup_barrier(mem_flags::mem_threadgroup);
 
-        threadgroup float * temp_str = ((threadgroup float *) shmem) + 32*(sgitg&1) + (16*(sgitg >> 1))*NR0;
+        threadgroup ACC * temp_str = ((threadgroup ACC *) shmem) + 32*(sgitg&1) + (16*(sgitg >> 1))*NR0;
 
         for (short i = 0; i < 8; i++) {
             simdgroup_store(mc[i], temp_str + 8*(i%4) + 8*NR0*(i/4), NR0, 0, false);
@@ -14590,17 +14601,17 @@ kernel void kernel_mul_mm(
                 device float  * D  = (device float  *) dst + r0 + (r1 + j)*args.ne0 + im*args.ne1*args.ne0;
                 device float4 * D4 = (device float4 *) D;
 
-                threadgroup float  * C  = temp_str + (j*NR0);
-                threadgroup float4 * C4 = (threadgroup float4 *) C;
+                threadgroup ACC  * C  = temp_str + (j*NR0);
+                threadgroup vec<ACC, 4> * C4 = (threadgroup vec<ACC, 4> *) C;
 
                 int i = 0;
                 for (; i < nr0/4; i++) {
-                    *(D4 + i) = *(C4 + i);
+                    *(D4 + i) = (float4) *(C4 + i);
                 }
 
                 i *= 4;
                 for (; i < nr0; i++) {
-                    *(D + i) = *(C + i);
+                    *(D + i) = (float) *(C + i);
                 }
             }
         }
@@ -15305,6 +15316,8 @@ template [[host_name("kernel_mul_mm_bf16_f32")]]    kernel mul_mm_t kernel_mul_m
 template [[host_name("kernel_mul_mm_q1_0_f32")]]    kernel mul_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   half,   half2x4,   simdgroup_half8x8,   block_q1_0,    8,     dequantize_q1_0,    float,  float4x4,  float, float2x4>;
 template [[host_name("kernel_mul_mm_q2_0_f32")]]    kernel mul_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   half,   half2x4,   simdgroup_half8x8,   block_q2_0,    4,     dequantize_q2_0,    float,  float4x4,  float, float2x4>;
 template [[host_name("kernel_mul_mm_q4_0_f32")]]    kernel mul_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   half,   half2x4,   simdgroup_half8x8,   block_q4_0,    2,     dequantize_q4_0,    float,  float4x4,  float, float2x4>;
+// half-accumulate probe (GGML_MM_ACC_HALF=1): does the MMA lowering reach the 2x f16 FMA rate?
+template [[host_name("kernel_mul_mm_acch_q4_0_f32")]] kernel mul_mm_t kernel_mul_mm<half, half4x4,   simdgroup_half8x8,   half,   half2x4,   simdgroup_half8x8,   block_q4_0,    2,     dequantize_q4_0,    float,  float4x4,  float, float2x4, half, simdgroup_half8x8>;
 template [[host_name("kernel_mul_mm_q4_1_f32")]]    kernel mul_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   half,   half2x4,   simdgroup_half8x8,   block_q4_1,    2,     dequantize_q4_1,    float,  float4x4,  float, float2x4>;
 template [[host_name("kernel_mul_mm_q5_0_f32")]]    kernel mul_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   half,   half2x4,   simdgroup_half8x8,   block_q5_0,    2,     dequantize_q5_0,    float,  float4x4,  float, float2x4>;
 template [[host_name("kernel_mul_mm_q5_1_f32")]]    kernel mul_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   half,   half2x4,   simdgroup_half8x8,   block_q5_1,    2,     dequantize_q5_1,    float,  float4x4,  float, float2x4>;
