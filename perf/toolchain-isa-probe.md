@@ -62,6 +62,12 @@ pressure, but the host helper's ISA string table is empty and every mnemonic is 
 See `perf/agx-disasm.md` for the working structural decoder and the private paths that
 were exhausted. The "no readable AGX disassembly" verdict above still stands.
 
+**Follow-up, 2026-08-30:** `perf/air-layout-control.md` maps the next boundary. Textual
+AIR round-trips losslessly and can control loop shape and coarse block placement; a
+GPU-specific `MTLBinaryArchive` can force exact translated code through ggml. The AGX
+backend still owns within-block scheduling, and GPU trace replay recompiles the AIR rather
+than preserving archive-selected native code.
+
 ## What we got instead: per-thread spill bytes
 
 `__GPU_METADATA` is an undocumented FlatBuffer. One field tracks register pressure:
