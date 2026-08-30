@@ -117,13 +117,18 @@ numerics and does not mint another SHA lineage.
 4-row x 3-column, two-simdgroup K-split SoA kernel removes the width-3 hole:
 real-model width-3 latency falls **107.2 -> 80.7 ms**, and fixed DFlash depth 2
 improves **19.613 -> 23.553 t/s (+20.09%)** over four balanced server runs.
-`GGML_MV_SOA_PIN=1` makes first-use layout deterministic for an adaptive width-1..5
-process; leave it off for fixed width-6+ studies because skinny still consumes DI
-and loses 9-12% after SoA is pinned (`m4-width3-r4kp.md`).
+`GGML_MV_SOA_PIN=1` makes first-use layout deterministic for an adaptive process
+(`m4-width3-r4kp.md`).
+
+**Extended a seventh time 2026-08-30: + `GGML_MV_SOA_PIN=1` and
+`GGML_MM_SKINNY_SOA=1`** - the skinny width-6..8 kernel now consumes that same
+persistent SoA layout, removing the last layout-order hole. Fixed DFlash depth 5
+(verify width 6) improves **22.122 -> 24.295 t/s (+9.82%)**, byte-identical; the
+fixed depth-4 canonical arm is flat because it verifies width 5 (`skinny-soa.md`).
 
 ```
-GGML_MV_NC=2 GGML_MM_SKINNY=6 GGML_FA_VEC_MAX=5 GGML_FA_MM_NWG=8 GGML_GDN_FUSE_WB=1 \
-GGML_MV_REPACK=1 GGML_MV_SOA_W3=1 GGML_MV_SOA_W4=1 GGML_MV_SOA_W4_R4KP=3 GGML_MV_SOA_W5=4 GGML_MV_SOA_W5_HALF=1 \
+GGML_MV_NC=2 GGML_MM_SKINNY=6 GGML_MM_SKINNY_SOA=1 GGML_FA_VEC_MAX=5 GGML_FA_MM_NWG=8 GGML_GDN_FUSE_WB=1 \
+GGML_MV_REPACK=1 GGML_MV_SOA_PIN=1 GGML_MV_SOA_W3=1 GGML_MV_SOA_W4=1 GGML_MV_SOA_W4_R4KP=3 GGML_MV_SOA_W5=4 GGML_MV_SOA_W5_HALF=1 \
 GGML_MV_SOA_WL_XL=1 GGML_METAL_GET_MEMCPY=1 \
 DFLASH_FUSED_INJECT=1 DFLASH_ASYNC_INJECT=1 LLAMA_DRAFT_WINDOW=1024 \
 GGML_MM_ACC_HALF=1 GGML_MM_N64=1 \
@@ -155,7 +160,8 @@ What each flag buys, and where it came from:
 | `GGML_MV_SOA_W4=1` + `GGML_MV_SOA_W4_R4KP=3` | 0 | width-4 SoA scalar kernel, v3 (half product) - MTP draft path runs width-4 ops at every depth | m4-width4-r4kp.md |
 | `GGML_MV_SOA_W5=4` + `GGML_MV_SOA_W5_HALF=1` | 0 | width-5 SoA scalar kernel w5r4h on the six routed projections (the verify width at n4) | m4-width5-crossover.md |
 | `GGML_MV_SOA_WL_XL=1` | 0 | extends the SoA whitelist with ne01 248320 + 4096 and pins those tensors to the SoA repack layout at creation - both lm_heads ride w5r4h, +3.04% e2e | shortk-head.md |
-| `GGML_MV_SOA_PIN=1` | 0 | pins every eligible projection to SoA on first use so adaptive widths 1-5 are order-invariant; widths 1-2 fall back to original weights at their bandwidth floor | m4-width3-r4kp.md |
+| `GGML_MV_SOA_PIN=1` | 0 | pins every eligible projection to SoA on first use so adaptive widths 1-8 are order-invariant; widths 1-2 fall back to original weights at their bandwidth floor | m4-width3-r4kp.md |
+| `GGML_MM_SKINNY_SOA=1` | 0 | widths 6-8 consume the persistent SoA layout with the skinny MMA kernel; restores DI-class throughput and adds +9.82% e2e at fixed DFlash depth 5 | skinny-soa.md |
 | `GGML_METAL_GET_MEMCPY=1` | 0 | get_tensor_async readbacks (logits, 5 MB/round) as memcpy-after-wait instead of a blit command buffer queued behind the graph, +3.3% e2e | cpu-round-overhead.md |
 | `GGML_MM_N64=1` | 0 | 64x64 Q4_0 half-accumulate tile on the measured width-512, short-K, sufficiently parallel region; +1.27% full prefill | mm-acch-n64.md |
 | `GGML_FA_VEC_MAX=5` | 20 | FA vec/mm routing cutoff. **5, not 4** - at 4 an MTP-path FA call reroutes and output changes | flash-attn-mm-split.md |

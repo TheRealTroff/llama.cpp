@@ -1,7 +1,7 @@
 # M4 width-3 SoA r4kp
 
 Measured 2026-08-30 on M4 Pro from committed base `301c0707a`, branch
-`exp/mv-w3-r4kp`. The experiment is uncommitted.
+`exp/mv-w3-r4kp`. Adopted into `prod` via `c31e79b99`.
 
 ## Result
 
@@ -94,9 +94,8 @@ them first. Those bandwidth-bound widths read the original weights, while widths
 reuse SoA. The formerly bad order becomes 13.67/26.67/36.98/47.87/55.00 t/s for
 widths 1/2/3/4/5: first-use order is gone.
 
-Widths 6-8 remain a separate family. After SoA is pinned they fall to
-48.75/56.73/64.51 t/s from isolated DI rates 55.21/63.02/71.04, about 9-12% down;
-all three then cost roughly 123-124 ms per pass and are dominated by width 5. The safe
-adaptive frontier is therefore widths 1-5. A skinny kernel consuming the SoA layout
-would be required before extending the selector above 5. No such kernel exists in any
-local worktree or git ref as of this experiment.
+At the time of this experiment, widths 6-8 remained a separate family: after SoA was
+pinned they fell to 48.75/56.73/64.51 t/s from isolated DI rates
+55.21/63.02/71.04. The subsequent `GGML_MM_SKINNY_SOA=1` kernel closes that hole by
+having skinny consume the same persistent layout; the safe adaptive frontier is now
+widths 1-8. See `skinny-soa.md`.

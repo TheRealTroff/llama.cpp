@@ -1,7 +1,7 @@
 # Skinny SoA Q4_0 matmul
 
 Measured 2026-08-30 on M4 Pro from committed base `301c0707a`, branch
-`exp/skinny-soa`. The experiment is uncommitted.
+`exp/skinny-soa`. Adopted into `prod` via `c31e79b99`.
 
 ## Result
 
