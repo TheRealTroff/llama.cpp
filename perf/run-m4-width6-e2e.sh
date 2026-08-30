@@ -32,9 +32,12 @@ TAG=${TAG:-m4-w6-e2e-$(date +%m%d-%H%M)}
 NPRED=${NPRED:-600}
 REPS=${REPS:-4}
 CONTROL_REPS=${CONTROL_REPS:-2}
+RUN_MTP=${RUN_MTP:-1}
 COOL=${COOL:-5}
 W6_ROWS=${W6_ROWS:-4}
 W6_HALF=${W6_HALF:-0}
+ARM_A=${ARM_A:-skinny}
+ARM_B=${ARM_B:-w6}
 TSV=$OUT/$TAG.tsv
 
 mkdir -p "$OUT"
@@ -65,10 +68,11 @@ COMMON_ENV=(
 
 arm_env() {
     case $1 in
-        skinny) echo "GGML_MM_SKINNY=6" ;;
-        w6)     local e="GGML_MM_SKINNY=7 GGML_MV_SOA_W6=$W6_ROWS"
-                [ "$W6_HALF" = 1 ] && e="$e GGML_MV_SOA_W6_HALF=1"
-                echo "$e" ;;
+        skinny)     echo "GGML_MM_SKINNY=6" ;;
+        skinny-soa) echo "GGML_MM_SKINNY=6 GGML_MM_SKINNY_SOA=1" ;;
+        w6)         local e="GGML_MM_SKINNY=7 GGML_MV_SOA_W6=$W6_ROWS"
+                    [ "$W6_HALF" = 1 ] && e="$e GGML_MV_SOA_W6_HALF=1"
+                    echo "$e" ;;
     esac
 }
 
@@ -78,6 +82,7 @@ echo "=== width-5 e2e A/B: $TAG ==="
 echo "commit : $(git -C "$B" rev-parse --short HEAD) on $(git -C "$B" rev-parse --abbrev-ref HEAD) ($(git -C "$B" status --porcelain | wc -l | tr -d ' ') dirty)"
 echo "binary : $(stat -f '%Sm' "$BIN/llama-server")"
 echo "w6 arm : rows=$W6_ROWS half=$W6_HALF"
+echo "arms   : $ARM_A / $ARM_B"
 echo "run    : n_predict $NPRED, $REPS order-balanced reps per point+arm"
 echo "date   : $(date)"
 echo
@@ -158,29 +163,33 @@ PY
 }
 
 echo "--- WARMUP, discarded ---"
-run_one warmup skinny dflash 5 >/dev/null 2>&1 || true
+run_one warmup "$ARM_A" dflash 5 >/dev/null 2>&1 || true
 
 echo "--- dflash n5 + MTP d5, order-balanced ---"
 for rep in $(seq 1 "$REPS"); do
     case $((rep % 2)) in
-        1) order=(skinny w6) ;;
-        0) order=(w6 skinny) ;;
+        1) order=("$ARM_A" "$ARM_B") ;;
+        0) order=("$ARM_B" "$ARM_A") ;;
     esac
     for arm in "${order[@]}"; do
         run_one "dflash-n5-$arm-r$rep" "$arm" dflash 5
     done
-    for arm in "${order[@]}"; do
-        run_one "mtp-d5-$arm-r$rep" "$arm" mtp 5
-    done
+    if [ "$RUN_MTP" = 1 ]; then
+        for arm in "${order[@]}"; do
+            run_one "mtp-d5-$arm-r$rep" "$arm" mtp 5
+        done
+    fi
 done
 
 echo "--- dflash n4 control (the pick point; no width-6 ops; must be inert, byte-identical) ---"
-for rep in $(seq 1 "$CONTROL_REPS"); do
-    if [ $((rep % 2)) -eq 1 ]; then order=(skinny w6); else order=(w6 skinny); fi
-    for arm in "${order[@]}"; do
-        run_one "ctrl-n4-$arm-r$rep" "$arm" dflash 4
+if [ "$CONTROL_REPS" -gt 0 ]; then
+    for rep in $(seq 1 "$CONTROL_REPS"); do
+        if [ $((rep % 2)) -eq 1 ]; then order=("$ARM_A" "$ARM_B"); else order=("$ARM_B" "$ARM_A"); fi
+        for arm in "${order[@]}"; do
+            run_one "ctrl-n4-$arm-r$rep" "$arm" dflash 4
+        done
     done
-done
+fi
 
 echo
 echo "--- summary (per point+arm means) ---"

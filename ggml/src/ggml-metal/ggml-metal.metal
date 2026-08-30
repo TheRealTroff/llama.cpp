@@ -5963,6 +5963,108 @@ kernel void kernel_mul_mv_q4_0_soa_w4_r4kp_v3(
     }
 }
 
+kernel void kernel_mul_mv_q4_0_soa_w3_r4kp_v3(
+        constant ggml_metal_kargs_mul_mv_ext & args,
+        device const char * src0,
+        device const half * src1,
+        device float * dst,
+        uint3 tgpig [[threadgroup_position_in_grid]],
+        ushort tiisg [[thread_index_in_simdgroup]],
+        ushort sgitg [[simdgroup_index_in_threadgroup]]) {
+    threadgroup float partial[2][12];
+    float acc[12] = {};
+    const int nblk = args.ne00/32;
+    const int npack = 4*nblk;
+    const int row0 = 4*(int)tgpig.x;
+    const int pstart = (int)sgitg*(npack/2);
+    const int pend = pstart + npack/2;
+
+    device const half * sp0 = (device const half *)(src0 + (uint64_t)(row0 + 0)*args.nb01);
+    device const half * sp1 = (device const half *)(src0 + (uint64_t)(row0 + 1)*args.nb01);
+    device const half * sp2 = (device const half *)(src0 + (uint64_t)(row0 + 2)*args.nb01);
+    device const half * sp3 = (device const half *)(src0 + (uint64_t)(row0 + 3)*args.nb01);
+    device const uint * qp0 = (device const uint *)(sp0 + nblk);
+    device const uint * qp1 = (device const uint *)(sp1 + nblk);
+    device const uint * qp2 = (device const uint *)(sp2 + nblk);
+    device const uint * qp3 = (device const uint *)(sp3 + nblk);
+    using half8 = vec<half, 8>;
+    const device half8 * xv = (const device half8 *)src1;
+    const int K8 = args.ne00/8;
+
+    for (int p = pstart + (int)tiisg; p < pend; p += 32) {
+        const int block = p/4;
+        const half8 v0 = xv[0*K8 + p];
+        const half8 v1 = xv[1*K8 + p];
+        const half8 v2 = xv[2*K8 + p];
+        const uint q0 = qp0[p];
+        const uint q1 = qp1[p];
+        const uint q2 = qp2[p];
+        const uint q3 = qp3[p];
+        const half s0 = sp0[block];
+        const half s1 = sp1[block];
+        const half s2 = sp2[block];
+        const half s3 = sp3[block];
+
+        {
+            const uint q = q0; const half s = s0;
+#pragma unroll
+            for (int ki = 0; ki < 8; ++ki) {
+                const half wv = (half((q >> (ki*4)) & 0xFu) - 8.h)*s;
+                acc[0*3 + 0] += float(v0[ki]*wv);
+                acc[0*3 + 1] += float(v1[ki]*wv);
+                acc[0*3 + 2] += float(v2[ki]*wv);
+            }
+        }
+        {
+            const uint q = q1; const half s = s1;
+#pragma unroll
+            for (int ki = 0; ki < 8; ++ki) {
+                const half wv = (half((q >> (ki*4)) & 0xFu) - 8.h)*s;
+                acc[1*3 + 0] += float(v0[ki]*wv);
+                acc[1*3 + 1] += float(v1[ki]*wv);
+                acc[1*3 + 2] += float(v2[ki]*wv);
+            }
+        }
+        {
+            const uint q = q2; const half s = s2;
+#pragma unroll
+            for (int ki = 0; ki < 8; ++ki) {
+                const half wv = (half((q >> (ki*4)) & 0xFu) - 8.h)*s;
+                acc[2*3 + 0] += float(v0[ki]*wv);
+                acc[2*3 + 1] += float(v1[ki]*wv);
+                acc[2*3 + 2] += float(v2[ki]*wv);
+            }
+        }
+        {
+            const uint q = q3; const half s = s3;
+#pragma unroll
+            for (int ki = 0; ki < 8; ++ki) {
+                const half wv = (half((q >> (ki*4)) & 0xFu) - 8.h)*s;
+                acc[3*3 + 0] += float(v0[ki]*wv);
+                acc[3*3 + 1] += float(v1[ki]*wv);
+                acc[3*3 + 2] += float(v2[ki]*wv);
+            }
+        }
+    }
+
+    for (int i = 0; i < 12; ++i) {
+        acc[i] = simd_sum(acc[i]);
+    }
+    if (tiisg == 0) {
+        for (int i = 0; i < 12; ++i) {
+            partial[sgitg][i] = acc[i];
+        }
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (sgitg == 0 && tiisg < 12) {
+        const int r = (int)tiisg/3;
+        const int c = (int)tiisg%3;
+        if (row0 + r < args.ne01) {
+            dst[c*args.ne01 + row0 + r] = partial[0][tiisg] + partial[1][tiisg];
+        }
+    }
+}
+
 // v4/v5: the v2 codegen form at the other two tile geometries, to isolate what pays.
 // v4 = 2 rows, full K, one simdgroup (R2's geometry); v5 = 4 rows, full K, one simdgroup.
 kernel void kernel_mul_mv_q4_0_soa_w4_r4kp_v4(
@@ -14910,6 +15012,154 @@ kernel void kernel_mul_mm_skinny_q4_0_di_f32(
             q1 = *(device const ushort4 *)(xqs + 4);
             xd  += NK/32;
             xqs += 8*(NK/32);
+        }
+
+        threadgroup const half * lsma = sa + 16*sgitg*NK;
+        threadgroup const half * lsmb = sb;
+
+        FOR_UNROLL (short ik = 0; ik < NK/8; ik++) {
+            simdgroup_barrier(mem_flags::mem_none);
+
+            simdgroup_load(ma[0], lsma + 8*ik,        NK,  0, false);
+            simdgroup_load(ma[1], lsma + 8*NK + 8*ik, NK,  0, false);
+            simdgroup_load(mb,    lsmb + 8*ik*NR1,    NR1, 0, false);
+
+            simdgroup_barrier(mem_flags::mem_none);
+
+            simdgroup_multiply_accumulate(mc[0], ma[0], mb, mc[0]);
+            simdgroup_multiply_accumulate(mc[1], ma[1], mb, mc[1]);
+        }
+    }
+
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    threadgroup float * temp_all = (threadgroup float *) shmem;
+
+    simdgroup_store(mc[0], temp_all + (16*sgitg + 0)*NR1, NR1, 0, false);
+    simdgroup_store(mc[1], temp_all + (16*sgitg + 8)*NR1, NR1, 0, false);
+
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    if (sgitg == 0) {
+        for (short j = tiitg; j < nr1; j += 32) {
+            device float * D = (device float *) dst + r0 + (r1 + j)*args.ne0 + im*args.ne1*args.ne0;
+
+            for (short i = 0; i < nr0; ++i) {
+                D[i] = temp_all[i*NR1 + j];
+            }
+        }
+    }
+}
+
+// Skinny simdgroup-matrix body over the SoA scalar-kernel weight layout.
+// Only the A loader differs from the established DI kernel.
+kernel void kernel_mul_mm_skinny_q4_0_soa_f32(
+        constant ggml_metal_kargs_mul_mm & args,
+        device const char * src0,
+        device const char * src1,
+        device       char * dst,
+        threadgroup  char * shmem [[threadgroup(0)]],
+        uint3  tgpig[[threadgroup_position_in_grid]],
+        ushort tiitg[[thread_index_in_threadgroup]],
+        ushort sgitg[[simdgroup_index_in_threadgroup]]) {
+
+    threadgroup half * sa = (threadgroup half *)(shmem);
+    threadgroup half * sb = (threadgroup half *)(shmem + 4096);
+
+    constexpr int NR0 = 32;
+    constexpr int NR1 = 8;
+    constexpr int NK  = 64;
+
+    const int im = tgpig.z;
+    const int r0 = tgpig.y*NR0;
+    const int r1 = tgpig.x*NR1;
+
+    const short nr0 = (args.ne0 - r0 < NR0) ? (args.ne0 - r0) : NR0;
+    const short nr1 = (args.ne1 - r1 < NR1) ? (args.ne1 - r1) : NR1;
+
+    const short ar  = tiitg/2;
+    const short il0 = tiitg%2;
+    const short lr0 = ar < nr0 ? ar : nr0 - 1;
+
+    const int i12 = im % FC_mul_mm_ne12;
+    const int i13 = im / FC_mul_mm_ne12;
+
+    // 2D SoA weights: [half scale x nblk][uint pack8 x 4*nblk].
+    const int nblk = args.ne00/32;
+
+    device const char * row0 = src0 + args.nb01*(r0 + lr0);
+
+    uint ib = il0;
+    device const uint * packs = (device const uint *)(row0 + 2*nblk);
+
+    const short bcol = (short)(tiitg/4) < nr1 ? (short)(tiitg/4) : nr1 - 1;
+    const short bsx  = tiitg%4;
+
+    device const float * y = (device const float *)(src1
+        + args.nb13*i13
+        + args.nb12*i12
+        + args.nb11*(r1 + bcol)
+        + args.nb10*(16*bsx));
+
+    simdgroup_half8x8 ma[2];
+    simdgroup_half8x8 mb;
+
+    simdgroup_float8x8 mc[2];
+    mc[0] = make_filled_simdgroup_matrix<float, 8>(0.f);
+    mc[1] = make_filled_simdgroup_matrix<float, 8>(0.f);
+
+    // Prefetch slice 0: one scale and four already nibble-planar pack8 words.
+    half dh = *(device const half *)(row0 + 2*ib);
+    uint q0 = packs[4*ib + 0];
+    uint q1 = packs[4*ib + 1];
+    uint q2 = packs[4*ib + 2];
+    uint q3 = packs[4*ib + 3];
+    ib += NK/32;
+
+    for (int loop_k = 0; loop_k < args.ne00; loop_k += NK) {
+        // Expand each pack8 into two half4 vectors in sequential K order.
+        half4x4 ta0;
+        half4x4 ta1;
+        const uint4 shifts = uint4(0, 4, 8, 12);
+        ta0[0] = (half4((uint4(q0)       >> shifts) & 0x0Fu) - 8.h)*dh;
+        ta0[1] = (half4((uint4(q0 >> 16) >> shifts) & 0x0Fu) - 8.h)*dh;
+        ta0[2] = (half4((uint4(q1)       >> shifts) & 0x0Fu) - 8.h)*dh;
+        ta0[3] = (half4((uint4(q1 >> 16) >> shifts) & 0x0Fu) - 8.h)*dh;
+        ta1[0] = (half4((uint4(q2)       >> shifts) & 0x0Fu) - 8.h)*dh;
+        ta1[1] = (half4((uint4(q2 >> 16) >> shifts) & 0x0Fu) - 8.h)*dh;
+        ta1[2] = (half4((uint4(q3)       >> shifts) & 0x0Fu) - 8.h)*dh;
+        ta1[3] = (half4((uint4(q3 >> 16) >> shifts) & 0x0Fu) - 8.h)*dh;
+
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        threadgroup half4 * pa = (threadgroup half4 *)(sa + ar*NK + 32*il0);
+        pa[0] = ta0[0];
+        pa[1] = ta0[1];
+        pa[2] = ta0[2];
+        pa[3] = ta0[3];
+        pa[4] = ta1[0];
+        pa[5] = ta1[1];
+        pa[6] = ta1[2];
+        pa[7] = ta1[3];
+
+        if (tiitg < 4*NR1) {
+            FOR_UNROLL (short j = 0; j < 16; ++j) {
+                sb[(16*bsx + j)*NR1 + tiitg/4] = (half) y[j];
+            }
+        }
+
+        y += NK;
+
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        // prefetch slice t+1 while the MACs run
+        if (loop_k + NK < args.ne00) {
+            dh = *(device const half *)(row0 + 2*ib);
+            q0 = packs[4*ib + 0];
+            q1 = packs[4*ib + 1];
+            q2 = packs[4*ib + 2];
+            q3 = packs[4*ib + 3];
+            ib += NK/32;
         }
 
         threadgroup const half * lsma = sa + 16*sgitg*NK;
