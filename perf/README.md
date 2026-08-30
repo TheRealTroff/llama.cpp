@@ -118,7 +118,9 @@ numerics and does not mint another SHA lineage.
 real-model width-3 latency falls **107.2 -> 80.7 ms**, and fixed DFlash depth 2
 improves **19.613 -> 23.553 t/s (+20.09%)** over four balanced server runs.
 `GGML_MV_SOA_PIN=1` makes first-use layout deterministic for an adaptive process
-(`m4-width3-r4kp.md`).
+(`m4-width3-r4kp.md`). A follow-up source/AIR/native-control sweep found no faster
+width-3 construction; the committed negative matrix is in
+`m4-width3-control-sweep.md`.
 
 **Extended a seventh time 2026-08-30: + `GGML_MV_SOA_PIN=1` and
 `GGML_MM_SKINNY_SOA=1`** - the skinny width-6..8 kernel now consumes that same

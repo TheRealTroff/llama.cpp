@@ -1,0 +1,9 @@
+{
+  "pipelines": {
+    "compute_pipelines": [
+      { "compute_function": "kernel_repack_q4_0_soa" },
+      { "compute_function": "kernel_cpy_f32_f16" },
+      { "compute_function": "kernel_mul_mv_q4_0_soa_w3_r4kp_v3" }
+    ]
+  }
+}
