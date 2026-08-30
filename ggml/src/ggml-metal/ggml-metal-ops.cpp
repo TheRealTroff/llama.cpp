@@ -2558,6 +2558,7 @@ static bool ggml_metal_op_mul_mat_try_repack_q4_0(ggml_metal_op_t ctx, const ggm
     static const int env_soa_pin = getenv("GGML_MV_SOA_PIN") ? atoi(getenv("GGML_MV_SOA_PIN")) : 0;
     static const int env_skinny_soa = getenv("GGML_MM_SKINNY_SOA") ? atoi(getenv("GGML_MM_SKINNY_SOA")) : 0;
     static const int env_soa_w3 = getenv("GGML_MV_SOA_W3") ? atoi(getenv("GGML_MV_SOA_W3")) : 0;
+    static const int env_soa_w3_ctl = getenv("GGML_MV_SOA_W3_CTL") ? atoi(getenv("GGML_MV_SOA_W3_CTL")) : 0;
     static const int env_soa_w4 = getenv("GGML_MV_SOA_W4") ? atoi(getenv("GGML_MV_SOA_W4")) : 0;
     static const int env_soa_w5 = getenv("GGML_MV_SOA_W5") ? atoi(getenv("GGML_MV_SOA_W5")) : 0;
     static const int env_soa_w6 = getenv("GGML_MV_SOA_W6") ? atoi(getenv("GGML_MV_SOA_W6")) : 0;
@@ -2599,7 +2600,8 @@ static bool ggml_metal_op_mul_mat_try_repack_q4_0(ggml_metal_op_t ctx, const ggm
     }
 
     if (is_new) {
-        auto pipeline_rp = create_soa ? ggml_metal_library_get_pipeline_repack_q4_0_soa(lib) :
+        auto pipeline_rp = create_soa && env_soa_w3_ctl == 12 ? ggml_metal_library_get_pipeline_repack_q4_0_soa_r4i(lib) :
+                           create_soa ? ggml_metal_library_get_pipeline_repack_q4_0_soa(lib) :
                                         ggml_metal_library_get_pipeline_repack_q4_0_di(lib);
 
         ggml_metal_kargs_repack_q4_0_di rargs = {
@@ -2959,6 +2961,7 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
         static const int env_di_v2 = getenv("GGML_MV_EXT_DI_V2") ? atoi(getenv("GGML_MV_EXT_DI_V2")) : 0;
         static const int env_half_product = getenv("GGML_MV_EXT_HALF_PRODUCT") ? atoi(getenv("GGML_MV_EXT_HALF_PRODUCT")) : 0;
         static const int env_soa_w3 = getenv("GGML_MV_SOA_W3") ? atoi(getenv("GGML_MV_SOA_W3")) : 0;
+        static const int env_soa_w3_ctl = getenv("GGML_MV_SOA_W3_CTL") ? atoi(getenv("GGML_MV_SOA_W3_CTL")) : 0;
         static const int env_soa_w4 = getenv("GGML_MV_SOA_W4") ? atoi(getenv("GGML_MV_SOA_W4")) : 0;
         static const int env_soa_w4_k1 = getenv("GGML_MV_SOA_W4_K1") ? atoi(getenv("GGML_MV_SOA_W4_K1")) : 0;
         static const int env_soa_w4_r2 = getenv("GGML_MV_SOA_W4_R2") ? atoi(getenv("GGML_MV_SOA_W4_R2")) : 0;
@@ -2998,7 +3001,7 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
         static const int env_soa_w5_qw = getenv("GGML_MV_SOA_W5_QW") ? atoi(getenv("GGML_MV_SOA_W5_QW")) : 0;
         const bool use_soa_w5_qw = use_soa_w5 && env_soa_w5_qw && env_soa_w5 == 4 && env_soa_w5_hp && !use_soa_skh;
 
-        auto pipeline = use_soa_w3 ? ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w3_r4kp(lib) :
+        auto pipeline = use_soa_w3 ? ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w3_r4kp(lib, env_soa_w3_ctl) :
                         use_soa_w7 ? ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w7(lib, env_soa_w7) :
                         use_soa_w6 ? ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w6(lib, env_soa_w6, env_soa_w6_hp != 0) :
                         use_soa_skh ? ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w5_skh(lib, env_soa_skh) :
@@ -3048,7 +3051,12 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
             const int rpt  = rows == 4 ? 4 : 2;
             ggml_metal_encoder_dispatch_threadgroups(enc, (ne01 + rpt - 1)/rpt, 1, 1, 32, 1, 1);
         } else if (use_soa_w3) {
-            ggml_metal_encoder_dispatch_threadgroups(enc, (ne01 + 3)/4, 1, 1, 32, 2, 1);
+            const bool r8 = env_soa_w3_ctl >= 4 && env_soa_w3_ctl <= 7;
+            const bool k1 = env_soa_w3_ctl == 2 || env_soa_w3_ctl == 3 ||
+                            env_soa_w3_ctl == 6 || env_soa_w3_ctl == 7 ||
+                            env_soa_w3_ctl == 10 || env_soa_w3_ctl == 11;
+            const int rpt = r8 ? 8 : 4;
+            ggml_metal_encoder_dispatch_threadgroups(enc, (ne01 + rpt - 1)/rpt, 1, 1, 32, k1 ? 1 : 2, 1);
         } else if (use_soa_w4) {
             const int rpt = env_soa_w4_r4kp == 4 ? 2 : env_soa_w4_r4kp     ? 4 :
                             env_soa_w4_r3       ? 3 : env_soa_w4_r2        ? 2 : 4;

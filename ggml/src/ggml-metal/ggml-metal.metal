@@ -5391,6 +5391,40 @@ kernel void kernel_repack_q4_0_soa(
     }
 }
 
+// Experimental four-row-interleaved SoA. The byte count and nominal row stride are
+// unchanged, but each group stores half4 scales by block followed by uint4 packs by p.
+kernel void kernel_repack_q4_0_soa_r4i(
+        constant ggml_metal_kargs_repack_q4_0_di & args,
+        device const char * src,
+        device       char * dst,
+        uint3   tgpig[[threadgroup_position_in_grid]],
+        ushort3 tpitg[[thread_position_in_threadgroup]]) {
+    const int bx = tgpig.x*32 + tpitg.x;
+    const int r  = tgpig.y;
+    if (bx >= args.nblk || r >= args.ne01) {
+        return;
+    }
+
+    device const uchar * pb = (device const uchar *)src + (uint64_t)r*args.nb01 + 18*bx;
+    const int rg = r/4;
+    const int ri = r%4;
+    device uchar * group = (device uchar *)dst + (uint64_t)(4*rg)*args.nbd1;
+    device half * scales = (device half *)group;
+    scales[4*bx + ri] = *(device const half *)pb;
+
+    device uint * packs = (device uint *)(group + 8*args.nblk);
+    for (short h = 0; h < 2; ++h) {
+        for (short p = 0; p < 2; ++p) {
+            uint q = 0;
+            for (short i = 0; i < 8; ++i) {
+                const uchar b = pb[2 + 8*p + i];
+                q |= uint((b >> (4*h)) & 0xf) << (4*i);
+            }
+            packs[4*(4*bx + 2*h + p) + ri] = q;
+        }
+    }
+}
+
 // Width-4 morphology probe over q4_0 SoA rows: [half scale per block][uint pack8 x 4 per block].
 // Two simdgroups split K; each lane owns strided pack8 units and all 4x4 output accumulators.
 kernel void kernel_mul_mv_q4_0_soa_w4_k2(
@@ -6064,6 +6098,275 @@ kernel void kernel_mul_mv_q4_0_soa_w3_r4kp_v3(
         }
     }
 }
+
+// Width-3 control sweep. Keep the production kernel above untouched so its native
+// stream remains the control. These cells isolate product precision, K splitting,
+// and row-tile amortization; GGML_MV_SOA_W3_CTL selects them experimentally.
+#define W3_CTL_ACC_HALF(R, W) \
+    acc[(R)*3 + 0] += float(v0[ki]*(W)); \
+    acc[(R)*3 + 1] += float(v1[ki]*(W)); \
+    acc[(R)*3 + 2] += float(v2[ki]*(W))
+
+#define W3_CTL_ACC_FLOAT(R, W) \
+    acc[(R)*3 + 0] += float(v0[ki])*(W); \
+    acc[(R)*3 + 1] += float(v1[ki])*(W); \
+    acc[(R)*3 + 2] += float(v2[ki])*(W)
+
+#define W3_CTL_ROW_HALF(R, Q, S) \
+    { \
+        const uint q = (Q); const half s = (S); \
+        FOR_UNROLL (int ki = 0; ki < 8; ++ki) { \
+            const half wv = (half((q >> (ki*4)) & 0xFu) - 8.h)*s; \
+            W3_CTL_ACC_HALF(R, wv); \
+        } \
+    }
+
+#define W3_CTL_ROW_FLOAT(R, Q, S, B) \
+    { \
+        const uint q = (Q); const float s = (S); const float b = (B); \
+        FOR_UNROLL (int ki = 0; ki < 8; ++ki) { \
+            const float wv = float((q >> (ki*4)) & 0xFu)*s + b; \
+            W3_CTL_ACC_FLOAT(R, wv); \
+        } \
+    }
+
+template<int R, int KP, bool HALF_PRODUCT, bool INTERLEAVE>
+void mul_mv_q4_0_soa_w3_ctl_impl(
+        constant ggml_metal_kargs_mul_mv_ext & args,
+        device const char * src0,
+        device const half * src1,
+        device float * dst,
+        threadgroup float * partial,
+        uint3 tgpig,
+        ushort tiisg,
+        ushort sgitg) {
+    static_assert(R == 4 || R == 8, "width-3 control sweep supports R4 and R8");
+    static_assert(KP == 1 || KP == 2, "width-3 control sweep supports KP1 and KP2");
+
+    constexpr int NA = R*3;
+    float acc[NA] = {};
+    const int nblk = args.ne00/32;
+    const int npack = 4*nblk;
+    const int row0 = R*(int)tgpig.x;
+    const int pstart = (int)sgitg*(npack/KP);
+    const int pend = pstart + npack/KP;
+
+    device const half * sp0 = (device const half *)(src0 + (uint64_t)(row0 + 0)*args.nb01);
+    device const half * sp1 = (device const half *)(src0 + (uint64_t)(row0 + 1)*args.nb01);
+    device const half * sp2 = (device const half *)(src0 + (uint64_t)(row0 + 2)*args.nb01);
+    device const half * sp3 = (device const half *)(src0 + (uint64_t)(row0 + 3)*args.nb01);
+    device const half * sp4 = (device const half *)(src0 + (uint64_t)(row0 + 4)*args.nb01);
+    device const half * sp5 = (device const half *)(src0 + (uint64_t)(row0 + 5)*args.nb01);
+    device const half * sp6 = (device const half *)(src0 + (uint64_t)(row0 + 6)*args.nb01);
+    device const half * sp7 = (device const half *)(src0 + (uint64_t)(row0 + 7)*args.nb01);
+    device const uint * qp0 = (device const uint *)(sp0 + nblk);
+    device const uint * qp1 = (device const uint *)(sp1 + nblk);
+    device const uint * qp2 = (device const uint *)(sp2 + nblk);
+    device const uint * qp3 = (device const uint *)(sp3 + nblk);
+    device const uint * qp4 = (device const uint *)(sp4 + nblk);
+    device const uint * qp5 = (device const uint *)(sp5 + nblk);
+    device const uint * qp6 = (device const uint *)(sp6 + nblk);
+    device const uint * qp7 = (device const uint *)(sp7 + nblk);
+    using half8 = vec<half, 8>;
+    const device half8 * xv = (const device half8 *)src1;
+    const int K8 = args.ne00/8;
+
+    for (int p = pstart + (int)tiisg; p < pend; p += 32) {
+        const int block = p/4;
+        const half8 v0 = xv[0*K8 + p];
+        const half8 v1 = xv[1*K8 + p];
+        const half8 v2 = xv[2*K8 + p];
+        const uint q0 = qp0[p]; const half h0 = sp0[block];
+        const uint q1 = qp1[p]; const half h1 = sp1[block];
+        const uint q2 = qp2[p]; const half h2 = sp2[block];
+        const uint q3 = qp3[p]; const half h3 = sp3[block];
+        uint q4 = 0, q5 = 0, q6 = 0, q7 = 0;
+        half h4 = 0.h, h5 = 0.h, h6 = 0.h, h7 = 0.h;
+        if constexpr (R == 8) {
+            q4 = qp4[p]; h4 = sp4[block];
+            q5 = qp5[p]; h5 = sp5[block];
+            q6 = qp6[p]; h6 = sp6[block];
+            q7 = qp7[p]; h7 = sp7[block];
+        }
+
+        if constexpr (INTERLEAVE) {
+            if constexpr (HALF_PRODUCT) {
+                FOR_UNROLL (int ki = 0; ki < 8; ++ki) {
+                    const half w0 = (half((q0 >> (ki*4)) & 0xFu) - 8.h)*h0;
+                    const half w1 = (half((q1 >> (ki*4)) & 0xFu) - 8.h)*h1;
+                    const half w2 = (half((q2 >> (ki*4)) & 0xFu) - 8.h)*h2;
+                    const half w3 = (half((q3 >> (ki*4)) & 0xFu) - 8.h)*h3;
+                    W3_CTL_ACC_HALF(0, w0); W3_CTL_ACC_HALF(1, w1);
+                    W3_CTL_ACC_HALF(2, w2); W3_CTL_ACC_HALF(3, w3);
+                    if constexpr (R == 8) {
+                        const half w4 = (half((q4 >> (ki*4)) & 0xFu) - 8.h)*h4;
+                        const half w5 = (half((q5 >> (ki*4)) & 0xFu) - 8.h)*h5;
+                        const half w6 = (half((q6 >> (ki*4)) & 0xFu) - 8.h)*h6;
+                        const half w7 = (half((q7 >> (ki*4)) & 0xFu) - 8.h)*h7;
+                        W3_CTL_ACC_HALF(4, w4); W3_CTL_ACC_HALF(5, w5);
+                        W3_CTL_ACC_HALF(6, w6); W3_CTL_ACC_HALF(7, w7);
+                    }
+                }
+            } else {
+                const float s0 = float(h0), b0 = -8.f*s0;
+                const float s1 = float(h1), b1 = -8.f*s1;
+                const float s2 = float(h2), b2 = -8.f*s2;
+                const float s3 = float(h3), b3 = -8.f*s3;
+                const float s4 = float(h4), b4 = -8.f*s4;
+                const float s5 = float(h5), b5 = -8.f*s5;
+                const float s6 = float(h6), b6 = -8.f*s6;
+                const float s7 = float(h7), b7 = -8.f*s7;
+                FOR_UNROLL (int ki = 0; ki < 8; ++ki) {
+                    const float w0 = float((q0 >> (ki*4)) & 0xFu)*s0 + b0;
+                    const float w1 = float((q1 >> (ki*4)) & 0xFu)*s1 + b1;
+                    const float w2 = float((q2 >> (ki*4)) & 0xFu)*s2 + b2;
+                    const float w3 = float((q3 >> (ki*4)) & 0xFu)*s3 + b3;
+                    W3_CTL_ACC_FLOAT(0, w0); W3_CTL_ACC_FLOAT(1, w1);
+                    W3_CTL_ACC_FLOAT(2, w2); W3_CTL_ACC_FLOAT(3, w3);
+                    if constexpr (R == 8) {
+                        const float w4 = float((q4 >> (ki*4)) & 0xFu)*s4 + b4;
+                        const float w5 = float((q5 >> (ki*4)) & 0xFu)*s5 + b5;
+                        const float w6 = float((q6 >> (ki*4)) & 0xFu)*s6 + b6;
+                        const float w7 = float((q7 >> (ki*4)) & 0xFu)*s7 + b7;
+                        W3_CTL_ACC_FLOAT(4, w4); W3_CTL_ACC_FLOAT(5, w5);
+                        W3_CTL_ACC_FLOAT(6, w6); W3_CTL_ACC_FLOAT(7, w7);
+                    }
+                }
+            }
+        } else if constexpr (HALF_PRODUCT) {
+            W3_CTL_ROW_HALF(0, q0, h0); W3_CTL_ROW_HALF(1, q1, h1);
+            W3_CTL_ROW_HALF(2, q2, h2); W3_CTL_ROW_HALF(3, q3, h3);
+            if constexpr (R == 8) {
+                W3_CTL_ROW_HALF(4, q4, h4); W3_CTL_ROW_HALF(5, q5, h5);
+                W3_CTL_ROW_HALF(6, q6, h6); W3_CTL_ROW_HALF(7, q7, h7);
+            }
+        } else {
+            const float s0 = float(h0), b0 = -8.f*s0;
+            const float s1 = float(h1), b1 = -8.f*s1;
+            const float s2 = float(h2), b2 = -8.f*s2;
+            const float s3 = float(h3), b3 = -8.f*s3;
+            const float s4 = float(h4), b4 = -8.f*s4;
+            const float s5 = float(h5), b5 = -8.f*s5;
+            const float s6 = float(h6), b6 = -8.f*s6;
+            const float s7 = float(h7), b7 = -8.f*s7;
+            W3_CTL_ROW_FLOAT(0, q0, s0, b0); W3_CTL_ROW_FLOAT(1, q1, s1, b1);
+            W3_CTL_ROW_FLOAT(2, q2, s2, b2); W3_CTL_ROW_FLOAT(3, q3, s3, b3);
+            if constexpr (R == 8) {
+                W3_CTL_ROW_FLOAT(4, q4, s4, b4); W3_CTL_ROW_FLOAT(5, q5, s5, b5);
+                W3_CTL_ROW_FLOAT(6, q6, s6, b6); W3_CTL_ROW_FLOAT(7, q7, s7, b7);
+            }
+        }
+    }
+
+    FOR_UNROLL (short i = 0; i < NA; ++i) {
+        acc[i] = simd_sum(acc[i]);
+    }
+    if constexpr (KP == 1) {
+        if (tiisg < NA) {
+            const int r = (int)tiisg/3;
+            const int c = (int)tiisg%3;
+            if (row0 + r < args.ne01) {
+                dst[c*args.ne01 + row0 + r] = acc[tiisg];
+            }
+        }
+    } else {
+        if (tiisg == 0) {
+            FOR_UNROLL (short i = 0; i < NA; ++i) {
+                partial[(int)sgitg*NA + i] = acc[i];
+            }
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        if (sgitg == 0 && tiisg < NA) {
+            const int r = (int)tiisg/3;
+            const int c = (int)tiisg%3;
+            if (row0 + r < args.ne01) {
+                dst[c*args.ne01 + row0 + r] = partial[tiisg] + partial[NA + tiisg];
+            }
+        }
+    }
+}
+
+#define W3_CTL_KERNEL(NAME, R, KP, HP, IL) \
+kernel void NAME( \
+        constant ggml_metal_kargs_mul_mv_ext & args, \
+        device const char * src0, device const half * src1, device float * dst, \
+        uint3 tgpig [[threadgroup_position_in_grid]], \
+        ushort tiisg [[thread_index_in_simdgroup]], \
+        ushort sgitg [[simdgroup_index_in_threadgroup]]) { \
+    threadgroup float partial[(KP)*(R)*3]; \
+    mul_mv_q4_0_soa_w3_ctl_impl<(R), (KP), (HP), (IL)>( \
+            args, src0, src1, dst, partial, tgpig, tiisg, sgitg); \
+}
+
+W3_CTL_KERNEL(kernel_mul_mv_q4_0_soa_w3_ctl_r4k2f, 4, 2, false, false)
+W3_CTL_KERNEL(kernel_mul_mv_q4_0_soa_w3_ctl_r4k1h, 4, 1, true,  false)
+W3_CTL_KERNEL(kernel_mul_mv_q4_0_soa_w3_ctl_r4k1f, 4, 1, false, false)
+W3_CTL_KERNEL(kernel_mul_mv_q4_0_soa_w3_ctl_r8k2h, 8, 2, true,  false)
+W3_CTL_KERNEL(kernel_mul_mv_q4_0_soa_w3_ctl_r8k2f, 8, 2, false, false)
+W3_CTL_KERNEL(kernel_mul_mv_q4_0_soa_w3_ctl_r8k1h, 8, 1, true,  false)
+W3_CTL_KERNEL(kernel_mul_mv_q4_0_soa_w3_ctl_r8k1f, 8, 1, false, false)
+W3_CTL_KERNEL(kernel_mul_mv_q4_0_soa_w3_ctl_r4k2hi, 4, 2, true,  true)
+W3_CTL_KERNEL(kernel_mul_mv_q4_0_soa_w3_ctl_r4k2fi, 4, 2, false, true)
+W3_CTL_KERNEL(kernel_mul_mv_q4_0_soa_w3_ctl_r4k1hi, 4, 1, true,  true)
+W3_CTL_KERNEL(kernel_mul_mv_q4_0_soa_w3_ctl_r4k1fi, 4, 1, false, true)
+
+kernel void kernel_mul_mv_q4_0_soa_w3_ctl_r4i(
+        constant ggml_metal_kargs_mul_mv_ext & args,
+        device const char * src0,
+        device const half * src1,
+        device float * dst,
+        uint3 tgpig [[threadgroup_position_in_grid]],
+        ushort tiisg [[thread_index_in_simdgroup]],
+        ushort sgitg [[simdgroup_index_in_threadgroup]]) {
+    threadgroup float partial[2][12];
+    float acc[12] = {};
+    const int nblk = args.ne00/32;
+    const int npack = 4*nblk;
+    const int row0 = 4*(int)tgpig.x;
+    const int pstart = (int)sgitg*(npack/2);
+    const int pend = pstart + npack/2;
+    device const half4 * scales = (device const half4 *)(src0 + (uint64_t)row0*args.nb01);
+    device const uint4 * packs = (device const uint4 *)((device const char *)scales + 8*nblk);
+    using half8 = vec<half, 8>;
+    const device half8 * xv = (const device half8 *)src1;
+    const int K8 = args.ne00/8;
+
+    for (int p = pstart + (int)tiisg; p < pend; p += 32) {
+        const int block = p/4;
+        const half8 v0 = xv[0*K8 + p];
+        const half8 v1 = xv[1*K8 + p];
+        const half8 v2 = xv[2*K8 + p];
+        const uint4 qv = packs[p];
+        const half4 sv = scales[block];
+        W3_CTL_ROW_HALF(0, qv[0], sv[0]);
+        W3_CTL_ROW_HALF(1, qv[1], sv[1]);
+        W3_CTL_ROW_HALF(2, qv[2], sv[2]);
+        W3_CTL_ROW_HALF(3, qv[3], sv[3]);
+    }
+
+    FOR_UNROLL (short i = 0; i < 12; ++i) {
+        acc[i] = simd_sum(acc[i]);
+    }
+    if (tiisg == 0) {
+        FOR_UNROLL (short i = 0; i < 12; ++i) {
+            partial[sgitg][i] = acc[i];
+        }
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (sgitg == 0 && tiisg < 12) {
+        const int r = (int)tiisg/3;
+        const int c = (int)tiisg%3;
+        if (row0 + r < args.ne01) {
+            dst[c*args.ne01 + row0 + r] = partial[0][tiisg] + partial[1][tiisg];
+        }
+    }
+}
+
+#undef W3_CTL_KERNEL
+#undef W3_CTL_ROW_FLOAT
+#undef W3_CTL_ROW_HALF
+#undef W3_CTL_ACC_FLOAT
+#undef W3_CTL_ACC_HALF
 
 // v4/v5: the v2 codegen form at the other two tile geometries, to isolate what pays.
 // v4 = 2 rows, full K, one simdgroup (R2's geometry); v5 = 4 rows, full K, one simdgroup.

@@ -842,6 +842,12 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_repack_q4_0_soa(
     return res.pipeline ? res : ggml_metal_library_compile_pipeline(lib, name, name, nullptr);
 }
 
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_repack_q4_0_soa_r4i(ggml_metal_library_t lib) {
+    const char * name = "kernel_repack_q4_0_soa_r4i";
+    auto res = ggml_metal_library_get_pipeline(lib, name);
+    return res.pipeline ? res : ggml_metal_library_compile_pipeline(lib, name, name, nullptr);
+}
+
 ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w4(ggml_metal_library_t lib) {
     const char * name = "kernel_mul_mv_q4_0_soa_w4_k2";
     auto res = ggml_metal_library_get_pipeline(lib, name);
@@ -882,8 +888,20 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_
     return res.pipeline ? res : ggml_metal_library_compile_pipeline(lib, name, name, nullptr);
 }
 
-ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w3_r4kp(ggml_metal_library_t lib) {
-    const char * name = "kernel_mul_mv_q4_0_soa_w3_r4kp_v3";
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w3_r4kp(ggml_metal_library_t lib, int variant) {
+    const char * name = variant == 1 ? "kernel_mul_mv_q4_0_soa_w3_ctl_r4k2f" :
+                        variant == 2 ? "kernel_mul_mv_q4_0_soa_w3_ctl_r4k1h" :
+                        variant == 3 ? "kernel_mul_mv_q4_0_soa_w3_ctl_r4k1f" :
+                        variant == 4 ? "kernel_mul_mv_q4_0_soa_w3_ctl_r8k2h" :
+                        variant == 5 ? "kernel_mul_mv_q4_0_soa_w3_ctl_r8k2f" :
+                        variant == 6 ? "kernel_mul_mv_q4_0_soa_w3_ctl_r8k1h" :
+                        variant == 7 ? "kernel_mul_mv_q4_0_soa_w3_ctl_r8k1f" :
+                        variant == 8 ? "kernel_mul_mv_q4_0_soa_w3_ctl_r4k2hi" :
+                        variant == 9 ? "kernel_mul_mv_q4_0_soa_w3_ctl_r4k2fi" :
+                        variant == 10 ? "kernel_mul_mv_q4_0_soa_w3_ctl_r4k1hi" :
+                        variant == 11 ? "kernel_mul_mv_q4_0_soa_w3_ctl_r4k1fi" :
+                        variant == 12 ? "kernel_mul_mv_q4_0_soa_w3_ctl_r4i" :
+                                       "kernel_mul_mv_q4_0_soa_w3_r4kp_v3";
     auto res = ggml_metal_library_get_pipeline(lib, name);
     return res.pipeline ? res : ggml_metal_library_compile_pipeline(lib, name, name, nullptr);
 }
