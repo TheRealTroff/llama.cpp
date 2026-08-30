@@ -104,12 +104,29 @@ INVERTED). Across sha lineages, only the b1 anchor and interleaved same-config
 A/Bs compare; acch's real effect is prefill 67.7 -> 62.5 s. The losslessness
 gate itself is unchanged: drafting changes must hold the CURRENT lineage's shas.
 
+**Extended a fifth time 2026-08-30 (owner: "prod it"): + `GGML_MM_N64=1`** -
+the half-accumulate Q4_0 mul_mm uses a 64x64 tile only at width 512, M >= 4096,
+and K <= 6144. The route halves repeated A dequant/staging without taking the
+long-K down projection or small-M grids. Full 8288-token server A/B, mirrored
+base/n64/n64/base with 30 s cooldowns: **63.582 -> 62.786 s, +1.27% throughput
+and -796 ms TTFT.** Both n64 arms were within 6 ms; every arm had SHA
+`e9dd82def28c` and 80% draft acceptance (`mm-acch-n64.md`). This changes no
+numerics and does not mint another SHA lineage.
+
+**Extended a sixth time 2026-08-30: + `GGML_MV_SOA_W3=1`** - a dedicated
+4-row x 3-column, two-simdgroup K-split SoA kernel removes the width-3 hole:
+real-model width-3 latency falls **107.2 -> 80.7 ms**, and fixed DFlash depth 2
+improves **19.613 -> 23.553 t/s (+20.09%)** over four balanced server runs.
+`GGML_MV_SOA_PIN=1` makes first-use layout deterministic for an adaptive width-1..5
+process; leave it off for fixed width-6+ studies because skinny still consumes DI
+and loses 9-12% after SoA is pinned (`m4-width3-r4kp.md`).
+
 ```
 GGML_MV_NC=2 GGML_MM_SKINNY=6 GGML_FA_VEC_MAX=5 GGML_FA_MM_NWG=8 GGML_GDN_FUSE_WB=1 \
-GGML_MV_REPACK=1 GGML_MV_SOA_W4=1 GGML_MV_SOA_W4_R4KP=3 GGML_MV_SOA_W5=4 GGML_MV_SOA_W5_HALF=1 \
+GGML_MV_REPACK=1 GGML_MV_SOA_W3=1 GGML_MV_SOA_W4=1 GGML_MV_SOA_W4_R4KP=3 GGML_MV_SOA_W5=4 GGML_MV_SOA_W5_HALF=1 \
 GGML_MV_SOA_WL_XL=1 GGML_METAL_GET_MEMCPY=1 \
 DFLASH_FUSED_INJECT=1 DFLASH_ASYNC_INJECT=1 LLAMA_DRAFT_WINDOW=1024 \
-GGML_MM_ACC_HALF=1 \
+GGML_MM_ACC_HALF=1 GGML_MM_N64=1 \
   llama-server -m Qwen3.8-27B-uniform-Q4_0.gguf -c 10240 -fa on -ctk f16 -ctv f16 \
     -md Qwen3.8-27B-DFlash2-pureQ4_0.gguf --spec-type draft-dflash --spec-draft-n-max 4
 ```
@@ -134,10 +151,13 @@ What each flag buys, and where it came from:
 | `GGML_MV_NC=2` | 0 | mul_mv column loop, ne11=2 | results.md, mv-nc-cliff-probe.md |
 | `GGML_MM_SKINNY=6` | 0 | routes ne11 6..8 to the skinny mm kernel. **6, not 5, since the 2026-08-28 pick** - skinny takes ne11 >= value and must not swallow width 5 ahead of the w5 SoA route (the old pick used 5; the "5, not 4" misroute note there still holds) | dflash-vs-mtp-uniform.md, m4-width5-crossover.md |
 | `GGML_MV_REPACK=1` | 0 | deinterleaved/SoA persistent weight copy; the SoA kernels require it | width4-skinny-ab.md, repack-inplace.md |
+| `GGML_MV_SOA_W3=1` | 0 | width-3 SoA r4kp kernel; closes the 107.2 ms width-3 hole to 80.7 ms and adds +20.09% at fixed DFlash depth 2 | m4-width3-r4kp.md |
 | `GGML_MV_SOA_W4=1` + `GGML_MV_SOA_W4_R4KP=3` | 0 | width-4 SoA scalar kernel, v3 (half product) - MTP draft path runs width-4 ops at every depth | m4-width4-r4kp.md |
 | `GGML_MV_SOA_W5=4` + `GGML_MV_SOA_W5_HALF=1` | 0 | width-5 SoA scalar kernel w5r4h on the six routed projections (the verify width at n4) | m4-width5-crossover.md |
 | `GGML_MV_SOA_WL_XL=1` | 0 | extends the SoA whitelist with ne01 248320 + 4096 and pins those tensors to the SoA repack layout at creation - both lm_heads ride w5r4h, +3.04% e2e | shortk-head.md |
+| `GGML_MV_SOA_PIN=1` | 0 | pins every eligible projection to SoA on first use so adaptive widths 1-5 are order-invariant; widths 1-2 fall back to original weights at their bandwidth floor | m4-width3-r4kp.md |
 | `GGML_METAL_GET_MEMCPY=1` | 0 | get_tensor_async readbacks (logits, 5 MB/round) as memcpy-after-wait instead of a blit command buffer queued behind the graph, +3.3% e2e | cpu-round-overhead.md |
+| `GGML_MM_N64=1` | 0 | 64x64 Q4_0 half-accumulate tile on the measured width-512, short-K, sufficiently parallel region; +1.27% full prefill | mm-acch-n64.md |
 | `GGML_FA_VEC_MAX=5` | 20 | FA vec/mm routing cutoff. **5, not 4** - at 4 an MTP-path FA call reroutes and output changes | flash-attn-mm-split.md |
 | `GGML_FA_MM_NWG=8` | 1 | KV split for the mm FA kernel, -60% FA | flash-attn-mm-split.md |
 | `GGML_GDN_FUSE_WB=1` | off | GDN writes the state cache directly, drops ~2.1 GB/round | gdn-writeback-fusion.md |
@@ -324,7 +344,7 @@ against our 144.9. Our curve is flat but high; theirs is steep with a cheap shel
 > the n3 round at **141.0 ms** (`slope-sweep.md`). What is missing is a *round decomposition*
 > at depth 3. See **`width4-verify.md`**.
 
-## Four traps that have each cost a day
+## Five traps that have each cost a day
 
 **1. n_predict is not comparable across harnesses.** Generation grows the KV cache, so
 the same config reads ~25 t/s at `n_predict` 300 and ~23 at 600. `RUN_GDN_FUSE.sh` and
@@ -359,6 +379,13 @@ for every other flag.
 **4. Record a commit sha with every number.** head-to-head-cooled.md recorded a date and
 no sha, 24 commits landed under it, and the rot stayed invisible until someone compared
 against it and reported a bogus +5.8%.
+
+**5. Sweep widths in separate processes when persistent repack is enabled.** A single
+`llama-bench -p 1,2,...` process reuses model and repack state across cells, so later
+widths can inherit a layout choice made by an earlier width. On 2026-08-30 the same
+width-5/6 pair reversed ordering between a combined sweep and a second combined run.
+Fresh-process cells were stable and matched the routed-kernel boundaries. The combined
+numbers are discarded; use one `-p` value per process for a width curve.
 
 ## Methodology rules, learned the hard way
 

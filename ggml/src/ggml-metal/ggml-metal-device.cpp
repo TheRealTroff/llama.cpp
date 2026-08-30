@@ -847,6 +847,12 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_
     return res.pipeline ? res : ggml_metal_library_compile_pipeline(lib, name, name, nullptr);
 }
 
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w3_r4kp(ggml_metal_library_t lib) {
+    const char * name = "kernel_mul_mv_q4_0_soa_w3_r4kp_v3";
+    auto res = ggml_metal_library_get_pipeline(lib, name);
+    return res.pipeline ? res : ggml_metal_library_compile_pipeline(lib, name, name, nullptr);
+}
+
 ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w7(ggml_metal_library_t lib, int rows) {
     const char * name = rows == 4 ? "kernel_mul_mv_q4_0_soa_w7_r4" :
                                     "kernel_mul_mv_q4_0_soa_w7_r2";
@@ -941,8 +947,13 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm(ggml_meta
     const int16_t r3   = (int16_t) (ne13 / op->src[0]->ne[3]);
 
     static const bool acc_half = getenv("GGML_MM_ACC_HALF") != nullptr;
+    static const bool n64_enabled = getenv("GGML_MM_N64") != nullptr;
+    const bool n64 = n64_enabled && acc_half &&
+        tsrc0 == GGML_TYPE_Q4_0 && tsrc1 == GGML_TYPE_F32 && !has_tensor && !bc_inp &&
+        op->ne[0] >= 4096 && op->ne[1] == 512 && op->src[0]->ne[0] <= 6144 &&
+        op->ne[0] % 64 == 0;
     if (acc_half && tsrc0 == GGML_TYPE_Q4_0 && tsrc1 == GGML_TYPE_F32 && !has_tensor) {
-        snprintf(base, 256, "kernel_mul_mm_acch_q4_0_f32");
+        snprintf(base, 256, n64 ? "kernel_mul_mm_acch_n64_q4_0_f32" : "kernel_mul_mm_acch_q4_0_f32");
     } else {
         snprintf(base, 256, "kernel_mul_mm_%s_%s", ggml_type_name(tsrc0), ggml_type_name(tsrc1));
     }
@@ -973,9 +984,9 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm(ggml_meta
         res.smem = smem_a;
     } else {
         res.nr0 = 64;
-        res.nr1 = 32;
+        res.nr1 = n64 ? 64 : 32;
 
-        res.smem = bc_out ? 8192 : (4096 + 2048);
+        res.smem = n64 || bc_out ? 8192 : (4096 + 2048);
     }
 
     res.nsg = N_MM_SIMD_GROUP_X * N_MM_SIMD_GROUP_Y;

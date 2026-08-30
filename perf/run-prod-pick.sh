@@ -56,12 +56,16 @@ mkdir -p "$OUT"
 # accepted. NOTE: this changes prefill numerics, so it STARTS A NEW CANONICAL SHA
 # LINEAGE - the old 9ad7e023c6ab/3776c0adb7ee gate pre-acch configs only. See
 # perf/prefill-decomp.md.
+# MM_N64 added 2026-08-30 (owner: "prod it"): 64x64 mul_mm tile on the measured
+# width-512 short-K region, +1.27% full prefill with identical output.
+# SOA_W3 adds the dedicated width-3 r4kp kernel: +20.09% at fixed DFlash depth 2.
+# The fixed depth-4 pick normally verifies width 5; width 3 is for the adaptive frontier.
 PICK_ENV=(GGML_MV_NC=2 GGML_MM_SKINNY=6 GGML_FA_VEC_MAX=5 GGML_FA_MM_NWG=8 GGML_GDN_FUSE_WB=1
-          GGML_MV_REPACK=1 GGML_MV_SOA_W4=1 GGML_MV_SOA_W4_R4KP=3
+          GGML_MV_REPACK=1 GGML_MV_SOA_W3=1 GGML_MV_SOA_W4=1 GGML_MV_SOA_W4_R4KP=3
           GGML_MV_SOA_W5=4 GGML_MV_SOA_W5_HALF=1 GGML_MV_SOA_WL_XL=1
           GGML_METAL_GET_MEMCPY=1
           DFLASH_FUSED_INJECT=1 DFLASH_ASYNC_INJECT=1 LLAMA_DRAFT_WINDOW=1024
-          GGML_MM_ACC_HALF=1)
+          GGML_MM_ACC_HALF=1 GGML_MM_N64=1)
 # What the older harnesses set, kept to show the delta is the missing flags.
 PART_ENV=(GGML_MV_NC=2 GGML_MM_SKINNY=5)
 

@@ -25,10 +25,11 @@ mkdir -p "$OUT"
 
 # The prod pick env, copied from run-prod-pick.sh (keep in sync), plus the profilers.
 PICK_ENV=(GGML_MV_NC=2 GGML_MM_SKINNY=6 GGML_FA_VEC_MAX=5 GGML_FA_MM_NWG=8 GGML_GDN_FUSE_WB=1
-          GGML_MV_REPACK=1 GGML_MV_SOA_W4=1 GGML_MV_SOA_W4_R4KP=3
+          GGML_MV_REPACK=1 GGML_MV_SOA_W3=1 GGML_MV_SOA_W4=1 GGML_MV_SOA_W4_R4KP=3
           GGML_MV_SOA_W5=4 GGML_MV_SOA_W5_HALF=1 GGML_MV_SOA_WL_XL=1
           GGML_METAL_GET_MEMCPY=1
           DFLASH_FUSED_INJECT=1 DFLASH_ASYNC_INJECT=1 LLAMA_DRAFT_WINDOW=1024
+          GGML_MM_ACC_HALF=1 GGML_MM_N64=1
           GGML_METAL_SUBMIT_PROF=1 LLAMA_DECODE_PROF=1)
 
 PICK_SPEC=(-md "$MD" --spec-type draft-dflash --spec-draft-n-max 4)
