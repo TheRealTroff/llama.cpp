@@ -2701,13 +2701,15 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
     static const int env_mv_nc       = getenv("GGML_MV_NC")       ? atoi(getenv("GGML_MV_NC"))       : 0;
     static const int env_mv_nc_small = getenv("GGML_MV_NC_SMALL") ? atoi(getenv("GGML_MV_NC_SMALL")) : 0;
 
-    // Single-token decode reads the persistent SoA rows directly. This route
-    // is type-driven so model correctness does not depend on tuning flags.
+    // Widths one and two read persistent SoA rows directly. Both reuse a
+    // weight-stream pass across four output rows; width two also reuses it
+    // across both columns instead of paying for an eight-column skinny tile.
     if (op->src[0]->type == GGML_TYPE_Q4_0_SOA &&
-        op->src[1]->type == GGML_TYPE_F32 && ne11 == 1 &&
+        op->src[1]->type == GGML_TYPE_F32 && (ne11 == 1 || ne11 == 2) &&
         !ggml_is_transposed(op->src[0]) && !ggml_is_transposed(op->src[1]) &&
         ne00 % 64 == 0) {
-        auto pipeline = ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w1(lib);
+        auto pipeline = ne11 == 1 ? ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w1(lib) :
+                                    ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w2(lib);
 
         ggml_metal_kargs_mul_mv_ext args = {
             /*.ne00  =*/ ne00,
@@ -2790,7 +2792,7 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
     static const int env_mm_skinny = getenv("GGML_MM_SKINNY") ? atoi(getenv("GGML_MM_SKINNY")) : 0;
 
     const bool stored_soa_skinny = op->src[0]->type == GGML_TYPE_Q4_0_SOA &&
-                                   (ne11 == 2 || (ne11 >= 6 && ne11 <= 8));
+                                   ne11 >= 6 && ne11 <= 8;
     const bool runtime_repack_skinny = env_mm_skinny > 0 && ne11 >= std::max(2, env_mm_skinny) &&
                                        op->src[0]->type == GGML_TYPE_Q4_0;
 

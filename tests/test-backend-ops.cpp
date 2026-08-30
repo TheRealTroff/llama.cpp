@@ -10036,12 +10036,16 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_mul_mat(
             GGML_TYPE_Q4_0_SOA, GGML_TYPE_F32, 256, n, 512, {1, 1}, {1, 1}));
     }
-    for (int n : {1, 4, 7}) {
+    for (int n : {1, 2, 4, 7}) {
         test_cases.emplace_back(new test_mul_mat(
             GGML_TYPE_Q4_0_SOA, GGML_TYPE_F32, 17408, n,  5120, {1, 1}, {1, 1}));
         test_cases.emplace_back(new test_mul_mat(
             GGML_TYPE_Q4_0_SOA, GGML_TYPE_F32,  5120, n, 17408, {1, 1}, {1, 1}));
     }
+    test_cases.emplace_back(new test_mul_mat(
+        GGML_TYPE_Q4_0_SOA, GGML_TYPE_F32, 5120, 1, 6144, {1, 1}, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat(
+        GGML_TYPE_Q4_0_SOA, GGML_TYPE_F32, 6144, 1, 5120, {1, 1}, {1, 1}));
 
     return test_cases;
 }
@@ -10263,11 +10267,18 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
         }
     }
 
-    // Persistent Q4_0_SOA_V1 readers: decode/speculative widths plus generic prefill.
-    // Keep both FFN orientations because they exercise different row strides.
+    // Persistent Q4_0_SOA_V1 readers: every converted Qwen3.8 projection at
+    // decode/speculative widths, plus both FFN orientations at generic prefill.
     for (int bs : {1, 2, 3, 4, 5, 6, 7, 8, 512}) {
         test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0_SOA, GGML_TYPE_F32, 17408, bs,  5120, {1, 1}, {1, 1}));
         test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0_SOA, GGML_TYPE_F32,  5120, bs, 17408, {1, 1}, {1, 1}));
+        if (bs <= 8) {
+            test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0_SOA, GGML_TYPE_F32,  5120, bs,  6144, {1, 1}, {1, 1}));
+            test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0_SOA, GGML_TYPE_F32, 10240, bs,  5120, {1, 1}, {1, 1}));
+            test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0_SOA, GGML_TYPE_F32,  6144, bs,  5120, {1, 1}, {1, 1}));
+            test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0_SOA, GGML_TYPE_F32, 12288, bs,  5120, {1, 1}, {1, 1}));
+            test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0_SOA, GGML_TYPE_F32, 248320, bs, 5120, {1, 1}, {1, 1}));
+        }
     }
 
     // small-ne01 verify shapes from the 27B round decomposition (GDN a/dt, conv, kv, q slices)

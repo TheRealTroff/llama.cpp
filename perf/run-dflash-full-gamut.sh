@@ -19,6 +19,7 @@ NPRED=${NPRED:-600}
 REPS=${REPS:-2}
 DEPTHS=${DEPTHS:-"1 2 3 4 5 6 7"}
 COOL=${COOL:-5}
+WARMUP=${WARMUP:-1}
 TSV=$OUT/$TAG.tsv
 
 mkdir -p "$OUT"
@@ -170,8 +171,10 @@ PY
     sleep "$COOL"
 }
 
-echo "--- warmup, discarded ---"
-run_one 0 4 >/dev/null 2>&1 || true
+if [ "$WARMUP" = 1 ]; then
+    echo "--- warmup, discarded ---"
+    run_one 0 4 >/dev/null 2>&1 || true
+fi
 
 for rep in $(seq 1 "$REPS"); do
     if [ $((rep % 2)) -eq 1 ]; then

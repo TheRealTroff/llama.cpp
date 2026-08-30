@@ -5963,6 +5963,15 @@ kernel void kernel_mul_mv_q4_0_soa_w4_r4kp_v3(
     }
 }
 
+using q4_0_soa_float8 = vec<float, 8>;
+
+inline float q4_0_soa_pack_dot(uint q, q4_0_soa_float8 v) {
+    const uint4 shifts = { 0, 4, 8, 12 };
+    const float4 q0 = float4((uint4(q)       >> shifts) & 0x0Fu) - 8.f;
+    const float4 q1 = float4((uint4(q >> 16) >> shifts) & 0x0Fu) - 8.f;
+    return dot(q0, v.lo) + dot(q1, v.hi);
+}
+
 // Direct batch-1 reader for persistent Q4_0_SOA_V1 weights. Four output rows
 // share each weight-stream pass; two simdgroups split K and reduce in shared memory.
 kernel void kernel_mul_mv_q4_0_soa_w1(
@@ -6024,6 +6033,75 @@ kernel void kernel_mul_mv_q4_0_soa_w1(
     threadgroup_barrier(mem_flags::mem_threadgroup);
     if (sgitg == 0 && tiisg < 4 && row0 + tiisg < args.ne01) {
         dst[(uint64_t)im*args.ne01 + row0 + tiisg] = partial[0][tiisg] + partial[1][tiisg];
+    }
+}
+
+// Direct two-column reader for persistent Q4_0_SOA_V1 weights. It retains the
+// width-1 grid and reuses each unpacked weight across both activation columns.
+kernel void kernel_mul_mv_q4_0_soa_w2(
+        constant ggml_metal_kargs_mul_mv_ext & args,
+        device const char * src0,
+        device const char * src1,
+        device float * dst,
+        uint3 tgpig [[threadgroup_position_in_grid]],
+        ushort tiisg [[thread_index_in_simdgroup]],
+        ushort sgitg [[simdgroup_index_in_threadgroup]]) {
+    threadgroup float partial[2][8];
+    float acc[8] = {};
+    const int nblk = args.ne00/32;
+    const int npack = 4*nblk;
+    const int row0 = 4*(int)tgpig.x;
+    const int im = tgpig.z;
+    const int i12 = im % args.ne12;
+    const int i13 = im / args.ne12;
+    const uint64_t offset0 = (i12/args.r2)*args.nb02 + (i13/args.r3)*args.nb03;
+    const int rows[4] = {
+        min(row0 + 0, args.ne01 - 1),
+        min(row0 + 1, args.ne01 - 1),
+        min(row0 + 2, args.ne01 - 1),
+        min(row0 + 3, args.ne01 - 1),
+    };
+
+    device const half * sp0 = (device const half *)(src0 + offset0 + (uint64_t)rows[0]*args.nb01);
+    device const half * sp1 = (device const half *)(src0 + offset0 + (uint64_t)rows[1]*args.nb01);
+    device const half * sp2 = (device const half *)(src0 + offset0 + (uint64_t)rows[2]*args.nb01);
+    device const half * sp3 = (device const half *)(src0 + offset0 + (uint64_t)rows[3]*args.nb01);
+    device const uint * qp0 = (device const uint *)(sp0 + nblk);
+    device const uint * qp1 = (device const uint *)(sp1 + nblk);
+    device const uint * qp2 = (device const uint *)(sp2 + nblk);
+    device const uint * qp3 = (device const uint *)(sp3 + nblk);
+    device const char * ybase = src1 + args.nb13*i13 + args.nb12*i12;
+    device const float * y0 = (device const float *)(ybase + 0*args.nb11);
+    device const float * y1 = (device const float *)(ybase + 1*args.nb11);
+    const int pstart = (int)sgitg*(npack/2);
+    const int pend = pstart + npack/2;
+
+    for (int p = pstart + (int)tiisg; p < pend; p += 32) {
+        const int block = p/4;
+        const int k0 = 8*p;
+        const q4_0_soa_float8 v0 = *(device const q4_0_soa_float8 *)(y0 + k0);
+        const q4_0_soa_float8 v1 = *(device const q4_0_soa_float8 *)(y1 + k0);
+        const uint q[4] = { qp0[p], qp1[p], qp2[p], qp3[p] };
+        const half d[4] = { sp0[block], sp1[block], sp2[block], sp3[block] };
+        FOR_UNROLL (int r = 0; r < 4; ++r) {
+            acc[2*r + 0] += float(d[r])*q4_0_soa_pack_dot(q[r], v0);
+            acc[2*r + 1] += float(d[r])*q4_0_soa_pack_dot(q[r], v1);
+        }
+    }
+
+    FOR_UNROLL (int i = 0; i < 8; ++i) {
+        acc[i] = simd_sum(acc[i]);
+        if (tiisg == 0) {
+            partial[sgitg][i] = acc[i];
+        }
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (sgitg == 0 && tiisg < 8) {
+        const int r = (int)tiisg/2;
+        const int c = (int)tiisg%2;
+        if (row0 + r < args.ne01) {
+            dst[(uint64_t)im*args.ne01*args.ne11 + (uint64_t)c*args.ne01 + row0 + r] = partial[0][tiisg] + partial[1][tiisg];
+        }
     }
 }
 
