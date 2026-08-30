@@ -433,7 +433,11 @@ extern "C" {
         GGML_TYPE_TURBO2_0 = 43, // TurboQuant 2-bit KV cache: WHT + 2-bit Lloyd-Max
         GGML_TYPE_TURBO3_0 = 44, // TurboQuant 3-bit KV cache: WHT + 3-bit Lloyd-Max
         GGML_TYPE_TURBO4_0 = 45, // TurboQuant 4-bit KV cache: WHT + 4-bit Lloyd-Max
-        GGML_TYPE_COUNT   = 46,
+        // Lossless row-wise permutation of Q4_0 for the Metal SoA kernels:
+        // [fp16 scale x nblk][nibble-planar uint32 pack8 x 4*nblk].
+        // This is an on-disk storage contract, not a different quantization.
+        GGML_TYPE_Q4_0_SOA = 46,
+        GGML_TYPE_COUNT   = 47,
     };
 
     // precision

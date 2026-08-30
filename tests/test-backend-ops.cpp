@@ -99,7 +99,12 @@ static void init_tensor_uniform(ggml_tensor * tensor, float min = -1.0f, float m
         }
 
         std::vector<uint8_t> dataq(ggml_row_size(tensor->type, nels));
-        {
+        if (tensor->type == GGML_TYPE_Q4_0_SOA) {
+            // SoA scale/pack streams restart on every logical row and therefore
+            // cannot be quantized as independent 32-element blocks.
+            ggml_quantize_chunk(tensor->type, data.data(), dataq.data(),
+                                0, ggml_nrows(tensor), tensor->ne[0], im);
+        } else {
             // parallel quantization by block
             size_t blck_size = ggml_blck_size(tensor->type);
             size_t n_blocks = nels / blck_size;
@@ -10026,6 +10031,18 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
+    // Q4_0_SOA_V1 direct readers: one compact correctness case per dispatch family.
+    for (int n : {1, 2, 3, 4, 5, 6, 7, 8, 32}) {
+        test_cases.emplace_back(new test_mul_mat(
+            GGML_TYPE_Q4_0_SOA, GGML_TYPE_F32, 256, n, 512, {1, 1}, {1, 1}));
+    }
+    for (int n : {1, 4, 7}) {
+        test_cases.emplace_back(new test_mul_mat(
+            GGML_TYPE_Q4_0_SOA, GGML_TYPE_F32, 17408, n,  5120, {1, 1}, {1, 1}));
+        test_cases.emplace_back(new test_mul_mat(
+            GGML_TYPE_Q4_0_SOA, GGML_TYPE_F32,  5120, n, 17408, {1, 1}, {1, 1}));
+    }
+
     return test_cases;
 }
 #ifdef _MSC_VER
@@ -10244,6 +10261,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
             test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32, 248320, bs, 5120, {1, 1}, {1, 1})); // output (lm_head)    x1
             // attn_k/v (5120,1024) x32 is already covered by the small-ne01 block below
         }
+    }
+
+    // Persistent Q4_0_SOA_V1 readers: decode/speculative widths plus generic prefill.
+    // Keep both FFN orientations because they exercise different row strides.
+    for (int bs : {1, 2, 3, 4, 5, 6, 7, 8, 512}) {
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0_SOA, GGML_TYPE_F32, 17408, bs,  5120, {1, 1}, {1, 1}));
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0_SOA, GGML_TYPE_F32,  5120, bs, 17408, {1, 1}, {1, 1}));
     }
 
     // small-ne01 verify shapes from the 27B round decomposition (GDN a/dt, conv, kv, q slices)

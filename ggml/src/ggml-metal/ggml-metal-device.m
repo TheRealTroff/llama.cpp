@@ -1191,6 +1191,24 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
         }
     }
 
+    bool has_q4_0_soa = op->type == GGML_TYPE_Q4_0_SOA;
+    for (size_t i = 0; i < 4; ++i) {
+        has_q4_0_soa = has_q4_0_soa || (op->src[i] && op->src[i]->type == GGML_TYPE_Q4_0_SOA);
+    }
+    if (has_q4_0_soa) {
+        if (op->op == GGML_OP_NONE || op->op == GGML_OP_RESHAPE ||
+            op->op == GGML_OP_VIEW || op->op == GGML_OP_PERMUTE ||
+            op->op == GGML_OP_TRANSPOSE) {
+            return true;
+        }
+        return op->op == GGML_OP_MUL_MAT &&
+               op->src[0] && op->src[0]->type == GGML_TYPE_Q4_0_SOA &&
+               op->src[1] && op->src[1]->type == GGML_TYPE_F32 &&
+               op->type == GGML_TYPE_F32 &&
+               op->src[0]->ne[0] % 64 == 0 &&
+               op->src[0]->ne[2] == 1 && op->src[0]->ne[3] == 1;
+    }
+
     switch (op->op) {
         case GGML_OP_SCALE:
         case GGML_OP_FILL:

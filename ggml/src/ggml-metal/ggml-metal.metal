@@ -5963,6 +5963,70 @@ kernel void kernel_mul_mv_q4_0_soa_w4_r4kp_v3(
     }
 }
 
+// Direct batch-1 reader for persistent Q4_0_SOA_V1 weights. Four output rows
+// share each weight-stream pass; two simdgroups split K and reduce in shared memory.
+kernel void kernel_mul_mv_q4_0_soa_w1(
+        constant ggml_metal_kargs_mul_mv_ext & args,
+        device const char * src0,
+        device const char * src1,
+        device float * dst,
+        uint3 tgpig [[threadgroup_position_in_grid]],
+        ushort tiisg [[thread_index_in_simdgroup]],
+        ushort sgitg [[simdgroup_index_in_threadgroup]]) {
+    threadgroup float partial[2][4];
+    float acc[4] = {};
+    const int nblk = args.ne00/32;
+    const int npack = 4*nblk;
+    const int row0 = 4*(int)tgpig.x;
+    const int im = tgpig.z;
+    const int i12 = im % args.ne12;
+    const int i13 = im / args.ne12;
+    const uint64_t offset0 = (i12/args.r2)*args.nb02 + (i13/args.r3)*args.nb03;
+    const int rows[4] = {
+        min(row0 + 0, args.ne01 - 1),
+        min(row0 + 1, args.ne01 - 1),
+        min(row0 + 2, args.ne01 - 1),
+        min(row0 + 3, args.ne01 - 1),
+    };
+
+    device const half * sp0 = (device const half *)(src0 + offset0 + (uint64_t)rows[0]*args.nb01);
+    device const half * sp1 = (device const half *)(src0 + offset0 + (uint64_t)rows[1]*args.nb01);
+    device const half * sp2 = (device const half *)(src0 + offset0 + (uint64_t)rows[2]*args.nb01);
+    device const half * sp3 = (device const half *)(src0 + offset0 + (uint64_t)rows[3]*args.nb01);
+    device const uint * qp0 = (device const uint *)(sp0 + nblk);
+    device const uint * qp1 = (device const uint *)(sp1 + nblk);
+    device const uint * qp2 = (device const uint *)(sp2 + nblk);
+    device const uint * qp3 = (device const uint *)(sp3 + nblk);
+    device const char * ybase = src1 + args.nb13*i13 + args.nb12*i12;
+    device const float * y = (device const float *) ybase;
+    const int pstart = (int)sgitg*(npack/2);
+    const int pend = pstart + npack/2;
+
+    for (int p = pstart + (int)tiisg; p < pend; p += 32) {
+        const int block = p/4;
+        const int k0 = 8*p;
+        const uint q[4] = { qp0[p], qp1[p], qp2[p], qp3[p] };
+        const half d[4] = { sp0[block], sp1[block], sp2[block], sp3[block] };
+        FOR_UNROLL (int r = 0; r < 4; ++r) {
+            FOR_UNROLL (int k = 0; k < 8; ++k) {
+                const float w = (float((q[r] >> (4*k)) & 0x0Fu) - 8.f)*float(d[r]);
+                acc[r] += y[k0 + k]*w;
+            }
+        }
+    }
+
+    FOR_UNROLL (int r = 0; r < 4; ++r) {
+        acc[r] = simd_sum(acc[r]);
+        if (tiisg == 0) {
+            partial[sgitg][r] = acc[r];
+        }
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (sgitg == 0 && tiisg < 4 && row0 + tiisg < args.ne01) {
+        dst[(uint64_t)im*args.ne01 + row0 + tiisg] = partial[0][tiisg] + partial[1][tiisg];
+    }
+}
+
 kernel void kernel_mul_mv_q4_0_soa_w3_r4kp_v3(
         constant ggml_metal_kargs_mul_mv_ext & args,
         device const char * src0,
@@ -14384,6 +14448,29 @@ constant short FC_mul_mm_ne12  [[function_constant(FC_MUL_MM + 2)]];
 constant short FC_mul_mm_ne13  [[function_constant(FC_MUL_MM + 3)]];
 constant short FC_mul_mm_r2    [[function_constant(FC_MUL_MM + 4)]];
 constant short FC_mul_mm_r3    [[function_constant(FC_MUL_MM + 5)]];
+constant bool  FC_mul_mm_soa   [[function_constant(FC_MUL_MM + 6)]];
+
+template <typename type4x4>
+inline void dequantize_q4_0_soa_mm(
+        device const char * row,
+        int nblk,
+        int block_idx,
+        short il,
+        thread type4x4 & reg) {
+    device const half * scales = (device const half *) row;
+    device const uint * packs = (device const uint *)(row + 2*nblk);
+    const half d = scales[block_idx];
+    const uint q0 = packs[4*block_idx + 2*il + 0];
+    const uint q1 = packs[4*block_idx + 2*il + 1];
+    const uint4 shifts = uint4(0, 4, 8, 12);
+
+    float4x4 reg_f;
+    reg_f[0] = (float4((uint4(q0)       >> shifts) & 0x0Fu) - 8.f)*float(d);
+    reg_f[1] = (float4((uint4(q0 >> 16) >> shifts) & 0x0Fu) - 8.f)*float(d);
+    reg_f[2] = (float4((uint4(q1)       >> shifts) & 0x0Fu) - 8.f)*float(d);
+    reg_f[3] = (float4((uint4(q1 >> 16) >> shifts) & 0x0Fu) - 8.f)*float(d);
+    reg = (type4x4) reg_f;
+}
 
 // each block_q contains 16*nl weights
 #ifdef GGML_METAL_HAS_TENSOR
@@ -14468,6 +14555,18 @@ kernel void kernel_mul_mm(
 
                     FOR_UNROLL (short i = 0; i < 16; i++) {
                         sa[row * N_MM_NK_TOTAL + (k_base + i)] = (k_pos + i < K) ? (SA) row_ptr[k_pos + i] : (SA)0;
+                    }
+                } else if (FC_mul_mm_soa) {
+                    const int block_idx = k_pos / (16 * nl);
+                    const short il = (k_pos / 16) % nl;
+
+                    device const char * row_ptr = srcA + args.nb01 * (ra + row) + offset0;
+
+                    SA_4x4 temp_a;
+                    dequantize_q4_0_soa_mm(row_ptr, K/32, block_idx, il, temp_a);
+
+                    FOR_UNROLL (short i = 0; i < 16; i++) {
+                        sa[row * N_MM_NK_TOTAL + (k_base + i)] = (k_pos + i < K) ? temp_a[i/4][i%4] : (SA)0;
                     }
                 } else {
                     const int block_idx = k_pos / (16 * nl);
@@ -14608,6 +14707,21 @@ kernel void kernel_mul_mm(
                 const short ib = 8*sx + sy;
 
                 *(sa + 64*ib + 8*ly + lx) = loop_k + 16*il + i < args.ne00 ? *((device T0 *) x + i) : 0;
+            }
+        } else if (FC_mul_mm_soa) {
+            S0_4x4 temp_a;
+            device const char * row_ptr = src0 + args.nb01*(r0 + lr0) + offset0;
+            dequantize_q4_0_soa_mm(row_ptr, args.ne00/32, loop_k/32, il0, temp_a);
+
+            threadgroup_barrier(mem_flags::mem_threadgroup);
+
+            FOR_UNROLL (short i = 0; i < 16; i++) {
+                const short sx = 2*il0 + i/8;
+                const short sy = (tiitg/NL0)/8;
+                const short lx = (tiitg/NL0)%8;
+                const short ly = i%8;
+                const short ib = 8*sx + sy;
+                *(sa + 64*ib + 8*ly + lx) = temp_a[i/4][i%4];
             }
         } else {
             S0_4x4 temp_a;

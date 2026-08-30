@@ -147,6 +147,47 @@ void quantize_row_q4_0_ref(const float * GGML_RESTRICT x, block_q4_0 * GGML_REST
     }
 }
 
+void quantize_row_q4_0_soa_ref(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
+    static const int qk = QK4_0;
+
+    assert(k % qk == 0);
+
+    const int nb = k / qk;
+    uint8_t * y = (uint8_t *) vy;
+
+    for (int i = 0; i < nb; ++i) {
+        float amax = 0.0f;
+        float max  = 0.0f;
+
+        for (int j = 0; j < qk; ++j) {
+            const float v = x[i*qk + j];
+            if (amax < fabsf(v)) {
+                amax = fabsf(v);
+                max  = v;
+            }
+        }
+
+        const float d  = max / -8;
+        const float id = d ? 1.0f/d : 0.0f;
+        const ggml_fp16_t dh = GGML_FP32_TO_FP16(d);
+        memcpy(y + 2*i, &dh, sizeof(dh));
+
+        uint32_t packs[4] = { 0, 0, 0, 0 };
+        for (int j = 0; j < qk/2; ++j) {
+            const float x0 = x[i*qk + j         ]*id;
+            const float x1 = x[i*qk + j + qk/2]*id;
+
+            const uint8_t q0 = MIN(15, (int8_t)(x0 + 8.5f));
+            const uint8_t q1 = MIN(15, (int8_t)(x1 + 8.5f));
+            const int p = j/8;
+            const int s = 4*(j % 8);
+            packs[p    ] |= (uint32_t) q0 << s;
+            packs[2 + p] |= (uint32_t) q1 << s;
+        }
+        memcpy(y + 2*nb + 16*i, packs, sizeof(packs));
+    }
+}
+
 void quantize_row_q4_1_ref(const float * GGML_RESTRICT x, block_q4_1 * GGML_RESTRICT y, int64_t k) {
     const int qk = QK4_1;
 
@@ -472,6 +513,32 @@ void dequantize_row_q4_0(const block_q4_0 * GGML_RESTRICT x, float * GGML_RESTRI
 
             y[i*qk + j + 0   ] = x0*d;
             y[i*qk + j + qk/2] = x1*d;
+        }
+    }
+}
+
+void dequantize_row_q4_0_soa(const void * GGML_RESTRICT vx, float * GGML_RESTRICT y, int64_t k) {
+    static const int qk = QK4_0;
+
+    assert(k % qk == 0);
+
+    const int nb = k / qk;
+    const uint8_t * x = (const uint8_t *) vx;
+
+    for (int i = 0; i < nb; ++i) {
+        ggml_fp16_t dh;
+        uint32_t packs[4];
+        memcpy(&dh, x + 2*i, sizeof(dh));
+        memcpy(packs, x + 2*nb + 16*i, sizeof(packs));
+        const float d = GGML_FP16_TO_FP32(dh);
+
+        for (int j = 0; j < qk/2; ++j) {
+            const int p = j/8;
+            const int s = 4*(j % 8);
+            const int q0 = ((packs[p    ] >> s) & 0x0f) - 8;
+            const int q1 = ((packs[2 + p] >> s) & 0x0f) - 8;
+            y[i*qk + j         ] = q0*d;
+            y[i*qk + j + qk/2] = q1*d;
         }
     }
 }
@@ -2135,6 +2202,18 @@ size_t quantize_q4_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, 
     for (int64_t row = 0; row < nrow; ++row) {
         quantize_row_q4_0_impl(src, (block_q4_0*)qrow, n_per_row, quant_weights);
         src += n_per_row;
+        qrow += row_size;
+    }
+    return nrow * row_size;
+}
+
+size_t quantize_q4_0_soa(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
+    GGML_UNUSED(quant_weights);
+    const size_t row_size = ggml_row_size(GGML_TYPE_Q4_0_SOA, n_per_row);
+    char * qrow = (char *) dst;
+    for (int64_t row = 0; row < nrow; ++row) {
+        quantize_row_q4_0_soa_ref(src, qrow, n_per_row);
+        src  += n_per_row;
         qrow += row_size;
     }
     return nrow * row_size;
@@ -5540,6 +5619,14 @@ bool ggml_validate_row_data(enum ggml_type type, const void * data, size_t nbyte
         case GGML_TYPE_Q4_0:
             {
                 VALIDATE_ROW_DATA_D_F16_IMPL(block_q4_0, data, nb);
+            } break;
+        case GGML_TYPE_Q4_0_SOA:
+            {
+                // Scale and nibble streams are separated at a row-dependent offset,
+                // so this byte-count-only API cannot locate the fp16 values. The
+                // GGUF converter validates every scale while it knows the row shape.
+                GGML_UNUSED(data);
+                GGML_UNUSED(nb);
             } break;
         case GGML_TYPE_Q4_1:
             {
