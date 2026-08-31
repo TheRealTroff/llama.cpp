@@ -3865,7 +3865,31 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
             nwg = std::max<int32_t>(nwg, 1);
         }
 
-        auto pipeline = ggml_metal_library_get_pipeline_flash_attn_ext(lib, op, has_mask, has_sinks, has_bias, has_scap, has_kvpad, nsg, nwg);
+        // A Qwen3.8-27B KV head is shared by six query heads.  Flatten those heads into
+        // the existing Q=8 row tile so each Turbo4 K/V chunk is dequantized once for up
+        // to eight (query, head) rows.  This is transient tile reuse: no expanded cache
+        // is allocated.  Restrict the first probe to the exact safe geometry and to
+        // widths where it reduces the number of cache passes.
+        // Pre-M5 benefits from the reuse by default; keep newer tensor hardware on the
+        // established path until it is measured there.  GGML_FA_GQA_HEADS=1/6 is the
+        // per-process A/B override.
+        static const int env_fa_gqa_heads = getenv("GGML_FA_GQA_HEADS") ?
+                atoi(getenv("GGML_FA_GQA_HEADS")) : (props_dev->has_tensor ? 1 : 6);
+        const int32_t gqa_ratio = ne12 > 0 && ne02 % ne12 == 0 ? ne02/ne12 : 1;
+        const int32_t gqa_heads = env_fa_gqa_heads == 6 && is_turbo4_kv &&
+                                  ne01 >= 5 && ne01 <= 6 && gqa_ratio == 6 &&
+                                  ne02 % 6 == 0 && !has_sinks && !has_bias && !has_kvpad ? 6 : 1;
+
+        if (gqa_heads == 6) {
+            static bool logged = false;
+            if (!logged) {
+                GGML_LOG_INFO("%s: Turbo4 FA sharing each decoded KV tile across six GQA heads\n", __func__);
+                logged = true;
+            }
+        }
+
+        auto pipeline = ggml_metal_library_get_pipeline_flash_attn_ext(
+                lib, op, has_mask, has_sinks, has_bias, has_scap, has_kvpad, nsg, nwg, gqa_heads);
 
         ggml_metal_encoder_set_pipeline(enc, pipeline);
         ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);
@@ -3880,7 +3904,9 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
 
         ggml_metal_encoder_set_threadgroup_memory_size(enc, smem, 0);
 
-        ggml_metal_encoder_dispatch_threadgroups(enc, (ne01 + nqptg - 1)/nqptg, ne02, ne03*nwg, 32, nsg, 1);
+        ggml_metal_encoder_dispatch_threadgroups(enc,
+                (ne01*gqa_heads + nqptg - 1)/nqptg, (ne02 + gqa_heads - 1)/gqa_heads, ne03*nwg,
+                32, nsg, 1);
 
         if (nwg > 1) {
             // sanity checks

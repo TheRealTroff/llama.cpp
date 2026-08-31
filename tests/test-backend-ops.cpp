@@ -9887,7 +9887,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     // short correctness case for both the vector and batched Metal routes;
     // the long-context variants are also useful as focused performance cases.
     for (ggml_type type_KV : { GGML_TYPE_F16, GGML_TYPE_TURBO4_0 }) {
-        for (int nb : { 1, 5 }) {
+        for (int nb : { 1, 5, 6 }) {
             test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {6, 1}, 512, nb, true, false, 0, 0,
                                                             GGML_PREC_F32, type_KV, type_KV));
             test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {6, 1}, 8448, nb, true, false, 0, 0,
@@ -10366,6 +10366,14 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     for (ggml_type type_KV : { GGML_TYPE_F16, GGML_TYPE_TURBO4_0 }) {
         for (int nb : { 1, 5, 6, 7, 8 }) {
             test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {6, 1}, 8448, nb, true, false, 0, 0,
+                                                            GGML_PREC_F32, type_KV, type_KV));
+        }
+    }
+
+    // Filled 100 Ki-token cache: performance-only coverage for the two GQA-reuse widths.
+    for (ggml_type type_KV : { GGML_TYPE_F16, GGML_TYPE_TURBO4_0 }) {
+        for (int nb : { 5, 6 }) {
+            test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {6, 1}, 102400, nb, true, false, 0, 0,
                                                             GGML_PREC_F32, type_KV, type_KV));
         }
     }
