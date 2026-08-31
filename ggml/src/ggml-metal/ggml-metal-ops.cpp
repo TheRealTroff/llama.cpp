@@ -3851,10 +3851,14 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
         // min(ne01, 32)*ne02*ne03 rows -- prefill-sized batches would overflow it, and they
         // have plenty of threadgroups already.
         static const int env_fa_mm_nwg = getenv("GGML_FA_MM_NWG") ? atoi(getenv("GGML_FA_MM_NWG")) : 1;
+        static const int env_fa_turbo_nwg = getenv("GGML_FA_TURBO_NWG") ? atoi(getenv("GGML_FA_TURBO_NWG")) : 0;
+
+        const bool is_turbo4_kv = op->src[1]->type == GGML_TYPE_TURBO4_0 || op->src[2]->type == GGML_TYPE_TURBO4_0;
+        const int requested_nwg = is_turbo4_kv && env_fa_turbo_nwg > 0 ? env_fa_turbo_nwg : env_fa_mm_nwg;
 
         int32_t nwg = 1;
-        if (env_fa_mm_nwg > 1 && ne01 <= 32) {
-            nwg = std::min<int32_t>(env_fa_mm_nwg, 32);
+        if (requested_nwg > 1 && ne01 <= 32) {
+            nwg = std::min<int32_t>(requested_nwg, 32);
 
             // never launch more workgroups than there are cache chunks
             nwg = std::min<int32_t>(nwg, (ne11 + ncpsg - 1)/ncpsg);
