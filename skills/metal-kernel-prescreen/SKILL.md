@@ -62,12 +62,19 @@ python3 references/agx-spill-probe.py /tmp/x.metallib kernel_mul_mv_q4_0_f32_nc3
     --cv 600=2 --cv 602=1 --cv 603=1 --cv 604=1
 ```
 
-`--cv IDX=VAL` sets a function constant (short-typed). **You must supply every function
-constant the kernel reads**, or translation fails with "cannot lower module with
-unresolved function constants". Get the indices and the values the runtime actually uses
-from the pipeline getter in `ggml-metal-device.cpp` - for mul_mv nc that is
+Function-constant options are typed and repeatable:
+
+- `--cv IDX=VAL`: Metal `short` / `int16_t` (`ConstantShort`)
+- `--cvi IDX=VAL`: Metal `int` / `int32_t` (`ConstantInt`)
+- `--cvb IDX=VAL`: Metal `bool` (`ConstantBool`)
+
+The option must match the Metal declaration; `applegpu-nt` rejects, for example, an i16
+value for an int32 function constant. **You must supply every function constant the kernel
+reads**, or translation fails with "cannot lower module with unresolved function constants".
+Get the declared types from `ggml-metal.metal`, then get the indices and runtime values from
+the pipeline getter in `ggml-metal-device.cpp`. For mul_mv nc that is
 `ggml_metal_library_get_pipeline_mul_mv_nc`, which sets `FC_MUL_MV + 0/2/3/4` (base 600)
-to nsg/ne12/r2/r3.
+to short-typed nsg/ne12/r2/r3.
 
 Function constants are specialized offline exactly as the Metal runtime specializes them
 at pipeline creation, so the result reflects the real specialized kernel. Kernels behind
@@ -155,6 +162,12 @@ comparison (respect any no-copying boundary - probe the FORM, not their code).
 - **Code size is not a substitute.** In the mul_mv nc sweep `text` grew smoothly across
   the whole range with no discontinuity at the shape where spilling starts. Only the
   spill field found it.
+- **A translator failure shared by control and candidate is inconclusive.** In particular,
+  if a known-good kernel and the experimental kernel both fail with the same private-metadata
+  offset error, do not turn that failure into a spill, register-pressure, or codegen claim
+  about the candidate. Reduce both to equivalent standalone probes; if that cannot be done,
+  report the prescreen as unavailable and let uncaptured timing plus a survivor-only GPU
+  profile decide.
 
 ## What this does not tell you
 
