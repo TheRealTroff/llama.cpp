@@ -93,6 +93,34 @@ route wins in isolation. This A/B cannot attribute the entire round delta
 because the output trajectories differ; width 1 already had a dedicated reader
 and remains a separate parity problem.
 
+## Current stored-layout width sweep
+
+Commit `037fc5490` was measured with the converted target and drafter, the
+31,522-byte/8,288-token canonical prompt, 600 output tokens, and the complete
+production environment. Two fresh-process passes were mirrored in width order.
+
+| verify width | DFlash depth | mean t/s | mean round | output/round | acceptance |
+|---:|---:|---:|---:|---:|---:|
+| 2 | 1 | 20.480 | 89.44 ms | 1.835 | 84.00% |
+| 3 | 2 | 24.722 | 100.54 ms | 2.490 | 74.79% |
+| 4 | 3 | 27.008 | 107.66 ms | 2.913 | 64.17% |
+| **5** | **4** | **30.138** | **111.03 ms** | **3.352** | **59.30%** |
+| 6 | 5 | 25.532 | 134.06 ms | 3.429 | 49.08% |
+| 7 | 6 | 26.535 | 136.81 ms | 3.636 | 44.52% |
+| 8 | 7 | 26.310 | 140.54 ms | 3.704 | 39.21% |
+
+Width 5 remains the optimum on this prompt. The width-5-to-6 transition adds
+23.03 ms per round and loses 15.3% throughput; widths 6 through 8 are all
+dominated by width 5. Raw results are in
+`/Users/troff/play/kvquant-experiments/results/q4soa-full-gamut-0831.tsv`.
+
+The matched pre-storage sweep used ordinary Q4_0 files plus runtime SoA side
+buffers. Across widths 2 through 8, stored-layout round-time changes were
+`+0.35%, +0.12%, +0.74%, -0.13%, +0.27%, +0.62%, +0.33%`. Throughput changes
+cannot be read as pure layout effects because the deterministic output and
+acceptance trajectories differ. The round-cost result is the relevant one:
+offline storage removes 14.359 GiB without materially changing the width curve.
+
 ## Reuse
 
 Start with `--plan` for every new checkpoint. Selection is structural and does
