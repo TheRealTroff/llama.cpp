@@ -159,6 +159,270 @@ constant half turbo_centroids_4bit_h[16] = {
      0.011349h,  0.034299h,  0.058050h,  0.083292h,
      0.111036h,  0.143016h,  0.182877h,  0.241529h
 };
+#if defined(TURBO_USE_PAIR_LUT)
+// One packed cache byte maps to two centroids.  This halves dynamic LUT loads
+// in the Turbo4 attention hot paths while preserving each path's incumbent
+// arithmetic precision (half in vec FA, float in batched FA).
+constant float2 turbo_pairs_4bit[256] = {
+    float2(-0.241529f, -0.241529f),
+    float2(-0.182877f, -0.241529f),
+    float2(-0.143016f, -0.241529f),
+    float2(-0.111036f, -0.241529f),
+    float2(-0.083292f, -0.241529f),
+    float2(-0.058050f, -0.241529f),
+    float2(-0.034299f, -0.241529f),
+    float2(-0.011349f, -0.241529f),
+    float2(0.011349f, -0.241529f),
+    float2(0.034299f, -0.241529f),
+    float2(0.058050f, -0.241529f),
+    float2(0.083292f, -0.241529f),
+    float2(0.111036f, -0.241529f),
+    float2(0.143016f, -0.241529f),
+    float2(0.182877f, -0.241529f),
+    float2(0.241529f, -0.241529f),
+    float2(-0.241529f, -0.182877f),
+    float2(-0.182877f, -0.182877f),
+    float2(-0.143016f, -0.182877f),
+    float2(-0.111036f, -0.182877f),
+    float2(-0.083292f, -0.182877f),
+    float2(-0.058050f, -0.182877f),
+    float2(-0.034299f, -0.182877f),
+    float2(-0.011349f, -0.182877f),
+    float2(0.011349f, -0.182877f),
+    float2(0.034299f, -0.182877f),
+    float2(0.058050f, -0.182877f),
+    float2(0.083292f, -0.182877f),
+    float2(0.111036f, -0.182877f),
+    float2(0.143016f, -0.182877f),
+    float2(0.182877f, -0.182877f),
+    float2(0.241529f, -0.182877f),
+    float2(-0.241529f, -0.143016f),
+    float2(-0.182877f, -0.143016f),
+    float2(-0.143016f, -0.143016f),
+    float2(-0.111036f, -0.143016f),
+    float2(-0.083292f, -0.143016f),
+    float2(-0.058050f, -0.143016f),
+    float2(-0.034299f, -0.143016f),
+    float2(-0.011349f, -0.143016f),
+    float2(0.011349f, -0.143016f),
+    float2(0.034299f, -0.143016f),
+    float2(0.058050f, -0.143016f),
+    float2(0.083292f, -0.143016f),
+    float2(0.111036f, -0.143016f),
+    float2(0.143016f, -0.143016f),
+    float2(0.182877f, -0.143016f),
+    float2(0.241529f, -0.143016f),
+    float2(-0.241529f, -0.111036f),
+    float2(-0.182877f, -0.111036f),
+    float2(-0.143016f, -0.111036f),
+    float2(-0.111036f, -0.111036f),
+    float2(-0.083292f, -0.111036f),
+    float2(-0.058050f, -0.111036f),
+    float2(-0.034299f, -0.111036f),
+    float2(-0.011349f, -0.111036f),
+    float2(0.011349f, -0.111036f),
+    float2(0.034299f, -0.111036f),
+    float2(0.058050f, -0.111036f),
+    float2(0.083292f, -0.111036f),
+    float2(0.111036f, -0.111036f),
+    float2(0.143016f, -0.111036f),
+    float2(0.182877f, -0.111036f),
+    float2(0.241529f, -0.111036f),
+    float2(-0.241529f, -0.083292f),
+    float2(-0.182877f, -0.083292f),
+    float2(-0.143016f, -0.083292f),
+    float2(-0.111036f, -0.083292f),
+    float2(-0.083292f, -0.083292f),
+    float2(-0.058050f, -0.083292f),
+    float2(-0.034299f, -0.083292f),
+    float2(-0.011349f, -0.083292f),
+    float2(0.011349f, -0.083292f),
+    float2(0.034299f, -0.083292f),
+    float2(0.058050f, -0.083292f),
+    float2(0.083292f, -0.083292f),
+    float2(0.111036f, -0.083292f),
+    float2(0.143016f, -0.083292f),
+    float2(0.182877f, -0.083292f),
+    float2(0.241529f, -0.083292f),
+    float2(-0.241529f, -0.058050f),
+    float2(-0.182877f, -0.058050f),
+    float2(-0.143016f, -0.058050f),
+    float2(-0.111036f, -0.058050f),
+    float2(-0.083292f, -0.058050f),
+    float2(-0.058050f, -0.058050f),
+    float2(-0.034299f, -0.058050f),
+    float2(-0.011349f, -0.058050f),
+    float2(0.011349f, -0.058050f),
+    float2(0.034299f, -0.058050f),
+    float2(0.058050f, -0.058050f),
+    float2(0.083292f, -0.058050f),
+    float2(0.111036f, -0.058050f),
+    float2(0.143016f, -0.058050f),
+    float2(0.182877f, -0.058050f),
+    float2(0.241529f, -0.058050f),
+    float2(-0.241529f, -0.034299f),
+    float2(-0.182877f, -0.034299f),
+    float2(-0.143016f, -0.034299f),
+    float2(-0.111036f, -0.034299f),
+    float2(-0.083292f, -0.034299f),
+    float2(-0.058050f, -0.034299f),
+    float2(-0.034299f, -0.034299f),
+    float2(-0.011349f, -0.034299f),
+    float2(0.011349f, -0.034299f),
+    float2(0.034299f, -0.034299f),
+    float2(0.058050f, -0.034299f),
+    float2(0.083292f, -0.034299f),
+    float2(0.111036f, -0.034299f),
+    float2(0.143016f, -0.034299f),
+    float2(0.182877f, -0.034299f),
+    float2(0.241529f, -0.034299f),
+    float2(-0.241529f, -0.011349f),
+    float2(-0.182877f, -0.011349f),
+    float2(-0.143016f, -0.011349f),
+    float2(-0.111036f, -0.011349f),
+    float2(-0.083292f, -0.011349f),
+    float2(-0.058050f, -0.011349f),
+    float2(-0.034299f, -0.011349f),
+    float2(-0.011349f, -0.011349f),
+    float2(0.011349f, -0.011349f),
+    float2(0.034299f, -0.011349f),
+    float2(0.058050f, -0.011349f),
+    float2(0.083292f, -0.011349f),
+    float2(0.111036f, -0.011349f),
+    float2(0.143016f, -0.011349f),
+    float2(0.182877f, -0.011349f),
+    float2(0.241529f, -0.011349f),
+    float2(-0.241529f, 0.011349f),
+    float2(-0.182877f, 0.011349f),
+    float2(-0.143016f, 0.011349f),
+    float2(-0.111036f, 0.011349f),
+    float2(-0.083292f, 0.011349f),
+    float2(-0.058050f, 0.011349f),
+    float2(-0.034299f, 0.011349f),
+    float2(-0.011349f, 0.011349f),
+    float2(0.011349f, 0.011349f),
+    float2(0.034299f, 0.011349f),
+    float2(0.058050f, 0.011349f),
+    float2(0.083292f, 0.011349f),
+    float2(0.111036f, 0.011349f),
+    float2(0.143016f, 0.011349f),
+    float2(0.182877f, 0.011349f),
+    float2(0.241529f, 0.011349f),
+    float2(-0.241529f, 0.034299f),
+    float2(-0.182877f, 0.034299f),
+    float2(-0.143016f, 0.034299f),
+    float2(-0.111036f, 0.034299f),
+    float2(-0.083292f, 0.034299f),
+    float2(-0.058050f, 0.034299f),
+    float2(-0.034299f, 0.034299f),
+    float2(-0.011349f, 0.034299f),
+    float2(0.011349f, 0.034299f),
+    float2(0.034299f, 0.034299f),
+    float2(0.058050f, 0.034299f),
+    float2(0.083292f, 0.034299f),
+    float2(0.111036f, 0.034299f),
+    float2(0.143016f, 0.034299f),
+    float2(0.182877f, 0.034299f),
+    float2(0.241529f, 0.034299f),
+    float2(-0.241529f, 0.058050f),
+    float2(-0.182877f, 0.058050f),
+    float2(-0.143016f, 0.058050f),
+    float2(-0.111036f, 0.058050f),
+    float2(-0.083292f, 0.058050f),
+    float2(-0.058050f, 0.058050f),
+    float2(-0.034299f, 0.058050f),
+    float2(-0.011349f, 0.058050f),
+    float2(0.011349f, 0.058050f),
+    float2(0.034299f, 0.058050f),
+    float2(0.058050f, 0.058050f),
+    float2(0.083292f, 0.058050f),
+    float2(0.111036f, 0.058050f),
+    float2(0.143016f, 0.058050f),
+    float2(0.182877f, 0.058050f),
+    float2(0.241529f, 0.058050f),
+    float2(-0.241529f, 0.083292f),
+    float2(-0.182877f, 0.083292f),
+    float2(-0.143016f, 0.083292f),
+    float2(-0.111036f, 0.083292f),
+    float2(-0.083292f, 0.083292f),
+    float2(-0.058050f, 0.083292f),
+    float2(-0.034299f, 0.083292f),
+    float2(-0.011349f, 0.083292f),
+    float2(0.011349f, 0.083292f),
+    float2(0.034299f, 0.083292f),
+    float2(0.058050f, 0.083292f),
+    float2(0.083292f, 0.083292f),
+    float2(0.111036f, 0.083292f),
+    float2(0.143016f, 0.083292f),
+    float2(0.182877f, 0.083292f),
+    float2(0.241529f, 0.083292f),
+    float2(-0.241529f, 0.111036f),
+    float2(-0.182877f, 0.111036f),
+    float2(-0.143016f, 0.111036f),
+    float2(-0.111036f, 0.111036f),
+    float2(-0.083292f, 0.111036f),
+    float2(-0.058050f, 0.111036f),
+    float2(-0.034299f, 0.111036f),
+    float2(-0.011349f, 0.111036f),
+    float2(0.011349f, 0.111036f),
+    float2(0.034299f, 0.111036f),
+    float2(0.058050f, 0.111036f),
+    float2(0.083292f, 0.111036f),
+    float2(0.111036f, 0.111036f),
+    float2(0.143016f, 0.111036f),
+    float2(0.182877f, 0.111036f),
+    float2(0.241529f, 0.111036f),
+    float2(-0.241529f, 0.143016f),
+    float2(-0.182877f, 0.143016f),
+    float2(-0.143016f, 0.143016f),
+    float2(-0.111036f, 0.143016f),
+    float2(-0.083292f, 0.143016f),
+    float2(-0.058050f, 0.143016f),
+    float2(-0.034299f, 0.143016f),
+    float2(-0.011349f, 0.143016f),
+    float2(0.011349f, 0.143016f),
+    float2(0.034299f, 0.143016f),
+    float2(0.058050f, 0.143016f),
+    float2(0.083292f, 0.143016f),
+    float2(0.111036f, 0.143016f),
+    float2(0.143016f, 0.143016f),
+    float2(0.182877f, 0.143016f),
+    float2(0.241529f, 0.143016f),
+    float2(-0.241529f, 0.182877f),
+    float2(-0.182877f, 0.182877f),
+    float2(-0.143016f, 0.182877f),
+    float2(-0.111036f, 0.182877f),
+    float2(-0.083292f, 0.182877f),
+    float2(-0.058050f, 0.182877f),
+    float2(-0.034299f, 0.182877f),
+    float2(-0.011349f, 0.182877f),
+    float2(0.011349f, 0.182877f),
+    float2(0.034299f, 0.182877f),
+    float2(0.058050f, 0.182877f),
+    float2(0.083292f, 0.182877f),
+    float2(0.111036f, 0.182877f),
+    float2(0.143016f, 0.182877f),
+    float2(0.182877f, 0.182877f),
+    float2(0.241529f, 0.182877f),
+    float2(-0.241529f, 0.241529f),
+    float2(-0.182877f, 0.241529f),
+    float2(-0.143016f, 0.241529f),
+    float2(-0.111036f, 0.241529f),
+    float2(-0.083292f, 0.241529f),
+    float2(-0.058050f, 0.241529f),
+    float2(-0.034299f, 0.241529f),
+    float2(-0.011349f, 0.241529f),
+    float2(0.011349f, 0.241529f),
+    float2(0.034299f, 0.241529f),
+    float2(0.058050f, 0.241529f),
+    float2(0.083292f, 0.241529f),
+    float2(0.111036f, 0.241529f),
+    float2(0.143016f, 0.241529f),
+    float2(0.182877f, 0.241529f),
+    float2(0.241529f, 0.241529f)
+};
+#endif
+
 // ===== end TurboQuant constants =====
 
 static inline int best_index_int8(int n, constant float * val, float x) {
@@ -759,11 +1023,21 @@ void dequantize_turbo3_0_t4(device const block_turbo3_0 * xb, short il, thread t
 template <typename type4x4>
 void dequantize_turbo4_0(device const block_turbo4_0 * xb, short il, thread type4x4 & reg) {
     const float norm = xb->norm;
+#if defined(TURBO_USE_PAIR_LUT)
+    FOR_UNROLL (short i = 0; i < 8; ++i) {
+        const float2 p = turbo_pairs_4bit[xb->qs[il*8 + i]]*norm;
+        const short row = i >> 1;
+        const short col = (i & 1) << 1;
+        reg[row][col + 0] = p[0];
+        reg[row][col + 1] = p[1];
+    }
+#else
     for (int i = 0; i < 16; i++) {
         const int j = il*16 + i;
         const int q = (xb->qs[j/2] >> ((j % 2)*4)) & 0xF;
         reg[i/4][i%4] = turbo_centroids_4bit[q]*norm;
     }
+#endif
 }
 
 template <typename type4>
@@ -10551,6 +10825,7 @@ constant int32_t FC_flash_attn_ext_ns10 [[function_constant(FC_FLASH_ATTN_EXT + 
 constant int32_t FC_flash_attn_ext_ns20 [[function_constant(FC_FLASH_ATTN_EXT + 21)]];
 constant int32_t FC_flash_attn_ext_nsg  [[function_constant(FC_FLASH_ATTN_EXT + 22)]];
 constant int32_t FC_flash_attn_ext_nwg  [[function_constant(FC_FLASH_ATTN_EXT + 23)]];
+constant int32_t FC_flash_attn_ext_gqa_heads [[function_constant(FC_FLASH_ATTN_EXT + 24)]];
 
 // ref: https://arxiv.org/pdf/2307.08691.pdf
 template<
@@ -10581,6 +10856,7 @@ template<
     short DV,         // V head size
     short Q,          // queries per threadgroup
     short C,          // cache items per threadgroup
+    short GQAH,       // query heads sharing one KV head in this threadgroup grid
     short NSG>        // number of simd groups
 void kernel_flash_attn_ext_impl(
         constant ggml_metal_kargs_flash_attn_ext & args,
@@ -10609,6 +10885,8 @@ void kernel_flash_attn_ext_impl(
     const ushort iq3 = tgpig[2]/NWG;
     const ushort iq2 = tgpig[1];
     const ushort iq1 = tgpig[0]*Q;
+    const ushort iqh0 = tgpig[1]*GQAH;
+    const uint   iqr0 = tgpig[0]*Q;
 
 #define NS10 (FC_flash_attn_ext_ns10)
 #define NS20 (FC_flash_attn_ext_ns20)
@@ -10662,15 +10940,21 @@ void kernel_flash_attn_ext_impl(
 
     FOR_UNROLL (short jj = 0; jj < NQ; ++jj) {
         const short j = jj*NSG + sgitg;
-
-        pm2[jj] = (device const half2 *) ((device const char *) mask + (iq1 + j)*args.nb31 + (iq2%args.ne32)*args.nb32 + (iq3%args.ne33)*args.nb33);
+        if constexpr (GQAH == 1) {
+            pm2[jj] = (device const half2 *) ((device const char *) mask + (iq1 + j)*args.nb31 + (iq2%args.ne32)*args.nb32 + (iq3%args.ne33)*args.nb33);
+        } else {
+            const uint ir = iqr0 + j;
+            const uint it = ir % args.ne01;
+            const uint ih = iqh0 + ir / args.ne01;
+            pm2[jj] = (device const half2 *) ((device const char *) mask + it*args.nb31 + (ih%args.ne32)*args.nb32 + (iq3%args.ne33)*args.nb33);
+        }
 
         // these advance one chunk per loop iteration, so they start at this workgroup's
         // first chunk and step by NWG chunks below
         pm2[jj] += iwg*NW;
     }
 
-    {
+    if constexpr (GQAH == 1) {
         const int32_t nblk1 = ((args.ne01 + Q - 1)/Q);
         const int32_t nblk0 = ((args.ne11 + C - 1)/C);
 
@@ -10678,9 +10962,11 @@ void kernel_flash_attn_ext_impl(
     }
 
     {
-        q += iq1*args.nb01 + iq2*args.nb02 + iq3*args.nb03;
+        if constexpr (GQAH == 1) {
+            q += iq1*args.nb01 + iq2*args.nb02 + iq3*args.nb03;
+        }
 
-        const short ikv2 = iq2/(args.ne02/args.ne_12_2);
+        const short ikv2 = (GQAH == 1 ? iq2 : iqh0)/(args.ne02/args.ne_12_2);
         const short ikv3 = iq3/(args.ne03/args.ne_12_3);
 
         k += ikv2*args.nb12 + ikv3*args.nb13;
@@ -10691,10 +10977,21 @@ void kernel_flash_attn_ext_impl(
     FOR_UNROLL (short jj = 0; jj < NQ; ++jj) {
         const short j = jj*NSG + sgitg;
 
-        device const float4 * q4 = (device const float4 *) ((device const char *) q + j*args.nb01);
+        device const float4 * q4;
+        bool valid;
+        if constexpr (GQAH == 1) {
+            q4 = (device const float4 *) ((device const char *) q + j*args.nb01);
+            valid = iq1 + j < args.ne01;
+        } else {
+            const uint ir = iqr0 + j;
+            const uint it = ir % args.ne01;
+            const uint ih = iqh0 + ir / args.ne01;
+            q4 = (device const float4 *) ((device const char *) q + it*args.nb01 + ih*args.nb02 + iq3*args.nb03);
+            valid = ir < GQAH*args.ne01 && ih < args.ne02;
+        }
 
         for (short i = tiisg; i < DK4; i += NW) {
-            if (iq1 + j < args.ne01) {
+            if (valid) {
                 sq4[j*DK4 + i] = (q4_t) q4[i];
             } else {
                 sq4[j*DK4 + i] = 0;
@@ -10748,7 +11045,7 @@ void kernel_flash_attn_ext_impl(
                 v    = k + args.nb11*C*args.ne_12_2*args.ne_12_3;
                 mask = v + args.nb21*C*args.ne_12_2*args.ne_12_3;
 
-                const short ikv2 = iq2/(args.ne02/args.ne_12_2);
+                const short ikv2 = (GQAH == 1 ? iq2 : iqh0)/(args.ne02/args.ne_12_2);
                 const short ikv3 = iq3/(args.ne03/args.ne_12_3);
 
                 k += (ikv2 + ikv3*args.ne_12_2)*args.nb11*C;
@@ -10770,10 +11067,20 @@ void kernel_flash_attn_ext_impl(
                     FOR_UNROLL (short jj = 0; jj < NQ; ++jj) {
                         const short j = jj*NSG + sgitg;
 
-                        pm2[jj] = (device const half2 *) ((device const half *) mask +
-                                (iq1 + j)*C +
-                                (iq2%args.ne32)*(C*args.ne31) +
-                                (iq3%args.ne33)*(C*args.ne31*args.ne32));
+                        if constexpr (GQAH == 1) {
+                            pm2[jj] = (device const half2 *) ((device const half *) mask +
+                                    (iq1 + j)*C +
+                                    (iq2%args.ne32)*(C*args.ne31) +
+                                    (iq3%args.ne33)*(C*args.ne31*args.ne32));
+                        } else {
+                            const uint ir = iqr0 + j;
+                            const uint it = ir % args.ne01;
+                            const uint ih = iqh0 + ir / args.ne01;
+                            pm2[jj] = (device const half2 *) ((device const half *) mask +
+                                    it*C +
+                                    (ih%args.ne32)*(C*args.ne31) +
+                                    (iq3%args.ne33)*(C*args.ne31*args.ne32));
+                        }
                     }
                 }
 
@@ -10784,7 +11091,9 @@ void kernel_flash_attn_ext_impl(
 
             // read the mask into shared mem
             if (FC_flash_attn_ext_has_mask) {
-                blk_cur = blk[ic0];
+                if constexpr (GQAH == 1) {
+                    blk_cur = blk[ic0];
+                }
 
                 if (blk_cur == 0) {
                     FOR_UNROLL (short jj = 0; jj < NQ; ++jj) {
@@ -10799,7 +11108,15 @@ void kernel_flash_attn_ext_impl(
                         const short j = jj*NSG + sgitg;
 
                         if (FC_flash_attn_ext_bc_mask) {
-                            sm2[j*SH + tiisg] = (iq1 + j) < args.ne31 ? pm2[jj][tiisg] : half2(-MAXHALF, -MAXHALF);
+                            bool valid;
+                            if constexpr (GQAH == 1) {
+                                valid = iq1 + j < args.ne31;
+                            } else {
+                                const uint ir = iqr0 + j;
+                                const uint ih = iqh0 + ir / args.ne01;
+                                valid = ir < GQAH*args.ne01 && ih < args.ne02 && ir % args.ne01 < args.ne31;
+                            }
+                            sm2[j*SH + tiisg] = valid ? pm2[jj][tiisg] : half2(-MAXHALF, -MAXHALF);
                         } else {
                             sm2[j*SH + tiisg] = pm2[jj][tiisg];
                         }
@@ -11183,11 +11500,24 @@ void kernel_flash_attn_ext_impl(
     // store to global memory
     for (short jj = 0; jj < NQ; ++jj) {
         const short j = jj*NSG + sgitg;
-        if (iq1 + j >= args.ne01) {
+        uint it;
+        uint ih;
+        if constexpr (GQAH == 1) {
+            it = iq1 + j;
+            ih = iq2;
+        } else {
+            const uint ir = iqr0 + j;
+            it = ir % args.ne01;
+            ih = iqh0 + ir / args.ne01;
+            if (ir >= GQAH*args.ne01 || ih >= args.ne02) {
+                continue;
+            }
+        }
+        if (it >= args.ne01) {
             break;
         }
 
-        const uint64_t rid = (uint64_t)iq3*args.ne2*args.ne1 + iq2 + (uint64_t)(iq1 + j)*args.ne1;
+        const uint64_t rid = (uint64_t)iq3*args.ne2*args.ne1 + ih + (uint64_t)it*args.ne1;
 
         if (NWG == 1) {
             device float4 * dst4 = (device float4 *) dst + rid*DV4;
@@ -11279,8 +11609,16 @@ kernel void kernel_flash_attn_ext(
       // note: disabled cases to reduce library load time
       //case 1: kernel_flash_attn_ext_impl<FWD_TMPL, 1>(FWD_ARGS); break;
       //case 2: kernel_flash_attn_ext_impl<FWD_TMPL, 2>(FWD_ARGS); break;
-        case 4: kernel_flash_attn_ext_impl<FWD_TMPL, 4>(FWD_ARGS); break;
-        case 8: kernel_flash_attn_ext_impl<FWD_TMPL, 8>(FWD_ARGS); break;
+        case 4:
+            if (FC_flash_attn_ext_gqa_heads == 6) {
+                kernel_flash_attn_ext_impl<FWD_TMPL, 6, 4>(FWD_ARGS);
+            } else {
+                kernel_flash_attn_ext_impl<FWD_TMPL, 1, 4>(FWD_ARGS);
+            }
+            break;
+        case 8:
+            kernel_flash_attn_ext_impl<FWD_TMPL, 1, 8>(FWD_ARGS);
+            break;
     }
 #undef FWD_TMPL
 #undef FWD_ARGS

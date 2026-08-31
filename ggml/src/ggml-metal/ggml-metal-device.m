@@ -234,6 +234,17 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
                     }
                 }
 
+                // Turbo4 batched attention: map each packed cache byte to a centroid
+                // pair.  This wins on pre-M5 hardware; retain an A/B override.
+                {
+                    const char * env = getenv("TURBO_FORCE_PAIR_LUT");
+                    const bool use_pair_lut = env ? env[0] == '1' : !ggml_metal_device_get_props(dev)->has_tensor;
+                    if (use_pair_lut) {
+                        [prep setObject:@"1" forKey:@"TURBO_USE_PAIR_LUT"];
+                        GGML_LOG_INFO("%s: turbo4 batched FA using packed centroid LUT (pre-M5 hardware)\n", __func__);
+                    }
+                }
+
 #if GGML_METAL_EMBED_LIBRARY
                 [prep setObject:@"1" forKey:@"GGML_METAL_EMBED_LIBRARY"];
 #endif

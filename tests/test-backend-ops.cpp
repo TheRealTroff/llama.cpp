@@ -2444,7 +2444,7 @@ struct test_set_rows : public test_case {
     }
 
     double max_nmse_err() override {
-        if (type_dst == GGML_TYPE_Q2_0 || type_dst == GGML_TYPE_Q4_0 || type_dst == GGML_TYPE_Q4_1 ||
+        if (type_dst == GGML_TYPE_Q2_0 || type_dst == GGML_TYPE_Q4_0 || type_dst == GGML_TYPE_Q4_1 || type_dst == GGML_TYPE_TURBO4_0 ||
             type_dst == GGML_TYPE_IQ4_NL ||
             type_dst == GGML_TYPE_Q5_0 || type_dst == GGML_TYPE_Q5_1 || type_dst == GGML_TYPE_Q8_0) {
             // estimate what the max nmse error would be if one quantized value is
@@ -8421,6 +8421,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_set_rows(GGML_TYPE_F16, GGML_TYPE_F16, GGML_TYPE_I32, { 1, 8, 1, 3 }, { 1, 1 }, 2, false));
     test_cases.emplace_back(new test_set_rows(GGML_TYPE_F16, GGML_TYPE_F16, GGML_TYPE_I64, { 1, 8, 1, 3 }, { 1, 1 }, 2, true));
     test_cases.emplace_back(new test_set_rows(GGML_TYPE_F16, GGML_TYPE_F16, GGML_TYPE_I32, { 1, 8, 1, 3 }, { 1, 1 }, 2, true));
+    test_cases.emplace_back(new test_set_rows(GGML_TYPE_F32, GGML_TYPE_TURBO4_0, GGML_TYPE_I64, { 1024, 128, 1, 1 }, { 1, 1 }, 5, false));
 
     for (int mode : { GGML_ROPE_TYPE_NORMAL, GGML_ROPE_TYPE_NEOX, GGML_ROPE_TYPE_MROPE, GGML_ROPE_TYPE_VISION }) {
         for (ggml_type type : {GGML_TYPE_F16, GGML_TYPE_F32}) {
@@ -9882,6 +9883,18 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_flash_attn_ext(64, 128, 4, {1, 1}, 128, 2, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q4_0, GGML_TYPE_Q2_0));
     test_cases.emplace_back(new test_flash_attn_ext(128, 64, 4, {1, 1}, 64, 2, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q2_0, GGML_TYPE_F16));
 
+    // Turbo KV cache coverage for the Qwen3.8-27B attention geometry.  Keep a
+    // short correctness case for both the vector and batched Metal routes;
+    // the long-context variants are also useful as focused performance cases.
+    for (ggml_type type_KV : { GGML_TYPE_F16, GGML_TYPE_TURBO4_0 }) {
+        for (int nb : { 1, 4, 5, 6 }) {
+            test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {6, 1}, 512, nb, true, false, 0, 0,
+                                                            GGML_PREC_F32, type_KV, type_KV));
+            test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {6, 1}, 8448, nb, true, false, 0, 0,
+                                                            GGML_PREC_F32, type_KV, type_KV));
+        }
+    }
+
     // large-KV F16 cases (Qwen3.6-27B geometry and a llama-class control): the upstream matrix
     // stops at kv=1024, blind to long-context FA bugs (e.g. the oneDNN SDPA ordering race on BMG).
     for (int64_t kv : { 4096, 16384 }) {
@@ -10346,6 +10359,28 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
                 test_cases.emplace_back(new test_flash_attn_ext(hs, hs, 8, {nr, 1}, kv, 1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
             }
         }
+    }
+
+    // Qwen3.8-27B target-model decode/verify geometry, paired so that the
+    // Turbo4 cost is measured against the identical F16 dispatch shape.
+    for (ggml_type type_KV : { GGML_TYPE_F16, GGML_TYPE_TURBO4_0 }) {
+        for (int nb : { 1, 4, 5, 6, 7, 8 }) {
+            test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {6, 1}, 8448, nb, true, false, 0, 0,
+                                                            GGML_PREC_F32, type_KV, type_KV));
+        }
+    }
+
+    // Filled 100 Ki-token cache: performance-only coverage for the three GQA-reuse widths.
+    for (ggml_type type_KV : { GGML_TYPE_F16, GGML_TYPE_TURBO4_0 }) {
+        for (int nb : { 4, 5, 6 }) {
+            test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {6, 1}, 102400, nb, true, false, 0, 0,
+                                                            GGML_PREC_F32, type_KV, type_KV));
+        }
+    }
+
+    for (ggml_type type_dst : { GGML_TYPE_F16, GGML_TYPE_TURBO4_0 }) {
+        test_cases.emplace_back(new test_set_rows(GGML_TYPE_F32, type_dst, GGML_TYPE_I64,
+                                                  { 1024, 102400, 1, 1 }, { 1, 1 }, 5, false));
     }
 
     for (int col : {8192, 16384, 32768, 65536, 131072, 262144, 524288}) {

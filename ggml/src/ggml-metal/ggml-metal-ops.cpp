@@ -3689,7 +3689,27 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
     ggml_metal_buffer_id bid_tmp = bid_blk;
     bid_tmp.offs += ggml_metal_op_flash_attn_ext_extra_blk(op);
 
-    if (!ggml_metal_op_flash_attn_ext_use_vec(op)) {
+    // Width four normally takes the vector route, which scans a GQA-shared KV head
+    // once for every (query, head) row.  The Q=8 kernel can instead flatten the four
+    // query rows and six query heads into three tiles, sharing each decoded Turbo4
+    // K/V chunk across the rows in a tile.  Widths five and six already reach this
+    // kernel under the tuned GGML_FA_VEC_MAX=5 route.
+    //
+    // Keep this probe on the same exact geometry as the measured width-five/six
+    // path.  In particular, the no-kvpad restriction avoids mixing the routing
+    // experiment with GQA handling of a padded final cache chunk.  The vector-sized
+    // block-map reservation is larger than the batched route needs at width four.
+    static const int env_fa_gqa_heads = getenv("GGML_FA_GQA_HEADS") ?
+            atoi(getenv("GGML_FA_GQA_HEADS")) : (props_dev->has_tensor ? 1 : 6);
+    const bool is_turbo4_kv = op->src[1]->type == GGML_TYPE_TURBO4_0 || op->src[2]->type == GGML_TYPE_TURBO4_0;
+    const int32_t gqa_ratio = ne12 > 0 && ne02 % ne12 == 0 ? ne02/ne12 : 1;
+    const bool use_gqa_reuse = env_fa_gqa_heads == 6 && is_turbo4_kv &&
+                               ne01 >= 4 && ne01 <= 6 && gqa_ratio == 6 &&
+                               ne02 % 6 == 0 && !has_sinks && !has_bias &&
+                               ne11 % OP_FLASH_ATTN_EXT_NCPSG == 0;
+    const bool use_vec = ggml_metal_op_flash_attn_ext_use_vec(op) && !(use_gqa_reuse && ne01 == 4);
+
+    if (!use_vec) {
         // half8x8 kernel
         const int nqptg = OP_FLASH_ATTN_EXT_NQPSG; // queries per threadgroup
         const int ncpsg = OP_FLASH_ATTN_EXT_NCPSG; // cache values per simdgroup
@@ -3740,7 +3760,10 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
             need_sync = true;
         }
 
-        if (has_mask) {
+        // The GQA kernel addresses each query row's broadcast mask directly.  Its
+        // flattened (query, head) grid cannot consume the per-Q-tile classification
+        // map, so do not scan the entire mask to produce a buffer it will ignore.
+        if (has_mask && !use_gqa_reuse) {
             assert(ggml_metal_op_flash_attn_ext_extra_blk(op) != 0);
 
             ggml_metal_kargs_flash_attn_ext_blk args0 = {
@@ -3851,17 +3874,39 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
         // min(ne01, 32)*ne02*ne03 rows -- prefill-sized batches would overflow it, and they
         // have plenty of threadgroups already.
         static const int env_fa_mm_nwg = getenv("GGML_FA_MM_NWG") ? atoi(getenv("GGML_FA_MM_NWG")) : 1;
+        static const int env_fa_turbo_nwg = getenv("GGML_FA_TURBO_NWG") ? atoi(getenv("GGML_FA_TURBO_NWG")) : 0;
+
+        const int requested_nwg = is_turbo4_kv && env_fa_turbo_nwg > 0 ? env_fa_turbo_nwg : env_fa_mm_nwg;
 
         int32_t nwg = 1;
-        if (env_fa_mm_nwg > 1 && ne01 <= 32) {
-            nwg = std::min<int32_t>(env_fa_mm_nwg, 32);
+        if (requested_nwg > 1 && ne01 <= 32) {
+            nwg = std::min<int32_t>(requested_nwg, 32);
 
             // never launch more workgroups than there are cache chunks
             nwg = std::min<int32_t>(nwg, (ne11 + ncpsg - 1)/ncpsg);
             nwg = std::max<int32_t>(nwg, 1);
         }
 
-        auto pipeline = ggml_metal_library_get_pipeline_flash_attn_ext(lib, op, has_mask, has_sinks, has_bias, has_scap, has_kvpad, nsg, nwg);
+        // A Qwen3.8-27B KV head is shared by six query heads.  Flatten those heads into
+        // the existing Q=8 row tile so each Turbo4 K/V chunk is dequantized once for up
+        // to eight (query, head) rows.  This is transient tile reuse: no expanded cache
+        // is allocated.  Restrict the first probe to the exact safe geometry and to
+        // widths where it reduces the number of cache passes.
+        // Pre-M5 benefits from the reuse by default; keep newer tensor hardware on the
+        // established path until it is measured there.  GGML_FA_GQA_HEADS=1/6 is the
+        // per-process A/B override.
+        const int32_t gqa_heads = use_gqa_reuse ? 6 : 1;
+
+        if (gqa_heads == 6) {
+            static bool logged = false;
+            if (!logged) {
+                GGML_LOG_INFO("%s: Turbo4 FA sharing each decoded KV tile across six GQA heads\n", __func__);
+                logged = true;
+            }
+        }
+
+        auto pipeline = ggml_metal_library_get_pipeline_flash_attn_ext(
+                lib, op, has_mask, has_sinks, has_bias, has_scap, has_kvpad, nsg, nwg, gqa_heads);
 
         ggml_metal_encoder_set_pipeline(enc, pipeline);
         ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);
@@ -3876,7 +3921,9 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
 
         ggml_metal_encoder_set_threadgroup_memory_size(enc, smem, 0);
 
-        ggml_metal_encoder_dispatch_threadgroups(enc, (ne01 + nqptg - 1)/nqptg, ne02, ne03*nwg, 32, nsg, 1);
+        ggml_metal_encoder_dispatch_threadgroups(enc,
+                (ne01*gqa_heads + nqptg - 1)/nqptg, (ne02 + gqa_heads - 1)/gqa_heads, ne03*nwg,
+                32, nsg, 1);
 
         if (nwg > 1) {
             // sanity checks
