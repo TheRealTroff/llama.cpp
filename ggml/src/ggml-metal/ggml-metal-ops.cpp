@@ -3689,25 +3689,26 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
     ggml_metal_buffer_id bid_tmp = bid_blk;
     bid_tmp.offs += ggml_metal_op_flash_attn_ext_extra_blk(op);
 
-    // Width four normally takes the vector route, which scans a GQA-shared KV head
-    // once for every (query, head) row.  The Q=8 kernel can instead flatten the four
-    // query rows and six query heads into three tiles, sharing each decoded Turbo4
-    // K/V chunk across the rows in a tile.  Widths five and six already reach this
-    // kernel under the tuned GGML_FA_VEC_MAX=5 route.
+    // Widths three and four normally take the vector route, which scans a GQA-shared
+    // KV head once for every (query, head) row.  The Q=8 kernel can instead flatten
+    // the query rows and six query heads into three tiles: 18 logical rows plus six
+    // padded rows at width three, or 24 logical rows at width four.  Each decoded
+    // Turbo4 K/V chunk is shared across the rows in a tile.  Widths five and six
+    // already reach this kernel under the tuned GGML_FA_VEC_MAX=5 route.
     //
     // Keep this probe on the same exact geometry as the measured width-five/six
     // path.  In particular, the no-kvpad restriction avoids mixing the routing
     // experiment with GQA handling of a padded final cache chunk.  The vector-sized
-    // block-map reservation is larger than the batched route needs at width four.
+    // block-map reservation is larger than the batched route needs at these widths.
     static const int env_fa_gqa_heads = getenv("GGML_FA_GQA_HEADS") ?
             atoi(getenv("GGML_FA_GQA_HEADS")) : (props_dev->has_tensor ? 1 : 6);
     const bool is_turbo4_kv = op->src[1]->type == GGML_TYPE_TURBO4_0 || op->src[2]->type == GGML_TYPE_TURBO4_0;
     const int32_t gqa_ratio = ne12 > 0 && ne02 % ne12 == 0 ? ne02/ne12 : 1;
     const bool use_gqa_reuse = env_fa_gqa_heads == 6 && is_turbo4_kv &&
-                               ne01 >= 4 && ne01 <= 6 && gqa_ratio == 6 &&
+                               ne01 >= 3 && ne01 <= 6 && gqa_ratio == 6 &&
                                ne02 % 6 == 0 && !has_sinks && !has_bias &&
                                ne11 % OP_FLASH_ATTN_EXT_NCPSG == 0;
-    const bool use_vec = ggml_metal_op_flash_attn_ext_use_vec(op) && !(use_gqa_reuse && ne01 == 4);
+    const bool use_vec = ggml_metal_op_flash_attn_ext_use_vec(op) && !(use_gqa_reuse && ne01 <= 4);
 
     if (!use_vec) {
         // half8x8 kernel
@@ -3875,8 +3876,13 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
         // have plenty of threadgroups already.
         static const int env_fa_mm_nwg = getenv("GGML_FA_MM_NWG") ? atoi(getenv("GGML_FA_MM_NWG")) : 1;
         static const int env_fa_turbo_nwg = getenv("GGML_FA_TURBO_NWG") ? atoi(getenv("GGML_FA_TURBO_NWG")) : 0;
+        static const int env_fa_gqa_w3_nwg = getenv("GGML_FA_GQA_W3_NWG") ? atoi(getenv("GGML_FA_GQA_W3_NWG")) : 0;
 
-        const int requested_nwg = is_turbo4_kv && env_fa_turbo_nwg > 0 ? env_fa_turbo_nwg : env_fa_mm_nwg;
+        // Width three leaves a partially-filled final Q tile and benefits from its own
+        // occupancy setting.  Keep it opt-in so untuned GPUs inherit the general setting.
+        const int requested_nwg = is_turbo4_kv && env_fa_turbo_nwg > 0 ? env_fa_turbo_nwg :
+                                  use_gqa_reuse && ne01 == 3 && env_fa_gqa_w3_nwg > 0 ? env_fa_gqa_w3_nwg :
+                                  env_fa_mm_nwg;
 
         int32_t nwg = 1;
         if (requested_nwg > 1 && ne01 <= 32) {
