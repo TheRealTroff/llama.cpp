@@ -136,6 +136,21 @@ GGML_MM_ACC_HALF=1 GGML_MM_N64=1 \
     -md Qwen3.8-27B-DFlash2-pureQ4_0.gguf --spec-type draft-dflash --spec-draft-n-max 4
 ```
 
+**Second product line, 2026-09-01: the Turbo4 KV pick.** Same flags plus the Turbo4 FA
+GQA tile-reuse stack, `-ctk turbo4 -ctv turbo4`, a 100K allocation and DFlash depth 3
+(verify width 4, Turbo4's best width). It trades nothing for memory any more: 4.65 GiB
+less RSS than f16 at every width, and at width 4 it is 2.1% FASTER per round than f16 at
+the same width (104.9 vs 107.1 ms; 29.5 t/s at 600 tokens, hash `12c3dc6bb2dd`). Its own
+lineage is separate from the f16 shas above. Runnable as `TURBO=1 perf/run-prod-pick.sh`
+(`TURBO_PICK_ENV`); measured on the SOA-V1 GGUFs. Full record, flag table, the
+acceptance question and the open quality measurement: **`turbo4-fa-gqa-reuse.md`**.
+
+```
+<the f16 pick env above> TURBO_AUTO_ASYMMETRIC=0 GGML_FA_GQA_HEADS=4,6 GGML_FA_GQA4_NWG=6 GGML_FA_GQA_W3_NWG=13 \
+  llama-server -m Qwen3.8-27B-uniform-Q4_0-SOA-V1.gguf -c 102400 -fa on -ctk turbo4 -ctv turbo4 \
+    -md Qwen3.8-27B-DFlash2-pureQ4_0-SOA-V1.gguf --spec-type draft-dflash --spec-draft-n-max 3
+```
+
 The previous pick (n6+skinny, no repack) was:
 
 ```
@@ -167,6 +182,11 @@ What each flag buys, and where it came from:
 | `GGML_FA_VEC_MAX=5` | 20 | FA vec/mm routing cutoff. **5, not 4** - at 4 an MTP-path FA call reroutes and output changes | flash-attn-mm-split.md |
 | `GGML_FA_MM_NWG=8` | 1 | KV split for the mm FA kernel, -60% FA | flash-attn-mm-split.md |
 | `GGML_GDN_FUSE_WB=1` | off | GDN writes the state cache directly, drops ~2.1 GB/round | gdn-writeback-fusion.md |
+| `GGML_FA_GQA_HEADS=4,6` | **auto: 6 on pre-M5 with Turbo4 KV, off on tensor hw** (Turbo4 line only) | Turbo4 FA flattens the query heads sharing a KV head into the Q8 tile; widths 3-6, GQA 4/6. Width 4: 5.3x kernel, -22.9% round. Default-on is a departure from the opt-in convention; the pick sets it explicitly | turbo4-fa-gqa-reuse.md |
+| `GGML_FA_GQA4_NWG=6` | 0 (inherit MM_NWG) | KV split for the drafter's GQA4 reuse route | turbo4-fa-gqa-reuse.md |
+| `GGML_FA_GQA_W3_NWG=13` | 0 (inherit) | KV split for the width-3 GQA6 reuse route | turbo4-fa-gqa-reuse.md |
+| `GGML_FA_TURBO_NWG` | 0 (inherit) | KV split override for any Turbo4 batched FA; unset in the pick | turbo4-fa-gqa-reuse.md |
+| `TURBO_FORCE_PAIR_LUT` | **auto: on for pre-M5** | compile-time centroid-pair LUT in the Turbo4 FA paths. **Unmeasured** - landed without an A/B | turbo4-fa-gqa-reuse.md |
 
 Model files are not interchangeable: the target must be the byte-uniform Q4_0 build and
 the drafter must be the pure-Q4_0 requant. Both fast paths are hard-gated on

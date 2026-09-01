@@ -71,10 +71,27 @@ PICK_ENV=(GGML_MV_NC=2 GGML_MM_SKINNY=6 GGML_MM_SKINNY_SOA=1
           GGML_METAL_GET_MEMCPY=1
           DFLASH_FUSED_INJECT=1 DFLASH_ASYNC_INJECT=1 LLAMA_DRAFT_WINDOW=1024
           GGML_MM_ACC_HALF=1 GGML_MM_N64=1)
+# The Turbo4 KV line (2026-09-01, perf/turbo4-fa-gqa-reuse.md): the same flags plus the
+# Turbo4 FA GQA tile-reuse stack. GQA_HEADS is auto-on for GQA6 on pre-M5 hardware, but
+# the pick names it so the measurement never depends on a default. GQA4_NWG=6 and
+# W3_NWG=13 are the measured KV splits for the drafter and width-3 routes. Runs at a
+# 100K allocation on the SOA-V1 GGUFs with DFlash depth 3 (verify width 4, Turbo4's best
+# width: 2.1% faster per round than f16 at the same width, 4.65 GiB less RSS). Opt in
+# with TURBO=1; the f16 arms above are unaffected.
+TURBO_PICK_ENV=("${PICK_ENV[@]}" TURBO_AUTO_ASYMMETRIC=0
+                GGML_FA_GQA_HEADS=4,6 GGML_FA_GQA4_NWG=6 GGML_FA_GQA_W3_NWG=13)
+TURBO=${TURBO:-0}
+# LV=5 (with GGML_METAL_LOG_LEVEL=2 in the environment) makes the server log name every
+# compiled pipeline, which is how a route is proved; default verbosity hides it.
+LV=${LV:-}
+TURBO_CTX=${TURBO_CTX:-102400}
+M_TURBO=${M_TURBO:-/Users/troff/play/Qwen3.8-27B-uniform-Q4_0-SOA-V1.gguf}
+MD_TURBO=${MD_TURBO:-/Users/troff/play/Qwen3.8-27B-DFlash2-pureQ4_0-SOA-V1.gguf}
 # What the older harnesses set, kept to show the delta is the missing flags.
 PART_ENV=(GGML_MV_NC=2 GGML_MM_SKINNY=5)
 
 PICK_SPEC=(-md "$MD" --spec-type draft-dflash --spec-draft-n-max 4)
+TURBO_SPEC=(-md "$MD_TURBO" --spec-type draft-dflash --spec-draft-n-max 3)
 MTP_SPEC=(--spec-type draft-mtp --spec-draft-n-max 1)
 BASE_SPEC=(--spec-type none)
 
@@ -88,9 +105,17 @@ echo "env    : ${PICK_ENV[*]}"
 echo "spec   : ${PICK_SPEC[*]}"
 echo
 
-# label, n_predict, env-array-name, spec-array-name
+# label, n_predict, env-array-name, spec-array-name, [kv: f16 (default) | turbo4]
+# kv=turbo4 switches the model, the allocation and the cache type to the Turbo4 line;
+# the draft KV stays f16 (a Turbo4 draft KV is a memory-first option, +1.35% round).
 run_one() {
-  local label=$1 npred=$2 envname=$3 specname=$4
+  local label=$1 npred=$2 envname=$3 specname=$4 kv=${5:-f16}
+  local model=$M ctx=10240
+  local -a kvargs=(-ctk f16 -ctv f16)
+  if [ "$kv" = turbo4 ]; then
+    model=$M_TURBO; ctx=$TURBO_CTX
+    kvargs=(-ctk turbo4 -ctv turbo4 -ctkd f16 -ctvd f16)
+  fi
   if [ -n "$ARMS" ]; then
     case " $ARMS " in *" $label "*) ;; *) return 0 ;; esac
   fi
@@ -103,8 +128,8 @@ run_one() {
     echo "[$label] ABORT: port $PORT busy before start (stale server?)"; return 1
   fi
 
-  env "${envv[@]}" "$BIN/llama-server" -m "$M" -c 10240 -fa on -ctk f16 -ctv f16 \
-    "${specv[@]}" --port $PORT >"$slog" 2>&1 &
+  env "${envv[@]}" "$BIN/llama-server" -m "$model" -c "$ctx" -fa on "${kvargs[@]}" \
+    "${specv[@]}" ${LV:+-lv "$LV"} --port $PORT >"$slog" 2>&1 &
   local pid=$!
   local ok=0
   for i in $(seq 1 200); do
@@ -158,6 +183,15 @@ echo
 echo "--- references ---"
 run_one "mtp-d1-300"      300 PICK_ENV MTP_SPEC
 run_one "batch1-300"      300 PICK_ENV BASE_SPEC
+
+if [ "$TURBO" = 1 ]; then
+  echo
+  echo "--- Turbo4 KV line: dflash n3 (verify width 4), 100K allocation, SOA-V1 files ---"
+  echo "    reference 2026-09-01: 29.5 t/s, 104.9 ms/round, sha 12c3dc6bb2dd at 600"
+  run_one "turbo4-n3-600"    600 TURBO_PICK_ENV TURBO_SPEC turbo4
+  run_one "turbo4-n3-600-r2" 600 TURBO_PICK_ENV TURBO_SPEC turbo4
+  run_one "turbo4-n3-300"    300 TURBO_PICK_ENV TURBO_SPEC turbo4
+fi
 
 echo
 echo "--- output identity (same n_predict must share a sha) ---"
