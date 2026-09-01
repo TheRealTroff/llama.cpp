@@ -168,6 +168,10 @@ comparison (respect any no-copying boundary - probe the FORM, not their code).
   about the candidate. Reduce both to equivalent standalone probes; if that cannot be done,
   report the prescreen as unavailable and let uncaptured timing plus a survivor-only GPU
   profile decide.
+  As of 2026-09-01 this is the state for the flash-attention (`kernel_flash_attn_ext_*`)
+  and skinny mul_mm (`kernel_mul_mm_skinny_*`) families: both fail translation with
+  `cannot find private metadata`, while mul_mv kernels still translate (`skinny-soa.md`,
+  `turbo4-fa-gqa-reuse.md`). The same limit applies to `metal-air-layout-control`.
 
 ## What this does not tell you
 

@@ -1,0 +1,3 @@
+interface:
+  display_name: "Metal Air Layout Control"
+  short_description: "Control and validate native AGX layout below MSL"
