@@ -11190,7 +11190,7 @@ void kernel_flash_attn_ext_impl(
                         q8x8_t mq[2];
 
                         // note: too much unroll can tank the performance for large heads
-                        #pragma unroll (MIN(DK8/2, 4*NSG))
+                        #pragma unroll 4
                         for (short i = 0; i < DK8/2; ++i) {
                             simdgroup_barrier(mem_flags::mem_none);
 
