@@ -7060,9 +7060,10 @@ struct test_flash_attn_ext : public test_case {
     const ggml_type type_K;
     const ggml_type type_V;
     std::array<int32_t, 4> permute;
+    const bool kv_view;
 
     std::string vars() override {
-        return VARS_TO_STR14(hsk, hsv, nh, nr23, kv, nb, mask, sinks, max_bias, logit_softcap, prec, type_K, type_V, permute);
+        return VARS_TO_STR15(hsk, hsv, nh, nr23, kv, nb, mask, sinks, max_bias, logit_softcap, prec, type_K, type_V, permute, kv_view);
     }
 
     double max_nmse_err() override {
@@ -7078,9 +7079,9 @@ struct test_flash_attn_ext : public test_case {
 
     test_flash_attn_ext(int64_t hsk = 128, int64_t hsv = 128, int64_t nh = 32, std::array<int64_t, 2> nr23 = {1, 1}, int64_t kv = 96, int64_t nb = 8,
                         bool mask = true, bool sinks = false, float max_bias = 0.0f, float logit_softcap = 0.0f, ggml_prec prec = GGML_PREC_F32,
-                        ggml_type type_K = GGML_TYPE_F16, ggml_type type_V = GGML_TYPE_F16, std::array<int32_t, 4> permute = {0, 1, 2, 3})
+                        ggml_type type_K = GGML_TYPE_F16, ggml_type type_V = GGML_TYPE_F16, std::array<int32_t, 4> permute = {0, 1, 2, 3}, bool kv_view = true)
         : hsk(hsk), hsv(hsv), nh(nh), nr23(nr23), kv(kv), nb(nb), mask(mask), sinks(sinks), max_bias(max_bias), logit_softcap(logit_softcap), prec(prec),
-          type_K(type_K), type_V(type_V), permute(permute) {}
+          type_K(type_K), type_V(type_V), permute(permute), kv_view(kv_view) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         const int64_t hsk_padded = GGML_PAD(hsk, ggml_blck_size(type_K));
@@ -7108,7 +7109,7 @@ struct test_flash_attn_ext : public test_case {
         ggml_tensor * q = create_permuted(GGML_TYPE_F32, hsk_padded, nb, nh*nr23[0], nr23[1], false);
         ggml_set_name(q, "q");
 
-        ggml_tensor * k = create_permuted(type_K,        hsk_padded, kv, nh,         nr23[1], true); // the K tensor is usually a view of the K cache
+        ggml_tensor * k = create_permuted(type_K,        hsk_padded, kv, nh,         nr23[1], kv_view); // the K tensor is usually a view of the K cache
         ggml_set_name(k, "k");
 
         ggml_tensor * v = nullptr;
@@ -7122,7 +7123,7 @@ struct test_flash_attn_ext : public test_case {
             //   - https://github.com/ggml-org/llama.cpp/pull/18986
             v = ggml_view_4d(ctx, k, hsv_padded, kv, nh, nr23[1], k->nb[1], k->nb[2], k->nb[3], 0);
         } else {
-            v = create_permuted(type_V,        hsv_padded, kv, nh,         nr23[1], true); // the V tensor is usually a view of the V cache
+            v = create_permuted(type_V,        hsv_padded, kv, nh,         nr23[1], kv_view); // the V tensor is usually a view of the V cache
         }
         ggml_set_name(v, "v");
 
@@ -9895,6 +9896,18 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
+    // DFlash2 draft-model geometry.  Its 32 query heads share eight KV heads,
+    // so these cover the GQA4 Turbo4 tile-reuse route at the production draft
+    // depths.  KV=1088 is the standard 64-sink + 1024-window live cache.
+    for (int nb : { 3, 4 }) {
+        for (int kv : { 512, 1088 }) {
+            test_cases.emplace_back(new test_flash_attn_ext(128, 128, 8, {4, 1}, kv, nb, true, false, 0, 0,
+                                                            GGML_PREC_F32, GGML_TYPE_TURBO4_0, GGML_TYPE_TURBO4_0));
+        }
+    }
+    test_cases.emplace_back(new test_flash_attn_ext(128, 128, 8, {4, 1}, 1088, 4, true, false, 0, 0,
+                                                    GGML_PREC_F32, GGML_TYPE_TURBO4_0, GGML_TYPE_TURBO4_0, {0, 2, 1, 3}, false));
+
     // large-KV F16 cases (Qwen3.6-27B geometry and a llama-class control): the upstream matrix
     // stops at kv=1024, blind to long-context FA bugs (e.g. the oneDNN SDPA ordering race on BMG).
     for (int64_t kv : { 4096, 16384 }) {
@@ -10376,6 +10389,14 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
             test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {6, 1}, 102400, nb, true, false, 0, 0,
                                                             GGML_PREC_F32, type_KV, type_KV));
         }
+    }
+
+    // DFlash2 depth 3 uses four noise-block rows (anchor + three drafts).
+    // Pair the standard live window with longer contexts to expose the scaling
+    // of its GQA4 Turbo4 route.
+    for (int kv : { 1088, 8448, 102400 }) {
+        test_cases.emplace_back(new test_flash_attn_ext(128, 128, 8, {4, 1}, kv, 4, true, false, 0, 0,
+                                                        GGML_PREC_F32, GGML_TYPE_TURBO4_0, GGML_TYPE_TURBO4_0, {0, 2, 1, 3}, false));
     }
 
     for (ggml_type type_dst : { GGML_TYPE_F16, GGML_TYPE_TURBO4_0 }) {

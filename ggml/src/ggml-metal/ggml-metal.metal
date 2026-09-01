@@ -11610,10 +11610,10 @@ kernel void kernel_flash_attn_ext(
       //case 1: kernel_flash_attn_ext_impl<FWD_TMPL, 1>(FWD_ARGS); break;
       //case 2: kernel_flash_attn_ext_impl<FWD_TMPL, 2>(FWD_ARGS); break;
         case 4:
-            if (FC_flash_attn_ext_gqa_heads == 6) {
-                kernel_flash_attn_ext_impl<FWD_TMPL, 6, 4>(FWD_ARGS);
-            } else {
-                kernel_flash_attn_ext_impl<FWD_TMPL, 1, 4>(FWD_ARGS);
+            switch (FC_flash_attn_ext_gqa_heads) {
+                case 4: kernel_flash_attn_ext_impl<FWD_TMPL, 4, 4>(FWD_ARGS); break;
+                case 6: kernel_flash_attn_ext_impl<FWD_TMPL, 6, 4>(FWD_ARGS); break;
+                default: kernel_flash_attn_ext_impl<FWD_TMPL, 1, 4>(FWD_ARGS); break;
             }
             break;
         case 8:

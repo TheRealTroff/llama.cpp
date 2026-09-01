@@ -21,6 +21,30 @@ static bool ggml_metal_gdn_wb_enabled(void) {
     return res;
 }
 
+// Accept one or more integer choices separated by any non-numeric delimiter.
+// This keeps the historical GGML_FA_GQA_HEADS=6 spelling while allowing a
+// target and drafter with different GQA ratios to opt in together (for example
+// GGML_FA_GQA_HEADS=4,6).
+static bool ggml_metal_env_has_i32(const char * value, int32_t wanted) {
+    while (value && *value) {
+        char * end = nullptr;
+        const long parsed = strtol(value, &end, 10);
+
+        if (end == value) {
+            ++value;
+            continue;
+        }
+
+        if (parsed == wanted) {
+            return true;
+        }
+
+        value = end;
+    }
+
+    return false;
+}
+
 // if cpy moves the state snapshots of a gated-delta-net op into the recurrent state
 // cache, return that op, else null.
 // the op side and the copy side must agree exactly, or the copy gets dropped while the
@@ -3691,22 +3715,22 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
 
     // Widths three and four normally take the vector route, which scans a GQA-shared
     // KV head once for every (query, head) row.  The Q=8 kernel can instead flatten
-    // the query rows and six query heads into three tiles: 18 logical rows plus six
-    // padded rows at width three, or 24 logical rows at width four.  Each decoded
-    // Turbo4 K/V chunk is shared across the rows in a tile.  Widths five and six
-    // already reach this kernel under the tuned GGML_FA_VEC_MAX=5 route.
+    // the query rows and the query heads sharing one KV head into row tiles.  Each
+    // decoded Turbo4 K/V chunk is shared across the rows in a tile.  Widths five and
+    // six already reach this kernel under the tuned GGML_FA_VEC_MAX=5 route.
     //
     // Keep this probe on the same exact geometry as the measured width-five/six
     // path.  In particular, the no-kvpad restriction avoids mixing the routing
     // experiment with GQA handling of a padded final cache chunk.  The vector-sized
     // block-map reservation is larger than the batched route needs at these widths.
-    static const int env_fa_gqa_heads = getenv("GGML_FA_GQA_HEADS") ?
-            atoi(getenv("GGML_FA_GQA_HEADS")) : (props_dev->has_tensor ? 1 : 6);
+    static const char * env_fa_gqa_heads = getenv("GGML_FA_GQA_HEADS");
     const bool is_turbo4_kv = op->src[1]->type == GGML_TYPE_TURBO4_0 || op->src[2]->type == GGML_TYPE_TURBO4_0;
     const int32_t gqa_ratio = ne12 > 0 && ne02 % ne12 == 0 ? ne02/ne12 : 1;
-    const bool use_gqa_reuse = env_fa_gqa_heads == 6 && is_turbo4_kv &&
-                               ne01 >= 3 && ne01 <= 6 && gqa_ratio == 6 &&
-                               ne02 % 6 == 0 && !has_sinks && !has_bias &&
+    const bool gqa_ratio_enabled = env_fa_gqa_heads ? ggml_metal_env_has_i32(env_fa_gqa_heads, gqa_ratio) :
+                                                     (!props_dev->has_tensor && gqa_ratio == 6);
+    const bool use_gqa_reuse = gqa_ratio_enabled && is_turbo4_kv &&
+                               ne01 >= 3 && ne01 <= 6 && (gqa_ratio == 4 || gqa_ratio == 6) &&
+                               !has_sinks && !has_bias &&
                                ne11 % OP_FLASH_ATTN_EXT_NCPSG == 0;
     const bool use_vec = ggml_metal_op_flash_attn_ext_use_vec(op) && !(use_gqa_reuse && ne01 <= 4);
 
@@ -3877,10 +3901,13 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
         static const int env_fa_mm_nwg = getenv("GGML_FA_MM_NWG") ? atoi(getenv("GGML_FA_MM_NWG")) : 1;
         static const int env_fa_turbo_nwg = getenv("GGML_FA_TURBO_NWG") ? atoi(getenv("GGML_FA_TURBO_NWG")) : 0;
         static const int env_fa_gqa_w3_nwg = getenv("GGML_FA_GQA_W3_NWG") ? atoi(getenv("GGML_FA_GQA_W3_NWG")) : 0;
+        static const int env_fa_gqa4_nwg = getenv("GGML_FA_GQA4_NWG") ? atoi(getenv("GGML_FA_GQA4_NWG")) : 0;
 
-        // Width three leaves a partially-filled final Q tile and benefits from its own
-        // occupancy setting.  Keep it opt-in so untuned GPUs inherit the general setting.
+        // Width three and GQA4 have different grid shapes from the GQA6 target path and
+        // benefit from their own occupancy settings.  Keep them opt-in so untuned GPUs
+        // inherit the general setting.
         const int requested_nwg = is_turbo4_kv && env_fa_turbo_nwg > 0 ? env_fa_turbo_nwg :
+                                  use_gqa_reuse && gqa_ratio == 4 && env_fa_gqa4_nwg > 0 ? env_fa_gqa4_nwg :
                                   use_gqa_reuse && ne01 == 3 && env_fa_gqa_w3_nwg > 0 ? env_fa_gqa_w3_nwg :
                                   env_fa_mm_nwg;
 
@@ -3893,20 +3920,22 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
             nwg = std::max<int32_t>(nwg, 1);
         }
 
-        // A Qwen3.8-27B KV head is shared by six query heads.  Flatten those heads into
-        // the existing Q=8 row tile so each Turbo4 K/V chunk is dequantized once for up
-        // to eight (query, head) rows.  This is transient tile reuse: no expanded cache
-        // is allocated.  Restrict the first probe to the exact safe geometry and to
-        // widths where it reduces the number of cache passes.
+        // Flatten the query heads sharing a KV head into the existing Q=8 row tile so
+        // each Turbo4 K/V chunk is dequantized once for up to eight (query, head) rows.
+        // This is transient tile reuse: no expanded cache is allocated.  Restrict the
+        // path to the measured Qwen target (GQA6) and DFlash drafter (GQA4) geometries,
+        // and to widths where it reduces the number of cache passes.
         // Pre-M5 benefits from the reuse by default; keep newer tensor hardware on the
-        // established path until it is measured there.  GGML_FA_GQA_HEADS=1/6 is the
-        // per-process A/B override.
-        const int32_t gqa_heads = use_gqa_reuse ? 6 : 1;
+        // established path until it is measured there.  GGML_FA_GQA_HEADS=1/4/6/4,6
+        // is the per-process A/B override.
+        const int32_t gqa_heads = use_gqa_reuse ? gqa_ratio : 1;
 
-        if (gqa_heads == 6) {
-            static bool logged = false;
+        if (gqa_heads > 1) {
+            static bool logged_gqa4 = false;
+            static bool logged_gqa6 = false;
+            bool & logged = gqa_heads == 4 ? logged_gqa4 : logged_gqa6;
             if (!logged) {
-                GGML_LOG_INFO("%s: Turbo4 FA sharing each decoded KV tile across six GQA heads\n", __func__);
+                GGML_LOG_INFO("%s: Turbo4 FA sharing each decoded KV tile across %d GQA heads\n", __func__, gqa_heads);
                 logged = true;
             }
         }
