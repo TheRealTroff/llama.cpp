@@ -11,7 +11,11 @@ See perf/toolchain-isa-probe.md for how it was identified and calibrated.
 
 Usage:
   agx-spill-probe.py LIB.metallib KERNEL [KERNEL ...] [--cv IDX=VAL]...
-                     [--cvi IDX=VAL]... [--cvb IDX=VAL]... [--arch A]
+                     [--cvi IDX=VAL]... [--cvb IDX=VAL]... [--arch A] [--keep DIR]
+
+The `via` column says which applegpu-nt route produced the binary: 'pkg' (normal)
+or 'stage' (recovered from -stop-after translate when the packager failed with
+"cannot find private metadata"; same native bytes - see translate()).
 
 Example (mul_mv nc sweep, runtime constants nsg=2 ne12=1 r2=1 r3=1):
   agx-spill-probe.py /tmp/x.metallib kernel_mul_mv_q4_0_f32_nc{2,3,4} \
@@ -94,6 +98,20 @@ def measure(gpubin):
 
 
 def translate(lib, kernel, cvs, arch, outdir):
+    """Translate one kernel. Returns (native_path, via, error).
+
+    via is 'pkg' for the normal packaged .gpubin, or 'stage' when the packaged run
+    failed with "cannot find private metadata at offset N" and the translation was
+    recovered from `-stop-after translate`. That error is a bug in applegpu-nt's final
+    packaging step, not in specialization or translation: with a specialized
+    function it fails for every function whose private-metadata offset in the
+    metallib is not one the packager can map back (measured 2026-09-02: in a fresh
+    metallib only the first two functions survive; in the ggml library mul_mv and
+    f16 FA happened to, skinny mul_mm and Turbo4 FA did not). The translate-stage
+    output is a Mach-O with the same __compute section; for kernels that survive
+    both routes the native __TEXT bytes are identical, so 'stage' numbers are the
+    same numbers.
+    """
     script = {
         "pipelines": {"compute_pipelines": [{"compute_function": kernel}]},
     }
@@ -109,12 +127,26 @@ def translate(lib, kernel, cvs, arch, outdir):
     sp = os.path.join(outdir, 'script.mtlp-json')
     out = os.path.join(outdir, 'out.gpubin')
     open(sp, 'w').write(json.dumps(script))
-    r = subprocess.run([os.path.join(BIN, 'applegpu-nt'), '-arch', arch,
-                        '-platform_version', 'macos', '26.0', '26.0',
-                        '-N', sp, lib, '-o', out], capture_output=True, text=True)
-    if r.returncode != 0 or not os.path.exists(out):
-        return None, (r.stdout + r.stderr).strip()
-    return out, None
+    base = [os.path.join(BIN, 'applegpu-nt'), '-arch', arch,
+            '-platform_version', 'macos', '26.0', '26.0', '-N', sp, os.path.abspath(lib)]
+    r = subprocess.run(base + ['-o', out], capture_output=True, text=True)
+    if r.returncode == 0 and os.path.exists(out):
+        return out, 'pkg', None
+    err = (r.stdout + r.stderr).strip()
+    if 'private metadata' not in err:
+        return None, None, err
+
+    # packaging bug: rerun and stop before it. Outputs land in the cwd, named
+    # <script-stem>.compute-pipeline-<n>, so run in a private directory.
+    sd = os.path.join(outdir, 'stage')
+    os.makedirs(sd, exist_ok=True)
+    for f in os.listdir(sd):
+        os.remove(os.path.join(sd, f))
+    r = subprocess.run(base + ['-stop-after', 'translate'], capture_output=True, text=True, cwd=sd)
+    outs = [f for f in os.listdir(sd) if '.compute-pipeline-' in f]
+    if r.returncode != 0 or not outs:
+        return None, None, err + '\n(stage retry also failed: ' + (r.stdout + r.stderr).strip() + ')'
+    return os.path.join(sd, outs[0]), 'stage', None
 
 
 def main():
@@ -131,6 +163,8 @@ def main():
     ap.add_argument('--cvb', action='append', default=[], metavar='IDX=VAL',
                     help='function constant, bool-typed (repeatable)')
     ap.add_argument('--arch', default=None, help='default: this host')
+    ap.add_argument('--keep', default=None, metavar='DIR',
+                    help='copy each native binary to DIR/<kernel>.gpubin (input for perf/agx-disasm.py)')
     args = ap.parse_args()
 
     cvs = []
@@ -145,17 +179,22 @@ def main():
         cvs.append((int(i), int(v) != 0, 'ConstantBool'))
     arch = args.arch or host_arch()
 
-    print('%-44s %8s %8s' % ('kernel', 'text', 'spill'))
+    print('%-44s %8s %8s  %s' % ('kernel', 'text', 'spill', 'via'))
     rc = 0
+    if args.keep:
+        os.makedirs(args.keep, exist_ok=True)
     with tempfile.TemporaryDirectory() as td:
         for k in args.kernels:
-            out, err = translate(args.metallib, k, cvs, arch, td)
+            out, via, err = translate(args.metallib, k, cvs, arch, td)
             if err:
                 print('%-44s FAILED: %s' % (k, err.splitlines()[0] if err else '?'))
                 rc = 1
                 continue
             text, spill = measure(out)
-            print('%-44s %8d %8d' % (k, text, spill))
+            print('%-44s %8d %8d  %s' % (k, text, spill, via))
+            if args.keep:
+                import shutil
+                shutil.copyfile(out, os.path.join(args.keep, k + '.gpubin'))
     return rc
 
 

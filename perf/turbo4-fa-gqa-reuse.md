@@ -161,7 +161,9 @@ for argmax stability. See open items.
   to +59% slower than Q8 at every width and KV length; it exactly fills the 32 KiB
   threadgroup budget and doubles live matrix state. Removed. (Resource explanation is an
   inference: `applegpu-nt` failed with the private-metadata error on both Q8 and Q16, so
-  there is no offline spill comparison.)
+  there is no offline spill comparison. That failure was a packager bug, routed around
+  2026-09-02 (`toolchain-isa-probe.md`); the Q8 kernel now probes 0 spill / 11708 B, but
+  the Q16 source is gone, so the comparison stays undone.)
 - **Pair LUT** (`addbd127d`, `TURBO_USE_PAIR_LUT`): landed with no measurement record
   anywhere in the repo or `kvquant-experiments`. Its claim (halved LUT loads at equal
   precision) is untested. A `TURBO_FORCE_PAIR_LUT=0/1` A/B on the width-4 and width-1

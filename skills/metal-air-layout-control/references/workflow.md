@@ -26,6 +26,8 @@ applegpu-nt -arch applegpu_g16s \
 
 The Metal pipelines script must resolve function constants for the target kernel. Use the toolchain's `metal-pipelines-script` manual and an existing repository example rather than inventing its schema.
 
+If `applegpu-nt` reports `cannot find private metadata at offset N`, add `-stop-after translate` and drop `-o`: the packaging step is what fails, the translated native Mach-O is written to the working directory as `<script-stem>.compute-pipeline-0`, and it carries the same `__compute`/`__TEXT` as a packaged `.gpubin`. The manual lives under the toolchain's `share/man` (`metal-tt.1`; not on the default MANPATH). Function constants are only accepted through `libraries.specialized_functions`, never as a field on the pipeline entry.
+
 ## 2. Prove the textual AIR round trip
 
 Before making a claim about an edit:

@@ -68,6 +68,31 @@ GPU-specific `MTLBinaryArchive` can force exact translated code through ggml. Th
 backend still owns within-block scheduling, and GPU trace replay recompiles the AIR rather
 than preserving archive-selected native code.
 
+**Follow-up, 2026-09-02: the "cannot find private metadata at offset N" failure is a
+packager bug, isolated and routed around.** It had blocked `agx-spill-probe` on the skinny
+mul_mm and Turbo4 flash-attention families (`skinny-soa.md`, the Turbo4 Q16 probe) and
+was the reason probe kernels "had to be inserted inline, not appended at EOF" above. A
+four-kernel standalone file showed: the failure follows a function's position in the
+metallib function list (reordering the same kernels moves it; in a fresh library only the
+first two functions package), `-stop-after materialize` and `-stop-after translate` both
+succeed, and only the final package stage fails. The translate-stage Mach-O has the same
+`__compute`/`__TEXT`; for kernels that package normally its text bytes are identical, so
+it is the same measurement. The probe now retries that way and reports `via=stage`.
+Materialized libraries are structurally identical for surviving and failing kernels (one
+function, 8-byte private section), so the packager is failing on something it reads back
+from the ORIGINAL file; that rule is not mapped and does not need to be.
+
+First results on the unblocked families (M4 Pro `g16s`, production specializations):
+
+| kernel | text | spill | replay (metal-gpu-profile) |
+|---|---:|---:|---|
+| `kernel_mul_mm_skinny_q4_0_soa_f32` | 3942 | 0 | 0 spill, 52 regs, 421 instr |
+| `kernel_flash_attn_ext_turbo4_dk256_dv256` (GQA6, nwg 8) | 11708 | 0 | 0 spill, 60 regs, 992 instr |
+
+Spill agrees. `agx-disasm.py` decodes 438 and 1,243 instructions for the same two
+binaries: the offline translator and the driver compiler are different builds, so offline
+counts rank forms but are not the replay's numbers.
+
 ## What we got instead: per-thread spill bytes
 
 `__GPU_METADATA` is an undocumented FlatBuffer. One field tracks register pressure:

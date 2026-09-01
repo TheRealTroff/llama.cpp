@@ -96,10 +96,13 @@ meaningful pressure or issue/stall change. Captures and replay archives:
 - SoA: `/tmp/perf-metal-31188.gputrace`, `/tmp/skinny-soa-profile-31188`
 - DI: `/tmp/perf-metal-31204.gputrace`, `/tmp/skinny-di-profile-31204`
 
-`agx-spill-probe` cannot currently translate either this kernel or the unchanged skinny
+~~`agx-spill-probe` cannot currently translate either this kernel or the unchanged skinny
 DI kernel (`applegpu-nt: cannot find private metadata ...`), while it still translates a
-known width-3 metallib. Therefore no offline spill inference is used here; the spill and
-instruction claims above are hardware replay measurements.
+known width-3 metallib.~~ That was an applegpu-nt packaging bug tied to the function's
+position in the metallib, routed around in the probe 2026-09-02 (`toolchain-isa-probe.md`
+follow-up). Re-probed: SoA 3942 B / 0 spill, DI and plain skinny 0 spill as well,
+agreeing with the replay's zero. The spill and instruction claims above remain the
+hardware replay measurements.
 
 ## Real model: persistent-layout recovery
 

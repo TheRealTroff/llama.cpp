@@ -26,6 +26,16 @@ the Metal compiler's own `Spilled bytes`, read back via the `metal-gpu-profile` 
 skill needs an Xcode install and a full GPU replay per run, this stays a 0.12 s offline answer, so prefer it and
 escalate only when you need register counts or the instruction mix too.
 
+Cross-checked again 2026-09-02 on the two families that had been unreachable: skinny SoA
+mul_mm probes 0 spill (replay: 0, 52 registers) and the Turbo4 GQA6 flash-attention
+probes 0 spill (replay: 0, 60 registers). Instruction COUNTS do not cross-check the same
+way - see "What this does not tell you". The same run also produced an UNVERIFIED lead:
+the f16 flash-attention kernel `kernel_flash_attn_ext_f16_dk256_dv256` at its production
+specialization (mask, bcm, nsg 4, nwg 8, gqah 1) probes **432 bytes/thread of spill**
+(256 at gqah 6) while every Turbo4 and skinny kernel is at zero. Treat it as a lead for
+`metal-gpu-profile` to confirm, not a fact - the probe has been validated against the
+replay on one mul_mv kernel and two zero cases only.
+
 ## Prerequisites
 
 Xcode 26.x with the Metal Toolchain installed (`applegpu-nt` and `metal-arch` live next
@@ -80,7 +90,12 @@ Function constants are specialized offline exactly as the Metal runtime speciali
 at pipeline creation, so the result reflects the real specialized kernel. Kernels behind
 function constants are therefore in scope, including flash-attention shapes.
 
-Output is code size (`text`) and `spill` bytes per thread. Zero means no spilling.
+Output is code size (`text`), `spill` bytes per thread, and `via`: which applegpu-nt
+route produced the binary. Zero spill means no spilling. `via=pkg` is the normal packaged
+`.gpubin`; `via=stage` means the packager failed with "cannot find private metadata at
+offset N" and the probe recovered the binary from `-stop-after translate` (see the
+private-metadata section below - same native bytes). `--keep DIR` saves each native
+binary as `DIR/<kernel>.gpubin` for `perf/agx-disasm.py`.
 
 ## Step 4 - Sweep a shape space in one compile
 
@@ -93,10 +108,11 @@ for R in range(1,9):
     emit(f"kernel void probe_r{R}_c{C}(...) {{ my_impl<{R},{C}>(args, ...); }}")
 ```
 
-**Insert the probe kernels inline next to the existing instantiations, not appended at
-EOF.** Appending at end of file yields a metallib that `applegpu-nt` rejects with
-"cannot find private metadata at offset N" for exactly the new functions. Inserting them
-after the last real kernel of the same family works.
+Probe kernels can go anywhere in the file, including appended at EOF. ~~Appending at
+end of file yields a metallib that `applegpu-nt` rejects with "cannot find private
+metadata at offset N" for exactly the new functions; insert them inline instead.~~ That
+was the packager bug described under "private metadata" below, and the probe now routes
+around it (2026-09-02). Appended kernels simply show `via=stage`.
 
 ## Step 5 - Iterate codegen FORMS offline, not just shapes
 
@@ -162,16 +178,23 @@ comparison (respect any no-copying boundary - probe the FORM, not their code).
 - **Code size is not a substitute.** In the mul_mv nc sweep `text` grew smoothly across
   the whole range with no discontinuity at the shape where spilling starts. Only the
   spill field found it.
-- **A translator failure shared by control and candidate is inconclusive.** In particular,
-  if a known-good kernel and the experimental kernel both fail with the same private-metadata
-  offset error, do not turn that failure into a spill, register-pressure, or codegen claim
-  about the candidate. Reduce both to equivalent standalone probes; if that cannot be done,
-  report the prescreen as unavailable and let uncaptured timing plus a survivor-only GPU
-  profile decide.
-  As of 2026-09-01 this is the state for the flash-attention (`kernel_flash_attn_ext_*`)
-  and skinny mul_mm (`kernel_mul_mm_skinny_*`) families: both fail translation with
-  `cannot find private metadata`, while mul_mv kernels still translate (`skinny-soa.md`,
-  `turbo4-fa-gqa-reuse.md`). The same limit applies to `metal-air-layout-control`.
+- **A translator failure shared by control and candidate is inconclusive.** If a
+  known-good kernel and the experimental kernel both fail the same way, do not turn that
+  into a spill, register-pressure, or codegen claim about the candidate. Reduce both to
+  equivalent standalone probes; if that cannot be done, report the prescreen as
+  unavailable and let uncaptured timing plus a survivor-only GPU profile decide.
+- **"cannot find private metadata at offset N" is a bug in applegpu-nt's packaging step,
+  and the probe routes around it (2026-09-02).** It blocked the skinny mul_mm and Turbo4
+  flash-attention families for a week and was misread as a kernel property. Isolated
+  with a four-kernel standalone file: specialization succeeds, translation succeeds
+  (`-stop-after translate` emits the native Mach-O), only the final package step fails,
+  and it fails by the function's position in the metallib's function list, not by
+  anything in the kernel (reordering the same four kernels moves the failure with the
+  position; in a fresh library only the first two functions package). For kernels that
+  package fine, the stage output's native `__TEXT` bytes are byte-identical to the
+  packaged `.gpubin`, so `via=stage` numbers are the same numbers. The exact packager
+  rule (which original offsets it can map back) is not mapped; the workaround does not
+  need it. If a run ever fails on BOTH routes, that is a real error again.
 
 ## What this does not tell you
 
@@ -188,6 +211,12 @@ comparison (respect any no-copying boundary - probe the FORM, not their code).
   printer, the translator plugin refuses `AIRNTEmitAssembly`, and the printer inside
   `libapplegpu-nt.dylib` exports no `LLVM*` symbols. Size-family histograms are the
   working substitute for a mnemonic census.
+- **Offline instruction counts are not replay counts.** The host translator and the
+  driver's runtime compiler are different builds. Measured 2026-09-02 on identical
+  specializations: skinny SoA mul_mm decodes to 438 instructions offline vs 421 in the
+  GPU replay; the Turbo4 GQA6 FA kernel 1,243 vs 992. Spill agreed (0/0) in both. Use
+  offline counts to RANK forms against each other in the same run, never to quote a
+  kernel's instruction count or compare against a profiled number.
 - **Static counts are not dynamic cost.** A 2-row variant with R2-equivalent static
   text measured -21% because the saved instructions were IN the hot loop and attached
   to stall sites; conversely an unroll that cut dynamic instructions 15% measured
