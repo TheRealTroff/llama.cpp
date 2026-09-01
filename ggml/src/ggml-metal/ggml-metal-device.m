@@ -97,6 +97,7 @@ int ggml_metal_pipeline_max_theads_per_threadgroup(struct ggml_metal_pipeline_wi
 
 struct ggml_metal_library {
     id<MTLLibrary> obj;
+    id<MTLBinaryArchive> archive;
 
     ggml_metal_device_t dev;
     ggml_metal_pipelines_t pipelines; // cache of compiled pipelines
@@ -273,9 +274,28 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
         GGML_LOG_INFO("%s: loaded in %.3f sec\n", __func__, (ggml_time_us() - t_start) / 1e6);
     }
 
+    id<MTLBinaryArchive> archive = nil;
+    const char * archive_path = getenv("GGML_METAL_BINARY_ARCHIVE");
+    if (archive_path != NULL) {
+        NSError * error = nil;
+        MTLBinaryArchiveDescriptor * desc = [MTLBinaryArchiveDescriptor new];
+        desc.url = [NSURL fileURLWithPath:[NSString stringWithUTF8String:archive_path]];
+        archive = [device newBinaryArchiveWithDescriptor:desc error:&error];
+        [desc release];
+
+        if (!archive) {
+            GGML_LOG_ERROR("%s: failed to load binary archive '%s': %s\n", __func__, archive_path,
+                    error ? [[error description] UTF8String] : "unknown error");
+            [library release];
+            return nil;
+        }
+        GGML_LOG_INFO("%s: loaded binary archive '%s'\n", __func__, archive_path);
+    }
+
     ggml_metal_library_t res = calloc(1, sizeof(struct ggml_metal_library));
 
     res->obj       = library;
+    res->archive   = archive;
     res->dev       = dev;
     res->pipelines = ggml_metal_pipelines_init();
     res->lock      = [NSLock new];
@@ -343,6 +363,7 @@ ggml_metal_library_t ggml_metal_library_init_from_source(ggml_metal_device_t dev
     }
 
     res->obj       = library;
+    res->archive   = nil;
     res->dev       = dev;
     res->pipelines = ggml_metal_pipelines_init();
     res->lock      = [NSLock new];
@@ -357,6 +378,9 @@ void ggml_metal_library_free(ggml_metal_library_t lib) {
 
     if (lib->obj) {
         [lib->obj release];
+    }
+    if (lib->archive) {
+        [lib->archive release];
     }
 
     ggml_metal_pipelines_free(lib->pipelines);
@@ -435,7 +459,19 @@ struct ggml_metal_pipeline_with_params ggml_metal_library_compile_pipeline(ggml_
         }
 
         id<MTLDevice> device = ggml_metal_device_get_obj(lib->dev);
-        id<MTLComputePipelineState> obj = [device newComputePipelineStateWithFunction:mtl_function error:&error];
+        id<MTLComputePipelineState> obj;
+        if (lib->archive) {
+            MTLComputePipelineDescriptor * desc = [MTLComputePipelineDescriptor new];
+            desc.computeFunction = mtl_function;
+            desc.binaryArchives = @[lib->archive];
+            obj = [device newComputePipelineStateWithDescriptor:desc
+                                                        options:MTLPipelineOptionFailOnBinaryArchiveMiss
+                                                     reflection:NULL
+                                                          error:&error];
+            [desc release];
+        } else {
+            obj = [device newComputePipelineStateWithFunction:mtl_function error:&error];
+        }
 
         [mtl_function release];
 
