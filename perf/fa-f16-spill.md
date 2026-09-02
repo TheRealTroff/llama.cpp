@@ -110,12 +110,81 @@ change is lossless in the current lineage, as the unchanged loop order predicts.
 small slice of the round at 8K. It grows with context (9.5% at a filled 100K cache).
 Adoption is the owner's call; the branch is ready to merge as is.
 
+## Unroll curve at runtime: 4 is the sweet spot
+
+Same mirrored prod/variant/variant/prod protocol, kernel level:
+
+| K-loop unroll | spill | 8K width 5 | 100K width 5 | 8K prefill 512 rows |
+|---|---:|---:|---:|---:|
+| full (prod) | 400 | 444 us | 5475 us | 21.8 ms |
+| 8 | 96 | not built | | |
+| **4** | 0 | **-6.3%** | **-9.5%** | **-4.8%** |
+| 2 | 0 | +3.1% | -1.6% | +3.6% |
+| 1 | 0 | +10.7% | +5.2% | +10.2% |
+
+Below 4 the loop loses the load-ahead that hides K latency; above it the allocator
+loses. Unroll 8 was not built: it still spills 96 B and sits between two measured points.
+
+## The same disease in the vector kernel: every quantized KV type spills
+
+`kernel_flash_attn_ext_vec_*` (widths 1-4 on the f16 pick; widths 1-2 on the Turbo4
+line, whose 3-6 go to the batched GQA route). Offline probe at the production
+specialization (`mask nsg 4 nwg 32 nq 1`), metallib compiled WITH the runtime defines
+(`GGML_METAL_HAS_BF16 TURBO_USE_4MAG TURBO_USE_PAIR_LUT`; without them the Turbo4 kernels
+are a different kernel - the earlier no-define number happened to agree):
+
+| vec kernel, dk256 | text | spill |
+|---|---:|---:|
+| f16 | 10590 | 64 |
+| q8_0 | 33704 | 432 |
+| q4_0 | 39800 | 352 |
+| **turbo4** | 38560 | **496** |
+
+Replay on the Turbo4 kernel at width 1, kv 8448: **496 spilled bytes** (offline 496), 96
+registers, 4012 instructions, 772 device loads (trace
+`sep2-fa-f16-spill/vec-turbo4-w1-kv8448`). Width 1 timing: f16 222 us, Turbo4 677 us -
+a 3x premium on the batch-1 route.
+
+Cause: the quantized K and V paths are `FOR_UNROLL cc < C/NE` x `FOR_UNROLL ii < DK4/NL`
+with an inline dequant per float4 - 64 expansions each, fully unrolled. The f16 path is
+loads and dots. Which loop to partially unroll is dictated by the register arrays: in the
+K loop `ii` only addresses threadgroup memory (`mqk[cc]` is the accumulator), in the V
+loop `cc` only addresses threadgroup memory (`lo[ii]` is the accumulator). Unrolling the
+other index partially turns the accumulator array dynamic and makes it worse.
+
+| form (K ii / V cc) | turbo4 dk256 text | spill | dk128 spill |
+|---|---:|---:|---:|
+| full / full (prod) | 38560 | 496 | 128 |
+| 2 / full | 38560 | 496 | - |
+| full / 2 | 22100 | 128 | 16 |
+| full / 1 | 21768 | 128 | 16 |
+| 1 / full | 35944 | 352 | 128 |
+| 1 / 2 | 20632 | 0 | 16 |
+| **1 / 1** | 20138 | **0** | 16 |
+
+Runtime, mirrored prod/variant/variant/prod, `test-backend-ops perf`, Turbo4 KV:
+
+| case | prod | K1/V1 | delta |
+|---|---:|---:|---:|
+| width 1, kv 8448 (vec route) | 642.8 us | 321.4 us | **-50.0%** |
+| width 3, kv 102400 (batched GQA route, control) | 5279.1 | 5282.9 | +0.1% |
+| f16 width 1, kv 8448 (untouched branch, control) | 215.4 | 214.3 | -0.5% |
+
+The V-loop unroll curve at runtime (K at 1 throughout, all spill-free), same case:
+
+| V cc unroll | text | width 1, kv 8448 | vs prod |
+|---|---:|---:|---:|
+| 1 | 20138 | 321.4 us | -50.0% |
+| 2 | 20632 | 299.0 | -53.7% |
+| **4** | 21570 | **290.2** | **-55.5%** |
+| 8 | 23504 | 297.3 | -53.8% |
+
+**K1/V4 is the pick**: 652 -> 290 us at width 1. Still 1.35x the f16 vector kernel
+(215 us), which is the dequant cost proper; the other 1.65x was the spill.
+Correctness on K1/V4: 15/15 Turbo4 `FLASH_ATTN_EXT` cases and 19/19 drafter-geometry
+cases against the CPU reference. Depth-1 e2e below.
+
 ## Open
 
-- **Turbo4 vector FA spills 496 B/thread** (`kernel_flash_attn_ext_vec_turbo4_dk256_dv256`
-  at `mask nsg 4 nwg 32 nq 1`, 38.5 KB text) against 64 B for the f16 vector kernel. That
-  is the kernel behind the Turbo4 line's width-2 route and its +19% round premium
-  (`turbo4-fa-gqa-reuse.md`, open item 3). Same method: replay to confirm, then find the
-  form. Probed only, nothing measured.
-- unroll 2 and 1 are also spill-free with smaller code; not timed. One build each.
 - The dk128 f16 kernel (drafter-side f16 FA, 32 B spill) rides along; unmeasured.
+- q8_0 / q4_0 vector kernels get the same form change for free; not measured (not a line).

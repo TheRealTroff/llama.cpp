@@ -12075,7 +12075,7 @@ kernel void kernel_flash_attn_ext_vec(
 
                         k4_t mk;
 
-                        FOR_UNROLL (short ii = 0; ii < DK4/NL; ++ii) {
+                        _Pragma("unroll 1") for (short ii = 0; ii < DK4/NL; ++ii) {
                             const short i = ii*NL + tx;
 
                             deq_k_t4(pk + i/nl_k, i%nl_k, mk);
@@ -12181,7 +12181,7 @@ kernel void kernel_flash_attn_ext_vec(
                         }
                     }
                 } else {
-                    FOR_UNROLL (short cc = 0; cc < C/NE; ++cc) {
+                    _Pragma("unroll 4") for (short cc = 0; cc < C/NE; ++cc) {
                         device const vd4_t * pv4 = (device const vd4_t *) (v + ((ic + NE*cc + ty)*args.nb21));
 
                         FOR_UNROLL (short ii = 0; ii < DV4/NL; ++ii) {
