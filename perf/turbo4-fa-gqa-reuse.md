@@ -188,6 +188,9 @@ for argmax stability. See open items.
    (`53d773b66745` -> `6caf7d30b262`); widths 3+ unaffected. Merged 2026-09-02 (`922e56144`).
 4. Widths 7-8 outside the reuse guard (+4.5-5.0%). Extending GQAH=6 to width 7/8 tiles is
    a bounded A/B.
+4b. ~~Filled-cache e2e was a projection (~42 ms/round at width 5).~~ Measured 2026-09-02
+   at a filled 96K context: -41.9 ms/round (238.6 -> 196.8 ms), and the line's width 4
+   matches f16's width 5 on round time (`turbo4-filled-100k.md`).
 5. ~~Pair LUT A/B.~~ Measured 2026-09-02: hash-neutral, -7.8% on the batched width-4
    kernel, inert on the vector route, +0.15% e2e. Stays on (`turbo4-quality.md`).
 6. `server-context.cpp` leaves `result.probs` a TODO for speculatively accepted tokens, so

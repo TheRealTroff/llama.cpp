@@ -155,6 +155,9 @@ acceptance question: **`turbo4-fa-gqa-reuse.md`**. **Quality, priced 2026-09-02
 (`turbo4-quality.md`): the cache moves the greedy argmax on 1.7% of the model's own
 tokens (same-top 98.3%), 5% teacher-forced on wikitext, mean KLD 0.006-0.008, flat with
 context; the per-prompt acceptance column is a trajectory, not a quality number.**
+**Filled 96K context, measured 2026-09-02 (`turbo4-filled-100k.md`): Turbo4 at width 4
+matches f16 at width 5 on round time (182 vs 187 ms) for 5.2 GiB less RSS; GQA reuse is
+worth 42 ms of that round; prefill +7.6% over 96K tokens.**
 
 ```
 <the f16 pick env above> TURBO_AUTO_ASYMMETRIC=0 GGML_FA_GQA_HEADS=4,6 GGML_FA_GQA4_NWG=6 GGML_FA_GQA_W3_NWG=13 \
@@ -196,7 +199,7 @@ What each flag buys, and where it came from:
 off, unset it (`env -u GGML_MM_ACC_HALF ...`). A "no-acch" KLD arm run with `=0` reproduced
 the acch arm to the digit before this was noticed (`turbo4-quality.md`). Every other
 routing flag in this table is value-based.
-| `GGML_FA_VEC_MAX=5` | 20 | FA vec/mm routing cutoff. **5, not 4** - at 4 an MTP-path FA call reroutes and output changes | flash-attn-mm-split.md |
+| `GGML_FA_VEC_MAX=5` | 20 | FA vec/mm routing cutoff. **5, not 4** - at 4 an MTP-path FA call reroutes and output changes. **Stale since the unroll fix (2026-09-02): the batched kernel now beats the vector kernel at widths 3-4 at every context (0.59x at width 4, 8K; 0.26x at 100K). `=2` is the right value for speed and changes the lineage; e2e at depth 3 in `turbo4-filled-100k.md`** | flash-attn-mm-split.md, turbo4-filled-100k.md |
 | `GGML_FA_MM_NWG=8` | 1 | KV split for the mm FA kernel, -60% FA | flash-attn-mm-split.md |
 | `GGML_GDN_FUSE_WB=1` | off | GDN writes the state cache directly, drops ~2.1 GB/round | gdn-writeback-fusion.md |
 | `GGML_FA_GQA_HEADS=4,6` | **auto: 6 on pre-M5 with Turbo4 KV, off on tensor hw** (Turbo4 line only) | Turbo4 FA flattens the query heads sharing a KV head into the Q8 tile; widths 3-6, GQA 4/6. Width 4: 5.3x kernel, -22.9% round. Default-on is a departure from the opt-in convention; the pick sets it explicitly | turbo4-fa-gqa-reuse.md |
