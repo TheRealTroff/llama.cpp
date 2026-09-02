@@ -182,7 +182,40 @@ The V-loop unroll curve at runtime (K at 1 throughout, all spill-free), same cas
 **K1/V4 is the pick**: 652 -> 290 us at width 1. Still 1.35x the f16 vector kernel
 (215 us), which is the dequant cost proper; the other 1.65x was the spill.
 Correctness on K1/V4: 15/15 Turbo4 `FLASH_ATTN_EXT` cases and 19/19 drafter-geometry
-cases against the CPU reference. Depth-1 e2e below.
+cases against the CPU reference.
+
+### Depth-1 e2e on the Turbo4 line: -11% round time, hash changes at this width only
+
+`RUN_TURBO4_100K_DEPTH.sh` (B= override), depth 1 = verify width 2 = the vector route,
+600 tokens, 100K allocation, f16 draft KV, mirrored prod/variant/variant/prod
+(`kvquant-experiments/results/vecfa-{A1,B1,B2,A2}.tsv`):
+
+| arm | t/s | round | out/round | acceptance | rounds | sha |
+|---|---:|---:|---:|---:|---:|---|
+| prod | 16.716 | 109.59 ms | 1.835 | 84.00% | 327 | `53d773b66745` |
+| **K1/V4** | 18.899 | 97.22 | 1.840 | 84.31% | 326 | `6caf7d30b262` |
+| **K1/V4** | 18.835 | 97.55 | 1.840 | 84.31% | 326 | `6caf7d30b262` |
+| prod | 16.751 | 109.36 | 1.835 | 84.00% | 327 | `53d773b66745` |
+
+**Round time 109.5 -> 97.4 ms, -11.1%; throughput +12.8%.** Turbo4's width-2 round premium
+over f16 (91.8 ms in the same runs) falls from +19.3% to +6.1%.
+
+Controls from the same runs, all hash-identical to prod: f16 depth 1 (vector f16 branch,
+untouched) 19.91/19.97 vs 19.99/19.93 t/s, `3cee27b13b9d`; Turbo4 depth 4 (batched GQA
+route) 24.12/24.07 vs 24.05/24.18, `4ea063023564`.
+
+**The hash changes on this route.** The Metal library is built with fast math on
+(`ggml-metal-device.m`, `setFastMathEnabled:false` is commented out), so a different unroll
+may contract or reassociate differently; the two outputs are identical for the first
+~1,240 characters and fork at a near-tie, each arm byte-deterministic on its own. Same
+category as the GQA route's width-3/4 change: the Turbo4 width-1/2 reference hash becomes
+`6caf7d30b262` at 600 tokens when this merges; width 3+ (`12c3dc6bb2dd` at width 4) and
+every f16 sha are unaffected. Round time is the clean comparison; acceptance moved 0.3 pt.
+
+Harness note: passing the runner's settings as one unquoted zsh variable does not
+word-split; the runner saw `DEPTHS="1 CACHE_ORDER=turbo4 ..."`, ran its default warm-up
+and the f16 arm as well, and died on the garbage depth token after the rows above were
+written. The rows are valid; the invocation was not what was intended.
 
 ## Open
 
