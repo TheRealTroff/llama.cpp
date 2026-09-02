@@ -126,6 +126,14 @@ persistent SoA layout, removing the last layout-order hole. Fixed DFlash depth 5
 (verify width 6) improves **22.122 -> 24.295 t/s (+9.82%)**, byte-identical; the
 fixed depth-4 canonical arm is flat because it verifies width 5 (`skinny-soa.md`).
 
+**Kernel change without a flag, 2026-09-02: FA unroll form (`fa-f16-spill.md`).** The
+batched f16 FA kernel spilled 400 B/thread (full K-loop unroll); unroll 4 removes it,
+-6% kernel at 8K / -9.5% at 100K / -5% on the prefill route, **+0.44% e2e, byte-identical,
+every sha canonical**. The vector FA kernel's quantized K/V loops had the same disease
+(Turbo4 496 B): now unroll 1/4, Turbo4 width-1 kernel -55%, depth-1 round -11.1% on the
+Turbo4 line, whose width-1/2 hash therefore moves (`53d773b66745` -> `6caf7d30b262`);
+f16 and Turbo4 width 3+ hashes unchanged. Always on; there is no flag to forget.
+
 ```
 GGML_MV_NC=2 GGML_MM_SKINNY=6 GGML_MM_SKINNY_SOA=1 GGML_FA_VEC_MAX=5 GGML_FA_MM_NWG=8 GGML_GDN_FUSE_WB=1 \
 GGML_MV_REPACK=1 GGML_MV_SOA_PIN=1 GGML_MV_SOA_W3=1 GGML_MV_SOA_W4=1 GGML_MV_SOA_W4_R4KP=3 GGML_MV_SOA_W5=4 GGML_MV_SOA_W5_HALF=1 \

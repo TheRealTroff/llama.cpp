@@ -1,7 +1,7 @@
 # The f16 flash-attention kernel spilled 400 B/thread; unroll 4 removes it
 
 Measured 2026-09-02 on M4 Pro from prod `c756cb81c`, branch `exp/fa-f16-tgcap`
-(worktree `llama.cpp-fa-tgcap`). Status: **e2e gate pending** (see the last section).
+(worktree `llama.cpp-fa-tgcap`, removed after merge). Status: **MERGED to prod 2026-09-02** as `922e56144` (owner: "merge it, I can't see a reason not to"); post-merge gates in the last section.
 
 ## How it was found
 
@@ -108,7 +108,7 @@ change is lossless in the current lineage, as the unchanged loop order predicts.
 
 **Verdict:** a real 5-10% kernel win that is worth ~0.4% end to end today because FA is a
 small slice of the round at 8K. It grows with context (9.5% at a filled 100K cache).
-Adoption is the owner's call; the branch is ready to merge as is.
+Adopted: merged 2026-09-02.
 
 ## Unroll curve at runtime: 4 is the sweet spot
 
@@ -216,6 +216,19 @@ Harness note: passing the runner's settings as one unquoted zsh variable does no
 word-split; the runner saw `DEPTHS="1 CACHE_ORDER=turbo4 ..."`, ran its default warm-up
 and the f16 arm as well, and died on the garbage depth token after the rows above were
 written. The rows are valid; the invocation was not what was intended.
+
+## Post-merge gates on the rebuilt prod binary (`922e56144`)
+
+| arm | t/s | acceptance | sha | expected |
+|---|---:|---:|---|---|
+| f16 pick, 300 | 26.971 | 51.4% | `95eb7e65977e` | `95eb7e65977e` |
+| f16 pick, 600 | 29.984 | 58.2% | `6678b0507d41` | `6678b0507d41` |
+| batch-1 anchor, 300 | 13.431 | - | `95eb7e65977e` | `95eb7e65977e` (12.98 t/s anchor) |
+| Turbo4 pick, width 4, 600 | 29.633 | 70.7% | `12c3dc6bb2dd` | `12c3dc6bb2dd` |
+
+Every sha canonical. The b1 anchor reads 13.43 vs the 12.98 mint - decode is untouched by
+this change at width 1 on f16 (vector f16 branch unchanged), so that is machine state, the
+usual +/-2-4% daily wander (README trap 3). Read the t/s as "healthy", not as a lever.
 
 ## Open
 

@@ -130,6 +130,8 @@ so the f16 lineage gate is untouched; but Turbo4 t/s and acceptance from before
 `8c927c49e` (width 4) / `351e0deae` (width 3) do not compare with numbers after. Current
 Turbo4 reference at 600 tokens, width 4, standard prompt: hash `12c3dc6bb2dd`, 29.5 t/s,
 104.9 ms/round, acceptance 70.67% (f16 draft KV; identical hash with a Turbo4 draft KV).
+Since the vector FA fix merged (2026-09-02), the width-1/2 reference at 600 tokens is
+`6caf7d30b262` (18.9 t/s, 97.4 ms/round at depth 1); `53d773b66745` gates pre-merge builds.
 
 ## Acceptance: not reduced by this work
 
@@ -182,7 +184,7 @@ for argmax stability. See open items.
    Turbo4 kernel spilled 496 B/thread from fully unrolled dequant loops; fixed on branch
    `exp/fa-f16-tgcap` (`fa-f16-spill.md`): width-1 kernel -55%, depth-1 round 109.5 ->
    97.4 ms (-11.1%), premium over f16 now +6%. Changes the width-1/2 hash
-   (`53d773b66745` -> `6caf7d30b262`); widths 3+ unaffected. Pending merge.
+   (`53d773b66745` -> `6caf7d30b262`); widths 3+ unaffected. Merged 2026-09-02 (`922e56144`).
 4. Widths 7-8 outside the reuse guard (+4.5-5.0%). Extending GQAH=6 to width 7/8 tiles is
    a bounded A/B.
 5. Pair LUT A/B (above).
