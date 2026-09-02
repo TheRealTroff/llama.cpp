@@ -151,7 +151,10 @@ less RSS than f16 at every width, and at width 4 it is 2.1% FASTER per round tha
 the same width (104.9 vs 107.1 ms; 29.5 t/s at 600 tokens, hash `12c3dc6bb2dd`). Its own
 lineage is separate from the f16 shas above. Runnable as `TURBO=1 perf/run-prod-pick.sh`
 (`TURBO_PICK_ENV`); measured on the SOA-V1 GGUFs. Full record, flag table, the
-acceptance question and the open quality measurement: **`turbo4-fa-gqa-reuse.md`**.
+acceptance question: **`turbo4-fa-gqa-reuse.md`**. **Quality, priced 2026-09-02
+(`turbo4-quality.md`): the cache moves the greedy argmax on 1.7% of the model's own
+tokens (same-top 98.3%), 5% teacher-forced on wikitext, mean KLD 0.006-0.008, flat with
+context; the per-prompt acceptance column is a trajectory, not a quality number.**
 
 ```
 <the f16 pick env above> TURBO_AUTO_ASYMMETRIC=0 GGML_FA_GQA_HEADS=4,6 GGML_FA_GQA4_NWG=6 GGML_FA_GQA_W3_NWG=13 \
@@ -187,6 +190,12 @@ What each flag buys, and where it came from:
 | `GGML_MM_SKINNY_SOA=1` | 0 | widths 6-8 consume the persistent SoA layout with the skinny MMA kernel; restores DI-class throughput and adds +9.82% e2e at fixed DFlash depth 5 | skinny-soa.md |
 | `GGML_METAL_GET_MEMCPY=1` | 0 | get_tensor_async readbacks (logits, 5 MB/round) as memcpy-after-wait instead of a blit command buffer queued behind the graph, +3.3% e2e | cpu-round-overhead.md |
 | `GGML_MM_N64=1` | 0 | 64x64 Q4_0 half-accumulate tile on the measured width-512, short-K, sufficiently parallel region; +1.27% full prefill | mm-acch-n64.md |
+
+**Presence-based flags (2026-09-02 trap):** `GGML_MM_ACC_HALF`, `GGML_MM_N64` and
+`GGML_FA_ACC_HALF` are tested with `getenv() != nullptr`, so `=0` ENABLES them. To turn one
+off, unset it (`env -u GGML_MM_ACC_HALF ...`). A "no-acch" KLD arm run with `=0` reproduced
+the acch arm to the digit before this was noticed (`turbo4-quality.md`). Every other
+routing flag in this table is value-based.
 | `GGML_FA_VEC_MAX=5` | 20 | FA vec/mm routing cutoff. **5, not 4** - at 4 an MTP-path FA call reroutes and output changes | flash-attn-mm-split.md |
 | `GGML_FA_MM_NWG=8` | 1 | KV split for the mm FA kernel, -60% FA | flash-attn-mm-split.md |
 | `GGML_GDN_FUSE_WB=1` | off | GDN writes the state cache directly, drops ~2.1 GB/round | gdn-writeback-fusion.md |

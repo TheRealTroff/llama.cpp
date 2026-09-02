@@ -6,14 +6,16 @@ if [ -z "${CAFFEINATED:-}" ]; then
     exec env CAFFEINATED=1 caffeinate -dimsu "$0" "$@"
 fi
 
-B=${B:-/Users/troff/play/llama.cpp-skinny-soa}
+B=${B:-/Users/troff/play/llama.cpp-prod}
 BIN=${BIN:-$B/build/bin}
 M=${M:-/Users/troff/play/Qwen3.8-27B-uniform-Q4_0.gguf}
 MD=${MD:-/Users/troff/play/Qwen3.8-27B-DFlash2-pureQ4_0.gguf}
 PORT=${PORT:-8095}
 OUT=${OUT:-/Users/troff/play/kvquant-experiments/results}
 DEPTH=${DEPTH:-7}
-TAG=${TAG:-dflash-corpus-n$DEPTH-$(date +%m%d-%H%M)}
+# KV=turbo4 runs the Turbo4 line (export TURBO_AUTO_ASYMMETRIC=0 alongside for the sym pick).
+KV=${KV:-f16}
+TAG=${TAG:-dflash-corpus-$KV-n$DEPTH-$(date +%m%d-%H%M)}
 NPRED=${NPRED:-300}
 REPS=${REPS:-2}
 COOL=${COOL:-5}
@@ -64,7 +66,7 @@ fi
 
 printf 'label\trep\tprompt\tprompt_n\tdraft_n_max\tverify_width\ttps\tpredicted_ms\tpredicted_n\tdraft_tokens\tdraft_accepted\taccept_pct\trounds\tround_ms\toutput_per_round\tsha1\tbytes\n' > "$TSV"
 
-echo "=== DFlash tiny corpus at n=$DEPTH: $TAG ==="
+echo "=== DFlash tiny corpus at n=$DEPTH, KV $KV: $TAG ==="
 echo "commit : $(git -C "$B" rev-parse --short HEAD) on $(git -C "$B" rev-parse --abbrev-ref HEAD) ($(git -C "$B" status --porcelain | wc -l | tr -d ' ') dirty)"
 echo "binary : $(stat -f '%Sm' "$BIN/llama-server")"
 echo "env    : ${COMMON_ENV[*]}"
@@ -101,7 +103,7 @@ run_one() {
     fi
 
     env "${COMMON_ENV[@]}" "$BIN/llama-server" \
-        -m "$M" -c 10240 -fa on -ctk f16 -ctv f16 \
+        -m "$M" -c 10240 -fa on -ctk "$KV" -ctv "$KV" \
         -md "$MD" --spec-type draft-dflash --spec-draft-n-max "$DEPTH" \
         --port "$PORT" >"$slog" 2>&1 &
     server_pid=$!

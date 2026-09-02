@@ -166,20 +166,21 @@ for argmax stability. See open items.
   there is no offline spill comparison. That failure was a packager bug, routed around
   2026-09-02 (`toolchain-isa-probe.md`); the Q8 kernel now probes 0 spill / 11708 B, but
   the Q16 source is gone, so the comparison stays undone.)
-- **Pair LUT** (`addbd127d`, `TURBO_USE_PAIR_LUT`): landed with no measurement record
-  anywhere in the repo or `kvquant-experiments`. Its claim (halved LUT loads at equal
-  precision) is untested. A `TURBO_FORCE_PAIR_LUT=0/1` A/B on the width-4 and width-1
-  routes is owed before it counts as a lever.
+- **Pair LUT** (`addbd127d`, `TURBO_USE_PAIR_LUT`): landed with no measurement record;
+  measured 2026-09-02 in `turbo4-quality.md`: -7.8% on the batched width-4 kernel, inert on
+  the vector route, hash-neutral, +0.15% e2e. It counts, barely, and stays on.
 - **Tensor (M5+) hardware**: unmeasured; the defaults deliberately keep it on the old
   path.
 
 ## Open items
 
-1. Same-top-p / KLD of Turbo4 KV vs f16 KV at 8K+ context (extend `run-quant-kld.sh` with
-   KV type and CTX). This is the acceptance-relevant quality number for the Turbo4 line
-   and belongs beside the 4.65 GiB in the pick block.
-2. Five-prompt corpus (`run-dflash-corpus.sh`) f16 vs Turbo4 at depths 3 and 4: if the
-   acceptance sign is consistent across workloads it is a signal, otherwise noise.
+1. ~~Same-top-p / KLD of Turbo4 KV vs f16 KV at 8K+ context.~~ Measured 2026-09-02
+   (`turbo4-quality.md`): same-top 95.4% teacher-forced on wikitext at 8K, **98.3% on the
+   model's own greedy text** (the acceptance-relevant bound), mean KLD 0.006-0.008, flat
+   with context. One tail at 2K context under investigation there.
+2. ~~Five-prompt corpus f16 vs Turbo4 at depths 3 and 4.~~ Measured: acceptance sign flips
+   prompt to prompt (-11.8 to +8.4 pt); on the two prompts with identical text the cache
+   effect is -0.5 pt mean. The benchmark prompt's "-13 at width 5" was the trajectory.
 3. ~~Width 2 (depth 1) still on the vector route, +19% round premium.~~ The vector
    Turbo4 kernel spilled 496 B/thread from fully unrolled dequant loops; fixed on branch
    `exp/fa-f16-tgcap` (`fa-f16-spill.md`): width-1 kernel -55%, depth-1 round 109.5 ->
@@ -187,7 +188,8 @@ for argmax stability. See open items.
    (`53d773b66745` -> `6caf7d30b262`); widths 3+ unaffected. Merged 2026-09-02 (`922e56144`).
 4. Widths 7-8 outside the reuse guard (+4.5-5.0%). Extending GQAH=6 to width 7/8 tiles is
    a bounded A/B.
-5. Pair LUT A/B (above).
+5. ~~Pair LUT A/B.~~ Measured 2026-09-02: hash-neutral, -7.8% on the batched width-4
+   kernel, inert on the vector route, +0.15% e2e. Stays on (`turbo4-quality.md`).
 6. `server-context.cpp` leaves `result.probs` a TODO for speculatively accepted tokens, so
    fork points cannot be classified as target ties vs changed proposals.
 

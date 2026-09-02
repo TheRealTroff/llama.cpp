@@ -25,7 +25,13 @@ W=${W:-/Users/troff/play/kvquant-experiments/data/wikitext-2-raw/wiki.test.raw}
 REF=${REF:-/Users/troff/play/Qwen3.8-27B-conv-q8_0.gguf}
 CHUNKS=${CHUNKS:-24}
 CTX=${CTX:-2048}
-SCRATCH=${SCRATCH:-/private/tmp/claude-501/-Users-troff-play/5a19a1a2-8952-4f8d-95e5-99e5e3b07300/scratchpad}
+# KV cache types. REF_KV/KV default to f16 so the ONLY variable is the weights; set KV=turbo4
+# (and REF=<same model as the test>) to price the CACHE instead: same weights both sides,
+# f16 cache as the reference, quantized cache as the test. Extra env (TURBO_AUTO_ASYMMETRIC)
+# passes through from the caller.
+REF_KV=${REF_KV:-f16}
+KV=${KV:-f16}
+SCRATCH=${SCRATCH:-/private/tmp/claude-501/-Users-troff-play/6bc69f4f-7ac7-43fa-85b2-ee8d853452b0/scratchpad}
 OUT=/Users/troff/play/kvquant-experiments/results
 TAG=${TAG:-kld-$(date +%m%d-%H%M)}
 mkdir -p "$OUT" "$SCRATCH"
@@ -39,7 +45,7 @@ FREE=$(df -g "$SCRATCH" | tail -1 | awk '{print $4}')
 echo "=== weight-quant KLD: $TAG ==="
 echo "ref    : $REF"
 echo "tests  : ${TESTS[*]}"
-echo "chunks : $CHUNKS at -c $CTX  (~$((CHUNKS*CTX)) tokens)"
+echo "chunks : $CHUNKS at -c $CTX  (~$((CHUNKS*CTX)) tokens); ref KV $REF_KV, test KV $KV"
 echo "commit : $(cd "$B" && git rev-parse --short HEAD) on $(cd "$B" && git rev-parse --abbrev-ref HEAD)"
 echo "binary : $(date -r "$BIN/llama-perplexity" '+%Y-%m-%d %H:%M')"
 if [ -s "$BASE" ]; then
@@ -56,7 +62,7 @@ if [ ! -s "$BASE" ]; then
   [ "$FREE" -lt "$NEED" ] && { echo "ABORT: not enough space for the base logits"; exit 1; }
   echo "--- generating reference logits from $(basename "$REF") ---"
   "$BIN/llama-perplexity" -m "$REF" -f "$W" -c "$CTX" --chunks "$CHUNKS" -fa on \
-    -ctk f16 -ctv f16 --kl-divergence-base "$BASE" >"$OUT/$TAG-ref.log" 2>&1 \
+    -ctk "$REF_KV" -ctv "$REF_KV" --kl-divergence-base "$BASE" >"$OUT/$TAG-ref.log" 2>&1 \
     || { echo "FAILED, see $OUT/$TAG-ref.log"; tail -5 "$OUT/$TAG-ref.log"; exit 1; }
   grep -E 'Final estimate' "$OUT/$TAG-ref.log" | sed 's/^/  ref /'
 fi
@@ -67,7 +73,7 @@ for M in "${TESTS[@]}"; do
   echo
   echo "--- $n vs reference ---"
   "$BIN/llama-perplexity" -m "$M" -f "$W" -c "$CTX" --chunks "$CHUNKS" -fa on \
-    -ctk f16 -ctv f16 --kl-divergence --kl-divergence-base "$BASE" \
+    -ctk "$KV" -ctv "$KV" --kl-divergence --kl-divergence-base "$BASE" \
     >"$OUT/$TAG-$n.log" 2>&1 \
     || { echo "FAILED, see $OUT/$TAG-$n.log"; tail -5 "$OUT/$TAG-$n.log"; continue; }
   grep -E 'Mean KLD|Maximum KLD|99.0%|99.9%|Median KLD|Mean Delta|top token|Same top|RMS|PPL ratio|Final estimate' \
