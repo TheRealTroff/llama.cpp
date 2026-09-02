@@ -370,7 +370,7 @@ against our 144.9. Our curve is flat but high; theirs is steep with a cheap shel
 > the n3 round at **141.0 ms** (`slope-sweep.md`). What is missing is a *round decomposition*
 > at depth 3. See **`width4-verify.md`**.
 
-## Five traps that have each cost a day
+## Six traps that have each cost a day
 
 **1. n_predict is not comparable across harnesses.** Generation grows the KV cache, so
 the same config reads ~25 t/s at `n_predict` 300 and ~23 at 600. `RUN_GDN_FUSE.sh` and
@@ -412,6 +412,12 @@ widths can inherit a layout choice made by an earlier width. On 2026-08-30 the s
 width-5/6 pair reversed ordering between a combined sweep and a second combined run.
 Fresh-process cells were stable and matched the routed-kernel boundaries. The combined
 numbers are discarded; use one `-p` value per process for a width curve.
+
+**6. A copied `test-backend-ops` runs the CURRENT tree's kernels.** The binary links
+`@rpath/libggml-metal.dylib` with an absolute rpath into its build dir, so a copy taken
+before a rebuild silently loads the rebuilt Metal library. On 2026-09-02 a "base" copy
+measured flat against the variant for exactly that reason (`fa-f16-spill.md`). A base arm
+must be a separate checkout. Two arms that agree to the microsecond are a routing alarm.
 
 ## Methodology rules, learned the hard way
 

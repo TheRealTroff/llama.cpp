@@ -29,12 +29,11 @@ escalate only when you need register counts or the instruction mix too.
 Cross-checked again 2026-09-02 on the two families that had been unreachable: skinny SoA
 mul_mm probes 0 spill (replay: 0, 52 registers) and the Turbo4 GQA6 flash-attention
 probes 0 spill (replay: 0, 60 registers). Instruction COUNTS do not cross-check the same
-way - see "What this does not tell you". The same run also produced an UNVERIFIED lead:
-the f16 flash-attention kernel `kernel_flash_attn_ext_f16_dk256_dv256` at its production
-specialization (mask, bcm, nsg 4, nwg 8, gqah 1) probes **432 bytes/thread of spill**
-(256 at gqah 6) while every Turbo4 and skinny kernel is at zero. Treat it as a lead for
-`metal-gpu-profile` to confirm, not a fact - the probe has been validated against the
-replay on one mul_mv kernel and two zero cases only.
+way - see "What this does not tell you". The same sweep found the f16 flash-attention
+kernel spilling **400 B/thread** at its production specialization; replay confirmed 400
+exactly, and the fix (K-loop unroll 4 instead of full) is a 5-10% kernel win
+(`perf/fa-f16-spill.md`). That is the fourth family the spill field has been validated
+on. Probe every production kernel once; a spilling one was hiding in the pick for weeks.
 
 ## Prerequisites
 

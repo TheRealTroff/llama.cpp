@@ -178,7 +178,11 @@ for argmax stability. See open items.
    and belongs beside the 4.65 GiB in the pick block.
 2. Five-prompt corpus (`run-dflash-corpus.sh`) f16 vs Turbo4 at depths 3 and 4: if the
    acceptance sign is consistent across workloads it is a signal, otherwise noise.
-3. Width 2 (depth 1) still on the vector route, +19% round premium.
+3. ~~Width 2 (depth 1) still on the vector route, +19% round premium.~~ The vector
+   Turbo4 kernel spilled 496 B/thread from fully unrolled dequant loops; fixed on branch
+   `exp/fa-f16-tgcap` (`fa-f16-spill.md`): width-1 kernel -55%, depth-1 round 109.5 ->
+   97.4 ms (-11.1%), premium over f16 now +6%. Changes the width-1/2 hash
+   (`53d773b66745` -> `6caf7d30b262`); widths 3+ unaffected. Pending merge.
 4. Widths 7-8 outside the reuse guard (+4.5-5.0%). Extending GQAH=6 to width 7/8 tiles is
    a bounded A/B.
 5. Pair LUT A/B (above).

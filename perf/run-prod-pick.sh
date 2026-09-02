@@ -26,7 +26,7 @@ if [ -z "${CAFFEINATED:-}" ]; then
     exec env CAFFEINATED=1 caffeinate -dimsu "$0" "$@"
 fi
 
-B=/Users/troff/play/llama.cpp-prod
+B=${B:-/Users/troff/play/llama.cpp-prod}
 BIN=$B/build/bin
 # M/MD are overridable so this harness can measure a different target without anyone
 # hand-rolling a server invocation - that is the trap the whole file exists to prevent.
