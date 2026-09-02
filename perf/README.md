@@ -126,6 +126,11 @@ persistent SoA layout, removing the last layout-order hole. Fixed DFlash depth 5
 (verify width 6) improves **22.122 -> 24.295 t/s (+9.82%)**, byte-identical; the
 fixed depth-4 canonical arm is flat because it verifies width 5 (`skinny-soa.md`).
 
+**Extended an eighth time 2026-09-02 (owner: "adjust the cutoff as you see fit"):
+`GGML_FA_VEC_MAX=3`**, was 5 - see the flag row; the pick's shas are unchanged because
+every full depth-4 draft verifies at width 5, and depth 3 now emits the same canonical
+text 4.7% faster per round.
+
 **Kernel change without a flag, 2026-09-02: FA unroll form (`fa-f16-spill.md`).** The
 batched f16 FA kernel spilled 400 B/thread (full K-loop unroll); unroll 4 removes it,
 -6% kernel at 8K / -9.5% at 100K / -5% on the prefill route, **+0.44% e2e, byte-identical,
@@ -135,7 +140,7 @@ Turbo4 line, whose width-1/2 hash therefore moves (`53d773b66745` -> `6caf7d30b2
 f16 and Turbo4 width 3+ hashes unchanged. Always on; there is no flag to forget.
 
 ```
-GGML_MV_NC=2 GGML_MM_SKINNY=6 GGML_MM_SKINNY_SOA=1 GGML_FA_VEC_MAX=5 GGML_FA_MM_NWG=8 GGML_GDN_FUSE_WB=1 \
+GGML_MV_NC=2 GGML_MM_SKINNY=6 GGML_MM_SKINNY_SOA=1 GGML_FA_VEC_MAX=3 GGML_FA_MM_NWG=8 GGML_GDN_FUSE_WB=1 \
 GGML_MV_REPACK=1 GGML_MV_SOA_PIN=1 GGML_MV_SOA_W3=1 GGML_MV_SOA_W4=1 GGML_MV_SOA_W4_R4KP=3 GGML_MV_SOA_W5=4 GGML_MV_SOA_W5_HALF=1 \
 GGML_MV_SOA_WL_XL=1 GGML_METAL_GET_MEMCPY=1 \
 DFLASH_FUSED_INJECT=1 DFLASH_ASYNC_INJECT=1 LLAMA_DRAFT_WINDOW=1024 \
@@ -199,7 +204,7 @@ What each flag buys, and where it came from:
 off, unset it (`env -u GGML_MM_ACC_HALF ...`). A "no-acch" KLD arm run with `=0` reproduced
 the acch arm to the digit before this was noticed (`turbo4-quality.md`). Every other
 routing flag in this table is value-based.
-| `GGML_FA_VEC_MAX=5` | 20 | FA vec/mm routing cutoff. **5, not 4** - at 4 an MTP-path FA call reroutes and output changes. **Stale since the unroll fix (2026-09-02): the batched kernel now beats the vector kernel at widths 3-4 at every context (0.59x at width 4, 8K; 0.26x at 100K). `=2` is the right value for speed and changes the lineage; e2e at depth 3 in `turbo4-filled-100k.md`** | flash-attn-mm-split.md, turbo4-filled-100k.md |
+| `GGML_FA_VEC_MAX=3` | 20 | FA vector/batched routing cutoff: widths below it take the vector kernel. **3 since 2026-09-02** (was 5): the spill-free batched kernel beats the vector kernel at widths 3-4 at every context (0.59x at width 4, 8K; 0.26x at 100K), the vector kernel still wins at widths 1-2 (f16 at <= 8K, Turbo4 always). Inert at the depth-4 pick; -4.7% round at depth 3, whose output now matches the canonical depth-4 sha. Open: f16 widths 1-2 would prefer batched above ~30K context, which needs a context-aware rule, not a value | turbo4-filled-100k.md, flash-attn-mm-split.md |
 | `GGML_FA_MM_NWG=8` | 1 | KV split for the mm FA kernel, -60% FA | flash-attn-mm-split.md |
 | `GGML_GDN_FUSE_WB=1` | off | GDN writes the state cache directly, drops ~2.1 GB/round | gdn-writeback-fusion.md |
 | `GGML_FA_GQA_HEADS=4,6` | **auto: 6 on pre-M5 with Turbo4 KV, off on tensor hw** (Turbo4 line only) | Turbo4 FA flattens the query heads sharing a KV head into the Q8 tile; widths 3-6, GQA 4/6. Width 4: 5.3x kernel, -22.9% round. Default-on is a departure from the opt-in convention; the pick sets it explicitly | turbo4-fa-gqa-reuse.md |

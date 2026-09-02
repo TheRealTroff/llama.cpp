@@ -110,6 +110,36 @@ acceptance, the -4.7% round is the kernel). At the pick (depth 4) it is inert, s
 full draft verifies at width 5. Adoption is the owner's call; it belongs in `PICK_ENV`
 (`GGML_FA_VEC_MAX=2`) and the README flag table's "5, not 4" note becomes history.
 
+## F. Adopted: `GGML_FA_VEC_MAX=3` (owner: "adjust the cutoff as you see fit")
+
+Widths 1-2 measured before choosing the value (vector vs batched, mirrored, kernel level):
+
+| | width 1, 8K | width 2, 8K | width 1, 100K | width 2, 100K |
+|---|---:|---:|---:|---:|
+| f16 vector | 215 us | 379 | 6451 | 11300 |
+| f16 batched | 403 | 407 | 4897 | 4924 |
+| Turbo4 vector | 292 | 548 | 3851 | 7125 |
+| Turbo4 batched | 680 | 687 | 8428 | 8450 |
+
+The vector kernel wins widths 1-2 for f16 at 8K and for Turbo4 at every context (its
+batched kernel has no tile reuse below width 3); the batched kernel wins widths 3-4 for
+both at every context. The cutoff is one process-wide value, so 3 is the choice:
+widths 1-2 vector, 3+ batched. It is now in `PICK_ENV`, the README pick block, and both
+harnesses. What a single value cannot express: f16 at widths 1-2 would prefer the batched
+kernel above ~30K of context (0.76x / 0.44x at 100K). That is a context-aware routing rule
+(`ne11` in `ggml_metal_op_flash_attn_ext_use_vec`), left open.
+
+Post-change gates on the pick, `GGML_FA_VEC_MAX=3`:
+
+| arm | t/s | sha | expected |
+|---|---:|---|---|
+| f16 pick, 300 | 26.973 | `95eb7e65977e` | `95eb7e65977e` |
+| f16 pick, 600 | 29.503 | `6678b0507d41` | `6678b0507d41` |
+| batch-1 anchor | 13.170 | `95eb7e65977e` | `95eb7e65977e` |
+| Turbo4 pick, width 4, 600 | 29.164 | `12c3dc6bb2dd` | `12c3dc6bb2dd` |
+
+Every sha canonical, as the routing arithmetic predicts (widths 1-2 and 5 unchanged).
+
 ## Reading
 
 1. **The Turbo4 line's long-context story is real.** GQA tile reuse is worth 42 ms of a

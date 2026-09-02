@@ -63,8 +63,13 @@ mkdir -p "$OUT"
 # 1-2 read the original weights, widths 3-5 use scalar SoA, and widths 6-8 consume the
 # same persistent SoA layout with the skinny MMA kernel. The fixed depth-4 pick normally
 # verifies width 5, so SKINNY_SOA is inert there; at fixed depth 5 it is +9.82% e2e.
+# FA_VEC_MAX moved 5 -> 3 on 2026-09-02 (owner: "adjust the cutoff as you see fit"): the
+# batched FA kernel beats the vector kernel at widths 3-4 at every context since the unroll
+# fix (0.59x at width 4 on 8K, 0.26x at 100K); the vector kernel still wins at widths 1-2
+# for f16 at <=8K and for Turbo4 everywhere. Inert at this depth-4 pick (verify width 5),
+# -4.7% round at depth 3, where the output REJOINS the canonical sha. turbo4-filled-100k.md.
 PICK_ENV=(GGML_MV_NC=2 GGML_MM_SKINNY=6 GGML_MM_SKINNY_SOA=1
-          GGML_FA_VEC_MAX=5 GGML_FA_MM_NWG=8 GGML_GDN_FUSE_WB=1
+          GGML_FA_VEC_MAX=3 GGML_FA_MM_NWG=8 GGML_GDN_FUSE_WB=1
           GGML_MV_REPACK=1 GGML_MV_SOA_PIN=1 GGML_MV_SOA_W3=1
           GGML_MV_SOA_W4=1 GGML_MV_SOA_W4_R4KP=3
           GGML_MV_SOA_W5=4 GGML_MV_SOA_W5_HALF=1 GGML_MV_SOA_WL_XL=1
