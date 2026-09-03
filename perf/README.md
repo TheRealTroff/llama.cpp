@@ -127,9 +127,11 @@ persistent SoA layout, removing the last layout-order hole. Fixed DFlash depth 5
 fixed depth-4 canonical arm is flat because it verifies width 5 (`skinny-soa.md`).
 
 **Extended an eighth time 2026-09-02 (owner: "adjust the cutoff as you see fit"):
-`GGML_FA_VEC_MAX=3`**, was 5 - see the flag row; the pick's shas are unchanged because
-every full depth-4 draft verifies at width 5, and depth 3 now emits the same canonical
-text 4.7% faster per round.
+`GGML_FA_VEC_MAX=3`**, was 5 - see the flag row; the pick's shas held (every full
+depth-4 draft verifies at width 5) though one of five corpus prompts forks at depth 4, and
+depth 3 now emits the same canonical text 4.7% faster per round. **Parallel streams are
+outside everything above**: 2 slots are slower in aggregate than 1, 4-8 saturate at one
+stream's throughput (`parallel-streams.md`).
 
 **Kernel change without a flag, 2026-09-02: FA unroll form (`fa-f16-spill.md`).** The
 batched f16 FA kernel spilled 400 B/thread (full K-loop unroll); unroll 4 removes it,
@@ -204,7 +206,7 @@ What each flag buys, and where it came from:
 off, unset it (`env -u GGML_MM_ACC_HALF ...`). A "no-acch" KLD arm run with `=0` reproduced
 the acch arm to the digit before this was noticed (`turbo4-quality.md`). Every other
 routing flag in this table is value-based.
-| `GGML_FA_VEC_MAX=3` | 20 | FA vector/batched routing cutoff: widths below it take the vector kernel. **3 since 2026-09-02** (was 5): the spill-free batched kernel beats the vector kernel at widths 3-4 at every context (0.59x at width 4, 8K; 0.26x at 100K), the vector kernel still wins at widths 1-2 (f16 at <= 8K, Turbo4 always). Inert at the depth-4 pick; -4.7% round at depth 3, whose output now matches the canonical depth-4 sha. Open: f16 widths 1-2 would prefer batched above ~30K context, which needs a context-aware rule, not a value | turbo4-filled-100k.md, flash-attn-mm-split.md |
+| `GGML_FA_VEC_MAX=3` | 20 | FA vector/batched routing cutoff: widths below it take the vector kernel. **3 since 2026-09-02** (was 5): the spill-free batched kernel beats the vector kernel at widths 3-4 at every context (0.59x at width 4, 8K; 0.26x at 100K), the vector kernel still wins at widths 1-2 (f16 at <= 8K, Turbo4 always). The pick's shas held; NOT universally inert at depth 4 - 1 of 5 corpus prompts forks (short verify widths happen when the drafter's block is not full, `parallel-streams.md`); -4.7% round at depth 3, whose output now matches the canonical depth-4 sha. Open: f16 widths 1-2 would prefer batched above ~30K context, which needs a context-aware rule, not a value | turbo4-filled-100k.md, flash-attn-mm-split.md |
 | `GGML_FA_MM_NWG=8` | 1 | KV split for the mm FA kernel, -60% FA | flash-attn-mm-split.md |
 | `GGML_GDN_FUSE_WB=1` | off | GDN writes the state cache directly, drops ~2.1 GB/round | gdn-writeback-fusion.md |
 | `GGML_FA_GQA_HEADS=4,6` | **auto: 6 on pre-M5 with Turbo4 KV, off on tensor hw** (Turbo4 line only) | Turbo4 FA flattens the query heads sharing a KV head into the Q8 tile; widths 3-6, GQA 4/6. Width 4: 5.3x kernel, -22.9% round. Default-on is a departure from the opt-in convention; the pick sets it explicitly | turbo4-fa-gqa-reuse.md |

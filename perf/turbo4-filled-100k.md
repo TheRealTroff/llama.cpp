@@ -139,6 +139,8 @@ Post-change gates on the pick, `GGML_FA_VEC_MAX=3`:
 | Turbo4 pick, width 4, 600 | 29.164 | `12c3dc6bb2dd` | `12c3dc6bb2dd` |
 
 Every sha canonical, as the routing arithmetic predicts (widths 1-2 and 5 unchanged).
+Correction 2026-09-03: "inert at depth 4" held on the benchmark prompt only; one of five
+corpus prompts forks at depth 4 under the new cutoff (`parallel-streams.md`, side finding).
 
 ## Reading
 

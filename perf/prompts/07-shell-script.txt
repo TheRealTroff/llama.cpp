@@ -1,0 +1,1 @@
+Write a bash script that rotates log files in a directory: keep the seven most recent, compress the ones older than a day with gzip, and never touch a file that is currently open by another process. Explain each step briefly after the script.

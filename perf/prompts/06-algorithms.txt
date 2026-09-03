@@ -1,0 +1,1 @@
+Explain how a hash map works internally, including how collisions are handled, and describe two situations where a balanced binary search tree would be the better choice. Use concrete examples.
