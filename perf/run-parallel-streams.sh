@@ -36,8 +36,12 @@ for set in $SETS; do for n in $NS; do
       "${SPEC_ARGS[@]}" $EXTRA_ARGS --port $PORT > "$slog" 2>&1 &
   pid=$!
   for i in $(seq 1 200); do curl -sf -o /dev/null "http://127.0.0.1:$PORT/health" && break; sleep 2; kill -0 $pid 2>/dev/null || { echo "[$set n$n] server died"; tail -3 "$slog"; break 2; }; done
-  # warm-up: one short request so model/repack state is settled before timing
-  python3 -c "import json;print(json.dumps({'prompt':'Say hello.','n_predict':16,'temperature':0}))" | curl -s -X POST "http://127.0.0.1:$PORT/completion" -d @- >/dev/null
+  # warm-up: one short request so model/repack state is settled before timing (WARMUP=0 skips it)
+  if [ "${WARMUP:-1}" = 1 ]; then
+    for w in $(seq 1 ${WARMUP_N:-1}); do
+      python3 -c "import json;print(json.dumps({'prompt':'Say hello.','n_predict':16,'temperature':0}))" | curl -s -X POST "http://127.0.0.1:$PORT/completion" -d @- >/dev/null &
+    done; wait $(jobs -p | grep -v "^$pid$") 2>/dev/null
+  fi
   sleep 2
   t0=$(python3 -c 'import time;print(time.time())')
   for s in $(seq 0 $((n-1))); do

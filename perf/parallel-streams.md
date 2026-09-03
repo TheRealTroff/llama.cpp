@@ -136,3 +136,54 @@ fast math (`fa-f16-spill.md`). Not a Turbo4 defect, but a serving property to kn
 memory of f16. What it needs before it is a product: the symmetric-Turbo4 multi-sequence
 fix above, then kernels for decode widths 9-64 (the same wall f16 hits), then a drafter
 that batches across slots.
+
+## The symmetric-Turbo4 multi-slot defect, isolated (2026-09-03 night, owner: "can you unbreak it?")
+
+Not fixed. Narrowed to one condition, with every plausible cause tested and a
+one-command repro. Everything below is from fresh servers, `--spec-type none`, 8-token
+completions of `01-code-explain` on every slot.
+
+**Trigger: the first graph with three or more sequences, when any single-sequence graph
+ran before it, with K and V both Turbo4 and per-slot (non-unified) caches.** Then every
+stream samples EOS as its first token (sane top-4 logits otherwise).
+
+| variation | result |
+|---|---|
+| no request before the 3-slot batch | works |
+| three concurrent warm-ups, then the batch (first multi-seq graph is the warm-up) | works |
+| one warm-up, or three sequential single warm-ups, then the batch | **fails** |
+| 2 slots, any of the above | works (also with distinct prompts: correct per-stream text) |
+| K-only / V-only Turbo4 | works, but Metal refuses mixed types and runs FA on CPU |
+| q8_0 K+V, 4 slots | works |
+| `--kv-unified` | works |
+| prompt cache off (`--cache-ram 0`) | fails |
+| per-slot cache 2K / 4K / 8K / 16K | fails |
+| micro-batch 128 / 512 / 2048 (unsplit prefill) | fails |
+| GQA reuse off, KV split off, W3 override unset/8 | fails |
+| graph reuse off, Metal graph concurrency off, fusion off, one command buffer | fails |
+| GDN fused writeback off, memcpy readback off | fails |
+| all fork routing flags removed | works (subsets flip either way: timing, not routing) |
+| `MTL_SHADER_VALIDATION=1` | **works**, no bounds violation reported |
+| `MTL_DEBUG_LAYER=1` alone | fails |
+
+Kernels are exonerated in isolation: the exact traced shapes (`GGML_FA_DEBUG=1`, now in
+tree) pass against the CPU reference at 1-4 streams in both the head-major and the
+server's interleaved-head layout (36/36), the quantized cache write passes at 2-8 streams
+(9/9), and the routed Q4_0 matmuls pass with the stream broadcast the multi-seq graph uses
+(`ne12 = r2 = 3`, 65/65). Layout is consistent: the cache is one flat row array per layer,
+stream stride = per-stream cells x 528 B, and the attention view's `nb13` matches it.
+
+Reading: something in the FIRST >=3-sequence graph after a 1-sequence graph is
+timing-dependent (validation slows and serializes kernels and it passes), Turbo4-only,
+and not any of the backend's ordering knobs. The next step is a debugger on that graph:
+dump every layer-0 activation for "warm-up then 3-batch" vs "3-batch alone" and find the
+first tensor that differs. Repro:
+
+```
+KV=turbo4 SPEC=none SETS=same NS=3 NPRED=8 perf/run-parallel-streams.sh      # fails
+WARMUP=0 ... same                                                            # works
+EXTRA_ARGS="--kv-unified" ... same                                           # works
+```
+
+Workarounds today: `--kv-unified`, or issue a first request on every slot concurrently
+before serving. Both are in the harness (`EXTRA_ARGS`, `WARMUP_N`).
