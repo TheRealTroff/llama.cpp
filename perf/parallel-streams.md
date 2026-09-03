@@ -80,3 +80,59 @@ benchmark prompt happened not to have any, and the "inert at the pick" claim in
 `turbo4-filled-100k.md` and the README is corrected to "held on the benchmark prompt; can
 fork elsewhere". The pick's canonical shas still hold; other prompts' depth-4 hashes may
 not carry across the cutoff change.
+
+## Eight streams on Turbo4 (2026-09-03 evening, owner: "what can we do for 8 streams with turbo4?")
+
+Same prompt on every slot, `-np 8`, no warm-up difference from the morning. Harness gained
+`KV=`, `KVK=`/`KVV=`, `SPEC=dflash|none`, `DEPTH=`, `EXTRA_ARGS=`.
+
+### The speculation ladder at eight streams (f16, works)
+
+| speculation | aggregate | per stream | acceptance |
+|---|---:|---:|---:|
+| DFlash depth 4 (pick) | 27.5 t/s | 4.0 | 45.8% |
+| DFlash depth 1 | 33.4 | 5.0 | 82.9% |
+| **off** | **38.9** | **5.9** | - |
+
+Exactly what the per-pass table predicts: with speculation off the decode step is 8 tokens
+wide and rides the skinny kernel; depth 4 makes it 40 wide on the generic matmul. Until
+there are kernels above width 8, **speculation should be off for 8 streams** (+42%
+aggregate over the pick's setting). Generation-only, the no-spec step measures ~168 ms for
+8 tokens against the 112 ms kernel pass; the remaining ~55 ms is per-slot server work.
+
+### Turbo4 with per-slot caches: broken at three or more sequences
+
+| config (no speculation unless noted) | result |
+|---|---|
+| Turbo4, 1 slot | 23.2 t/s, fine |
+| Turbo4, 2 slots, per-slot cache | 21.0 aggregate, fine |
+| **Turbo4, 4 slots, per-slot cache** | **every stream: empty output, EOS at token 1** |
+| Turbo4, 8 slots, per-slot cache (2K or 8K per slot) | same failure |
+| Turbo4, 8 slots, depth 4 / depth 1 | same failure (not the drafter) |
+| Turbo4 K only (V f16), 4 slots | 26.0, fine |
+| Turbo4 V only (K f16), 4 slots | 27.5, fine |
+| q8_0 K+V, 4 slots | 31.9, fine (not "any quantized cache") |
+| **Turbo4, 8 slots, `--kv-unified`** | **27.4 aggregate, works** |
+
+So: symmetric Turbo4 (K and V both Turbo4), non-unified cache, >= 3 sequences. The kernels
+are not the culprit in isolation: new `test-backend-ops` cases cover `nr23[1]` (sequence
+count) 2/3/4/8 for FLASH_ATTN_EXT at widths 1 and 8 (38/38 pass, f16 and Turbo4) and
+SET_ROWS into Turbo4 at ne2/ne3 = 2/3/4/8 (9/9 pass). The defect is in the assembly - the
+symmetric-Turbo4 FA path as the server drives it with three or more streams (view strides,
+padding, or the K/V index tensors) - and is the first thing a serving session must fix.
+Workaround tonight: `--kv-unified` (27.4 aggregate at 8 streams, 22% below f16's 38.9,
+because Turbo4's batched FA at 8 rows has no tile reuse below width... it dequantizes per
+tile).
+
+### Unified caches make every slot's text drift (f16 too)
+
+With `--kv-unified`, the same prompt on 8 slots gave 4 distinct outputs on f16 and 5 on
+Turbo4; with per-slot caches f16 gave 1. Batch position changes accumulation order under
+fast math (`fa-f16-spill.md`). Not a Turbo4 defect, but a serving property to know.
+
+### What eight streams on Turbo4 can do tonight
+
+`--kv-unified`, speculation off: 27.4 t/s aggregate, 4.6 per stream, at 1/4 the cache
+memory of f16. What it needs before it is a product: the symmetric-Turbo4 multi-sequence
+fix above, then kernels for decode widths 9-64 (the same wall f16 hits), then a drafter
+that batches across slots.

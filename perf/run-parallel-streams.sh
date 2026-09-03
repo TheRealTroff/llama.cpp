@@ -11,6 +11,12 @@ B=${B:-/Users/troff/play/llama.cpp-prod}; BIN=$B/build/bin
 M=${M:-/Users/troff/play/Qwen3.8-27B-uniform-Q4_0.gguf}
 MD=${MD:-/Users/troff/play/Qwen3.8-27B-DFlash2-pureQ4_0.gguf}
 PORT=${PORT:-8099}; NPRED=${NPRED:-300}; CTX=${CTX:-16384}
+# KV=turbo4 for the Turbo4 line (TURBO_AUTO_ASYMMETRIC=0 is exported below when so);
+# SPEC=dflash|none and DEPTH control speculation - 8 slots x depth-4 verify = 40-wide steps.
+KV=${KV:-f16}; SPEC=${SPEC:-dflash}; DEPTH=${DEPTH:-4}
+EXTRA_ARGS=${EXTRA_ARGS:-}   # e.g. --kv-unified
+[ "$KV" = turbo4 ] && export TURBO_AUTO_ASYMMETRIC=0 GGML_FA_GQA_HEADS=4,6 GGML_FA_GQA4_NWG=6 GGML_FA_GQA_W3_NWG=13
+if [ "$SPEC" = none ]; then SPEC_ARGS=(--spec-type none); else SPEC_ARGS=(-md "$MD" --spec-type draft-dflash --spec-draft-n-max "$DEPTH"); fi
 SETS=${SETS:-"same unique"}; NS=${NS:-"1 2 4 8"}
 OUT=/Users/troff/play/kvquant-experiments/results; TAG=${TAG:-parstreams-$(date +%m%d-%H%M)}
 TSV=$OUT/$TAG.tsv; SUM=$OUT/$TAG-summary.tsv
@@ -23,11 +29,11 @@ UNIQUE=("$B"/perf/prompts/01-code-explain.txt "$B"/perf/prompts/02-prose-creativ
         "$B"/perf/prompts/07-shell-script.txt "$B"/perf/prompts/08-story.txt)
 printf 'set\tnstreams\tstream\tprompt\tprompt_n\tpredicted_n\tprompt_ms\tpredicted_ms\ttps\tdraft_n\tdraft_accepted\tacc_pct\tsha1\n' > "$TSV"
 printf 'set\tnstreams\twall_s\tagg_tps\tmean_stream_tps\tmean_prompt_ms\tmean_acc_pct\tdistinct_sha\n' > "$SUM"
-echo "=== parallel streams: $TAG ==="; echo "commit : $(git -C "$B" rev-parse --short HEAD)"; echo "sets $SETS; N $NS; n_predict $NPRED; ctx $CTX"; echo
+echo "=== parallel streams: $TAG ==="; echo "commit : $(git -C "$B" rev-parse --short HEAD)"; echo "sets $SETS; N $NS; n_predict $NPRED; ctx $CTX; KV $KV; spec $SPEC depth $DEPTH"; echo
 for set in $SETS; do for n in $NS; do
   slog=$OUT/$TAG-$set-n$n.server.log
-  env "${PICK_ENV[@]}" "$BIN/llama-server" -m "$M" -c "$CTX" -np "$n" -fa on -ctk f16 -ctv f16 \
-      -md "$MD" --spec-type draft-dflash --spec-draft-n-max 4 --port $PORT > "$slog" 2>&1 &
+  env "${PICK_ENV[@]}" "$BIN/llama-server" -m "$M" -c "$CTX" -np "$n" -fa on -ctk "${KVK:-$KV}" -ctv "${KVV:-$KV}" \
+      "${SPEC_ARGS[@]}" $EXTRA_ARGS --port $PORT > "$slog" 2>&1 &
   pid=$!
   for i in $(seq 1 200); do curl -sf -o /dev/null "http://127.0.0.1:$PORT/health" && break; sleep 2; kill -0 $pid 2>/dev/null || { echo "[$set n$n] server died"; tail -3 "$slog"; break 2; }; done
   # warm-up: one short request so model/repack state is settled before timing

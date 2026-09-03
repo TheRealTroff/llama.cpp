@@ -8423,6 +8423,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_set_rows(GGML_TYPE_F16, GGML_TYPE_F16, GGML_TYPE_I64, { 1, 8, 1, 3 }, { 1, 1 }, 2, true));
     test_cases.emplace_back(new test_set_rows(GGML_TYPE_F16, GGML_TYPE_F16, GGML_TYPE_I32, { 1, 8, 1, 3 }, { 1, 1 }, 2, true));
     test_cases.emplace_back(new test_set_rows(GGML_TYPE_F32, GGML_TYPE_TURBO4_0, GGML_TYPE_I64, { 1024, 128, 1, 1 }, { 1, 1 }, 5, false));
+    // multi-stream KV writes (non-unified cache: ne3 = streams; also ne2 > 1 for the per-head layout)
+    for (ggml_type type_dst : { GGML_TYPE_F16, GGML_TYPE_TURBO4_0 }) {
+        for (int64_t ns : { 2, 3, 4, 8 }) {
+            test_cases.emplace_back(new test_set_rows(GGML_TYPE_F32, type_dst, GGML_TYPE_I64, { 1024, 128, 1, ns }, { 1, 1 }, 5, false));
+            test_cases.emplace_back(new test_set_rows(GGML_TYPE_F32, type_dst, GGML_TYPE_I64, { 1024, 128, ns, 1 }, { 1, 1 }, 5, false));
+        }
+    }
 
     for (int mode : { GGML_ROPE_TYPE_NORMAL, GGML_ROPE_TYPE_NEOX, GGML_ROPE_TYPE_MROPE, GGML_ROPE_TYPE_VISION }) {
         for (ggml_type type : {GGML_TYPE_F16, GGML_TYPE_F32}) {
@@ -9893,6 +9900,18 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
                                                             GGML_PREC_F32, type_KV, type_KV));
             test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {6, 1}, 8448, nb, true, false, 0, 0,
                                                             GGML_PREC_F32, type_KV, type_KV));
+        }
+    }
+
+    // Multi-stream (non-unified KV, one sequence per server slot): nr23[1] = number of
+    // sequences in the batch.  Turbo4 with 4+ slots emitted EOS at the first token on
+    // 2026-09-03 while 2 slots worked; these pin it against the CPU reference.
+    for (ggml_type type_KV : { GGML_TYPE_F16, GGML_TYPE_TURBO4_0 }) {
+        for (int64_t nseq : { 2, 3, 4, 8 }) {
+            for (int nb : { 1, 8 }) {
+                test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {6, nseq}, 512, nb, true, false, 0, 0,
+                                                                GGML_PREC_F32, type_KV, type_KV));
+            }
         }
     }
 
