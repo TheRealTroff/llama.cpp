@@ -114,15 +114,16 @@ aggregate over the pick's setting). Generation-only, the no-spec step measures ~
 | q8_0 K+V, 4 slots | 31.9, fine (not "any quantized cache") |
 | **Turbo4, 8 slots, `--kv-unified`** | **27.4 aggregate, works** |
 
-So: symmetric Turbo4 (K and V both Turbo4), non-unified cache, >= 3 sequences. The kernels
+~~So: symmetric Turbo4 (K and V both Turbo4), non-unified cache, >= 3 sequences. The kernels
 are not the culprit in isolation: new `test-backend-ops` cases cover `nr23[1]` (sequence
 count) 2/3/4/8 for FLASH_ATTN_EXT at widths 1 and 8 (38/38 pass, f16 and Turbo4) and
 SET_ROWS into Turbo4 at ne2/ne3 = 2/3/4/8 (9/9 pass). The defect is in the assembly - the
 symmetric-Turbo4 FA path as the server drives it with three or more streams (view strides,
-padding, or the K/V index tensors) - and is the first thing a serving session must fix.
-Workaround tonight: `--kv-unified` (27.4 aggregate at 8 streams, 22% below f16's 38.9,
-because Turbo4's batched FA at 8 rows has no tile reuse below width... it dequantizes per
-tile).
+padding, or the K/V index tensors) - and is the first thing a serving session must fix.~~
+**Refuted 2026-09-04 - there is no defect; see "THE CORRECTION" below.** The `test-backend-ops`
+coverage is real and stays. ~~Workaround tonight: `--kv-unified`~~ (27.4 aggregate at 8 streams,
+22% below f16's 38.9, because Turbo4's batched FA at 8 rows has no tile reuse below width... it
+dequantizes per tile) - a real number, but no workaround is needed.
 
 ### Unified caches make every slot's text drift (f16 too)
 
@@ -132,14 +133,67 @@ fast math (`fa-f16-spill.md`). Not a Turbo4 defect, but a serving property to kn
 
 ### What eight streams on Turbo4 can do tonight
 
-`--kv-unified`, speculation off: 27.4 t/s aggregate, 4.6 per stream, at 1/4 the cache
-memory of f16. What it needs before it is a product: the symmetric-Turbo4 multi-sequence
-fix above, then kernels for decode widths 9-64 (the same wall f16 hits), then a drafter
-that batches across slots.
+~~`--kv-unified`,~~ speculation off: ~~27.4 t/s aggregate, 4.6 per stream~~ (per-slot caches work,
+see the correction: 8 slots per-slot Turbo4 no-spec was never measured clean - measure it), at
+1/4 the cache memory of f16. What it needs before it is a product: ~~the symmetric-Turbo4
+multi-sequence fix above, then~~ kernels for decode widths 9-64 (the same wall f16 hits), then a
+drafter that batches across slots.
 
 ## The symmetric-Turbo4 multi-slot defect, isolated (2026-09-03 night, owner: "can you unbreak it?")
 
-Not fixed. Narrowed to one condition, with every plausible cause tested and a
+> ## THE CORRECTION (2026-09-04, the first-divergent-activation trace) - read this first
+>
+> **There is no defect.** The "EOS at token 1 on every stream" is the benchmark prompt landing
+> on a first-token tie, and the whole works/fails matrix below is a coin flip read as a
+> boolean. Two measured facts replace it:
+>
+> 1. **`01-code-explain` as the harness feeds it (the file's trailing newline is kept) has a
+>    first-token tie between `` ``` `` (71093) and `<|im_end|>` (248046).** Margin `` ``` `` minus
+>    EOS, greedy, same tokens and positions, driver `llama-multiseq-repro`: Turbo4 1 stream
+>    +0.18, 2 streams +0.13, 3 streams +0.26 / -0.006 (two harmless call-sequence variants), 4
+>    streams -0.07; f16 1 stream +0.06, 3 streams +0.12; q8_0 3 streams +0.19; Turbo4 without
+>    `GGML_MM_ACC_HALF`: +0.02 / +0.02 / -0.05 at 1/3/4 streams. Every configuration sits within
+>    its own rounding noise of the tie, and the sign decides "works" or "fails". Without the
+>    trailing newline the first token is `\n\n` by 1.9 logits and nothing ever "fails". Field
+>    proof on the real server: Turbo4 symmetric, 4 slots, per-slot caches, spec off, the UNIQUE
+>    set - prompts 02/03/04 generate normal text, only 01 stops at token 1
+>    (`kvquant-experiments/results/t4-unique-n4*`).
+> 2. **The activations are exact.** Aligned trace, 1 stream vs 3 streams, identical tokens,
+>    positions and ubatch splits (170+7+4), every node of layers 0-3 dumped: for the 170-token
+>    prefill graph every layer 0-3 tensor of sequence 0 is **bitwise identical** across stream
+>    counts - the Turbo4 cache cells, the flash-attention output, the GDN states, all of it. The
+>    first node that differs at all is the layer-0 QKV projection of the 7-token chunk, with
+>    identical inputs: 7 columns take the f32 skinny route, 3x7 = 21 columns take the generic
+>    `mul_mm` with `GGML_MM_ACC_HALF` (f16 accumulate; the server's absmax values are all
+>    f16-representable). Everything downstream inherits that rounding. Logit KL 1-vs-3 streams:
+>    0.008 with acc-half, 0.0017 without; f16's own 1-vs-3 KL is 0.0024, Turbo4-vs-f16 is 0.018.
+>    So the only real multi-stream effect is a routing one: **with >= 3 slots (or 2 slots at
+>    verify width >= 5) every decode ubatch is >= 9-12 columns wide and the projections leave the
+>    f32 skinny/SoA kernels for the acc-half prefill kernel** - decode quality becomes prefill
+>    quality (the priced KLD ~0.006-0.008 of `GGML_MM_ACC_HALF`, README), which is also the perf
+>    cliff in the per-pass table above.
+>
+> What was wrong in the hunt below: every "works"/"fails" cell is a tie flip; "timing" was the
+> tie moving under validation/serialization; the 2-slot "works" is width 8 staying on the skinny
+> route; K-only/V-only were already flagged uninformative. The FA/SET_ROWS multi-stream tests
+> added that night are correct and stay. Method lessons: (a) before hunting a "wrong token",
+> print the top-2 logit margin - a 0.02-logit tie is not a defect signal; (b) `env $VAR cmd` in
+> zsh does NOT word-split - the first half-day of driver runs silently ran without the pick env
+> (K auto-upgraded to q8_0, no acc-half) and "could not reproduce"; check a log line that proves
+> the env took (`auto-asymmetric` warning absent, `attn_rot_k = 0`).
+>
+> Tooling kept on branch `dbg/turbo4-multiseq-trace`: `LLAMA_TRACE_DUMP=<dir>` in
+> `llama-context.cpp` (per-graph node dump: `graphs.tsv` ubatch geometry, `gN.idx` per-node
+> hash/sum/absmax + per-sequence block hashes, `gN.bin` data for `LLAMA_TRACE_DATA_LAYERS`,
+> `api.log` of every public llama call; observed nodes force a scheduler split, so keep
+> `LLAMA_TRACE_LAYERS` small for timing-sensitive hunts); `examples/multiseq-repro`
+> (`llama-multiseq-repro`: replays the server's slot sequence deterministically - `MSR_WARM`,
+> `MSR_TAIL`, `MSR_SPLITS`, `MSR_CKPT`, `MSR_SEQRM_TAIL`, `MSR_SYNC`, `MSR_PROBE`,
+> `MSR_APPEND_NL`, `MSR_DUMP_LOGITS`; prints top-3 logits per stream per step);
+> `perf/trace-posdiff.py` (position-aligned value diff of two graphs), `perf/trace-blkdiff.py`
+> (1-seq whole-hash vs N-seq block-0 hash, all layers), `perf/trace-logits-kl.py`.
+
+~~Not fixed.~~ Refuted above. The text below is the isolation as written that night. Narrowed to one condition, with every plausible cause tested and a
 one-command repro. Everything below is from fresh servers, `--spec-type none`, 8-token
 completions of `01-code-explain` on every slot.
 
@@ -173,11 +227,13 @@ server's interleaved-head layout (36/36), the quantized cache write passes at 2-
 (`ne12 = r2 = 3`, 65/65). Layout is consistent: the cache is one flat row array per layer,
 stream stride = per-stream cells x 528 B, and the attention view's `nb13` matches it.
 
-Reading: something in the FIRST >=3-sequence graph after a 1-sequence graph is
+~~Reading: something in the FIRST >=3-sequence graph after a 1-sequence graph is
 timing-dependent (validation slows and serializes kernels and it passes), Turbo4-only,
 and not any of the backend's ordering knobs. The next step is a debugger on that graph:
 dump every layer-0 activation for "warm-up then 3-batch" vs "3-batch alone" and find the
-first tensor that differs. Repro:
+first tensor that differs.~~ Done 2026-09-04, see THE CORRECTION: the first tensor that
+differs is the first matmul of the first ubatch narrower than the acc-half route threshold,
+with identical inputs - a precision route, not a defect. Repro:
 
 ```
 KV=turbo4 SPEC=none SETS=same NS=3 NPRED=8 perf/run-parallel-streams.sh      # fails
@@ -185,5 +241,6 @@ WARMUP=0 ... same                                                            # w
 EXTRA_ARGS="--kv-unified" ... same                                           # works
 ```
 
-Workarounds today: `--kv-unified`, or issue a first request on every slot concurrently
-before serving. Both are in the harness (`EXTRA_ARGS`, `WARMUP_N`).
+~~Workarounds today: `--kv-unified`, or issue a first request on every slot concurrently
+before serving.~~ No workaround needed (see the correction). `EXTRA_ARGS` and `WARMUP_N` stay in
+the harness; the harness now warns when a stream stops at token 1.

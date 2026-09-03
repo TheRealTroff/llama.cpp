@@ -63,6 +63,8 @@ for s in range(n):
     open(tsv,'a').write(f"{set_}\t{n}\t{s}\t{'same' if set_=='same' else 'u%d'%s}\t{t['prompt_n']}\t{t['predicted_n']}\t{t['prompt_ms']:.1f}\t{t['predicted_ms']:.1f}\t{t['predicted_per_second']:.3f}\t{t.get('draft_n',0)}\t{t.get('draft_n_accepted',0)}\t{acc:.2f}\t{sha}\n")
 wall=t1-t0; agg=sum(r[2] for r in rows)/wall
 open(summ,'a').write(f"{set_}\t{n}\t{wall:.2f}\t{agg:.3f}\t{st.mean(r[5] for r in rows):.3f}\t{st.mean(r[3] for r in rows):.1f}\t{st.mean(r[8] for r in rows):.2f}\t{len({r[9] for r in rows})}\n")
+for r in rows:
+    if r[2] <= 1: print(f"  WARNING: stream {r[0]} stopped at token 1 - 01-code-explain (with its trailing newline) is a first-token TIE between ``` and <|im_end|> (margin ~0.02-0.26 logits in every config); this is rounding, not a defect - see parallel-streams.md THE CORRECTION")
 print(f"[{set_:6s} n={n}] wall {wall:6.2f} s  aggregate {agg:7.3f} t/s  per-stream mean {st.mean(r[5] for r in rows):7.3f} t/s  acc {st.mean(r[8] for r in rows):5.1f}%  prompt_ms mean {st.mean(r[3] for r in rows):7.1f}  distinct sha {len({r[9] for r in rows})}")
 PY
   kill -TERM $pid 2>/dev/null; for i in $(seq 1 25); do kill -0 $pid 2>/dev/null || break; sleep 1; done; kill -9 $pid 2>/dev/null; wait $pid 2>/dev/null; sleep 5
