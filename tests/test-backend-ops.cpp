@@ -9903,6 +9903,16 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
+    // Multi-stream server graphs hand the projections a [k, n_tok, n_stream] activation:
+    // src1 ne12 = streams, broadcast over a single weight (r2 = streams).  The fork's routed
+    // Q4_0 kernels were only ever proved at ne12 = 1.  Real Qwen3.8 projection shapes.
+    for (int64_t ns : { 1, 2, 3, 4 }) {
+        for (int n : { 1, 3, 4, 5, 7, 12, 21, 170 }) {
+            test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 17408, n, 5120, {1, 1}, {ns, 1}));
+            test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 5120, n, 17408, {1, 1}, {ns, 1}));
+        }
+    }
+
     // Multi-stream (non-unified KV, one sequence per server slot): nr23[1] = number of
     // sequences in the batch.  Turbo4 with 4+ slots emitted EOS at the first token on
     // 2026-09-03 while 2 slots worked; these pin it against the CPU reference.
@@ -9912,6 +9922,25 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
                 test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {6, nseq}, 512, nb, true, false, 0, 0,
                                                                 GGML_PREC_F32, type_KV, type_KV));
             }
+        }
+    }
+
+    // Exact server prefill shapes from the 2026-09-03 multi-slot Turbo4 failure (3 slots
+    // fail, 2 work): 256-cell view, Q rows per stream x streams as traced.
+    for (ggml_type type_KV : { GGML_TYPE_F16, GGML_TYPE_TURBO4_0 }) {
+        for (auto sh : std::vector<std::pair<int64_t,int>>{ {2,177}, {2,4}, {2,1}, {3,170}, {3,4}, {3,7}, {3,1}, {4,181} }) {
+            test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {6, sh.first}, 256, sh.second, true, false, 0, 0,
+                                                            GGML_PREC_F32, type_KV, type_KV));
+        }
+    }
+
+    // Same shapes in the SERVER's cache layout: heads interleaved inside each cell (permute
+    // {0,2,1,3}, the ns10=ns20=8 pipelines), streams as nr23[1].  The head-major default
+    // layout above never exercises the stream stride the server actually uses.
+    for (ggml_type type_KV : { GGML_TYPE_F16, GGML_TYPE_TURBO4_0 }) {
+        for (auto sh : std::vector<std::pair<int64_t,int>>{ {1,170}, {2,177}, {2,4}, {2,1}, {3,170}, {3,4}, {3,7}, {3,1}, {4,181}, {4,1} }) {
+            test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {6, sh.first}, 256, sh.second, true, false, 0, 0,
+                                                            GGML_PREC_F32, type_KV, type_KV, {0, 2, 1, 3}, false));
         }
     }
 

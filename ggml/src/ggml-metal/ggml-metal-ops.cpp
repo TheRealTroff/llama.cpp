@@ -10,6 +10,8 @@
 
 #include <cassert>
 #include <algorithm>
+#include <set>
+#include <string>
 #include <limits>
 #include <cmath>
 
@@ -1315,6 +1317,19 @@ int ggml_metal_op_get_rows(ggml_metal_op_t ctx, int idx) {
 int ggml_metal_op_set_rows(ggml_metal_op_t ctx, int idx) {
     ggml_tensor * op = ctx->node(idx);
 
+    {
+        static const bool fa_debug = getenv("GGML_FA_DEBUG") != nullptr;
+        if (fa_debug) {
+            static std::set<std::string> seen;
+            const ggml_tensor * a = op->src[0]; const ggml_tensor * b = op->src[1]; const ggml_tensor * d = op;
+            char buf[512];
+            snprintf(buf, sizeof(buf), "set_rows: src[%lld,%lld,%lld,%lld] nb=[%zu,%zu,%zu,%zu] idx[%lld,%lld,%lld,%lld] dst[%lld,%lld,%lld,%lld] nb=[%zu,%zu,%zu,%zu] type=%s",
+                (long long) a->ne[0], (long long) a->ne[1], (long long) a->ne[2], (long long) a->ne[3], (size_t) a->nb[0], (size_t) a->nb[1], (size_t) a->nb[2], (size_t) a->nb[3],
+                (long long) b->ne[0], (long long) b->ne[1], (long long) b->ne[2], (long long) b->ne[3],
+                (long long) d->ne[0], (long long) d->ne[1], (long long) d->ne[2], (long long) d->ne[3], (size_t) d->nb[0], (size_t) d->nb[1], (size_t) d->nb[2], (size_t) d->nb[3], ggml_type_name(d->type));
+            if (seen.insert(buf).second) { GGML_LOG_INFO("%s\n", buf); }
+        }
+    }
     ggml_metal_library_t lib = ctx->lib;
     ggml_metal_encoder_t enc = ctx->enc;
 
@@ -3733,6 +3748,27 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
                                !has_sinks && !has_bias &&
                                ne11 % OP_FLASH_ATTN_EXT_NCPSG == 0;
     const bool use_vec = ggml_metal_op_flash_attn_ext_use_vec(op) && !(use_gqa_reuse && ne01 <= 4);
+
+    // GGML_FA_DEBUG=1: one line per distinct FA call shape, to see what the server actually
+    // dispatches (multi-stream caches make ne03/ne13/ne33 > 1).
+    {
+        static const bool fa_debug = getenv("GGML_FA_DEBUG") != nullptr;
+        if (fa_debug) {
+            static std::set<std::string> seen;
+            char buf[512];
+            snprintf(buf, sizeof(buf), "fa: q[%lld,%lld,%lld,%lld] k[%lld,%lld,%lld,%lld] v[%lld,%lld,%lld,%lld] mask[%lld,%lld,%lld,%lld] nb03=%zu nb13=%zu nb23=%zu nb33=%zu types k=%s v=%s vec=%d gqa=%d",
+                (long long) ne00, (long long) ne01, (long long) ne02, (long long) ne03,
+                (long long) ne10, (long long) ne11, (long long) ne12, (long long) ne13,
+                (long long) ne20, (long long) ne21, (long long) ne22, (long long) ne23,
+                (long long) (has_mask ? op->src[3]->ne[0] : 0), (long long) (has_mask ? op->src[3]->ne[1] : 0),
+                (long long) (has_mask ? op->src[3]->ne[2] : 0), (long long) (has_mask ? op->src[3]->ne[3] : 0),
+                (size_t) op->src[0]->nb[3], (size_t) op->src[1]->nb[3], (size_t) op->src[2]->nb[3], (size_t) (has_mask ? op->src[3]->nb[3] : 0),
+                ggml_type_name(op->src[1]->type), ggml_type_name(op->src[2]->type), (int) use_vec, (int) use_gqa_reuse);
+            if (seen.insert(buf).second) {
+                GGML_LOG_INFO("%s\n", buf);
+            }
+        }
+    }
 
     if (!use_vec) {
         // half8x8 kernel
