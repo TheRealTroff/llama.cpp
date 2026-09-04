@@ -57,6 +57,7 @@ COMMON_ENV=(
     LLAMA_DRAFT_WINDOW=1024
     GGML_MM_ACC_HALF=1
     GGML_MM_N64=1
+    LLAMA_GDN_REPLAY=1
 )
 
 printf 'label\trep\tdraft_n_max\tverify_width\ttps\tpredicted_ms\tpredicted_n\tdraft_tokens\tdraft_accepted\taccept_pct\trounds\tround_ms\toutput_per_round\tsha1\tbytes\n' > "$TSV"

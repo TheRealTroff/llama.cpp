@@ -146,6 +146,6 @@ lesson: a deletion probe prices the deletion, not the re-derivation.
 - Memory: `s_l` drops from (1 + n_rs_seq) to 2 groups - at 8 slots depth 4 that is 4.3 -> 1.7 GB
   of state cache; unmeasured as a lever, but it is the reason the mode can be on at 8 slots even
   though it wins nothing there.
-- Adoption into the pick is the owner's call: +1.0% single Turbo4 stream (29.0-29.1 vs 28.7-28.8
-  on prompt 06; 30.34 on the pick harness), +1.5% f16, +3% at 4 slots, and the state-cache
-  memory.
+- ~~Adoption into the pick is the owner's call~~ **ADOPTED 2026-09-04 (owner: "pick it")**:
+  `LLAMA_GDN_REPLAY=1` in `PICK_ENV` (`run-prod-pick.sh`, `run-parallel-streams.sh`) and the README
+  pick block; branch merged to prod. Mint: TBD_REPLAY_MINT.

@@ -75,7 +75,7 @@ PICK_ENV=(GGML_MV_NC=2 GGML_MM_SKINNY=6 GGML_MM_SKINNY_SOA=1
           GGML_MV_SOA_W5=4 GGML_MV_SOA_W5_HALF=1 GGML_MV_SOA_WL_XL=1
           GGML_METAL_GET_MEMCPY=1
           DFLASH_FUSED_INJECT=1 DFLASH_ASYNC_INJECT=1 LLAMA_DRAFT_WINDOW=1024
-          GGML_MM_ACC_HALF=1 GGML_MM_N64=1)
+          GGML_MM_ACC_HALF=1 GGML_MM_N64=1 LLAMA_GDN_REPLAY=1)
 # The Turbo4 KV line (2026-09-01, perf/turbo4-fa-gqa-reuse.md): the same flags plus the
 # Turbo4 FA GQA tile-reuse stack. GQA_HEADS is auto-on for GQA6 on pre-M5 hardware, but
 # the pick names it so the measurement never depends on a default. GQA4_NWG=6 and

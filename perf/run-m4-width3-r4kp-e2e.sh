@@ -52,6 +52,7 @@ COMMON_ENV=(
     LLAMA_DRAFT_WINDOW=1024
     GGML_MM_ACC_HALF=1
     GGML_MM_N64=1
+    LLAMA_GDN_REPLAY=1
 )
 
 printf 'label\tarm\ttps\taccept_pct\tpredicted_n\tsha1\tbytes\n' > "$TSV"
