@@ -150,7 +150,7 @@ points). Interleaved on the ceiling table's points: 1 slot depth 3/4 -1.2%/-1.4%
 (+1.0%/+1.5% t/s), **4 slots depth 3 +3.0% aggregate**, 8 slots depth 1 flat; the state cache
 drops from 1 + depth to 2 groups. What it does not reach, and why (the replayed steps are a
 serial recurrence, a deletion probe does not price re-derivation), is the note's point.
-Mint: TBD_REPLAY_MINT.
+Mint: Canonical mint TAG `prodpick-sep04-replay` (prod `988dafd69`, all shas canonical, so this mint's spec-arm t/s DO compare with the acch lineage): **27.30/27.16 at 300** (`95eb7e65977e`), **29.88/29.73 at 600** (`6678b0507d41`), batch-1 anchor 14.10 (`95eb7e65977e`), MTP 22.17, partial-env 19.83; **Turbo4 line 30.23/30.12 at 600** (`12c3dc6bb2dd`), 28.90 at 300 (`63a78a7669cb`). Against the merged-prod check earlier today (27.1/27.3 at 300, 29.8 at 600, b1 14.0) the day's spread covers the single-slot delta, as the interleaved A/B said it would; the 4-slot point carries the money.
 
 ```
 GGML_MV_NC=2 GGML_MM_SKINNY=6 GGML_MM_SKINNY_SOA=1 GGML_FA_VEC_MAX=3 GGML_FA_MM_NWG=8 GGML_GDN_FUSE_WB=1 \
