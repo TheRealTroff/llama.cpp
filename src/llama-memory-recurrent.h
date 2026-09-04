@@ -173,6 +173,18 @@ public:
 
     int32_t s_copy(int i) const;
 
+    // s_copy without the rollback-index reset side effect, for graph-build decisions
+    int32_t s_copy_peek(int i) const;
+
+    // true when every one of the first n_seqs sequences reads its state from its own cell
+    // (row head + i), i.e. the state gather is the identity and a view of the cache rows
+    // can replace the copy
+    bool s_copy_is_identity(uint32_t n_seqs) const;
+
+    // first source row when the n_seqs source rows are consecutive (row0 + i), else -1: such a
+    // gather is a view of the cache rows (identity, or a uniform rollback slot; always for 1 seq)
+    int32_t s_copy_view_row0(uint32_t n_seqs) const;
+
 private:
     const llama_memory_status status;
 

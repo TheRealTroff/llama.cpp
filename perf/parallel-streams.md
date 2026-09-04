@@ -401,3 +401,57 @@ block and a CPY (the `GGML_GDN_FUSE_WB` snapshot writeback already has the addre
 block layout `[head][row][k]` matches the cache row, and each threadgroup owns its slice, so
 in-place is plausible). `GATED_DELTA_NET` itself (11 ms at 8 streams, 236 us/dispatch for 4
 tokens) is sequential over tokens per head and is the remaining kernel-side per-stream cost.
+
+## In-place recurrent states (2026-09-04, owner: "I like not copying things that don't need copying")
+
+**Built (branch `gdn-decode-kernels`, default-on, `LLAMA_RS_VIEW=0` disables):**
+- `build_rs` views the cache rows instead of gathering them whenever the sequences' source rows are
+  consecutive (`llama_memory_recurrent_context::s_copy_view_row0`: the identity map, a uniform
+  rollback slot, or any single sequence). The delta-net then reads the state where it lives.
+  The row offset is part of the graph topology and sits in every recurrent reuse check (the plain
+  `llm_graph_input_rs` AND the three hybrid wrappers, which duplicate the checks).
+- The delta-net's fused write-back now also covers the no-snapshot case (`K == 1`), so the new
+  state goes straight into the cache rows; in place for the identity case, which is safe because
+  each thread reads its own state row into registers before the token loop and writes only that
+  row.
+- Side items from the 8-slot spec-on profile: the width-1 conv takes the rows kernel too (250 ->
+  11 us/call), and the gather copies use 32-bit index math (the conv-state snapshot copy 103 -> 28
+  us).
+
+Two bugs found on the way, both by the tracer's new tools (`LLAMA_TRACE_WATCH=<tensor>` re-hashes
+a tensor after every node; `LLAMA_TRACE_CANARY=<bytes>` hashes the memory after each node's
+reserved allocation before and after it runs):
+1. **f16 scratch overrun in the stored-SoA fold** (`178e78ecb`; hotfix on prod `7415209e2`): the
+   fold makes a `[K, 1, S]` projection an S-column op at encode time, but the scratch reservation
+   judged the original shape and reserved nothing for S = 3..5, so the f16 convert wrote S*K halves
+   over the next tensor. Harmless in most allocations, fatal once the view changed the layout. Hits
+   the Turbo4 SOA-V1 line at 3-5 verify columns across slots; single-slot runs never fold.
+2. **Hybrid reuse checks without the topology flag**: with the flag only in `llm_graph_input_rs`,
+   a rollback graph of the same shape as the previous round reused the view graph and read the
+   current slot instead of snapshot row r - every spec-on arm changed output (f16 pick
+   `fa7d59465c1c`, stopping at 269 tokens) while the no-spec anchor stayed byte-identical.
+
+Also learned: view-vs-gather as a topology that flips on every rollback costs a graph rebuild per
+flip (~2% on the 1-slot spec picks); the consecutive-rows rule keeps single-slot graphs on one
+topology (the view offset changes, the graph does not).
+
+**Numbers** (all shas canonical: f16 `95eb7e65977e` / `6678b0507d41`, MTP `0f1a97ed24bc`, Turbo4
+`12c3dc6bb2dd` / `63a78a7669cb`; driver logits bitwise equal view vs gather at 1-4 seqs):
+
+| | before (this branch, `ovh2`) | in-place (`ovh5`) |
+|---|---:|---:|
+| f16 pick 300 / 600 | 27.1-27.3 / 29.8 | 27.10 / 29.67 |
+| f16 no-spec anchor | 13.17 | **13.99** |
+| Turbo4 pick 600 (ref 29.45) | - | **29.96** |
+| Turbo4 1 slot d3 | 27.8 | 27.9 |
+| Turbo4 2 slots d3 | 37.5 | 37.7 |
+| Turbo4 4 slots (d1) | 43.4 | **47.5** |
+| Turbo4 8 slots no spec | 48.4 | **60.3** |
+| Turbo4 1 slot no spec | 13.17 | 13.99 |
+
+Verify graph, per-op profile: n=1 85.5 -> 81.6 ms, n=8 339 -> 315 ms; the state gather and the
+state/conv copies are gone from the top list. What remains per stream is the delta-net kernel itself
+(170 us/dispatch at width 1 with 2 snapshot slots at 8 slots; sequential over tokens per head and
+bandwidth-bound on K x 25 MB snapshot writes) and, on the server side, the per-round checkpoint work
+that runs even when the depth policy has switched speculation off (8 slots with the drafter loaded
+58.3 vs 60.3 without).

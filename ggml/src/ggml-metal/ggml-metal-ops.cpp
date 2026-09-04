@@ -60,7 +60,9 @@ static const ggml_tensor * ggml_metal_gdn_wb_op(const ggml_tensor * cpy) {
 
     const ggml_tensor * op = cpy->src[0]->view_src;
 
-    if (!op || op->op != GGML_OP_GATED_DELTA_NET || ggml_get_op_params_i32(op, 0) <= 1) {
+    // K == 1 (no rollback snapshots): the single new state is copied the same way, from the
+    // block right after the attention scores into the cache rows; fuse that too
+    if (!op || op->op != GGML_OP_GATED_DELTA_NET) {
         return nullptr;
     }
 
@@ -1764,7 +1766,7 @@ int ggml_metal_op_ssm_conv(ggml_metal_op_t ctx, int idx) {
 
     // decode/verify widths: one thread per (row, token) with 256-thread threadgroups; the batched
     // kernel at these widths dispatches ne01 x ne02 two-thread threadgroups (480 us/call at 8 seqs)
-    if (ne1 > 1 && ne1 <= 16 && op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_F32) {
+    if (ne1 >= 1 && ne1 <= 16 && op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_F32) {
         auto pipeline = ggml_metal_library_get_pipeline(lib, "kernel_ssm_conv_f32_f32_rows");
         if (!pipeline.pipeline) {
             pipeline = ggml_metal_library_compile_pipeline(lib, "kernel_ssm_conv_f32_f32_rows", "kernel_ssm_conv_f32_f32_rows", nullptr);
@@ -2000,6 +2002,14 @@ int ggml_metal_op_gated_delta_net(ggml_metal_op_t ctx, int idx) {
     }
 
     const bool fuse_wb = cpy != nullptr;
+    if (getenv("GGML_GDN_DEBUG")) {
+        const ggml_tensor * st = op->src[5];
+        fprintf(stderr, "gdn: tok=%lld seqs=%lld K=%d fuse=%d state ne=[%lld,%lld,%lld,%lld] nb=[%zu,%zu,%zu,%zu] view_src=%s data_off=%lld | dst ne=[%lld,%lld] %s\n",
+            (long long) op->src[2]->ne[2], (long long) op->src[2]->ne[3], ggml_get_op_params_i32(op, 0), (int) fuse_wb,
+            (long long) st->ne[0], (long long) st->ne[1], (long long) st->ne[2], (long long) st->ne[3], st->nb[0], st->nb[1], st->nb[2], st->nb[3],
+            st->view_src ? st->view_src->name : "-", st->view_src ? (long long) ((char *) st->data - (char *) st->view_src->data) : 0LL,
+            (long long) op->ne[0], (long long) op->ne[1], cpy ? cpy->name : "");
+    }
 
     // the kernel writes the state cache, which is not part of this node's ranges,
     // so order it against earlier nodes before touching the encoder
@@ -2334,6 +2344,34 @@ int ggml_metal_op_cpy(ggml_metal_op_t ctx, int idx) {
         return 1;
     }
 
+    // strided f32 source -> contiguous f32 destination, rows not 16-byte aligned (the conv-state
+    // updates: [3,10240,S] views with 28-byte row stride): scalar flat copy, one thread per element
+    if (op->src[0]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32 &&
+        ggml_is_contiguous(op) && !ggml_is_contiguous(op->src[0]) &&
+        ggml_nelements(op) == ggml_nelements(op->src[0]) && nb00 == 4 &&
+        !(ne00 % 4 == 0 && (nb01 | nb02 | nb03) % 16 == 0 && ((uintptr_t) op->src[0]->data % 16) == 0 && ((uintptr_t) op->data % 16) == 0)) {
+        auto pipeline_g = ggml_metal_library_get_pipeline(lib, "kernel_cpy_f32_gather");
+        if (!pipeline_g.pipeline) {
+            pipeline_g = ggml_metal_library_compile_pipeline(lib, "kernel_cpy_f32_gather", "kernel_cpy_f32_gather", nullptr);
+        }
+        ggml_metal_kargs_cpy_gather_x4 gargs = {
+            /*.ne00x4 =*/ ne00, // element count along dim 0 for the scalar kernel
+            /*.ne01   =*/ ne01,
+            /*.ne02   =*/ ne02,
+            /*.ne03   =*/ ne03,
+            /*.nb01   =*/ nb01,
+            /*.nb02   =*/ nb02,
+            /*.nb03   =*/ nb03,
+        };
+        const int64_t n = ggml_nelements(op);
+        ggml_metal_encoder_set_pipeline(enc, pipeline_g);
+        ggml_metal_encoder_set_bytes   (enc, &gargs, sizeof(gargs), 0);
+        ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[0]), 1);
+        ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         2);
+        ggml_metal_encoder_dispatch_threadgroups(enc, (int) ((n + 255)/256), 1, 1, 256, 1, 1);
+        return 1;
+    }
+
     // strided f32 source -> contiguous f32 destination with the same element count: one thread
     // per float4 over a flat grid. The generic kernel dispatches one threadgroup per source row,
     // which for the GDN state writeback ([128,128,48,S] head-interleaved view -> cache rows) is
@@ -2624,7 +2662,7 @@ int ggml_metal_op_pool_2d(ggml_metal_op_t ctx, int idx) {
 }
 
 // convert f32 src1 to f16 for the small-batch mul_mv_ext kernels (fewer y load instructions)
-static bool ggml_metal_mul_mat_use_f16_src1(const ggml_tensor * op) {
+static bool ggml_metal_mul_mat_use_f16_src1_n(const ggml_tensor * op, int64_t ne11) {
     static const int env = getenv("GGML_MV_EXT_F16Y") ? atoi(getenv("GGML_MV_EXT_F16Y")) : 1;
     if (env == 0 && op->src[0]->type != GGML_TYPE_Q4_0_SOA) {
         return false;
@@ -2635,7 +2673,6 @@ static bool ggml_metal_mul_mat_use_f16_src1(const ggml_tensor * op) {
     if (op->src[0]->ne[0] % 128 != 0) {
         return false;
     }
-    const int64_t ne11 = op->src[1]->ne[1];
     if (ne11 < 2 || ne11 > 8) {
         return false;
     }
@@ -2662,12 +2699,32 @@ static bool ggml_metal_mul_mat_use_f16_src1(const ggml_tensor * op) {
     }
 }
 
+static bool ggml_metal_mul_mat_use_f16_src1(const ggml_tensor * op) {
+    return ggml_metal_mul_mat_use_f16_src1_n(op, op->src[1]->ne[1]);
+}
+
+// stored-SoA weights fold a broadcast [K, T, S] activation into [K, T*S] columns at encode time
+// (ggml_metal_op_mul_mat); every shape-dependent decision here has to see the folded column count
+static bool ggml_metal_mul_mat_soa_folds(const ggml_tensor * op) {
+    return op->src[0]->type == GGML_TYPE_Q4_0_SOA &&
+           op->src[0]->ne[2] == 1 && op->src[0]->ne[3] == 1 &&
+           (op->src[1]->ne[2] > 1 || op->src[1]->ne[3] > 1) &&
+           ggml_is_contiguous(op->src[1]) && ggml_is_contiguous(op);
+}
+
+static int64_t ggml_metal_mul_mat_eff_ne11(const ggml_tensor * op) {
+    return ggml_metal_mul_mat_soa_folds(op) ? op->src[1]->ne[1]*op->src[1]->ne[2]*op->src[1]->ne[3] : op->src[1]->ne[1];
+}
+
 size_t ggml_metal_op_mul_mat_extra_src1f16(const ggml_tensor * op) {
-    if (op->src[0]->type == GGML_TYPE_Q4_0_SOA &&
-        (op->src[1]->ne[1] == 2 || op->src[1]->ne[1] >= 6)) {
+    // the f16 activation scratch lives right after dst; this must match the encode-time route
+    // (the fold made a [K,1,S] projection a 3-column f16y op while this reserved nothing: the
+    // convert then wrote S*K halves over the next tensor - the 2026-09-04 in-place state hunt)
+    const int64_t ne11 = ggml_metal_mul_mat_eff_ne11(op);
+    if (op->src[0]->type == GGML_TYPE_Q4_0_SOA && (ne11 == 2 || ne11 >= 6)) {
         return 0;
     }
-    if (!ggml_metal_mul_mat_use_f16_src1(op)) {
+    if (!ggml_metal_mul_mat_use_f16_src1_n(op, ne11)) {
         return 0;
     }
     return GGML_PAD(ggml_nelements(op->src[1])*sizeof(ggml_fp16_t), 32);
@@ -2804,10 +2861,7 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
     // a contiguous [K, T, S] activation (per-sequence GDN projections in a multi-slot graph) is the
     // same matmul as [K, T*S]: fold the batch dims into the column count so the width routes
     // (w1..w8, skinny, mm) apply with N = T*S columns, exactly like the token-major projections.
-    if (op->src[0]->type == GGML_TYPE_Q4_0_SOA &&
-        op->src[0]->ne[2] == 1 && op->src[0]->ne[3] == 1 &&
-        (op->src[1]->ne[2] > 1 || op->src[1]->ne[3] > 1) &&
-        ggml_is_contiguous(op->src[1]) && ggml_is_contiguous(op)) {
+    if (ggml_metal_mul_mat_soa_folds(op)) {
         ggml_tensor src1f = *op->src[1];
         ggml_tensor dstf  = *op;
         src1f.ne[1] = op->src[1]->ne[1]*op->src[1]->ne[2]*op->src[1]->ne[3];

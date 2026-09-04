@@ -13,6 +13,7 @@
 #include "llama-sampler.h"
 #include "llama.h"
 
+#include <array>
 #include <cinttypes>
 #include <cmath>
 #include <cstring>
@@ -100,6 +101,298 @@ static const llm_fused_op_probe llm_fused_op_dsv4_hc_post_probe = {
     /*.n_tokens_per_seq =*/ 1,
 };
 
+
+// ---- LLAMA_TRACE_DUMP: per-graph activation dump for divergence hunting ----------------------
+// LLAMA_TRACE_DUMP=<dir>        enable; writes <dir>/graphs.tsv (one line per graph) and per graph
+//                               g<N>.idx (one record per observed node) + g<N>.bin (raw data)
+// LLAMA_TRACE_LAYERS=0,1,2,3    layers whose nodes are observed (default 0-3); "all" = every layer
+// LLAMA_TRACE_MAX_MB=64         skip nodes bigger than this (weights are never observed)
+// Observed nodes force a scheduler split at that node (sync + readback), everything else runs as
+// usual, so keep the layer set small when hunting a timing-dependent defect.
+#include <cstdio>
+#include <set>
+#include <algorithm>
+#include <sys/types.h>
+
+struct llama_trace_state {
+    bool        enabled = false;
+    std::string dir;
+    std::set<int> layers;
+    bool        all_layers = false;
+    size_t      max_bytes = 64ull*1024*1024;
+    int         graph_idx = -1;
+    std::set<int> data_layers;   // layers whose raw data is written (LLAMA_TRACE_DATA_LAYERS)
+    uint32_t    cur_n_tokens = 0, cur_n_seqs = 0, cur_n_seq_tokens = 0;
+    int32_t     cur_n_cells = 0; // pos of last token + 1 (valid cache cells per stream)
+    FILE *      f_idx = nullptr;
+    FILE *      f_bin = nullptr;
+    FILE *      f_graphs = nullptr;
+    size_t      bin_off = 0;
+    std::vector<uint8_t> buf;
+    // LLAMA_TRACE_WATCH=<name>: after every observed node, re-hash this tensor and report changes
+    std::string   watch_name;
+    ggml_tensor * watch = nullptr;
+    uint64_t      watch_hash = 0;
+    std::vector<uint8_t> watch_buf;
+    // LLAMA_TRACE_CANARY=<bytes>: hash the memory right after every node's output before and after
+    // the node runs; a change means the kernel wrote past its output
+    size_t   canary = 0;
+    uint64_t canary_hash = 0;
+    std::vector<uint8_t> canary_buf;
+};
+
+static llama_trace_state & llama_trace() {
+    static llama_trace_state st;
+    static bool init = false;
+    if (!init) {
+        init = true;
+        const char * d = getenv("LLAMA_TRACE_DUMP");
+        if (d && *d) {
+            st.enabled = true;
+            st.dir = d;
+            auto parse_set = [](const std::string & ls, std::set<int> & out) {
+                size_t i = 0;
+                while (i < ls.size()) {
+                    size_t j = ls.find(',', i);
+                    if (j == std::string::npos) j = ls.size();
+                    std::string tok = ls.substr(i, j - i);
+                    size_t dash = tok.find('-');
+                    if (dash != std::string::npos) {
+                        int a = atoi(tok.substr(0, dash).c_str()), b = atoi(tok.substr(dash + 1).c_str());
+                        for (int k = a; k <= b; ++k) out.insert(k);
+                    } else if (!tok.empty()) {
+                        out.insert(atoi(tok.c_str()));
+                    }
+                    i = j + 1;
+                }
+            };
+            const char * l = getenv("LLAMA_TRACE_LAYERS");
+            std::string ls = l ? l : "all";
+            if (ls == "all") {
+                st.all_layers = true;
+            } else {
+                parse_set(ls, st.layers);
+            }
+            const char * dl = getenv("LLAMA_TRACE_DATA_LAYERS");
+            if (dl) parse_set(dl, st.data_layers);
+            if (const char * w = getenv("LLAMA_TRACE_WATCH")) st.watch_name = w;
+            if (const char * c = getenv("LLAMA_TRACE_CANARY")) st.canary = (size_t) atoll(c);
+            const char * m = getenv("LLAMA_TRACE_MAX_MB");
+            if (m) st.max_bytes = (size_t) atoll(m) * 1024 * 1024;
+            std::string gp = st.dir + "/graphs.tsv";
+            st.f_graphs = fopen(gp.c_str(), "w");
+            if (st.f_graphs) {
+                fprintf(st.f_graphs, "graph\treused\tn_tokens\tn_seqs\tn_seq_tokens\tn_seqs_unq\tseq_ids\tpos0\tposN\tn_outputs\tnodes\tsplits\n");
+                fflush(st.f_graphs);
+            }
+        }
+    }
+    return st;
+}
+
+// layer of a node: trailing "-<il>" on the name (cb naming), "_l<il>" (cache tensors), else inherit
+// from src[0] a few levels up (unnamed views/permutes)
+static int llama_trace_layer(const ggml_tensor * t, int depth = 0) {
+    const char * n = t->name;
+    size_t len = strlen(n);
+    // strip " (view)"/" (reshaped)"/" (permuted)"/... suffixes
+    size_t end = len;
+    for (;;) {
+        const char * sp = nullptr;
+        for (size_t i = 0; i < end; ++i) if (n[i] == ' ' && i + 1 < end && n[i+1] == '(') { sp = n + i; break; }
+        if (!sp) break;
+        end = sp - n;
+    }
+    // "-<digits>" at end
+    {
+        size_t i = end;
+        while (i > 0 && n[i-1] >= '0' && n[i-1] <= '9') --i;
+        if (i < end && i > 0 && n[i-1] == '-') return atoi(std::string(n + i, end - i).c_str());
+    }
+    // "_l<digits>" at end
+    {
+        size_t i = end;
+        while (i > 0 && n[i-1] >= '0' && n[i-1] <= '9') --i;
+        if (i < end && i >= 2 && n[i-1] == 'l' && n[i-2] == '_') return atoi(std::string(n + i, end - i).c_str());
+    }
+    if (depth < 4 && t->src[0]) return llama_trace_layer(t->src[0], depth + 1);
+    return -1;
+}
+
+static bool llama_trace_cb_eval(struct ggml_tensor * t, bool ask, void * user_data) {
+    GGML_UNUSED(user_data);
+    auto & st = llama_trace();
+    if (!st.enabled || !st.f_idx) return true;
+    if (t->op == GGML_OP_NONE) return false; // weights / inputs are not nodes anyway
+    const size_t nbytes = ggml_nbytes(t);
+    if (nbytes > st.max_bytes) return false;
+    const int il = llama_trace_layer(t);
+    const bool want = st.all_layers || (il >= 0 ? st.layers.count(il) > 0 : t->name[0] != 0);
+    auto canary_read = [&](uint64_t & h) -> bool {
+        // read [end of t, end + canary) if it stays inside t's buffer
+        ggml_backend_buffer_t buf = t->view_src ? t->view_src->buffer : t->buffer;
+        if (!buf || !t->data) return false;
+        const char * base = (const char *) ggml_backend_buffer_get_base(buf);
+        const size_t  bsz = ggml_backend_buffer_get_size(buf);
+        // start after the backend's reserved extra (f16 scratch etc.), so only real overruns count
+        const size_t alloc = ggml_backend_buft_get_alloc_size(ggml_backend_buffer_get_type(buf), (ggml_tensor *) t);
+        const char * end = (const char *) t->data + std::max(alloc, ggml_nbytes(t));
+        if (end < base || (size_t) (end - base) + st.canary > bsz) return false;
+        st.canary_buf.resize(st.canary);
+        memcpy(st.canary_buf.data(), end, st.canary); // unified memory, buffer is host-visible
+        h = 1469598103934665603ull;
+        for (size_t i = 0; i < st.canary; ++i) { h ^= st.canary_buf[i]; h *= 1099511628211ull; }
+        return true;
+    };
+    if (ask) {
+        if (st.canary) { uint64_t h = 0; st.canary_hash = canary_read(h) ? h : 0; }
+        return want || !st.watch_name.empty() || st.canary;
+    }
+    if (st.canary && st.canary_hash) {
+        uint64_t h = 0;
+        if (canary_read(h) && h != st.canary_hash) {
+            fprintf(stderr, "TRACE CANARY: node '%s' (%s) ne=[%lld,%lld,%lld,%lld] out=%p..%p wrote into the %zu bytes after its output (src0 %s %s ne=[%lld,%lld,%lld,%lld], src1 ne=[%lld,%lld,%lld,%lld])\n",
+                t->name, ggml_op_name(t->op), (long long) t->ne[0], (long long) t->ne[1], (long long) t->ne[2], (long long) t->ne[3],
+                t->data, (char *) t->data + ggml_nbytes(t), st.canary,
+                t->src[0] ? t->src[0]->name : "-", t->src[0] ? ggml_type_name(t->src[0]->type) : "-",
+                t->src[0] ? (long long) t->src[0]->ne[0] : 0, t->src[0] ? (long long) t->src[0]->ne[1] : 0, t->src[0] ? (long long) t->src[0]->ne[2] : 0, t->src[0] ? (long long) t->src[0]->ne[3] : 0,
+                t->src[1] ? (long long) t->src[1]->ne[0] : 0, t->src[1] ? (long long) t->src[1]->ne[1] : 0, t->src[1] ? (long long) t->src[1]->ne[2] : 0, t->src[1] ? (long long) t->src[1]->ne[3] : 0);
+        }
+    }
+    // watch: after any node, re-hash the watched tensor
+    if (st.watch && st.watch->data) {
+        const size_t wn = ggml_nbytes(st.watch);
+        st.watch_buf.resize(wn);
+        ggml_backend_tensor_get(st.watch, st.watch_buf.data(), 0, wn);
+        uint64_t wh = 1469598103934665603ull;
+        for (size_t i = 0; i < wn; ++i) { wh ^= st.watch_buf[i]; wh *= 1099511628211ull; }
+        if (wh != st.watch_hash) {
+            fprintf(stderr, "TRACE WATCH: '%s' changed after node '%s' (%s) ne=[%lld,%lld,%lld,%lld] data=%p..%p\n",
+                st.watch_name.c_str(), t->name, ggml_op_name(t->op), (long long) t->ne[0], (long long) t->ne[1], (long long) t->ne[2], (long long) t->ne[3],
+                t->data, (char *) t->data + ggml_nbytes(t));
+            st.watch_hash = wh;
+        }
+    }
+    if (!st.watch_name.empty() && strcmp(t->name, st.watch_name.c_str()) == 0) {
+        st.watch = t;
+        const size_t wn = ggml_nbytes(t);
+        st.watch_buf.resize(wn);
+        ggml_backend_tensor_get(t, st.watch_buf.data(), 0, wn);
+        uint64_t wh = 1469598103934665603ull;
+        for (size_t i = 0; i < wn; ++i) { wh ^= st.watch_buf[i]; wh *= 1099511628211ull; }
+        st.watch_hash = wh;
+        fprintf(stderr, "TRACE WATCH: armed on '%s' data=%p..%p\n", t->name, t->data, (char *) t->data + wn);
+    }
+    if (!want) return true;
+
+    st.buf.resize(nbytes);
+    ggml_backend_tensor_get(t, st.buf.data(), 0, nbytes);
+
+    // stats: fnv1a over the bytes; sum/absmax/nan over f32/f16 elements (contiguous only)
+    uint64_t h = 1469598103934665603ull;
+    for (size_t i = 0; i < nbytes; ++i) { h ^= st.buf[i]; h *= 1099511628211ull; }
+
+    // per-sequence block hashes: split the token axis (ne == n_tokens) into n_seqs chunks, or the
+    // sequence axis (ne == n_seqs, axis >= 1) into single slices; cache views (4D quantized, axis 3)
+    // hash only the valid cells [0, n_cells). blk_eq = every block hashes like block 0.
+    int nblk = 0; int blk_eq = -1; uint64_t hb0 = 0;
+    if (st.cur_n_seqs >= 2) {
+        int ax = -1;
+        for (int a = 0; a < 4 && ax < 0; ++a) if (t->ne[a] == (int64_t) st.cur_n_tokens && st.cur_n_tokens > st.cur_n_seqs) ax = a;
+        for (int a = 1; a < 4 && ax < 0; ++a) if (t->ne[a] == (int64_t) st.cur_n_seqs && (a >= 2 || t->ne[0] > 64)) ax = a;
+        if (ax >= 0 && t->nb[0] == ggml_type_size(t->type)) {
+            const int64_t per = t->ne[ax] / st.cur_n_seqs;
+            const bool is_cache = ggml_is_quantized(t->type) && ax == 3 && t->ne[2] > st.cur_n_cells;
+            std::vector<uint64_t> hs(st.cur_n_seqs);
+            for (uint32_t b = 0; b < st.cur_n_seqs; ++b) {
+                uint64_t hh = 1469598103934665603ull;
+                int64_t lo[4] = {0,0,0,0}, hi[4] = {t->ne[0], t->ne[1], t->ne[2], t->ne[3]};
+                lo[ax] = b*per; hi[ax] = (b+1)*per;
+                if (is_cache) hi[2] = std::min<int64_t>(hi[2], st.cur_n_cells);
+                const size_t row = ggml_row_size(t->type, ax == 0 ? per : t->ne[0]);
+                for (int64_t i3 = lo[3]; i3 < hi[3]; ++i3)
+                for (int64_t i2 = lo[2]; i2 < hi[2]; ++i2)
+                for (int64_t i1 = lo[1]; i1 < hi[1]; ++i1) {
+                    const size_t off = i3*t->nb[3] + i2*t->nb[2] + i1*t->nb[1] + (ax == 0 ? (lo[0]/ggml_blck_size(t->type))*ggml_type_size(t->type) : 0);
+                    const uint8_t * p = st.buf.data() + off;
+                    for (size_t i = 0; i < row; ++i) { hh ^= p[i]; hh *= 1099511628211ull; }
+                }
+                hs[b] = hh;
+            }
+            nblk = (int) st.cur_n_seqs; hb0 = hs[0]; blk_eq = 1;
+            for (uint32_t b = 1; b < st.cur_n_seqs; ++b) if (hs[b] != hs[0]) blk_eq = 0;
+        }
+    }
+    const bool write_data = st.all_layers ? (il >= 0 && st.data_layers.count(il) > 0) || (il < 0 && !st.data_layers.empty() && nbytes < (1u<<20))
+                                          : st.data_layers.empty() || (il >= 0 && st.data_layers.count(il) > 0) || il < 0;
+    double sum = 0, amax = 0; int64_t nnan = 0; bool have = false;
+    if (ggml_is_contiguous(t) && (t->type == GGML_TYPE_F32 || t->type == GGML_TYPE_F16)) {
+        have = true;
+        const int64_t n = ggml_nelements(t);
+        for (int64_t i = 0; i < n; ++i) {
+            float v = t->type == GGML_TYPE_F32 ? ((const float *) st.buf.data())[i]
+                                              : ggml_fp16_to_fp32(((const ggml_fp16_t *) st.buf.data())[i]);
+            if (v != v) { nnan++; continue; }
+            sum += v; if (fabsf(v) > amax) amax = fabsf(v);
+        }
+    }
+    if (write_data) fwrite(st.buf.data(), 1, nbytes, st.f_bin);
+    fprintf(st.f_idx, "%zd\t%zu\t%s\t%s\t%s\t%lld\t%lld\t%lld\t%lld\t%zu\t%zu\t%zu\t%zu\t%d\t%016llx\t%s\t%.9g\t%.9g\t%lld\t%s\t%d\t%d\t%016llx\t%p\t%p\n",
+        write_data ? (ssize_t) st.bin_off : (ssize_t) -1, nbytes, t->name, ggml_op_name(t->op), ggml_type_name(t->type),
+        (long long) t->ne[0], (long long) t->ne[1], (long long) t->ne[2], (long long) t->ne[3],
+        t->nb[0], t->nb[1], t->nb[2], t->nb[3], il, (unsigned long long) h,
+        have ? "y" : "n", sum, amax, (long long) nnan,
+        t->src[0] ? t->src[0]->name : "", nblk, blk_eq, (unsigned long long) hb0, t->data, (void *) (t->view_src ? t->view_src->buffer : t->buffer));
+    if (write_data) st.bin_off += nbytes;
+    return true;
+}
+
+#include <cstdarg>
+static void llama_trace_api(const char * fmt, ...) {
+    auto & st = llama_trace();
+    if (!st.enabled) return;
+    static FILE * f = nullptr;
+    if (!f) { std::string p = st.dir + "/api.log"; f = fopen(p.c_str(), "w"); if (!f) return; }
+    fprintf(f, "[g%d] ", st.graph_idx);
+    va_list ap; va_start(ap, fmt); vfprintf(f, fmt, ap); va_end(ap);
+    fprintf(f, "\n"); fflush(f);
+}
+
+static void llama_trace_graph_begin(const llama_ubatch & ubatch, bool reused, ggml_cgraph * gf) {
+    auto & st = llama_trace();
+    if (!st.enabled) return;
+    st.graph_idx++;
+    st.watch = nullptr;
+    std::string ip = st.dir + "/g" + std::to_string(st.graph_idx) + ".idx";
+    std::string bp = st.dir + "/g" + std::to_string(st.graph_idx) + ".bin";
+    st.f_idx = fopen(ip.c_str(), "w");
+    st.f_bin = fopen(bp.c_str(), "wb");
+    st.bin_off = 0;
+    if (st.f_idx) fprintf(st.f_idx, "off\tnbytes\tname\top\ttype\tne0\tne1\tne2\tne3\tnb0\tnb1\tnb2\tnb3\tlayer\tfnv\tstats\tsum\tabsmax\tnan\tsrc0\tnblk\tblk_eq\th_blk0\tdata\tbuf\n");
+    st.cur_n_tokens = ubatch.n_tokens; st.cur_n_seqs = ubatch.n_seqs; st.cur_n_seq_tokens = ubatch.n_seq_tokens;
+    st.cur_n_cells = ubatch.pos ? ubatch.pos[ubatch.n_tokens - 1] + 1 : 0;
+    if (st.f_graphs) {
+        std::string sids;
+        for (uint32_t s = 0; s < ubatch.n_seqs_unq; ++s) { if (s) sids += ","; sids += std::to_string(ubatch.seq_id_unq[s]); }
+        int n_out = 0;
+        for (uint32_t i = 0; i < ubatch.n_tokens; ++i) n_out += ubatch.output ? ubatch.output[i] : 0;
+        fprintf(st.f_graphs, "%d\t%d\t%u\t%u\t%u\t%u\t%s\t%d\t%d\t%d\t%d\t",
+            st.graph_idx, reused ? 1 : 0, ubatch.n_tokens, ubatch.n_seqs, ubatch.n_seq_tokens, ubatch.n_seqs_unq,
+            sids.c_str(), ubatch.pos ? ubatch.pos[0] : -1, ubatch.pos ? ubatch.pos[ubatch.n_tokens - 1] : -1,
+            n_out, ggml_graph_n_nodes(gf));
+        fflush(st.f_graphs);
+    }
+}
+
+static void llama_trace_graph_end(ggml_backend_sched_t sched) {
+    auto & st = llama_trace();
+    if (!st.enabled) return;
+    if (st.f_graphs) { fprintf(st.f_graphs, "%d\n", ggml_backend_sched_get_n_splits(sched)); fflush(st.f_graphs); }
+    if (st.f_idx) { fclose(st.f_idx); st.f_idx = nullptr; }
+    if (st.f_bin) { fclose(st.f_bin); st.f_bin = nullptr; }
+}
+// ---------------------------------------------------------------------------------------------
+
 llama_context::llama_context(
         const llama_model & model,
               llama_context_params params) :
@@ -159,6 +452,12 @@ llama_context::llama_context(
 
     cparams.cb_eval           = params.cb_eval;
     cparams.cb_eval_user_data = params.cb_eval_user_data;
+
+    if (llama_trace().enabled && cparams.cb_eval == nullptr) {
+        LLAMA_LOG_WARN("%s: LLAMA_TRACE_DUMP active - dumping activations to %s\n", __func__, llama_trace().dir.c_str());
+        cparams.cb_eval           = llama_trace_cb_eval;
+        cparams.cb_eval_user_data = nullptr;
+    }
 
     cparams.ctx_other = nullptr;
 
@@ -1363,6 +1662,7 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
 
     auto * res = gf_res_prev.get();
     auto * gf  = res->get_gf();
+    bool trace_was_reused = false;
 
     // the new graph parameters
     // in order to correctly reuse a graph, it's full topology has to be uniquely determined by these parameters
@@ -1379,7 +1679,9 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         }
 
         n_reused++;
+        trace_was_reused = true;
     } else {
+        trace_was_reused = false;
         res->reset();
 
         ggml_backend_sched_reset(sched.get());
@@ -1418,7 +1720,13 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
 
     const int64_t tp3 = dprof ? ggml_time_us() : 0;
 
+    const bool trace_reused = trace_was_reused;
+    llama_trace_graph_begin(ubatch, trace_reused, res->get_gf());
     const auto status = graph_compute(res->get_gf(), ubatch.n_tokens > 1);
+    if (llama_trace().enabled) {
+        ggml_backend_sched_synchronize(sched.get());
+        llama_trace_graph_end(sched.get());
+    }
     if (status != GGML_STATUS_SUCCESS) {
         LLAMA_LOG_ERROR("%s: failed to compute graph, compute status: %d\n", __func__, status);
         ret = status;
@@ -1683,6 +1991,21 @@ int llama_context::decode(const llama_batch & batch_inp) {
     // MTP hook batches carry both token (next-token id) and embd (h_nextn row),
     // so accept either present rather than requiring exactly one.
     GGML_ASSERT(batch_inp.token || batch_inp.embd);
+
+    if (llama_trace().enabled) {
+        // per-seq token count, pos range and outputs, in batch order
+        std::string s;
+        std::map<int, std::array<int,4>> per; // seq -> n, pos_min, pos_max, n_out
+        std::vector<int> order;
+        for (int i = 0; i < batch_inp.n_tokens; ++i) {
+            const int sid = batch_inp.seq_id ? batch_inp.seq_id[i][0] : 0;
+            if (!per.count(sid)) { per[sid] = {0, batch_inp.pos ? batch_inp.pos[i] : -1, -1, 0}; order.push_back(sid); }
+            auto & e = per[sid]; e[0]++; if (batch_inp.pos) { e[1] = std::min(e[1], batch_inp.pos[i]); e[2] = std::max(e[2], batch_inp.pos[i]); }
+            e[3] += batch_inp.logits ? (batch_inp.logits[i] != 0) : 0;
+        }
+        for (int sid : order) { char b[96]; snprintf(b, sizeof(b), " s%d:n%d@%d..%d/out%d", sid, per[sid][0], per[sid][1], per[sid][2], per[sid][3]); s += b; }
+        llama_trace_api("decode n_tokens=%d embd=%d%s", batch_inp.n_tokens, batch_inp.embd ? 1 : 0, s.c_str());
+    }
 
     if (!memory) {
         LLAMA_LOG_DEBUG("%s: cannot decode batches with this context (calling encode() instead)\n", __func__);
@@ -3824,16 +4147,19 @@ void llama_set_warmup(llama_context * ctx, bool warmup) {
 }
 
 void llama_synchronize(llama_context * ctx) {
+    llama_trace_api("synchronize");
     ctx->synchronize();
 }
 
 float * llama_get_logits(llama_context * ctx) {
+    llama_trace_api("get_logits");
     ctx->synchronize();
 
     return ctx->get_logits();
 }
 
 float * llama_get_logits_ith(llama_context * ctx, int32_t i) {
+    llama_trace_api("get_logits_ith i=%d", i);
     ctx->synchronize();
 
     float * res = nullptr;
@@ -3999,6 +4325,7 @@ int32_t llama_set_adapter_cvec(
 //
 
 void llama_memory_clear(llama_memory_t mem, bool data) {
+    llama_trace_api("memory_clear data=%d", (int) data);
     if (!mem) {
         return;
     }
@@ -4011,6 +4338,7 @@ bool llama_memory_seq_rm(
           llama_seq_id seq_id,
              llama_pos p0,
              llama_pos p1) {
+    llama_trace_api("seq_rm seq=%d p0=%d p1=%d", seq_id, p0, p1);
     if (!mem) {
         return true;
     }
@@ -4024,6 +4352,7 @@ void llama_memory_seq_cp(
           llama_seq_id seq_id_dst,
              llama_pos p0,
              llama_pos p1) {
+    llama_trace_api("seq_cp src=%d dst=%d p0=%d p1=%d", seq_id_src, seq_id_dst, p0, p1);
     if (!mem) {
         return;
     }
@@ -4034,6 +4363,7 @@ void llama_memory_seq_cp(
 void llama_memory_seq_keep(
         llama_memory_t mem,
           llama_seq_id seq_id) {
+    llama_trace_api("seq_keep seq=%d", seq_id);
     if (!mem) {
         return;
     }
@@ -4047,6 +4377,7 @@ void llama_memory_seq_add(
              llama_pos p0,
              llama_pos p1,
              llama_pos delta) {
+    llama_trace_api("seq_add seq=%d p0=%d p1=%d delta=%d", seq_id, p0, p1, delta);
     if (!mem) {
         return;
     }
@@ -4176,15 +4507,18 @@ size_t llama_state_seq_set_data(llama_context * ctx, const uint8_t * src, size_t
 }
 
 size_t llama_state_seq_get_size_ext(llama_context * ctx, llama_seq_id seq_id, llama_state_seq_flags flags) {
+    llama_trace_api("state_seq_get_size seq=%d flags=%d", seq_id, (int) flags);
     return ctx->state_seq_get_size(seq_id, flags);
 }
 
 size_t llama_state_seq_get_data_ext(llama_context * ctx, uint8_t * dst, size_t size, llama_seq_id seq_id, llama_state_seq_flags flags) {
+    llama_trace_api("state_seq_get_data seq=%d size=%zu flags=%d", seq_id, size, (int) flags);
     ctx->synchronize();
 
     return ctx->state_seq_get_data(seq_id, dst, size, flags);
 }
 size_t llama_state_seq_set_data_ext(llama_context * ctx, const uint8_t * src, size_t size, llama_seq_id seq_id, llama_state_seq_flags flags) {
+    llama_trace_api("state_seq_set_data seq=%d size=%zu flags=%d", seq_id, size, (int) flags);
     ctx->synchronize();
 
     return ctx->state_seq_set_data(seq_id, src, size, flags);

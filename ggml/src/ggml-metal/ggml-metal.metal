@@ -3415,7 +3415,11 @@ kernel void kernel_gated_delta_net_impl(
     }
 
     if (K == 1) {
-        device float * dst_state = (device float *) (dst) + attn_size + state_out_base;
+        // fused writeback: the new state goes straight to the cache rows (in place when the input
+        // state is a view of the same rows: this thread read its row before the token loop)
+        device float * dst_state = FC_gated_delta_net_WB
+            ? (device float *) (wb + i23*args.wb_nb1) + (i21*S_v*S_v + i20*S_v)
+            : (device float *) (dst) + attn_size + state_out_base;
         FOR_UNROLL (short j = 0; j < NSG; j++) {
             const short is = tx*NSG + j;
             dst_state[is] = ls[j];
@@ -5596,6 +5600,27 @@ kernel void kernel_mul_mv_ext_q4_f16y_disp(
 // row-contiguous same-type copy: each row is a raw byte move, outer strides arbitrary
 // (e.g. strided 3D recurrent-state snapshot writebacks). host guarantees nb_row % 16 == 0
 // and 16-byte aligned bases/strides.
+kernel void kernel_cpy_f32_gather(
+        constant ggml_metal_kargs_cpy_gather_x4 & args, // ne00x4 carries ne00 here
+        device const char * src0,
+        device       char * dst,
+        uint3 tgpig[[threadgroup_position_in_grid]],
+        uint3 tpitg[[thread_position_in_threadgroup]],
+        uint3 ntpg [[threads_per_threadgroup]]) {
+    // 32-bit index math: these copies are far below 2^32 elements and 64-bit div/mod is slow on AGX
+    const uint n = (uint) (args.ne00x4*args.ne01*args.ne02*args.ne03);
+    const uint t = tgpig.x*ntpg.x + tpitg.x;
+    if (t >= n) {
+        return;
+    }
+    uint i = t;
+    const uint i0 = i % (uint) args.ne00x4; i /= (uint) args.ne00x4;
+    const uint i1 = i % (uint) args.ne01;   i /= (uint) args.ne01;
+    const uint i2 = i % (uint) args.ne02;
+    const uint i3 = i / (uint) args.ne02;
+    ((device float *) dst)[t] = ((device const float *)(src0 + i1*args.nb01 + i2*args.nb02 + i3*args.nb03))[i0];
+}
+
 kernel void kernel_cpy_f32_gather_x4(
         constant ggml_metal_kargs_cpy_gather_x4 & args,
         device const char * src0,
@@ -5603,16 +5628,17 @@ kernel void kernel_cpy_f32_gather_x4(
         uint3 tgpig[[threadgroup_position_in_grid]],
         uint3 tpitg[[thread_position_in_threadgroup]],
         uint3 ntpg [[threads_per_threadgroup]]) {
-    const int64_t n = args.ne00x4*args.ne01*args.ne02*args.ne03;
-    const int64_t t = (int64_t) tgpig.x*ntpg.x + tpitg.x;
+    // 32-bit index math: these copies are far below 2^32 elements and 64-bit div/mod is slow on AGX
+    const uint n = (uint) (args.ne00x4*args.ne01*args.ne02*args.ne03);
+    const uint t = tgpig.x*ntpg.x + tpitg.x;
     if (t >= n) {
         return;
     }
-    int64_t i = t;
-    const int64_t i0 = i % args.ne00x4; i /= args.ne00x4;
-    const int64_t i1 = i % args.ne01;   i /= args.ne01;
-    const int64_t i2 = i % args.ne02;
-    const int64_t i3 = i / args.ne02;
+    uint i = t;
+    const uint i0 = i % (uint) args.ne00x4; i /= (uint) args.ne00x4;
+    const uint i1 = i % (uint) args.ne01;   i /= (uint) args.ne01;
+    const uint i2 = i % (uint) args.ne02;
+    const uint i3 = i / (uint) args.ne02;
     device const float4 * s = (device const float4 *)(src0 + i1*args.nb01 + i2*args.nb02 + i3*args.nb03) + i0;
     ((device float4 *) dst)[t] = *s;
 }
