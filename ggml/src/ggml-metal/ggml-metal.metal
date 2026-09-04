@@ -2854,6 +2854,39 @@ constant short FC_ssm_conv_bs   [[function_constant(FC_SSM_CONV + 0)]];
 
 // Batched version: each threadgroup processes multiple tokens for better efficiency
 // Thread layout: each thread handles one token, threadgroup covers BATCH_SIZE tokens
+// decode-width conv: one thread per (row, token), 256 threads per threadgroup, so a
+// [10240 rows x 4 tokens x S seqs] call is ~160 x S threadgroups instead of 20480 x S
+// two-thread threadgroups (the batched kernel at BATCH_SIZE 2): 480 us -> ~20 us per call
+kernel void kernel_ssm_conv_f32_f32_rows(
+        constant ggml_metal_kargs_ssm_conv & args,
+        device const  void * src0,
+        device const  void * src1,
+        device       float * dst,
+        uint3 tgpig[[threadgroup_position_in_grid]],
+        uint3 tpitg[[thread_position_in_threadgroup]],
+        uint3   ntg[[threads_per_threadgroup]]) {
+    const int64_t n_t = args.ne1;
+    const int64_t nr  = args.ne01;
+    const int64_t t   = (int64_t) tgpig.x*ntg.x + tpitg.x;
+    if (t >= nr*n_t) {
+        return;
+    }
+    const int64_t ir = t / n_t;
+    const int64_t i2 = t % n_t;
+    const int64_t i3 = tgpig.z;
+    const int64_t nc = args.ne10;
+
+    device const float * c = (device const float *) ((device const char *) src1 + ir*args.nb11);
+    device const float * s = (device const float *) ((device const char *) src0 + ir*args.nb01 + i2*args.nb00 + i3*args.nb02);
+    device       float * x = (device       float *) ((device       char *) dst  + ir*args.nb0  + i2*args.nb1  + i3*args.nb2);
+
+    float sumf = 0.0f;
+    for (int64_t i0 = 0; i0 < nc; ++i0) {
+        sumf += s[i0] * c[i0];
+    }
+    x[0] = sumf;
+}
+
 kernel void kernel_ssm_conv_f32_f32_batched(
         constant ggml_metal_kargs_ssm_conv & args,
         device const  void * src0,
@@ -5563,6 +5596,27 @@ kernel void kernel_mul_mv_ext_q4_f16y_disp(
 // row-contiguous same-type copy: each row is a raw byte move, outer strides arbitrary
 // (e.g. strided 3D recurrent-state snapshot writebacks). host guarantees nb_row % 16 == 0
 // and 16-byte aligned bases/strides.
+kernel void kernel_cpy_f32_gather_x4(
+        constant ggml_metal_kargs_cpy_gather_x4 & args,
+        device const char * src0,
+        device       char * dst,
+        uint3 tgpig[[threadgroup_position_in_grid]],
+        uint3 tpitg[[thread_position_in_threadgroup]],
+        uint3 ntpg [[threads_per_threadgroup]]) {
+    const int64_t n = args.ne00x4*args.ne01*args.ne02*args.ne03;
+    const int64_t t = (int64_t) tgpig.x*ntpg.x + tpitg.x;
+    if (t >= n) {
+        return;
+    }
+    int64_t i = t;
+    const int64_t i0 = i % args.ne00x4; i /= args.ne00x4;
+    const int64_t i1 = i % args.ne01;   i /= args.ne01;
+    const int64_t i2 = i % args.ne02;
+    const int64_t i3 = i / args.ne02;
+    device const float4 * s = (device const float4 *)(src0 + i1*args.nb01 + i2*args.nb02 + i3*args.nb03) + i0;
+    ((device float4 *) dst)[t] = *s;
+}
+
 kernel void kernel_cpy_cont_rows(
         constant ggml_metal_kargs_cpy_cont_rows & args,
         device const char * src0,
@@ -14664,6 +14718,7 @@ kernel void kernel_get_rows_f(
 typedef decltype(kernel_get_rows_f<float, float>) get_rows_f_t;
 
 template [[host_name("kernel_get_rows_f32")]]  kernel get_rows_f_t kernel_get_rows_f<float, float>;
+template [[host_name("kernel_get_rows_f32x4")]] kernel get_rows_f_t kernel_get_rows_f<float4, float4>; // 16-byte moves for large f32 rows (recurrent states)
 template [[host_name("kernel_get_rows_f16")]]  kernel get_rows_f_t kernel_get_rows_f<half,  float>;
 template [[host_name("kernel_get_rows_i32")]]  kernel get_rows_f_t kernel_get_rows_f<int32_t, int32_t>;
 #if defined(GGML_METAL_HAS_BF16)

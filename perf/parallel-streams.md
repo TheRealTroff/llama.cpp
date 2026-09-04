@@ -338,3 +338,66 @@ fused kernel might add ~10% there. Not worth building ahead of the per-slot serv
 (~55 ms/step at 8 slots, `run-parallel-streams` 168 ms step vs the 112 ms pass) and per-stream FA
 cost at long contexts, which are the walls that remain. The policy at budget 8 is the pick for
 the Turbo4 line too: 2 slots 34.3, 4 slots 43.4, 8 slots 48.5 aggregate, single slot untouched.
+
+## Round overhead attributed, 1-8 streams (2026-09-04, owner: "pin down where the round overhead spends its time")
+
+**It is not the server.** The compiled-in `spec-prof` timers (delta of the last two 5-second dumps,
+`perf/server-prof-parse.py`), Turbo4 SOA-V1, prompt 06, per round in ms:
+
+| slots | round | draft call | target decode | of which GPU wait | CPU submit + post | loop gap |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1, d3 | 99.7 | 11.0 | 88.3 | 86.4 | 2.1 | 0 |
+| 2, d3 | 144.8 | 15.1 | 128.9 | 126.8 | 2.8 | 0 |
+| 4, d3 | 223.5 | 23.3 | 198.5 | 196.2 | 3.6 | 0 |
+| 8, d1 | 241.0 | 23.7 | 215.2 | 213.2 | 3.7 | 0 |
+| 8, off | 164.6 | 0 | 163.8 | 162.2 | 2.3 | 0 |
+
+Server CPU is 2-4 ms at any slot count. The growth is inside the target graph: 8 slots without
+speculation is an 8-column pass that `llama-bench` times at 113 ms and the server waits 162 for.
+
+**Where the graph spends it.** `GGML_METAL_PROFILE=1` on the driver, verify graph of 4 tokens per
+stream repeated 10x and differenced (`llama-multiseq-repro MSR_TAIL_REPEAT`, `perf/trace-profdiff.py`;
+serialized encoders, so totals exceed the real graph time but attribution holds), ms per graph:
+
+| family | 1 | 2 | 4 | 8 | per extra stream |
+|---|---:|---:|---:|---:|---:|
+| projections (MUL_MAT) | 72 | 108 | 152 | 286 (32 cols, generic) | - |
+| SSM_CONV | 3.2 | 6.1 | 11.8 | 23.1 | 2.8 |
+| GET_ROWS (state gather) | 2.3 | 4.4 | 8.1 | 15.5 | 1.9 |
+| CPY (state writeback) | 1.7 | 2.4 | 5.4 | 11.8 | 1.5 |
+| GATED_DELTA_NET | 1.5 | 2.8 | 5.7 | 11.3 | 1.4 |
+| FLASH_ATTN_EXT | 0.6 | 0.9 | 1.3 | 2.1 | 0.2 |
+| everything else | ~9 | ~9 | ~10 | ~12 | ~0.4 |
+
+~8 ms per extra stream, almost all of it the 48 GDN layers' per-sequence state machinery;
+attention is negligible at this context (the FA per-stream cost at 96K is a separate matter).
+
+**Fixed (branch `gdn-decode-kernels`, default-on, sha-identical):**
+- `SSM_CONV` at decode widths (`ne1 <= 16`): the batched kernel dispatched `ne01 x n_seqs`
+  two-thread threadgroups (20480 x S for a 4-tap conv over 4 tokens: 480 us/call at 8 seqs). New
+  `kernel_ssm_conv_f32_f32_rows`, one thread per (row, token), 256/threadgroup: **23.1 -> 4.7 ms**
+  per graph at 8 streams, 3.2 -> 0.8 at 1.
+- `GET_ROWS` on f32 rows >= 4096 wide with 16-byte alignment (the 786432-float recurrent states)
+  moves float4 (`kernel_get_rows_f32x4`): **15.5 -> 11.1 ms** at 8 streams, 2.3 -> 1.2 at 1; now
+  ~216 GB/s, i.e. at memory bandwidth.
+- `kernel_cpy_f32_gather_x4` (flat float4 copy of a strided f32 source into a contiguous
+  destination) for the copies the row-per-threadgroup generic kernel handled; the state writeback
+  itself turned out to already be the flat `kernel_cpy_cont` at 240 GB/s.
+
+End to end (Turbo4 SOA-V1, prompt 06, 400 tokens, `ovh-*` -> `ovh2-*`): 1 slot d3 26.9 -> **27.8**,
+2 slots 35.7 -> **37.5**, 4 slots 46.6 -> **49.1**, 8 slots d1 56.2 -> **59.6**, 8 slots off 47.1 ->
+48.4, 1 slot no-spec 12.92 -> 13.17. f16 pick: shas identical (`95eb7e65977e` / `6678b0507d41`),
+27.1/27.3 at 300 and 29.8/29.8 at 600 (morning: 26.8/26.7, 29.2/29.2), b1 13.17 (13.02).
+
+**What remains in the state path, and the next lever.** The gather and the writeback are now
+bandwidth-bound copies of the full 3 MB state per sequence per GDN layer, 2 x 25 MB per layer at
+8 streams: ~22 ms of the 339 ms graph at 8 streams and 2.9 of 85 at one stream (3.4% of the
+single-stream verify graph). They can only go away by not copying: (a) in `build_rs`, when the
+sequence-to-cell map `s_copy_main` is the identity onto `rs_head..rs_head+n_seqs` (steady state:
+every slot keeps its cell), use a view of the cache rows instead of `ggml_get_rows` - the choice
+must enter the graph-reuse key (`llm_graph_input_rs::can_reuse` checks sizes only); (b) have the
+delta-net kernel write the new state into the cache rows directly instead of into its output
+block and a CPY (the `GGML_GDN_FUSE_WB` snapshot writeback already has the addressing; the state
+block layout `[head][row][k]` matches the cache row, and each threadgroup owns its slice, so
+in-place is plausible). `GATED_DELTA_NET` itself (11 ms at 8 streams, 236 us/dispatch for 4
+tokens) is sequential over tokens per head and is the remaining kernel-side per-stream cost.

@@ -525,6 +525,18 @@ typedef struct {
     uint64_t nb03;
 } ggml_metal_kargs_cpy_cont_rows;
 
+// flat vectorized copy of a strided f32 source into a contiguous destination of the same
+// element count (the GDN state writeback: [128,128,48,S] head-interleaved view -> cache rows)
+typedef struct {
+    int64_t  ne00x4; // ne00/4
+    int64_t  ne01;
+    int64_t  ne02;
+    int64_t  ne03;
+    uint64_t nb01;
+    uint64_t nb02;
+    uint64_t nb03;
+} ggml_metal_kargs_cpy_gather_x4;
+
 // weight-repack probe: q4_0 -> deinterleaved (per row: [d x nblk][pad16][qs x nblk])
 typedef struct {
     int32_t  nblk; // blocks per row
