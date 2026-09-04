@@ -154,6 +154,16 @@ Forms measured to matter on AGX/g16s (each worth re-trying on any slow inner loo
   low-row-count bodies on trend; benchmark the row-count pair. It changes rounding -
   a numerics decision, not a free lever - though where the incumbent route is
   `simdgroup_half8x8` MMA, the incumbent is already half-accumulate.
+- **A tile does not beat an incumbent that already dequantizes once per weight; check
+  what the incumbent IS before attributing a loss** (2026-09-04, `perf/ud-model.md` in the
+  fork): the q4_0 skinny MMA tile generalized over the generic `dequantize_*` block
+  functions (K-quants, iq4_xs) compiled with zero spill and ran 10-30% SLOWER per call.
+  The first write-up blamed a per-column `mul_mv` that re-streams the weights 4x; the
+  timing invocation's own stderr then showed the incumbent was the ext r1_4 family
+  (dequant-once-reuse-per-column, nr0 rows/thread, f16y) - so the tile removed no
+  redundant work and only added the threadgroup round trip plus a fatter dequant form.
+  Read the pipeline names FIRST, then the fork's prior record for that kernel family
+  (`results.md` had the K-quant ext ceiling on file), then explain the number.
 - Tile shape and K-split across simdgroups: single digits at best (~4.6% and ~1%
   respectively at width 4). Measure them AFTER the form is right.
 
