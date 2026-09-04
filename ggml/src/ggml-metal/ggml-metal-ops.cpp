@@ -83,10 +83,14 @@ static const ggml_tensor * ggml_metal_gdn_wb_op(const ggml_tensor * cpy) {
 }
 
 // if cpy moves the kept per-token inputs of a gated-delta-net op (ext semantics, n_keep > 0)
-// into the kept-input store, return that op, else null. same rules as ggml_metal_gdn_wb_op:
-// a pure function of the graph
+// into the kept-input store - a CPY into a strided view, or a SET_ROWS into the store's rows -
+// return that op, else null. same rules as ggml_metal_gdn_wb_op: a pure function of the graph
 static const ggml_tensor * ggml_metal_gdn_xk_op(const ggml_tensor * cpy) {
-    if (cpy->op != GGML_OP_CPY || !cpy->src[0]) {
+    if ((cpy->op != GGML_OP_CPY && cpy->op != GGML_OP_SET_ROWS) || !cpy->src[0]) {
+        return nullptr;
+    }
+
+    if (cpy->op == GGML_OP_SET_ROWS && (cpy->src[1]->type != GGML_TYPE_I32 || !ggml_is_contiguous(cpy->src[1]))) {
         return nullptr;
     }
 
@@ -307,7 +311,7 @@ static int ggml_metal_op_encode_impl(ggml_metal_op_t ctx, int idx) {
     }
 
     // the gated-delta-net op wrote these snapshots (or kept inputs) into the cache already
-    if (ggml_metal_gdn_wb_enabled() && node->op == GGML_OP_CPY) {
+    if (ggml_metal_gdn_wb_enabled() && (node->op == GGML_OP_CPY || node->op == GGML_OP_SET_ROWS)) {
         const ggml_tensor * op = ggml_metal_gdn_wb_op(node);
         if (!op) {
             op = ggml_metal_gdn_xk_op(node);
@@ -2054,7 +2058,12 @@ int ggml_metal_op_gated_delta_net(ggml_metal_op_t ctx, int idx) {
     const int32_t K      = ggml_get_op_params_i32(op, 0);
     const ggml_tensor * xp   = ext ? op->src[6] : nullptr;
     const ggml_tensor * xrep = ext ? op->src[7] : nullptr;
+    const ggml_tensor * xrow = ext ? op->src[8] : nullptr;
     const int32_t xp_cap = xp ? (int32_t) xp->ne[1] : 0;
+    const int32_t xk_cap = ext ? ggml_get_op_params_i32(op, 4) : 0;
+    // a fused SET_ROWS writes the store rows its index names; a fused CPY writes a strided view
+    const bool fuse_xk_rows = fuse_xk && cpy_xk->op == GGML_OP_SET_ROWS;
+    const ggml_tensor * xwrow = fuse_xk_rows ? cpy_xk->src[1] : nullptr;
     // kept-input region: right after the K snapshots in dst, [seq][token][n_x]
     const uint64_t xk_off_dst = (uint64_t) (ggml_nelements(op->src[2]) + (int64_t) K*ne20*ne20*ne21*ne23)*sizeof(float);
     if (getenv("GGML_GDN_DEBUG")) {
@@ -2118,8 +2127,10 @@ int ggml_metal_op_gated_delta_net(ggml_metal_op_t ctx, int idx) {
         /*.n_x    =*/ n_x,
         /*.xp_cap =*/ xp_cap,
         /*.xk_off =*/ fuse_xk ? 0 : xk_off_dst,
-        /*.xk_nb1 =*/ fuse_xk ? cpy_xk->nb[2] : (uint64_t) n_keep*n_x*sizeof(float),
-        /*.xk_nb2 =*/ fuse_xk ? cpy_xk->nb[1] : (uint64_t) n_x*sizeof(float),
+        /*.xk_nb1 =*/ fuse_xk ? (fuse_xk_rows ? cpy_xk->src[2]->nb[1] : cpy_xk->nb[2]) : (uint64_t) xk_cap*n_x*sizeof(float),
+        /*.xk_nb2 =*/ fuse_xk ? (fuse_xk_rows ? (uint64_t) n_x*sizeof(float) : cpy_xk->nb[1]) : (uint64_t) n_x*sizeof(float),
+        /*.has_xrow  =*/ xrow  ? 1 : 0,
+        /*.has_xwrow =*/ xwrow ? 1 : 0,
     };
 
     ggml_metal_encoder_set_pipeline(enc, pipeline);
@@ -2135,6 +2146,8 @@ int ggml_metal_op_gated_delta_net(ggml_metal_op_t ctx, int idx) {
     ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(xp   ? xp   : op), ida++); // replay inputs
     ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(xrep ? xrep : op), ida++); // replay counts
     ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(fuse_xk ? cpy_xk : op), ida++); // kept inputs
+    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(xrow  ? xrow  : op), ida++); // replay rows
+    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(xwrow ? xwrow : op), ida++); // kept-input rows
 
     const int nsg = pipeline.nsg;
 

@@ -6381,6 +6381,7 @@ struct ggml_tensor * ggml_gated_delta_net_ext(
         struct ggml_tensor  * state,
         struct ggml_tensor  * xp,
         struct ggml_tensor  * xrep,
+        struct ggml_tensor  * xrow,
         int64_t               K,
         int64_t               n_keep,
         int64_t               n_x) {
@@ -6419,14 +6420,22 @@ struct ggml_tensor * ggml_gated_delta_net_ext(
     if (xp) {
         GGML_ASSERT(xrep);
         GGML_ASSERT(xp->type == GGML_TYPE_F32 && ggml_is_contiguous(xp));
-        GGML_ASSERT(xp->ne[0] == n_x && xp->ne[2] == n_seqs && xp->ne[3] == 1);
+        GGML_ASSERT(xp->ne[0] == n_x && xp->ne[3] == 1);
+        GGML_ASSERT(xrow || xp->ne[2] >= n_seqs);
         GGML_ASSERT(xrep->type == GGML_TYPE_I32 && xrep->ne[0] == n_seqs && ggml_is_contiguous(xrep));
+        if (xrow) {
+            GGML_ASSERT(xrow->type == GGML_TYPE_I32 && xrow->ne[0] == n_seqs && ggml_is_contiguous(xrow));
+        }
     } else {
-        GGML_ASSERT(!xrep);
+        GGML_ASSERT(!xrep && !xrow);
     }
 
+    // token stride of the kept-input output: the store's capacity, so the rows can be set_rows'd
+    const int64_t xk_cap = xp ? xp->ne[1] : n_keep;
+    GGML_ASSERT(xk_cap >= n_keep);
+
     const int64_t state_rows = K * S_v * n_seqs;
-    const int64_t xk_rows    = (n_keep*n_x*n_seqs + S_v*H - 1) / (S_v*H);
+    const int64_t xk_rows    = n_keep > 0 ? (xk_cap*n_x*n_seqs + S_v*H - 1) / (S_v*H) : 0;
     const int64_t ne[4] = { S_v * H, n_tokens * n_seqs + state_rows + xk_rows, 1, 1 };
     struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne);
 
@@ -6434,6 +6443,7 @@ struct ggml_tensor * ggml_gated_delta_net_ext(
     ggml_set_op_params_i32(result, 1, (int32_t) n_keep);
     ggml_set_op_params_i32(result, 2, (int32_t) n_x);
     ggml_set_op_params_i32(result, 3, 1); // ext semantics
+    ggml_set_op_params_i32(result, 4, (int32_t) xk_cap);
 
     result->op     = GGML_OP_GATED_DELTA_NET;
     result->src[0] = q;
@@ -6444,6 +6454,7 @@ struct ggml_tensor * ggml_gated_delta_net_ext(
     result->src[5] = state;
     result->src[6] = xp;
     result->src[7] = xrep;
+    result->src[8] = xrow;
 
     return result;
 }

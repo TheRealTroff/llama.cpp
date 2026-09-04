@@ -531,4 +531,4 @@ pricing first. Verdict: a 2-3% lever at depth 3-4, nothing at the 8-slot point; 
 **BUILT the same afternoon (owner: "do the recompute-on-rollback snapshot scheme"), branch
 `gdn-replay-rollback`, `LLAMA_GDN_REPLAY=1`: `gdn-replay-rollback.md`. The replay runs inside the
 next round's kernel (register-resident state, no separate pass), so the "pays a delta-net pass"
-cost above did not materialize; measured against this table: 1 slot depth 3 -0.65 ms (-0.7%), depth 4 -1.05 ms (-1.0%), **4 slots depth 3 -6.8 ms (-3.3%, +2.8% aggregate)**, 8 slots flat; the single-slot shortfall is the replay's own serial recurrence steps, ~1.2 ms per round against the 2.1 ms two slots can remove.**
+cost above did not materialize; measured against this table: after the in-kernel fold: 1 slot depth 3 -1.15 ms (-1.2%), depth 4 -1.45 ms (-1.4%), **4 slots depth 3 -6.3 ms (-3.0%, +3.0% aggregate)**, 8 slots flat; the single-slot shortfall is the replay's own serial recurrence steps, ~0.7-1.0 ms per round against the 2.1 ms two slots can remove.**

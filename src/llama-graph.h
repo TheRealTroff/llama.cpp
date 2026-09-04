@@ -294,13 +294,14 @@ public:
     ggml_tensor * s_copy_ss  = nullptr;  // I32 [n_seqs]: ssm-state source rows
     ggml_tensor * s_copy_xg  = nullptr;  // I32 [(1 + n_rs_seq) * (n_rs - n_seqs)]: extra-cell rows, per group
     ggml_tensor * s_copy_none = nullptr; // I32 [0]: the generic extra copy is replaced by s_copy_xg
-    ggml_tensor * xk_rows    = nullptr;  // I32 [n_seqs]: kept-input store rows (source cells)
+    ggml_tensor * xk_rows    = nullptr;  // I32 [n_seqs]: kept-input store rows each seq reads
     ggml_tensor * xk_rep     = nullptr;  // I32 [n_seqs]: kept tokens to replay per seq
+    ggml_tensor * xk_wrow    = nullptr;  // I32 [n_seqs]: kept-input store rows each seq writes
 
     // topology, checked by can_reuse
     int32_t view_row0_ss = -1;
-    int32_t n_rep_max    = 0;  // max replay count over the batch (0: no replay input in the graph)
-    int32_t n_keep       = 0;  // tokens the batch keeps (0: no kept-input write, K = 1)
+    bool    xk_gather    = false; // the kept inputs are gathered before the kernel (cell swap)
+    int32_t n_keep       = 0;     // tokens the batch keeps (0: no kept-input write, K = 1)
 };
 
 class llm_graph_input_cross_embd : public llm_graph_input_i {

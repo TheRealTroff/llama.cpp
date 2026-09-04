@@ -658,19 +658,24 @@ ggml_tensor * llm_build_delta_net_base::build_recurrent_attn_replay(
     GGML_ASSERT(n_x == 2*S_v*q->ne[1] + S_v*H_v + 2*H_v);
     GGML_ASSERT(n_keep <= n_seq_tokens);
 
-    ggml_tensor * x_all = mctx_cur->get_x_l(il);
+    ggml_tensor * x_all = mctx_cur->get_x_l(il); // [n_x * n_rs_seq, 2 * mem_size]
 
-    // the kept inputs of the rolled-back seqs (their source cells), [n_x, n_rs_seq, n_seqs]
+    // the kept inputs: the kernel reads the store rows of the rolled-back seqs in place (their
+    // read half never overlaps the half this batch writes), unless a cell swap made a seq read
+    // the row another seq writes - then gather them first
     ggml_tensor * xp   = nullptr;
-    ggml_tensor * xrep = nullptr;
-    if (inp->n_rep_max > 0) {
+    ggml_tensor * xrow = nullptr;
+    if (inp->xk_gather) {
         xp = ggml_get_rows(ctx0, x_all, inp->xk_rows);
         xp = ggml_reshape_3d(ctx0, xp, n_x, n_rs_seq, n_seqs);
         cb(xp, "gdn_replay_inputs", il);
-        xrep = inp->xk_rep;
+    } else {
+        xp   = ggml_view_3d(ctx0, x_all, n_x, n_rs_seq, x_all->ne[1], ggml_row_size(x_all->type, n_x), x_all->nb[1], 0);
+        xrow = inp->xk_rows;
     }
+    ggml_tensor * xrep = inp->xk_rep;
 
-    ggml_tensor * gdn_out = ggml_gated_delta_net_ext(ctx0, q, k, v, g, b, s, xp, xrep, K, n_keep, n_x);
+    ggml_tensor * gdn_out = ggml_gated_delta_net_ext(ctx0, q, k, v, g, b, s, xp, xrep, xrow, K, n_keep, n_x);
     if (n_seq_tokens > 1) {
         res->add_fused_node({LLM_FUSED_OP_GDN_CH, gdn_out, il});
     } else {
@@ -705,21 +710,15 @@ ggml_tensor * llm_build_delta_net_base::build_recurrent_attn_replay(
 
     ggml_build_forward_expand(gf, ggml_cpy(ctx0, src, dst));
 
-    // the kept tokens' inputs -> the store rows of this batch's cells, tokens 0..n_keep-1
+    // the kept tokens' inputs -> the store rows this batch's seqs write (the other half of their
+    // cells), as whole rows: the op lays them out with the store's token capacity
     if (n_keep > 0) {
-        ggml_tensor * xsrc = ggml_view_3d(ctx0, gdn_out,
-            n_x, n_keep, n_seqs,
-            ggml_row_size(gdn_out->type, n_x),
-            ggml_row_size(gdn_out->type, n_x * n_keep),
+        ggml_tensor * xsrc = ggml_view_2d(ctx0, gdn_out,
+            n_x * n_rs_seq, n_seqs,
+            ggml_row_size(gdn_out->type, n_x * n_rs_seq),
             ggml_row_size(gdn_out->type, attn_score_elems + K * state_size_per_snap));
 
-        ggml_tensor * xdst = ggml_view_3d(ctx0, x_all,
-            n_x, n_keep, n_seqs,
-            ggml_row_size(x_all->type, n_x),
-            x_all->nb[1],
-            (size_t) kv_head * x_all->nb[1]);
-
-        ggml_build_forward_expand(gf, ggml_cpy(ctx0, xsrc, xdst));
+        ggml_build_forward_expand(gf, ggml_set_rows(ctx0, x_all, xsrc, inp->xk_wrow));
     }
 
     return output;

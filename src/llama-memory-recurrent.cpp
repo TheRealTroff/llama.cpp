@@ -35,6 +35,7 @@ llama_memory_recurrent::llama_memory_recurrent(
     this->n_rs_seq = n_rs_seq;
     rs_idx.assign(n_seq_max, 0);
     xk_n_keep.assign(n_seq_max, 0);
+    xk_par.assign(n_seq_max, 0);
 
     // recompute-on-rollback: opt-in, delta-net models only (their graph path knows the scheme)
     {
@@ -118,7 +119,7 @@ llama_memory_recurrent::llama_memory_recurrent(
         r_l[i] = r;
         s_l[i] = s;
         if (gdn_replay) {
-            ggml_tensor * x = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_embd_x * n_rs_seq, mem_size);
+            ggml_tensor * x = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_embd_x * n_rs_seq, 2 * mem_size);
             ggml_format_name(x, "cache_x_l%d", i);
             x_l[i] = x;
         }
@@ -175,6 +176,7 @@ void llama_memory_recurrent::clear(bool data) {
 
     std::fill(rs_idx.begin(), rs_idx.end(), 0);
     std::fill(xk_n_keep.begin(), xk_n_keep.end(), 0);
+    std::fill(xk_par.begin(), xk_par.end(), 0);
 }
 
 bool llama_memory_recurrent::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
@@ -307,6 +309,7 @@ void llama_memory_recurrent::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id
         if ((size_t) seq_id_dst < xk_n_keep.size() && (size_t) seq_id_src < xk_n_keep.size()) {
             // the kept inputs belong to the shared cell
             xk_n_keep[seq_id_dst] = xk_n_keep[seq_id_src];
+            xk_par[seq_id_dst]    = xk_par[seq_id_src];
         }
     }
 }
@@ -506,6 +509,7 @@ bool llama_memory_recurrent::prepare(const std::vector<llama_ubatch> & ubatches)
     auto org_used = used;
     auto org_head = head;
     auto org_xk_n_keep = xk_n_keep;
+    auto org_xk_par    = xk_par;
 
     bool success = true;
 
@@ -521,6 +525,7 @@ bool llama_memory_recurrent::prepare(const std::vector<llama_ubatch> & ubatches)
     used = org_used;
     head = org_head;
     xk_n_keep = std::move(org_xk_n_keep);
+    xk_par    = std::move(org_xk_par);
 
     return success;
 }
@@ -731,22 +736,48 @@ bool llama_memory_recurrent::find_slot(const llama_ubatch & ubatch) {
     // tokens: min(n_seq_tokens, n_rs_seq) of them, none for a single token (no rollback can
     // follow, and the extra state write would cost the no-spec round)
     if (gdn_replay) {
+        const uint32_t n_keep = n_seq_tokens > 1 ? std::min<uint32_t>(n_seq_tokens, n_rs_seq) : 0;
+
         for (uint32_t s = 0; s < n_seqs; ++s) {
             const uint32_t i = s*n_seq_tokens;
             const int32_t cell_id = s + min;
             auto & cell = cells[cell_id];
 
             const llama_seq_id seq_id = ubatch.seq_id[i][0];
-            const uint32_t r = rs_idx[seq_id];
+            const uint32_t r   = rs_idx[seq_id];
+            const uint8_t  par = xk_par[seq_id];
             GGML_ASSERT(r <= xk_n_keep[seq_id]);
             cell.xk_replay  = r > 0 ? (int32_t) (xk_n_keep[seq_id] - r) : 0;
             cell.xk_pending = false;
+            // read the kept tokens from the half that holds them (at the source cell), write this
+            // batch's into the other half of this cell
+            cell.xk_rrow = (int32_t) (par*size) + cell.src0;
+            cell.xk_wrow = (int32_t) ((1 - par)*size) + cell_id;
 
-            const uint32_t n_keep = n_seq_tokens > 1 ? std::min<uint32_t>(n_seq_tokens, n_rs_seq) : 0;
             for (int32_t j = 0; j < ubatch.n_seq_id[i]; ++j) {
                 xk_n_keep[ubatch.seq_id[i][j]] = n_keep;
+                if (n_keep > 0) {
+                    xk_par[ubatch.seq_id[i][j]] = 1 - par;
+                }
             }
         }
+
+        // a seq that reads the row another seq of the batch writes (its source cell is that
+        // seq's destination after a swap): gather the reads before the kernel for this batch
+        xk_gather = false;
+        for (uint32_t a = 0; a < n_seqs && !xk_gather; ++a) {
+            const auto & ca = cells[a + min];
+            if (ca.xk_replay == 0) {
+                continue;
+            }
+            for (uint32_t b = 0; b < n_seqs; ++b) {
+                if (a != b && n_keep > 0 && cells[b + min].xk_wrow == ca.xk_rrow) {
+                    xk_gather = true;
+                    break;
+                }
+            }
+        }
+
         for (uint32_t i = 0; i < size; ++i) {
             if ((int32_t) i < min || (int32_t) i > max) {
                 cells[i].xk_replay = 0;
@@ -845,12 +876,14 @@ void llama_memory_recurrent::state_write(llama_io_write_i & io, llama_seq_id seq
                 // what to replay for it (mutable bookkeeping for state_write_data)
                 const uint32_t src = cell.src >= 0 ? cell.src : i;
                 uint32_t n_rep = 0;
+                uint32_t x_row = src;
                 if (rs_idx_cur > 0) {
                     const llama_seq_id sid = seq_id != -1 ? seq_id : *cell.seq_id.begin();
                     GGML_ASSERT(rs_idx_cur <= xk_n_keep[sid]);
                     n_rep = xk_n_keep[sid] - rs_idx_cur;
+                    x_row = xk_par[sid]*size + src;
                 }
-                xk_write_cells.push_back({ src, rs_idx_cur > 0, n_rep });
+                xk_write_cells.push_back({ src, rs_idx_cur > 0, n_rep, x_row });
             }
 
             const uint32_t cell_id = rs_idx_cur * size + (cell.src >= 0 ? cell.src : (int32_t) i);
@@ -934,10 +967,12 @@ void llama_memory_recurrent::state_read(llama_io_read_i & io, llama_seq_id seq_i
         if (seq_id == -1) {
             std::fill(rs_idx.begin(), rs_idx.end(), 0);
             std::fill(xk_n_keep.begin(), xk_n_keep.end(), 0);
+            std::fill(xk_par.begin(), xk_par.end(), 0);
         } else {
             set_rs_idx(seq_id, 0);
             if ((size_t) seq_id < xk_n_keep.size()) {
                 xk_n_keep[seq_id] = 0;
+                xk_par[seq_id]    = 0;
             }
         }
     }
@@ -1078,7 +1113,7 @@ void llama_memory_recurrent::state_write_s_replay(llama_io_write_i & io, int32_t
 
     if (c.n_rep > 0) {
         std::vector<float> x((size_t) n_embd_x * c.n_rep);
-        ggml_backend_tensor_get(x_l[il], x.data(), (size_t) c.src * x_l[il]->nb[1], x.size() * sizeof(float));
+        ggml_backend_tensor_get(x_l[il], x.data(), (size_t) c.x_row * x_l[il]->nb[1], x.size() * sizeof(float));
 
         std::vector<float> delta(S);
         for (uint32_t t = 0; t < c.n_rep; ++t) {
@@ -1434,6 +1469,18 @@ int32_t llama_memory_recurrent_context::s_copy_src0(int i) const {
 
 int32_t llama_memory_recurrent_context::xk_replay(int i) const {
     return mem->cells[i + mem->head].xk_replay;
+}
+
+int32_t llama_memory_recurrent_context::xk_rrow(int i) const {
+    return mem->cells[i + mem->head].xk_rrow;
+}
+
+int32_t llama_memory_recurrent_context::xk_wrow(int i) const {
+    return mem->cells[i + mem->head].xk_wrow;
+}
+
+bool llama_memory_recurrent_context::xk_gather() const {
+    return mem->xk_gather;
 }
 
 int32_t llama_memory_recurrent_context::s_copy_ss_peek(int i) const {

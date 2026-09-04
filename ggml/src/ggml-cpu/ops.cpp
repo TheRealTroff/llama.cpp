@@ -10794,7 +10794,9 @@ static void ggml_compute_forward_gated_delta_net_one_chunk(
     const int64_t n_x    = ext ? ggml_get_op_params_i32(dst, 2) : 0;
     const ggml_tensor * src_xp   = ext ? dst->src[6] : nullptr;
     const ggml_tensor * src_xrep = ext ? dst->src[7] : nullptr;
+    const ggml_tensor * src_xrow = ext ? dst->src[8] : nullptr;
     const int64_t xp_cap = src_xp ? src_xp->ne[1] : 0;
+    const int64_t xk_cap = ext ? ggml_get_op_params_i32(dst, 4) : 0;
     // per-seq stride in floats (seq s starts at state + s * seq_stride)
     const int64_t state_seq_stride = src_state->nb[3] / sizeof(float);
 
@@ -10892,10 +10894,12 @@ static void ggml_compute_forward_gated_delta_net_one_chunk(
         // ext: replay the kept tokens of this seq before the batch (no output)
         if (ext && src_xp) {
             const int64_t n_rep = ((const int32_t *) src_xrep->data)[iv3];
+            const int64_t x_row = src_xrow ? ((const int32_t *) src_xrow->data)[iv3] : iv3;
             GGML_ASSERT(n_rep >= 0 && n_rep <= xp_cap);
+            GGML_ASSERT(x_row >= 0 && x_row < src_xp->ne[2]);
             const int64_t H_k = neq1;
             for (int64_t t = 0; t < n_rep; t++) {
-                const float * x = (const float *) src_xp->data + (iv3 * xp_cap + t) * n_x;
+                const float * x = (const float *) src_xp->data + (x_row * xp_cap + t) * n_x;
                 const float * q_d = x + iq1 * S_v;
                 const float * k_d = x + S_v * H_k + ik1 * S_v;
                 const float * v_d = x + 2 * S_v * H_k + iv1 * S_v;
@@ -10928,7 +10932,7 @@ static void ggml_compute_forward_gated_delta_net_one_chunk(
                 }
                 if (n_keep > 0 && t >= n_tokens - n_keep) {
                     const int64_t H_k = neq1;
-                    float * x = xk_out_base + (iv3 * n_keep + (t - (n_tokens - n_keep))) * n_x;
+                    float * x = xk_out_base + (iv3 * xk_cap + (t - (n_tokens - n_keep))) * n_x;
                     if (iv1 < H_k) {
                         memcpy(x + iv1 * S_v,             q_d, S_v * sizeof(float));
                         memcpy(x + S_v * H_k + iv1 * S_v, k_d, S_v * sizeof(float));

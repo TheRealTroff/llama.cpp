@@ -100,16 +100,52 @@ The note's premise "compute, not bandwidth, so it costs microseconds" was wrong 
 the recurrent step is serial-latency-bound, not FLOP-bound. Bandwidth that a ceiling probe
 deletes for free is not free to re-derive when the re-derivation is a dependent chain.
 
+## The fold (same afternoon, owner: "this is as much a learning endeavor... let's see where we end up")
+
+The kernel now reads the kept inputs straight out of `cache_x_l` (per-seq row index `xrow`)
+and writes this batch's through a fused `ggml_set_rows` (per-seq row index `xwrow`), so there
+is no gather node and no topology that depends on the replay count: the graph is reused across
+rounds again. What that took:
+
+- **Two halves per cell in the store.** Reading the store inside the kernel races with the
+  kernel's own keep-writes even for one sequence: a head's 32 row-group threadgroups all read
+  the head's q/k slice (and the g/b scalars) during the replay prefix while one of them may
+  already be writing this batch's over the same token slots. No cross-threadgroup ordering
+  exists, so the reads and writes must not share a row: each seq reads half `xk_par` of its
+  source cell and writes the other half of its destination cell, and flips. Per-seq parity is
+  cheap bookkeeping (`find_slot` sets both rows on the cell, `prepare` saves/restores it).
+- **Cross-seq aliasing** (seq A reads the row seq B writes: only after a cell swap) is detected
+  in `find_slot` and routes that one batch through the old gather graph (`xk_gather`, part of
+  the topology; never at one slot).
+- Replayed steps drop the attention-output reduction (template `WITH_OUT`); the state
+  arithmetic is unchanged, and the shas held.
+- Serialization writes with the parity too. Same `test-backend-ops` parity (40/40 with two
+  row-indexed cases), same gates: f16 `95eb7e65977e` at 27.06, Turbo4 `12c3dc6bb2dd` at 30.34.
+
+`perf/run-gdn-replay.sh` TAG `gdnfold-0904`, same points, two reps, off/on interleaved:
+
+| point | round off (r1/r2) | round on | delta (was, before the fold) | t/s off -> on |
+|---|---:|---:|---|---|
+| Turbo4 1 slot, depth 3 | 96.0 / 96.0 | 94.8 / 94.9 | **-1.15 ms (-1.2%)** (was -0.65) | 28.7/28.8 -> 29.0/29.1 (+1.0%) |
+| Turbo4 4 slots, depth 3 | 209.2 / 209.4 | 203.9 / 202.2 | **-6.3 ms (-3.0%)** (was -6.8) | agg 49.5 -> 51.0 (**+3.0%**) |
+| Turbo4 8 slots, depth 1 | 216.7 / 216.5 | 216.3 / 216.7 | flat | agg 62.3 -> 62.1 (was -0.8%) |
+| f16 1 slot, depth 4 | 104.1 / 103.8 | 103.5 / 101.5 | **-1.45 ms (-1.4%)** (was -1.05) | 31.7 -> 32.2/32.4 (+1.5%) |
+
+`dec_sub_tg` is back at the off arm's 2.7 ms (the rebuild is gone) and the ~0.5 ms the fold was
+sized for came back at one slot. Shas identical off/on at every point.
+
+**Where it ends up.** 1.2-1.4% of the single-slot round, 3.0% at 4 slots depth 3, nothing at
+8 slots depth 1. The remaining gap to the probe at one slot (2.1 ms two slots could claim vs
+1.15-1.45 got) is the serial replay steps themselves, ~0.7-1.0 ms per round averaged over the
+~70% of rounds that replay - inherent to re-deriving a recurrence, and the whole point of the
+lesson: a deletion probe prices the deletion, not the re-derivation.
+
 ## Open
 
-- Fold the gather into the kernel (read `cache_x_l` rows by per-seq index; the aliasing case -
-  a seq reading the cell another seq in the batch writes - needs the gather path kept as the
-  fallback): ~36 dispatches per replay round, maybe 0.3 ms at one slot.
-- Fix the topology (always build the gather, sized n_rs_seq) so the graph is reused across
-  replay/non-replay rounds: trades ~0.2 ms of rebuild for 36 tiny dispatches per round.
-- Replay steps skip the attention output already (dead `y`); the state update chain is the cost
-  and is inherent to the recurrence.
 - The CPU materialization in `state_write` is exercised but not verified exact (see gates).
 - Memory: `s_l` drops from (1 + n_rs_seq) to 2 groups - at 8 slots depth 4 that is 4.3 -> 1.7 GB
   of state cache; unmeasured as a lever, but it is the reason the mode can be on at 8 slots even
   though it wins nothing there.
+- Adoption into the pick is the owner's call: +1.0% single Turbo4 stream (29.0-29.1 vs 28.7-28.8
+  on prompt 06; 30.34 on the pick harness), +1.5% f16, +3% at 4 slots, and the state-cache
+  memory.

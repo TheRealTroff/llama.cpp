@@ -2608,10 +2608,13 @@ extern "C" {
     //          2*S_k*H_k + S_v*H_v + G*H_v + H_v floats) to run through the recurrence BEFORE this
     //          batch's tokens, from the given state. Row i holds the tokens of seq i.
     //   xrep : I32 [n_seqs] or NULL - how many leading tokens of xp row i to replay (0 = none).
+    //   xrow : I32 [n_seqs] or NULL - which row of xp seq i reads (NULL: row i), so xp can be the
+    //          whole kept-input store and the kernel reads it in place.
     //   n_keep > 0 requires K == 2: slot 0 = final state, slot 1 = the state BEFORE the last
     //          n_keep tokens of this batch. The inputs of those n_keep tokens are packed after the
-    //          snapshots in the output, n_keep*n_x floats per seq ([seq][token][n_x]), so the
-    //          caller can store them and hand them back as xp later.
+    //          snapshots in the output as [seq][token][n_x] with xp's token capacity as the token
+    //          stride (n_keep when xp is NULL), so the caller can store them and hand them back
+    //          as xp later.
     //   n_keep == 0 requires K == 1 (final state only).
     // xp == NULL with n_keep == 0 is the plain K == 1 op.
     GGML_API struct ggml_tensor * ggml_gated_delta_net_ext(
@@ -2624,6 +2627,7 @@ extern "C" {
             struct ggml_tensor  * state,
             struct ggml_tensor  * xp,
             struct ggml_tensor  * xrep,
+            struct ggml_tensor  * xrow,
             int64_t               K,
             int64_t               n_keep,
             int64_t               n_x);

@@ -346,12 +346,13 @@ void llm_graph_input_rs::set_input(const llama_ubatch * ubatch) {
             int32_t * d_xg = (int32_t *) s_copy_xg->data;
             int32_t * d_xr = (int32_t *) xk_rows->data;
             int32_t * d_xp = (int32_t *) xk_rep->data;
+            int32_t * d_xw = (int32_t *) xk_wrow->data;
 
             for (uint32_t i = 0; i < n_seqs; ++i) {
                 if (d_ss) d_ss[i] = mctx->s_copy_ss_peek(i);
-                if (d_xr) d_xr[i] = mctx->s_copy_src0(i);
+                if (d_xr) d_xr[i] = mctx->xk_rrow(i);
                 if (d_xp) d_xp[i] = mctx->xk_replay(i);
-                GGML_ASSERT(mctx->xk_replay(i) <= n_rep_max);
+                if (d_xw) d_xw[i] = mctx->xk_wrow(i);
             }
             // displaced cells (not in the batch) move every group of their state, and their kept
             // inputs, to the new cell; their rollback index is left pending
@@ -399,11 +400,7 @@ bool llm_graph_input_rs::can_reuse_rs(const llama_memory_recurrent_context * mct
 
     if (gdn_replay) {
         res &= view_row0_ss == mctx->s_copy_ss_view_row0(ubatch.n_seqs);
-        int32_t rep = 0;
-        for (uint32_t i = 0; i < ubatch.n_seqs; ++i) {
-            rep = std::max(rep, mctx->xk_replay(i));
-        }
-        res &= n_rep_max == rep;
+        res &= xk_gather == mctx->xk_gather();
         const int32_t keep = ubatch.n_seq_tokens > 1 ? (int32_t) std::min<uint32_t>(ubatch.n_seq_tokens, mctx->get_n_rs_seq()) : 0;
         res &= n_keep == keep;
     }
@@ -3491,14 +3488,12 @@ static std::unique_ptr<llm_graph_input_rs> build_rs_inp_impl(
         ggml_set_input(inp->xk_rows);
         inp->xk_rep = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_seqs);
         ggml_set_input(inp->xk_rep);
+        inp->xk_wrow = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_seqs);
+        ggml_set_input(inp->xk_wrow);
         inp->s_copy_none = ggml_view_1d(ctx0, inp->s_copy, 0, 0);
 
         inp->view_row0_ss = mctx_cur->s_copy_ss_view_row0(n_seqs);
-        int32_t rep = 0;
-        for (int64_t i = 0; i < n_seqs; ++i) {
-            rep = std::max(rep, mctx_cur->xk_replay(i));
-        }
-        inp->n_rep_max = rep;
+        inp->xk_gather = mctx_cur->xk_gather();
         inp->n_keep    = ubatch.n_seq_tokens > 1 ? (int32_t) std::min<uint32_t>(ubatch.n_seq_tokens, mctx_cur->get_n_rs_seq()) : 0;
     }
 
@@ -3586,9 +3581,9 @@ ggml_tensor * llm_graph_context::build_rs_gdn(
                     n_seqs, kv_state->get_head(), kv_state->get_size(), kv_state->get_rs_z(),
                     ggml_get_rows, inp->view_row0_ss);
 
-    // displaced cells: both state groups and the kept-input rows
+    // displaced cells: both state groups and both halves of the kept-input rows
     build_rs_extra_groups(inp, s, state_size, n_seqs, 2);
-    build_rs_extra_groups(inp, x, x->ne[0], n_seqs, 1);
+    build_rs_extra_groups(inp, x, x->ne[0], n_seqs, 2);
 
     return out;
 }

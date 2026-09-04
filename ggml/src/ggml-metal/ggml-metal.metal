@@ -3294,7 +3294,8 @@ constant bool  FC_gated_delta_net_WB   [[function_constant(FC_GATED_DELTA_NET + 
 constant bool  FC_gated_delta_net_XK   [[function_constant(FC_GATED_DELTA_NET + 4)]];
 
 // one recurrence step on this thread's NSG state elements; returns this row's (unscaled) output
-template<short NSG>
+// (WITH_OUT = false skips it: the replayed tokens only advance the state)
+template<short NSG, bool WITH_OUT>
 static inline float kernel_gated_delta_net_step(
         thread float (&ls)[NSG],
         const short tx,
@@ -3335,10 +3336,12 @@ static inline float kernel_gated_delta_net_step(
         const short is = tx*NSG + j;
         ls[j] += k_ptr[is]*d;
 
-        y += ls[j]*q_ptr[is];
+        if (WITH_OUT) {
+            y += ls[j]*q_ptr[is];
+        }
     }
 
-    return simd_sum(y);
+    return WITH_OUT ? simd_sum(y) : 0.0f;
 }
 
 #if 1
@@ -3356,6 +3359,8 @@ kernel void kernel_gated_delta_net_impl(
         device const char * xp,
         device const char * xrep,
         device       char * xk,
+        device const char * xrow,
+        device const char * xwrow,
         uint3 tgpig[[threadgroup_position_in_grid]],
         uint3 tpitg[[thread_position_in_threadgroup]],
         uint3   ntg[[threads_per_threadgroup]])  {
@@ -3411,13 +3416,14 @@ kernel void kernel_gated_delta_net_impl(
     // batch, from the given state; no output, no snapshots
     if (XK && args.xp_cap > 0) {
         const int n_rep = ((device const int32_t *) xrep)[i23];
+        const uint x_row = args.has_xrow ? (uint) ((device const int32_t *) xrow)[i23] : i23;
         const uint H_k  = args.ne01;
         const uint H_v  = args.ne21;
 
         for (int t = 0; t < n_rep; t++) {
-            device const float * x = (device const float *) (xp) + (i23*args.xp_cap + t)*args.n_x;
+            device const float * x = (device const float *) (xp) + ((uint64_t) x_row*args.xp_cap + t)*args.n_x;
 
-            kernel_gated_delta_net_step<NSG>(ls, tx, i20,
+            kernel_gated_delta_net_step<NSG, false>(ls, tx, i20,
                     x + i01*S_v,
                     x + S_v*H_k + i11*S_v,
                     x + 2*S_v*H_k + i21*S_v,
@@ -3438,7 +3444,7 @@ kernel void kernel_gated_delta_net_impl(
     }
 
     for (short t = 0; t < args.ne22; t++) {
-        const float y = kernel_gated_delta_net_step<NSG>(ls, tx, i20, q_ptr, k_ptr, v_ptr, g_ptr, b_ptr);
+        const float y = kernel_gated_delta_net_step<NSG, true>(ls, tx, i20, q_ptr, k_ptr, v_ptr, g_ptr, b_ptr);
 
         if (tx == 0) {
             dst_attn[t*args.ne21*S_v] = y*scale;
@@ -3459,7 +3465,8 @@ kernel void kernel_gated_delta_net_impl(
             if (args.n_keep > 0 && t >= args.ne22 - args.n_keep) {
                 const uint H_k = args.ne01;
                 const uint H_v = args.ne21;
-                device float * x = (device float *) (xk + args.xk_off + i23*args.xk_nb1 + (uint64_t) (t - (args.ne22 - args.n_keep))*args.xk_nb2);
+                const uint w_row = args.has_xwrow ? (uint) ((device const int32_t *) xwrow)[i23] : i23;
+                device float * x = (device float *) (xk + args.xk_off + (uint64_t) w_row*args.xk_nb1 + (uint64_t) (t - (args.ne22 - args.n_keep))*args.xk_nb2);
                 if (tgpig.x == 0 && ty == 0 && i21 < H_k) {
                     FOR_UNROLL (short j = 0; j < NSG; j++) {
                         const short is = tx*NSG + j;

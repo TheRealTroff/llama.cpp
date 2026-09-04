@@ -91,8 +91,11 @@ public:
         int32_t   src0 = -1; // like src, but only used when setting the inputs (allowing to copy once)
         int32_t   tail = -1;
 
-        // gdn_replay: kept tokens to re-run before this batch (set by find_slot for the batch cells)
+        // gdn_replay: kept tokens to re-run before this batch, and the store rows this batch's
+        // seq reads them from / writes its own to (set by find_slot for the batch cells)
         int32_t   xk_replay = 0;
+        int32_t   xk_rrow   = 0;
+        int32_t   xk_wrow   = 0;
         // gdn_replay: a rollback is pending (the logical state is not materialized in group 0)
         bool      xk_pending = false;
 
@@ -127,11 +130,20 @@ public:
 
     uint32_t n_embd_x = 0;
 
-    // per layer: [n_embd_x * n_rs_seq, size] (row = cell, token j at j*n_embd_x)
+    // per layer: [n_embd_x * n_rs_seq, 2 * size] (row = half * size + cell, token j at
+    // j*n_embd_x). Two halves per cell because the delta-net kernel reads the kept inputs of the
+    // previous batch in place while it writes this batch's: a seq reads half xk_par and writes
+    // the other, so the two never share a row
     std::vector<ggml_tensor *> x_l;
 
     // per seq: tokens kept from its last batch (bounds the rollback), 0 = none
     std::vector<uint32_t> xk_n_keep;
+    // per seq: the half of its cell's kept-input rows that holds those tokens
+    std::vector<uint8_t> xk_par;
+
+    // set by find_slot for the batch: some seq in the batch reads a store row another seq in the
+    // batch writes (a cell swap), so the kept inputs must be gathered before the kernel
+    bool xk_gather = false;
 
 private:
     //const llama_model & model;
@@ -156,6 +168,7 @@ private:
         uint32_t src;
         bool     pending;
         uint32_t n_rep;
+        uint32_t x_row; // store row of the kept tokens (half * size + src)
     };
     mutable std::vector<xk_write_cell> xk_write_cells;
 
@@ -213,8 +226,13 @@ public:
     int32_t       s_copy_ss_view_row0(uint32_t n_seqs) const;
     // plain source cell of seq i (no snapshot group)
     int32_t       s_copy_src0(int i) const;
-    // kept tokens seq i re-runs before this batch
+    // kept tokens seq i re-runs before this batch, the store row it reads them from and the row
+    // it writes this batch's to
     int32_t       xk_replay(int i) const;
+    int32_t       xk_rrow(int i) const;
+    int32_t       xk_wrow(int i) const;
+    // the batch needs the kept inputs gathered before the kernel (see llama_memory_recurrent)
+    bool          xk_gather() const;
 
     int32_t s_copy(int i) const;
 

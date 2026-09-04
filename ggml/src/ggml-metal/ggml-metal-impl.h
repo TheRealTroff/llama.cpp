@@ -991,8 +991,10 @@ typedef struct {
     int32_t  n_x;    // floats per kept token row
     int32_t  xp_cap; // token rows per seq in xp (0 = no replay input)
     uint64_t xk_off; // byte offset of the kept-input region in the bound xk buffer
-    uint64_t xk_nb1; // per-seq stride of the kept-input region
+    uint64_t xk_nb1; // per-row stride of the kept-input region
     uint64_t xk_nb2; // per-token stride of the kept-input region
+    int32_t  has_xrow;  // xp rows come from the xrow index (else row = seq)
+    int32_t  has_xwrow; // kept-input rows come from the xwrow index (else row = seq)
 } ggml_metal_kargs_gated_delta_net;
 
 typedef struct {

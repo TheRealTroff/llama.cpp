@@ -4346,17 +4346,18 @@ struct test_gated_delta_net : public test_case {
     // (n_rep - i for seq i, so counts differ), n_keep > 0 keeps the last n_keep tokens (K = 2)
     const int64_t n_rep;
     const int64_t n_keep;
+    const bool    xrow; // read the replay inputs through a row index into a larger xp
 
     std::string vars() override {
-        return VARS_TO_STR11(type, head_count, head_size, n_seq_tokens, n_seqs, v_repeat, permuted, kda, K, n_rep, n_keep);
+        return VARS_TO_STR12(type, head_count, head_size, n_seq_tokens, n_seqs, v_repeat, permuted, kda, K, n_rep, n_keep, xrow);
     }
 
     test_gated_delta_net(ggml_type type = GGML_TYPE_F32,
             int64_t head_count = 4, int64_t head_size = 16, int64_t n_seq_tokens = 1, int64_t n_seqs = 1,
             int v_repeat = 1, bool permuted = false, bool kda = false, int64_t K = 1,
-            int64_t n_rep = -1, int64_t n_keep = -1)
+            int64_t n_rep = -1, int64_t n_keep = -1, bool xrow = false)
         : type(type), head_count(head_count), head_size(head_size), n_seq_tokens(n_seq_tokens), n_seqs(n_seqs),
-          v_repeat(v_repeat), permuted(permuted), kda(kda), K(K), n_rep(n_rep), n_keep(n_keep) {}
+          v_repeat(v_repeat), permuted(permuted), kda(kda), K(K), n_rep(n_rep), n_keep(n_keep), xrow(xrow) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * q;
@@ -4390,14 +4391,19 @@ struct test_gated_delta_net : public test_case {
             const int64_t n_x = 2*head_size*head_count + head_size*H_v + g_ne0*H_v + H_v;
             ggml_tensor * xp   = nullptr;
             ggml_tensor * xrep = nullptr;
+            ggml_tensor * xrw  = nullptr;
             if (n_rep > 0) {
-                xp   = ggml_new_tensor_3d(ctx, type, n_x, n_rep + 1, n_seqs);
+                xp   = ggml_new_tensor_3d(ctx, type, n_x, std::max(n_rep + 1, std::max<int64_t>(n_keep, 0)), xrow ? 2*n_seqs + 1 : n_seqs);
                 xrep = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, n_seqs);
                 ggml_set_name(xp,   "xp");
                 ggml_set_name(xrep, "xrep");
+                if (xrow) {
+                    xrw = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, n_seqs);
+                    ggml_set_name(xrw, "xrow");
+                }
             }
             const int64_t nk = std::max<int64_t>(n_keep, 0);
-            return ggml_gated_delta_net_ext(ctx, q, k, v, g, beta, state, xp, xrep, nk > 0 ? 2 : 1, nk, n_x);
+            return ggml_gated_delta_net_ext(ctx, q, k, v, g, beta, state, xp, xrep, xrw, nk > 0 ? 2 : 1, nk, n_x);
         }
         ggml_tensor * out   = ggml_gated_delta_net(ctx, q, k, v, g, beta, state, K);
         return out;
@@ -4418,6 +4424,13 @@ struct test_gated_delta_net : public test_case {
                     rep[i] = (int32_t) std::max<int64_t>(n_rep - i, 0);
                 }
                 ggml_backend_tensor_set(t, rep.data(), 0, rep.size()*sizeof(int32_t));
+            } else if (strcmp(t->name, "xrow") == 0) {
+                // a scattered, reversed row map into the larger xp
+                std::vector<int32_t> rows(n_seqs);
+                for (int64_t i = 0; i < n_seqs; ++i) {
+                    rows[i] = (int32_t) (2*(n_seqs - 1 - i) + 1);
+                }
+                ggml_backend_tensor_set(t, rows.data(), 0, rows.size()*sizeof(int32_t));
             } else if (strcmp(t->name, "xp") == 0) {
                 // packed kept inputs [q | k | v | g | beta]: unit-norm q/k, the usual ranges otherwise
                 const int64_t H_v  = head_count * v_repeat;
@@ -10108,6 +10121,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 64, 5, 3, 2, false, false, 1, 3, 5));
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 64, 2, 4, 2, true,  false, 1, 2, 2));
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 32, 4, 2, 1, false, true,  1, 2, 4));
+    test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 64, 3, 3, 2, false, false, 1, 2, 3, true));
+    test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 64, 2, 2, 1, false, false, 1, 3, 2, true));
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 64, 4, 2, 1, true,  true));
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 16, 4, 2, 1, true,  true));
     // chunked path: multi-chunk and non-multiple-of-chunk-size (chunk_size=64 GDN, 16 KDA)
