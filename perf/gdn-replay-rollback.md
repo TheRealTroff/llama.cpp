@@ -64,7 +64,7 @@ Pieces (each a pure function of the graph, like the fused write-back):
 | f16 pick arm, replay OFF, new binary (kernel restructured) | sha `95eb7e65977e` (canonical), 26.96 t/s at 300 |
 | f16 pick arm, replay ON | sha `95eb7e65977e`, 27.46 t/s at 300 |
 | Turbo4 depth-3 arm at 600 (`run-prod-pick.sh` TURBO=1), OFF / ON | sha `12c3dc6bb2dd` both (canonical), 30.06 / 30.13 t/s (single runs; the 2026-09-01 reference was 29.5, so the base already reads above 30 on this merged prod) |
-| prompt-cache saves with a rollback pending (the CPU materialization) | exercised on every slot reuse in the harness runs (`materializing cell` lines), no failure; its exactness against the GPU replay is NOT verified - the explicit `/slots/0?action=save` route wrote 0 tokens for 5 of 6 prompts, so the file diff only covered non-pending saves (identical) |
+| prompt-cache saves with a rollback pending (the CPU materialization) | ~~exactness NOT verified~~ **VERIFIED with the activation tracer** (owner: "run it"): `llama-gdn-replay-check` (examples/) rolls 3 of 5 tokens back on seq 0, saves it (the CPU path replays 1 kept token), restores into seq 1, decodes the same 2 tokens on both in one batch under `LLAMA_TRACE_DUMP`; `perf/gdn-replay-check.py` slices the delta-net op's slot-1 snapshot (the state before those tokens: GPU replay for seq 0, the restored CPU state for seq 1). Layers 0-2: max\|d\| 3.8e-6 / 3.0e-8 / 6.0e-8 on absmax 28.8 / 0.54 / 0.51, i.e. **relative 1.3e-7 / 5.5e-8 / 1.2e-7, f32 rounding**; logits max\|d\| 1.1e-2 on absmax 16 with the same top-1 on both following rounds (64 half-accumulate layers amplify the ulp). Control with the old snapshot scheme (K = 5, the saved state is the GPU snapshot itself): every compared value bit-identical, logits identical - the method sees exactness when it is there |
 
 ## Measured against the ceiling table
 
@@ -142,7 +142,8 @@ lesson: a deletion probe prices the deletion, not the re-derivation.
 
 ## Open
 
-- The CPU materialization in `state_write` is exercised but not verified exact (see gates).
+- ~~The CPU materialization in `state_write` is exercised but not verified exact~~ - verified to
+  f32 rounding with the tracer (gates table; `examples/gdn-replay-check`, `perf/gdn-replay-check.py`).
 - Memory: `s_l` drops from (1 + n_rs_seq) to 2 groups - at 8 slots depth 4 that is 4.3 -> 1.7 GB
   of state cache; unmeasured as a lever, but it is the reason the mode can be on at 8 slots even
   though it wins nothing there.

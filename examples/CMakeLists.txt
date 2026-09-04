@@ -19,6 +19,7 @@ else()
     add_subdirectory(embedding)
     add_subdirectory(eval-callback)
     add_subdirectory(multiseq-repro)
+    add_subdirectory(gdn-replay-check)
 
     add_subdirectory(gguf-hash)
     add_subdirectory(gguf)
