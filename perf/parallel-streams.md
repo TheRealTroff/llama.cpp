@@ -285,6 +285,14 @@ Validation, same prompt, depth 4 requested (`budget8`, `budget0` results):
 | 4 | 33.5 | 44.0 | 1 | 11.6 |
 | 8 | 35.7 | 45.6 | off | 6.1 |
 
+**Pick check on this build (`perf/run-prod-pick.sh`, full harness):** shas identical to the
+acch lineage (`95eb7e65977e` at 300, `6678b0507d41` at 600); 26.80/26.70 t/s at 300 and
+29.22/29.22 at 600 against the lineage mint's 25.5/26.6 and 29.0/29.2; b1 anchor 13.016 vs
+12.980. Single-stream is untouched by construction: at one slot the cap is 7, above depth 4,
+so the drafter decodes the same block; the only round where it now drafts fewer masks is the
+last one before `n_predict`, where the server's per-slot depth already shrank and the extra
+drafts were discarded anyway.
+
 Per-slot verify batches of different depths pack fine (split_equal packs equal token counts;
 all generating slots get the same depth). Not yet measured: the Turbo4 line under the policy,
 the UNIQUE set, and whether 3 slots would rather have depth 2 with a 9-column skinny variant -
