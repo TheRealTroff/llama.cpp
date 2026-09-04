@@ -492,3 +492,14 @@ state/conv copies are gone from the top list. What remains per stream is the del
 bandwidth-bound on K x 25 MB snapshot writes) and, on the server side, the per-round checkpoint work
 that runs even when the depth policy has switched speculation off (8 slots with the drafter loaded
 58.3 vs 60.3 without).
+
+## Merged to prod (2026-09-04 evening, owner: "do both")
+
+`gdn-decode-kernels` (113820a23) then `skinny-n16` (0ca7b23fd); the only conflicts were the doc
+appends and one comment line. Pick harness on merged prod, `TURBO=1`, run without any exported
+env: f16 pick 27.06/27.16 at 300 and 29.62/29.61 at 600 (`95eb7e65977e` / `6678b0507d41`), partial
+arm `9ad7e023c6ab`, MTP 22.09 (`0f1a97ed24bc`), b1 13.98, Turbo4 29.96/29.94 at 600
+(`12c3dc6bb2dd`) and 28.40 at 300 (`63a78a7669cb`). Serving point on merged prod, Turbo4 SOA-V1,
+8 slots, `GGML_MM_SKINNY_N16=1 LLAMA_SPEC_SLOT_BUDGET_WIDE=16`: **62.3 t/s aggregate** (this
+morning's 8-slot Turbo4 cell: 27.5). Open: server checkpoint work when the budget turns speculation
+off, the delta-net's snapshot write bandwidth, the in-place view on other recurrent architectures.
