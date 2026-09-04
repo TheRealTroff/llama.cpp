@@ -15817,6 +15817,164 @@ kernel void kernel_mul_mm_skinny_q4_0_soa_f32(
     }
 }
 
+// 16-column variant of the SoA skinny kernel for verify batches of 9..16 columns (>= 3 slots,
+// or 2 slots at depth >= 4): one weight stream feeds two 8-column B tiles, so the pass costs the
+// 8-column kernel's weight traffic plus 2x the MMA work instead of two full column tiles.
+// tile: 32 rows x 16 cols, K-slice 64; 64 threads / 2 simdgroups, each SG: 16 rows x 16 cols
+kernel void kernel_mul_mm_skinny_q4_0_soa_n16_f32(
+        constant ggml_metal_kargs_mul_mm & args,
+        device const char * src0,
+        device const char * src1,
+        device       char * dst,
+        threadgroup  char * shmem [[threadgroup(0)]],
+        uint3  tgpig[[threadgroup_position_in_grid]],
+        ushort tiitg[[thread_index_in_threadgroup]],
+        ushort sgitg[[simdgroup_index_in_threadgroup]]) {
+
+    threadgroup half * sa = (threadgroup half *)(shmem);
+    threadgroup half * sb = (threadgroup half *)(shmem + 4096);   // 64 x 16 halves = 2048 B
+
+    constexpr int NR0 = 32;
+    constexpr int NR1 = 16;
+    constexpr int NK  = 64;
+
+    const int im = tgpig.z;
+    const int r0 = tgpig.y*NR0;
+    const int r1 = tgpig.x*NR1;
+
+    const short nr0 = (args.ne0 - r0 < NR0) ? (args.ne0 - r0) : NR0;
+    const short nr1 = (args.ne1 - r1 < NR1) ? (args.ne1 - r1) : NR1;
+
+    const short ar  = tiitg/2;
+    const short il0 = tiitg%2;
+    const short lr0 = ar < nr0 ? ar : nr0 - 1;
+
+    const int i12 = im % FC_mul_mm_ne12;
+    const int i13 = im / FC_mul_mm_ne12;
+
+    // 2D SoA weights: [half scale x nblk][uint pack8 x 4*nblk].
+    const int nblk = args.ne00/32;
+
+    device const char * row0 = src0 + args.nb01*(r0 + lr0);
+
+    uint ib = il0;
+    device const uint * packs = (device const uint *)(row0 + 2*nblk);
+
+    const short bcol = (short)(tiitg/4) < nr1 ? (short)(tiitg/4) : nr1 - 1;
+    const short bsx  = tiitg%4;
+
+    device const float * y = (device const float *)(src1
+        + args.nb13*i13
+        + args.nb12*i12
+        + args.nb11*(r1 + bcol)
+        + args.nb10*(16*bsx));
+
+    simdgroup_half8x8 ma[2];
+    simdgroup_half8x8 mb[2];
+
+    // mc[0]: rows 0-7 x cols 0-7, mc[1]: rows 8-15 x cols 0-7, mc[2]/mc[3]: the same rows x cols 8-15
+    simdgroup_float8x8 mc[4];
+    mc[0] = make_filled_simdgroup_matrix<float, 8>(0.f);
+    mc[1] = make_filled_simdgroup_matrix<float, 8>(0.f);
+    mc[2] = make_filled_simdgroup_matrix<float, 8>(0.f);
+    mc[3] = make_filled_simdgroup_matrix<float, 8>(0.f);
+
+    // Prefetch slice 0: one scale and four already nibble-planar pack8 words.
+    half dh = *(device const half *)(row0 + 2*ib);
+    uint q0 = packs[4*ib + 0];
+    uint q1 = packs[4*ib + 1];
+    uint q2 = packs[4*ib + 2];
+    uint q3 = packs[4*ib + 3];
+    ib += NK/32;
+
+    for (int loop_k = 0; loop_k < args.ne00; loop_k += NK) {
+        // Expand each pack8 into two half4 vectors in sequential K order.
+        half4x4 ta0;
+        half4x4 ta1;
+        const uint4 shifts = uint4(0, 4, 8, 12);
+        ta0[0] = (half4((uint4(q0)       >> shifts) & 0x0Fu) - 8.h)*dh;
+        ta0[1] = (half4((uint4(q0 >> 16) >> shifts) & 0x0Fu) - 8.h)*dh;
+        ta0[2] = (half4((uint4(q1)       >> shifts) & 0x0Fu) - 8.h)*dh;
+        ta0[3] = (half4((uint4(q1 >> 16) >> shifts) & 0x0Fu) - 8.h)*dh;
+        ta1[0] = (half4((uint4(q2)       >> shifts) & 0x0Fu) - 8.h)*dh;
+        ta1[1] = (half4((uint4(q2 >> 16) >> shifts) & 0x0Fu) - 8.h)*dh;
+        ta1[2] = (half4((uint4(q3)       >> shifts) & 0x0Fu) - 8.h)*dh;
+        ta1[3] = (half4((uint4(q3 >> 16) >> shifts) & 0x0Fu) - 8.h)*dh;
+
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        threadgroup half4 * pa = (threadgroup half4 *)(sa + ar*NK + 32*il0);
+        pa[0] = ta0[0];
+        pa[1] = ta0[1];
+        pa[2] = ta0[2];
+        pa[3] = ta0[3];
+        pa[4] = ta1[0];
+        pa[5] = ta1[1];
+        pa[6] = ta1[2];
+        pa[7] = ta1[3];
+
+        // 4*NR1 = 64 = every thread loads 16 k-values of one column
+        FOR_UNROLL (short j = 0; j < 16; ++j) {
+            sb[(16*bsx + j)*NR1 + tiitg/4] = (half) y[j];
+        }
+
+        y += NK;
+
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        // prefetch slice t+1 while the MACs run
+        if (loop_k + NK < args.ne00) {
+            dh = *(device const half *)(row0 + 2*ib);
+            q0 = packs[4*ib + 0];
+            q1 = packs[4*ib + 1];
+            q2 = packs[4*ib + 2];
+            q3 = packs[4*ib + 3];
+            ib += NK/32;
+        }
+
+        threadgroup const half * lsma = sa + 16*sgitg*NK;
+        threadgroup const half * lsmb = sb;
+
+        FOR_UNROLL (short ik = 0; ik < NK/8; ik++) {
+            simdgroup_barrier(mem_flags::mem_none);
+
+            simdgroup_load(ma[0], lsma + 8*ik,           NK,  0, false);
+            simdgroup_load(ma[1], lsma + 8*NK + 8*ik,    NK,  0, false);
+            simdgroup_load(mb[0], lsmb + 8*ik*NR1,       NR1, 0, false);
+            simdgroup_load(mb[1], lsmb + 8*ik*NR1 + 8,   NR1, 0, false);
+
+            simdgroup_barrier(mem_flags::mem_none);
+
+            simdgroup_multiply_accumulate(mc[0], ma[0], mb[0], mc[0]);
+            simdgroup_multiply_accumulate(mc[1], ma[1], mb[0], mc[1]);
+            simdgroup_multiply_accumulate(mc[2], ma[0], mb[1], mc[2]);
+            simdgroup_multiply_accumulate(mc[3], ma[1], mb[1], mc[3]);
+        }
+    }
+
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    threadgroup float * temp_all = (threadgroup float *) shmem;
+
+    // temp_all: [32 rows][16 cols] floats = 2048 B
+    simdgroup_store(mc[0], temp_all + (16*sgitg + 0)*NR1,     NR1, 0, false);
+    simdgroup_store(mc[1], temp_all + (16*sgitg + 8)*NR1,     NR1, 0, false);
+    simdgroup_store(mc[2], temp_all + (16*sgitg + 0)*NR1 + 8, NR1, 0, false);
+    simdgroup_store(mc[3], temp_all + (16*sgitg + 8)*NR1 + 8, NR1, 0, false);
+
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    if (sgitg == 0) {
+        for (short j = tiitg; j < nr1; j += 32) {
+            device float * D = (device float *) dst + r0 + (r1 + j)*args.ne0 + im*args.ne1*args.ne0;
+
+            for (short i = 0; i < nr0; ++i) {
+                D[i] = temp_all[i*NR1 + j];
+            }
+        }
+    }
+}
+
 template<short ne20> // n_expert_used
 kernel void kernel_mul_mm_id_map0(
         constant ggml_metal_kargs_mul_mm_id_map0 & args,

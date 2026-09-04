@@ -2773,6 +2773,7 @@ static bool ggml_metal_op_mul_mat_try_repack_q4_0(ggml_metal_op_t ctx, const ggm
     }
 
     static const int env_repack = getenv("GGML_MV_REPACK") ? atoi(getenv("GGML_MV_REPACK")) : 0;
+    static const int env_skinny_n16_rp = getenv("GGML_MM_SKINNY_N16") ? atoi(getenv("GGML_MM_SKINNY_N16")) : 0; // runtime-repack SoA also serves the 16-column tile
     static const int env_soa_pin = getenv("GGML_MV_SOA_PIN") ? atoi(getenv("GGML_MV_SOA_PIN")) : 0;
     static const int env_skinny_soa = getenv("GGML_MM_SKINNY_SOA") ? atoi(getenv("GGML_MM_SKINNY_SOA")) : 0;
     static const int env_soa_w3 = getenv("GGML_MV_SOA_W3") ? atoi(getenv("GGML_MV_SOA_W3")) : 0;
@@ -2782,7 +2783,7 @@ static bool ggml_metal_op_mul_mat_try_repack_q4_0(ggml_metal_op_t ctx, const ggm
     static const int env_soa_w7 = getenv("GGML_MV_SOA_W7") ? atoi(getenv("GGML_MV_SOA_W7")) : 0;
     const bool soa_width = (env_soa_w3 && op->src[1]->ne[1] == 3) ||
                            (env_soa_w4 && op->src[1]->ne[1] == 4) || (env_soa_w5 && op->src[1]->ne[1] == 5) ||
-                           (repack_soa && env_skinny_soa && op->src[1]->ne[1] >= 6 && op->src[1]->ne[1] <= 8) ||
+                           (repack_soa && env_skinny_soa && op->src[1]->ne[1] >= 6 && op->src[1]->ne[1] <= (env_skinny_n16_rp ? 16 : 8)) ||
                            (env_soa_w6 && op->src[1]->ne[1] == 6) || (env_soa_w7 && op->src[1]->ne[1] == 7);
     const bool soa_shape = op->src[1]->ne[2] == 1 &&
                            op->src[1]->ne[3] == 1 && op->src[0]->ne[0]%64 == 0 &&
@@ -3022,7 +3023,11 @@ static int ggml_metal_op_mul_mat_impl(ggml_metal_op_t ctx, int idx, ggml_tensor 
     // columns per threadgroup and the grid iterates column tiles, so 9..16 run as two column
     // tiles that each re-read the weight rows (probe for the 9-16 hole; a 16-column tile that
     // shares the dequantized A tile is the real kernel)
-    static const int env_mm_skinny_max = getenv("GGML_MM_SKINNY_MAX") ? atoi(getenv("GGML_MM_SKINNY_MAX")) : 8;
+    static const int env_mm_skinny_max_env = getenv("GGML_MM_SKINNY_MAX") ? atoi(getenv("GGML_MM_SKINNY_MAX")) : 8;
+    // GGML_MM_SKINNY_N16=1: 9..16 columns take the fused 16-column SoA tile (one weight stream,
+    // two B tiles) instead of two 8-column tiles; implies a cap of at least 16
+    static const int env_skinny_n16 = getenv("GGML_MM_SKINNY_N16") ? atoi(getenv("GGML_MM_SKINNY_N16")) : 0;
+    const int env_mm_skinny_max = env_skinny_n16 ? std::max(env_mm_skinny_max_env, 16) : env_mm_skinny_max_env;
 
     const bool stored_soa_skinny = op->src[0]->type == GGML_TYPE_Q4_0_SOA &&
                                    ne11 >= 6 && ne11 <= env_mm_skinny_max;
@@ -3043,7 +3048,9 @@ static int ggml_metal_op_mul_mat_impl(ggml_metal_op_t ctx, int idx, ggml_tensor 
         const bool use_di = stored_soa_skinny ? true :
             ggml_metal_op_mul_mat_try_repack_q4_0(ctx, op, bid_src0, nb01_eff, &repack_soa);
 
-        auto pipeline = repack_soa ? ggml_metal_library_get_pipeline_mul_mm_skinny_soa(lib, op) :
+        const bool use_n16 = env_skinny_n16 && repack_soa && ne11 > 8 && ne11 <= 16;
+        auto pipeline = use_n16    ? ggml_metal_library_get_pipeline_mul_mm_skinny_soa_n16(lib, op) :
+                        repack_soa ? ggml_metal_library_get_pipeline_mul_mm_skinny_soa(lib, op) :
                                      ggml_metal_library_get_pipeline_mul_mm_skinny(lib, op, use_di);
 
         ggml_metal_kargs_mul_mm args = {
@@ -3071,7 +3078,7 @@ static int ggml_metal_op_mul_mat_impl(ggml_metal_op_t ctx, int idx, ggml_tensor 
 
         ggml_metal_encoder_set_threadgroup_memory_size(enc, pipeline.smem, 0);
 
-        ggml_metal_encoder_dispatch_threadgroups(enc, ((ne11 + 7)/8), ((ne01 + 31)/32), ne12*ne13, 32, 2, 1);
+        ggml_metal_encoder_dispatch_threadgroups(enc, ((ne11 + pipeline.nr1 - 1)/pipeline.nr1), ((ne01 + 31)/32), ne12*ne13, 32, 2, 1);
 
         return 1;
     }

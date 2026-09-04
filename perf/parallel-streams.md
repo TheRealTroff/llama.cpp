@@ -339,6 +339,43 @@ fused kernel might add ~10% there. Not worth building ahead of the per-slot serv
 cost at long contexts, which are the walls that remain. The policy at budget 8 is the pick for
 the Turbo4 line too: 2 slots 34.3, 4 slots 43.4, 8 slots 48.5 aggregate, single slot untouched.
 
+## The fused 16-column SoA skinny tile (2026-09-04, owner: "build the tile", branch `skinny-n16`)
+
+`kernel_mul_mm_skinny_q4_0_soa_n16_f32`: the SoA skinny kernel with a 32 x 16 tile - one weight
+stream feeds two 8-column B tiles, four accumulators per simdgroup, 6 KB threadgroup memory.
+Opt-in `GGML_MM_SKINNY_N16=1` routes 9-16 columns to it (stored SoA, and the runtime-repack SoA
+path, whose repack window widens to 16 under the flag); default off, so single-slot picks are
+untouched. Correct against the CPU reference on the model-shaped `test-backend-ops` cases
+(17408x5120 and 5120x17408 at 12 columns, broadcast 1-4x; 1238/1238), and the 3-seq driver
+logits sit on the skinny family's values.
+
+Full pass, SOA-V1 model (`llama-bench -p N -n 0`):
+
+| columns | generic tile | two 8-col tiles | **fused 16** |
+|---:|---:|---:|---:|
+| 8 | - | 113 ms | - |
+| 10 | 290 | 180 | **159** |
+| 12 | 291 | 180 | **161** |
+| 16 | 291 | 184 | **164** |
+
+So 16 columns cost 1.45x the 8-column pass: the 8-column kernel is not weight-bandwidth-bound,
+which is the assumption the "~130 ms" plan rested on. End to end (Turbo4 SOA-V1, prompt 06,
+300 tokens, `t4n16-*`):
+
+| slots | best without the tile | with the tile (16 cols) | change |
+|---:|---:|---:|---:|
+| 2 | 34.3 (d3, 8 cols) | 28.0 (d4) | loses |
+| 3 | - | 38.2 (d4, 15 cols) | +5% vs the f16-line d1 cell |
+| 4 | 43.4 (d1) | **44.6** (d3) | +3% |
+| 8 | 48.5 (off) | **54.8** (d1) | **+13%** |
+
+`LLAMA_SPEC_SLOT_BUDGET_WIDE` (default = the budget) is the budget from 4 generating slots on:
+the serving setting for the tile is `GGML_MM_SKINNY_N16=1 LLAMA_SPEC_SLOT_BUDGET_WIDE=16` with
+the default budget 8 below 4 slots. Where the rest is: 4 slots at depth 3 make 10.4 tokens per
+round in ~243 ms, of which ~80 ms is not the pass (drafter batch, inject, sampling, server) - the
+per-round overhead is now the larger lever at 4-8 slots; on the kernel side the 8->16 slope says
+issue, not bandwidth, so a 64-row / 4-simdgroup variant (B tile amortized over twice the rows)
+is the next probe, and per-instruction attribution (`metal-gpu-profile`) should come before it.
 ## Round overhead attributed, 1-8 streams (2026-09-04, owner: "pin down where the round overhead spends its time")
 
 **It is not the server.** The compiled-in `spec-prof` timers (delta of the last two 5-second dumps,

@@ -3030,8 +3030,12 @@ private:
         // the verify width: depth <= budget / N_gen - 1, i.e. 2 slots -> 3, 3-4 slots -> 1, 5+ -> off.
         // A single slot is never affected (budget 8 vs the drafter's own cap of 7). 0 disables.
         static const int spec_slot_budget = getenv("LLAMA_SPEC_SLOT_BUDGET") ? atoi(getenv("LLAMA_SPEC_SLOT_BUDGET")) : 8;
+        // LLAMA_SPEC_SLOT_BUDGET_WIDE: the budget from 4 generating slots on (default = the budget).
+        // With GGML_MM_SKINNY_N16=1 (fused 16-column SoA tile) 16 pays at 4+ slots and loses at 2-3.
+        static const int spec_slot_budget_wide = getenv("LLAMA_SPEC_SLOT_BUDGET_WIDE") ? atoi(getenv("LLAMA_SPEC_SLOT_BUDGET_WIDE")) : spec_slot_budget;
         int n_gen = 0;
         iterate(slots, [&](server_slot & slot) { if (slot.state == SLOT_STATE_GENERATING) n_gen++; });
+        const int spec_slot_budget_cur = n_gen >= 4 ? spec_slot_budget_wide : spec_slot_budget;
 
         // determine which slots are generating and drafting
         iterate(slots, [&](server_slot & slot) {
@@ -3066,8 +3070,8 @@ private:
                     n_draft_max = std::min(n_draft_max, slot.spec_adaptive.depth(std::min(n_draft_max, d_cli)));
                 }
 
-                if (spec_slot_budget > 0 && n_gen > 1 && n_draft_max > 0) {
-                    n_draft_max = std::min(n_draft_max, std::max(0, spec_slot_budget / n_gen - 1));
+                if (spec_slot_budget_cur > 0 && n_gen > 1 && n_draft_max > 0) {
+                    n_draft_max = std::min(n_draft_max, std::max(0, spec_slot_budget_cur / n_gen - 1));
                 }
 
                 if (n_draft_max > 0) {
