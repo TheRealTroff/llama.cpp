@@ -16,7 +16,7 @@ fi
 
 B=/Users/troff/play/llama.cpp-prod
 BIN=$B/build/bin
-M=/Users/troff/play/Qwen3.8-27B-uniform-Q4_0.gguf
+M=${M:-/Users/troff/play/Qwen3.8-27B-uniform-Q4_0.gguf}   # overridable: 2026-09-04 UD-vs-Q4_0 acceptance comparison
 MD=/Users/troff/play/Qwen3.8-27B-DFlash2-pureQ4_0.gguf
 PORT=8094
 OUT=/Users/troff/play/kvquant-experiments/results
@@ -26,6 +26,21 @@ mkdir -p "$OUT"
 
 BASE_ENV=(GGML_MV_NC=2 GGML_MM_SKINNY=5 GGML_FA_VEC_MAX=5 GGML_FA_MM_NWG=8 GGML_GDN_FUSE_WB=1)
 WIN_ENV=("${BASE_ENV[@]}" LLAMA_DRAFT_WINDOW=1024)
+# PICK=1: the win arm carries the FULL current pick env (run-prod-pick.sh PICK_ENV) instead of
+# the aug-28 subset - needed once acch (prefill numerics) is in the pick, since the text and
+# hence the trajectory acceptance is measured on depends on it. ARMS filters win/base.
+PICK=${PICK:-0}
+ARMS=${ARMS:-"win base"}
+if [ "$PICK" = 1 ]; then
+  WIN_ENV=(GGML_MV_NC=2 GGML_MM_SKINNY=6 GGML_MM_SKINNY_SOA=1
+           GGML_FA_VEC_MAX=3 GGML_FA_MM_NWG=8 GGML_GDN_FUSE_WB=1
+           GGML_MV_REPACK=1 GGML_MV_SOA_PIN=1 GGML_MV_SOA_W3=1
+           GGML_MV_SOA_W4=1 GGML_MV_SOA_W4_R4KP=3
+           GGML_MV_SOA_W5=4 GGML_MV_SOA_W5_HALF=1 GGML_MV_SOA_WL_XL=1
+           GGML_METAL_GET_MEMCPY=1
+           DFLASH_FUSED_INJECT=1 DFLASH_ASYNC_INJECT=1 LLAMA_DRAFT_WINDOW=1024
+           GGML_MM_ACC_HALF=1 GGML_MM_N64=1 LLAMA_GDN_REPLAY=1)
+fi
 
 PROMPTS=(
   /Users/troff/play/benchprompt.txt
@@ -37,6 +52,7 @@ PROMPTS=(
 )
 
 echo "=== corpus acceptance at the pick (n4, window vs none): $TAG ==="
+echo "model  : $M   pick_env=$PICK   arms: $ARMS"
 echo "commit : $(cd "$B" && git rev-parse --short HEAD) on $(cd "$B" && git rev-parse --abbrev-ref HEAD) ($(cd "$B" && git status --porcelain | wc -l | tr -d ' ') dirty)"
 echo
 
@@ -88,6 +104,6 @@ print('[%-22s] prompt_n=%5d  acc=%5.1f%%  committed/rd=%4.2f  rounds=%3d  sha1=%
 
 for p in "${PROMPTS[@]}"; do
   name=$(basename "$p" .txt)
-  run_one "$name-win"  "$p" WIN_ENV
-  run_one "$name-base" "$p" BASE_ENV
+  case " $ARMS " in *" win "*)  run_one "$name-win"  "$p" WIN_ENV ;; esac
+  case " $ARMS " in *" base "*) run_one "$name-base" "$p" BASE_ENV ;; esac
 done

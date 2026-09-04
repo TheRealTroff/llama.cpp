@@ -56,10 +56,29 @@ against Q4_0's 1.94x.
 Same pureQ4_0 DFlash drafter, same prompt: depth 4 @600 Q4_0 58.2% vs UD 53.5% (mean run
 3.33 vs 3.14); @300 51.4% vs 49.9%; depth 3 @600 Q4_0 (Turbo4 KV line) 70.7% vs UD 60.9%.
 UD is far closer to bf16 (mean KLD 0.014 vs 0.054) and the drafter was trained on bf16, so
-the naive expectation was the reverse. Single-prompt acceptance is trajectory-dependent
-(`acceptance-by-prompt.md`; the 2026-08-24 measurement on the same prompt had UD slightly
-AHEAD, 43.0 vs 41.3) so this is not a verdict; `run-corpus-acceptance.sh` on UD is the
-instrument. Not run yet (GPU-serialized behind steps 2-5).
+the naive expectation was the reverse; the owner's reading was that a tiny drafter has a
+harder time predicting a more capable target. **Corpus run (owner: "go ahead"), same session,
+same pick env, depth 4, window arm, TAGs `corpacc-ud-sep04` / `corpacc-q40-sep04`:**
+
+| prompt | UD acc | Q4_0 acc | UD committed/rd | Q4_0 committed/rd | UD acc per pos | Q4_0 acc per pos |
+|---|--:|--:|--:|--:|---|---|
+| `benchprompt` (8288 tok) | 49.9% | 51.4% | 2.97 | 3.03 | (.700 .550 .420 .320) | (.776 .612 .418 .245) |
+| `01-code-explain` | **49.5%** | 37.4% | **2.94** | 2.48 | (.780 .560 .410 .230) | (.708 .433 .208 .142) |
+| `02-prose-creative` | **54.7%** | 42.1% | **3.16** | 2.65 | (.840 .617 .415 .309) | (.676 .486 .315 .207) |
+| `03-chat-support` | 32.8% | **47.1%** | 2.31 | **2.86** | (.756 .356 .156 .044) | (.816 .552 .345 .172) |
+| `04-math-derivation` | 84.6% | **91.1%** | 4.29 | 4.55 | (.971 .897 .809 .706) | (.969 .923 .892 .815) |
+| `05-json-boilerplate` | 95.2% | 97.1% | 4.69 | 4.76 | (.968 .952 .952 .935) | (1.00 .984 .967 .934) |
+| **mean committed/rd** | | | **3.39** | **3.39** | | |
+
+**Verdict: trajectory noise, not a drafter-target mismatch.** The mean committed/round is
+identical to two decimals (3.39 vs 3.39); per prompt the sign flips both ways by 12-14 pt
+(UD +12 on code-explain and +12.6 on prose, -14 on chat-support, where UD's generation hit
+EOS after 45 rounds, so that cell is short). The same-prompt gap from the depth sweep (UD
+5-10 pt under on benchprompt) is one draw from this spread. Neither "UD is harder to
+predict" nor "UD accepts more because it is closer to bf16" survives the corpus; this
+matches the Turbo4 finding that corpus acceptance is trajectory noise. Consequence for
+the UD stub: acceptance is NOT a lever or a cost on this model; the entire gap to the Q4_0
+pick is kernel time per width.
 
 ## Step 2: round decomposition at depth 3 (perf/run-ud-decomp.sh, TAG ud-decomp-sep04-d3)
 

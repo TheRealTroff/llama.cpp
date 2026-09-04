@@ -110,3 +110,21 @@ Three findings:
    n4's curves sit above n6's on every free-form prompt (e.g. 01: .400/.290 vs
    .337/.242) - the shorter noise block conditions the tail positions better. Part
    of why n4 wins e2e despite committing less per round.
+
+## UD-Q4_K_M vs uniform-Q4_0, same drafter, same session (2026-09-04, TAGs `corpacc-ud-sep04` / `corpacc-q40-sep04`)
+
+Question (owner): does the more capable target show up in acceptance? Depth 4, window arm,
+full current pick env (`PICK=1`; harness gained `M=`/`PICK=`/`ARMS=` overrides), 300 tokens.
+
+| prompt | UD acc | Q4_0 acc | UD committed/rd | Q4_0 committed/rd | UD acc per pos | Q4_0 acc per pos |
+|---|--:|--:|--:|--:|---|---|
+| `benchprompt` (8288 tok) | 49.9% | 51.4% | 2.97 | 3.03 | (.700 .550 .420 .320) | (.776 .612 .418 .245) |
+| `01-code-explain` | **49.5%** | 37.4% | **2.94** | 2.48 | (.780 .560 .410 .230) | (.708 .433 .208 .142) |
+| `02-prose-creative` | **54.7%** | 42.1% | **3.16** | 2.65 | (.840 .617 .415 .309) | (.676 .486 .315 .207) |
+| `03-chat-support` | 32.8% | **47.1%** | 2.31 | **2.86** | (.756 .356 .156 .044) | (.816 .552 .345 .172) |
+| `04-math-derivation` | 84.6% | **91.1%** | 4.29 | 4.55 | (.971 .897 .809 .706) | (.969 .923 .892 .815) |
+| `05-json-boilerplate` | 95.2% | 97.1% | 4.69 | 4.76 | (.968 .952 .952 .935) | (1.00 .984 .967 .934) |
+| **mean committed/rd** | | | **3.39** | **3.39** | | |
+
+Mean committed/round identical (3.39 vs 3.39); per-prompt sign flips both ways by 12-14 pt.
+Trajectory noise, same conclusion as the Turbo4 corpus run. Full reading in `ud-model.md`.
