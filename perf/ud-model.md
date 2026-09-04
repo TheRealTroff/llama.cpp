@@ -105,7 +105,7 @@ format's bpw, floor at 273 GB/s):
   [5120,48] calls (97/round, 4.4 ms) are the ssm vectors - dispatch-bound, hidden under
   concurrent encode in the real run (small-ne01 lesson).
 
-## Step 4: acc-half mul_mm for UD's formats (branch ud-acch-types) - prefill -6.9%, KLD pending
+## Step 4: acc-half mul_mm for UD's formats (branch ud-acch-types) - prefill -6.9%, KLD-priced, NOT recommended
 
 Built: `kernel_mul_mm_acch_{q8_0,q3_K,q4_K,q5_K,q6_K,iq3_s,iq4_nl,iq4_xs}_f32` instances of
 the same template as the q4_0 probe (half accumulate); host gate widened, n64 tile stays
@@ -119,7 +119,30 @@ q4_0. Same `GGML_MM_ACC_HALF=1` flag, so the pick env picks it up unchanged.
 Prefill numerics change, so this is a NEW UD sha lineage (`10e1c40ab4bc` @300); the decode
 t/s and acceptance difference is trajectory (different text), not a decode effect - the
 acch kernel only runs at ne11 > 8. Same size of win as on Q4_0 (+8.3% there, prefill-decomp.md).
-Routing proof and KLD pricing (q8_0 reference, 16 chunks) running - TAG kld-ud-acch-sep04.
+Routing proven from the timing invocation's stderr: all eight `kernel_mul_mm_acch_*` pipelines
+engage; bare pp512 119.26 -> 128.57 t/s (+7.8%).
+
+**KLD pricing (TAG kld-ud-acch-sep04, q8_0 reference, 16 chunks x 2048 wikitext, f16 KV both
+sides; the reference logits were deleted after the run - ~18 GB, disk at 94%):**
+
+| UD vs q8_0 | control (f32 acc) | acch | Q4_0 line for scale (kldacch-aug28) |
+|---|--:|--:|---|
+| Mean KLD | 0.01654 | **0.02265 (+37%)** | 0.054 -> 0.060 (+11.8%) |
+| Median KLD | 0.00262 | **0.00784 (3.0x)** | |
+| 99% KLD | 0.0913 | 0.1269 | |
+| 99.9% KLD | 1.328 | 1.494 | |
+| Maximum KLD | 21.67 | 20.85 | no pathologies either side |
+| RMS dp | 3.218% | **4.123%** | 6.29 -> ~6.8 |
+| Same top p | 96.43% | **93.92% (-2.51 pt)** | -0.86 pt |
+
+**Recommendation: do not adopt acch for UD.** The acch noise is the same absolute size on
+both models - RMS dp adds in quadrature as ~2.6% (sqrt(3.22^2+2.6^2) = 4.14, sqrt(6.29^2+2.6^2)
+= 6.8, both match the measurement) - but UD's own quant noise is half of Q4_0's, so the same
+kernel costs UD three times the top-token agreement it cost Q4_0. It hands back ~44% of the
+quality UD was chosen for (96.43 -> 93.92 against uniform-Q4_0's 90.75) for 6.9% of prefill
+wall. Owner's call, as with the Q4_0 adoption; the branch stays built and measured. If a
+cheaper form is wanted, the split-accumulate (f32 every N K-slices) that was never tried on
+the Q4_0 line is the next probe, not a per-format gate - the noise is not format-specific.
 
 ## Step 5: skinny MMA generalized over the dequant block type - REFUTED at width 4 (branch ud-skinny-generic)
 
@@ -145,23 +168,32 @@ Per call (us, width 4, profiled): iq4_xs [5120,17408] 411 -> 451; q5_K [5120,174
 q8_0 [5120,48] 45 -> 92 (small-ne01, dispatch-starved - the route should exclude it anyway).
 The drafter's q4_0 r4kp calls are unchanged (230 us), as expected.
 
-Why (mechanism, not a guess): the upstream K-quant `kernel_mul_mv_*_f32` runs ONE column
-per threadgroup (`r1 = tgpig.y`), so at width 4 it streams the weights four times and
-survives on cache - and it still wins, because its inner loop is the lean integer form
-(`acc += y * (q & mask)`, scales applied once per block). The skinny tile streams the
-weights once but pays the generic 16-element `dequantize_*` (scale/min extraction and
-float conversion per call, then a half store to threadgroup memory and an MMA) per
-weight. Offline prescreen (agx-spill-probe, all cv set): **zero spill on every instance**,
-text 4812 B (q4_0 skinny) vs 6262 q4_K / 8322 q5_K / 6644 q6_K / 5904 iq4_xs / 4590 q8_0,
-so registers are not the cause; the dequant form is. Same instruction-economy wall the
-Q4_0 mv plane hit (`m4-width5-crossover.md`); the SoA kernels won there by restructuring
-the dequant, not by changing the tile.
+~~Why (first write-up): the upstream K-quant `kernel_mul_mv_*_f32` runs ONE column per
+threadgroup and re-streams the weights 4x at width 4.~~ **WRONG, corrected the same evening
+(owner: "did you reference the work we did on reducing the number of redundant dequants?").**
+The routing was then read from a width-4 timing invocation's own stderr (prod binary, pick
+env, `GGML_METAL_LOG_LEVEL=2`): UD's projections run **`kernel_mul_mv_ext_{q4_K,q5_K,q6_K,
+q3_K,iq4_xs}_f16_r1_4`** (f16y, nr0=2) and the `_f32_r1_4` variants for the smaller tensors;
+only iq3_s (3 calls/round) and one q6_K call take the plain per-column mv. That is the x4
+ext family from `results.md` - dequant-once-reuse-per-column, the nr0 rows-per-thread port
+that removed the redundant src1 loads, f16y - and its record already says what today
+re-measured: **K-quants sit ~1.6x behind Q4_0 per pass at widths 4-8 from heavier dequant
+chains plus r1_4 register pressure, nr0=2 is the x4 ceiling (nr0=4 hits the register
+cliff), and dequant granularity is not the mechanism.** So the generic skinny removed NO
+redundant dequant relative to the incumbent - both dequantize each weight once per pass -
+and only added the `dequant -> threadgroup -> simdgroup_load` round trip and the generic
+16-element `dequantize_*` form (scale/min extraction and float conversion per call) on top.
+Offline prescreen (agx-spill-probe, all cv set): zero spill on every skinny instance, text
+4812 B (q4_0 skinny) vs 6262 q4_K / 8322 q5_K / 6644 q6_K / 5904 iq4_xs / 4590 q8_0, so
+registers are not the cause either. `ffn-utilization.md` priced the same round trip on Q4_0
+("buys nothing"). The 2.0-2.4x-floor figures in step 2 stand; they are measured against the
+ext family, and its own gap to the SoA w4 kernel on Q4_0 (1.24x) is the layout lever
+`results.md` named next and the Q4_0 line then built as SoA.
 
 **What would actually move UD's width-4 plane** (NOT built - it is step 6-class work,
-outside the agreed scope): an ext-style multi-column mv for the three FFN formats
-(q4_K/q5_K/iq4_xs), i.e. the lean per-block integer inner loop of the existing mv kernels
-holding 4 columns of y and 4 accumulators per row so the weights stream once. Upstream
-has this (`mul_mv_ext`, r1_2..r1_5) for q4_0/q8_0/iq4_nl/iq4_xs-class 32-blocks only.
-Ceiling from the decomposition: ~55 ms of the 160 ms round if the projections reach
-~1.3x floor. The generic skinny stays in the tree behind its env flag as the negative
-control; do not put GGML_MM_SKINNY_GEN in any pick.
+outside the agreed scope): the same move the Q4_0 line made after the ext family hit its
+register ceiling - a weight-layout change (SoA-style planar scales/mins/nibbles) for the
+three FFN formats q4_K/q5_K/iq4_xs, so the inner loop keeps the lean integer form with the
+per-block bookkeeping hoisted. Ceiling from the decomposition: ~55 ms of the 160 ms round if
+the projections reach ~1.3x floor. The generic skinny stays in the tree behind its env flag
+as the negative control; do not put GGML_MM_SKINNY_GEN in any pick.
