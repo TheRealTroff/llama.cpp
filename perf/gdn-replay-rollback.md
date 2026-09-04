@@ -6,7 +6,7 @@ write-back ceiling probe at the end of `parallel-streams.md` sized and recorded 
 ## What it replaces
 
 With speculation on, every delta-net layer wrote K = depth + 1 full-state snapshot slots per
-round (3 MB per sequence per layer, 36 layers), so that a rejected draft could roll back by
+round (3 MB per sequence per layer, 48 delta-net layers), so that a rejected draft could roll back by
 pointing the next read at slot r. The ceiling probe (`LLAMA_GDN_WB_SLOTS=1`) measured those
 extra writes at 3.1-3.6 ms of a ~100 ms single-slot round (3.2-3.4%) and 9.1 ms at 4 slots.
 
@@ -144,9 +144,13 @@ lesson: a deletion probe prices the deletion, not the re-derivation.
 
 - ~~The CPU materialization in `state_write` is exercised but not verified exact~~ - verified to
   f32 rounding with the tracer (gates table; `examples/gdn-replay-check`, `perf/gdn-replay-check.py`).
-- Memory: `s_l` drops from (1 + n_rs_seq) to 2 groups - at 8 slots depth 4 that is 4.3 -> 1.7 GB
-  of state cache; unmeasured as a lever, but it is the reason the mode can be on at 8 slots even
-  though it wins nothing there.
+- Memory: `s_l` drops from (1 + n_rs_seq) to 2 groups. From the server's allocation lines at
+  8 slots (`llama_memory_recurrent: size`, 48 delta-net layers x 3 MB per cell per group): S is
+  **2304 MiB** with replay against 4608 at depth 3 / 5760 at depth 4 without, plus R 180 MiB and the
+  kept-input store 91 MiB; a fixed cost, independent of context. For scale, the KV cache of the 16
+  attention layers is 5120 MiB f16 or 1320 MiB symmetric Turbo4 per 8 x 10240 tokens (64 KiB /
+  ~16.5 KiB per token per stream). Unmeasured as a speed lever; it is the reason the mode can be
+  on at 8 slots even though it wins nothing there.
 - ~~Adoption into the pick is the owner's call~~ **ADOPTED 2026-09-04 (owner: "pick it")**:
   `LLAMA_GDN_REPLAY=1` in `PICK_ENV` (`run-prod-pick.sh`, `run-parallel-streams.sh`) and the README
   pick block; branch merged to prod. Mint: Canonical mint TAG `prodpick-sep04-replay` (prod `988dafd69`, all shas canonical, so this mint's spec-arm t/s DO compare with the acch lineage): **27.30/27.16 at 300** (`95eb7e65977e`), **29.88/29.73 at 600** (`6678b0507d41`), batch-1 anchor 14.10 (`95eb7e65977e`), MTP 22.17, partial-env 19.83; **Turbo4 line 30.23/30.12 at 600** (`12c3dc6bb2dd`), 28.90 at 300 (`63a78a7669cb`). Against the merged-prod check earlier today (27.1/27.3 at 300, 29.8 at 600, b1 14.0) the day's spread covers the single-slot delta, as the interleaved A/B said it would; the 4-slot point carries the money.
