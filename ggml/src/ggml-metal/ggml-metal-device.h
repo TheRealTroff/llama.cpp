@@ -156,6 +156,7 @@ struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_q4
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_nc         (ggml_metal_library_t lib, const struct ggml_tensor * op, int nc);
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm_skinny     (ggml_metal_library_t lib, const struct ggml_tensor * op, bool di);
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm_skinny_soa (ggml_metal_library_t lib, const struct ggml_tensor * op);
+struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm_skinny_soa_n16(ggml_metal_library_t lib, const struct ggml_tensor * op);
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv            (ggml_metal_library_t lib, const struct ggml_tensor * op, bool di);
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm            (ggml_metal_library_t lib, const struct ggml_tensor * op);
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm_id_map0    (ggml_metal_library_t lib, int ne02, int ne20);

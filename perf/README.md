@@ -190,6 +190,7 @@ What each flag buys, and where it came from:
 | flag | default | effect | writeup |
 |---|---|---|---|
 | `GGML_MV_NC=2` | 0 | mul_mv column loop, ne11=2 | results.md, mv-nc-cliff-probe.md |
+| `GGML_MM_SKINNY_N16=1` | 0 | fused 16-column SoA skinny tile for 9-16 verify columns: 159-164 ms/pass vs 180 (two 8-col tiles) vs 290 (generic). Pays only at 4+ slots: 8 slots 48.5 -> 54.8 (depth 1), 4 slots 43.4 -> 44.6 (depth 3), loses at 2-3. Use with `LLAMA_SPEC_SLOT_BUDGET_WIDE=16`. Branch `skinny-n16` | parallel-streams.md |
 | `LLAMA_SPEC_SLOT_BUDGET=8` | 8 (server default) | slot-aware draft depth: caps DFlash depth at budget / N_generating - 1 so the verify ubatch stays on the skinny kernel (2 slots -> depth 3, 3-4 -> 1, 5+ -> off); single slot untouched (sha identical). 2 slots 19.2 -> 40.6 aggregate, 4 slots 33.5 -> 44.0, 8 slots 35.7 -> 45.6 (f16 pick, prompt 06). The DFlash drafter now honours per-seq depth, which also makes `LLAMA_SPEC_ADAPTIVE` effective for it. Branch `spec-slot-budget` | parallel-streams.md |
 | `GGML_MM_SKINNY=6` | 0 | routes ne11 6..8 to the skinny mm kernel. **6, not 5, since the 2026-08-28 pick** - skinny takes ne11 >= value and must not swallow width 5 ahead of the w5 SoA route (the old pick used 5; the "5, not 4" misroute note there still holds) | dflash-vs-mtp-uniform.md, m4-width5-crossover.md |
 | `GGML_MV_REPACK=1` | 0 | deinterleaved/SoA persistent weight copy; the SoA kernels require it | width4-skinny-ab.md, repack-inplace.md |
