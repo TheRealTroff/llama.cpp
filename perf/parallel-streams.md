@@ -143,12 +143,16 @@ drafter that batches across slots.
 
 > ## THE CORRECTION (2026-09-04, the first-divergent-activation trace) - read this first
 >
-> **There is no defect.** The "EOS at token 1 on every stream" is the benchmark prompt landing
-> on a first-token tie, and the whole works/fails matrix below is a coin flip read as a
+> **There is no defect.** The "EOS at token 1 on every stream" is the SAME-set prompt landing
+> on a first-token tie (`01-code-explain`, a 181-token corpus prompt - NOT the 8288-token pick
+> benchmark `benchprompt.txt`, whose first token `This` beats `<think>` by 1.3-1.7 logits under
+> q8_0, f16 and Turbo4 at 1 and 3 streams), and the whole works/fails matrix below is a coin flip read as a
 > boolean. Two measured facts replace it:
 >
 > 1. **`01-code-explain` as the harness feeds it (the file's trailing newline is kept) has a
->    first-token tie between `` ``` `` (71093) and `<|im_end|>` (248046).** Margin `` ``` `` minus
+>    first-token tie between `` ``` `` (71093) and `<|im_end|>` (248046)** - a raw completion
+>    with no chat template ending in `}\n`, where closing a code fence and ending the text are
+>    both plausible; q8_0 has the same tie (+0.09). Margin `` ``` `` minus
 >    EOS, greedy, same tokens and positions, driver `llama-multiseq-repro`: Turbo4 1 stream
 >    +0.18, 2 streams +0.13, 3 streams +0.26 / -0.006 (two harmless call-sequence variants), 4
 >    streams -0.07; f16 1 stream +0.06, 3 streams +0.12; q8_0 3 streams +0.19; Turbo4 without
