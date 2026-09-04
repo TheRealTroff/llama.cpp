@@ -1363,7 +1363,9 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
                 apply_window(seq_id, n);
             }
 
-            const int32_t n_draft = params.n_max;
+            // per-seq depth from the caller (server slot budget / adaptive depth) bounds the block:
+            // fewer masks = narrower drafter batch AND narrower target verify
+            const int32_t n_draft = dp.n_max > 0 ? std::min(dp.n_max, params.n_max) : params.n_max;
 
             const int32_t n_block_tokens = n_draft + (is_dspark && sample_from_anchor ? 0 : 1);
             i_block_beg[seq_id] = batch.n_tokens;

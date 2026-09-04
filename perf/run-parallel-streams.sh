@@ -45,7 +45,7 @@ for set in $SETS; do for n in $NS; do
   sleep 2
   t0=$(python3 -c 'import time;print(time.time())')
   for s in $(seq 0 $((n-1))); do
-    if [ "$set" = same ]; then pf=${UNIQUE[0]}; else pf=${UNIQUE[$s]}; fi
+    if [ "$set" = same ]; then pf=${UNIQUE[${SAME_IDX:-0}]}; else pf=${UNIQUE[$s]}; fi   # SAME_IDX picks the SAME-set prompt (01 is a first-token tie)
     ( python3 -c "import json;print(json.dumps({'prompt':open('$pf').read(),'n_predict':$NPRED,'temperature':0}))" \
       | curl -s -X POST "http://127.0.0.1:$PORT/completion" -d @- > "$OUT/$TAG-$set-n$n-s$s.json" ) &
   done

@@ -248,3 +248,46 @@ EXTRA_ARGS="--kv-unified" ... same                                           # w
 ~~Workarounds today: `--kv-unified`, or issue a first request on every slot concurrently
 before serving.~~ No workaround needed (see the correction). `EXTRA_ARGS` and `WARMUP_N` stay in
 the harness; the harness now warns when a stream stops at token 1.
+
+## Slot-aware draft depth: the 2-stream cliff closed (2026-09-04, owner: "the hit for 2 streams is unreasonably high ... without affecting single stream")
+
+The verify ubatch is N_gen x (depth + 1) columns and the projection kernels are picked by column
+count (1-2 matvec, 3-5 SoA, 6-8 skinny MMA, 9+ the generic 32-column tile). Depth 4 at two
+slots is 10 columns: off the skinny kernel and onto the tile at ~2.4x the pass cost. Depth
+ladder at two slots, f16 pick, prompt 06 (`SAME_IDX=5`, harness knob added; 01 is the tie
+prompt), 300 tokens each, `perf/run-parallel-streams.sh`, results `n2ladder-d*`:
+
+| depth | verify cols | route | aggregate t/s | per stream | acceptance |
+|---:|---:|---|---:|---:|---:|
+| 4 (pick) | 10 | generic tile | 19.2 | 9.8 | 53.8% |
+| **3** | 8 | skinny | **40.5** | 21.3 | 71.2% |
+| 2 | 6 | skinny | 32.4 | 16.9 | 75.9% |
+| 1 | 4 | SoA | 34.2 | 17.9 | 84.0% |
+| off | 2 | matvec | 23.7 | 12.2 | - |
+
+Single stream at depth 4 is 28.6 on this prompt. So two slots at depth 3 give 1.4x the
+single-stream aggregate instead of 0.67x - the cliff was purely the route.
+
+**Built (branch `spec-slot-budget`):** two changes. (1) The DFlash drafter now honours the
+per-sequence depth the server passes (`dp.n_max`); it used to read only the global `n_max`, so
+neither the server's per-slot depth nor `LLAMA_SPEC_ADAPTIVE` ever reached the block size -
+fewer masks also make the drafter's own batch narrower. (2) `LLAMA_SPEC_SLOT_BUDGET` (default
+8, 0 disables) in the server caps depth at `budget / N_generating - 1`: 2 slots -> 3, 3-4 -> 1,
+5+ -> speculation off. One slot is never touched (8/1 - 1 = 7 >= the drafter's own cap).
+
+Validation, same prompt, depth 4 requested (`budget8`, `budget0` results):
+
+| slots | old aggregate | budget 8 | effective depth | per stream (new) |
+|---:|---:|---:|---:|---:|
+| 1 | 28.6 | 28.4, **sha identical** (`5119150e2709`) | 4 | 29.8 |
+| 2 | 19.2 | **40.6** | 3 | 21.4 |
+| 3 | 26.7 | 36.4 | 1 | 12.7 |
+| 4 | 33.5 | 44.0 | 1 | 11.6 |
+| 8 | 35.7 | 45.6 | off | 6.1 |
+
+Per-slot verify batches of different depths pack fine (split_equal packs equal token counts;
+all generating slots get the same depth). Not yet measured: the Turbo4 line under the policy,
+the UNIQUE set, and whether 3 slots would rather have depth 2 with a 9-column skinny variant -
+the budget rule is the cheap policy; the kernel family for 9-32 columns remains the real lever
+(3 slots at depth 1 leave 25% of the skinny width unused). `LLAMA_SPEC_ADAPTIVE` now actually
+changes DFlash depth - its 2026-08 numbers were measured with the drafter ignoring it.

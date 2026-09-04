@@ -190,6 +190,7 @@ What each flag buys, and where it came from:
 | flag | default | effect | writeup |
 |---|---|---|---|
 | `GGML_MV_NC=2` | 0 | mul_mv column loop, ne11=2 | results.md, mv-nc-cliff-probe.md |
+| `LLAMA_SPEC_SLOT_BUDGET=8` | 8 (server default) | slot-aware draft depth: caps DFlash depth at budget / N_generating - 1 so the verify ubatch stays on the skinny kernel (2 slots -> depth 3, 3-4 -> 1, 5+ -> off); single slot untouched (sha identical). 2 slots 19.2 -> 40.6 aggregate, 4 slots 33.5 -> 44.0, 8 slots 35.7 -> 45.6 (f16 pick, prompt 06). The DFlash drafter now honours per-seq depth, which also makes `LLAMA_SPEC_ADAPTIVE` effective for it. Branch `spec-slot-budget` | parallel-streams.md |
 | `GGML_MM_SKINNY=6` | 0 | routes ne11 6..8 to the skinny mm kernel. **6, not 5, since the 2026-08-28 pick** - skinny takes ne11 >= value and must not swallow width 5 ahead of the w5 SoA route (the old pick used 5; the "5, not 4" misroute note there still holds) | dflash-vs-mtp-uniform.md, m4-width5-crossover.md |
 | `GGML_MV_REPACK=1` | 0 | deinterleaved/SoA persistent weight copy; the SoA kernels require it | width4-skinny-ab.md, repack-inplace.md |
 | `GGML_MV_SOA_W3=1` | 0 | width-3 SoA r4kp kernel; closes the 107.2 ms width-3 hole to 80.7 ms and adds +20.09% at fixed DFlash depth 2 | m4-width3-r4kp.md |

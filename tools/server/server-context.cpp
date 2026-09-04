@@ -3024,6 +3024,15 @@ private:
         std::vector<server_slot *> generating;
         std::vector<server_slot *> drafting;
 
+        // slot-aware speculation depth: the target verifies N_gen x (depth + 1) columns in one ubatch
+        // and the projection kernels are chosen by column count (1-2 matvec, 3-5 SoA, 6-8 skinny MMA,
+        // 9+ the generic 32-column tile at ~2.4x the cost). LLAMA_SPEC_SLOT_BUDGET (default 8) caps
+        // the verify width: depth <= budget / N_gen - 1, i.e. 2 slots -> 3, 3-4 slots -> 1, 5+ -> off.
+        // A single slot is never affected (budget 8 vs the drafter's own cap of 7). 0 disables.
+        static const int spec_slot_budget = getenv("LLAMA_SPEC_SLOT_BUDGET") ? atoi(getenv("LLAMA_SPEC_SLOT_BUDGET")) : 8;
+        int n_gen = 0;
+        iterate(slots, [&](server_slot & slot) { if (slot.state == SLOT_STATE_GENERATING) n_gen++; });
+
         // determine which slots are generating and drafting
         iterate(slots, [&](server_slot & slot) {
             if (slot.state != SLOT_STATE_GENERATING) {
@@ -3055,6 +3064,10 @@ private:
                         slot.spec_adaptive.reset(std::min(n_draft_max, d_cli));
                     }
                     n_draft_max = std::min(n_draft_max, slot.spec_adaptive.depth(std::min(n_draft_max, d_cli)));
+                }
+
+                if (spec_slot_budget > 0 && n_gen > 1 && n_draft_max > 0) {
+                    n_draft_max = std::min(n_draft_max, std::max(0, spec_slot_budget / n_gen - 1));
                 }
 
                 if (n_draft_max > 0) {
