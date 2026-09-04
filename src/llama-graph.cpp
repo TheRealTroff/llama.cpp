@@ -355,6 +355,7 @@ bool llm_graph_input_rs::can_reuse(const llm_graph_params & params) {
 
     res &= head == mctx->get_head();
     res &= rs_z == mctx->get_rs_z();
+    res &= view_row0 == mctx->s_copy_view_row0(params.ubatch.n_seqs);
 
     return res;
 }
@@ -1105,6 +1106,7 @@ bool llm_graph_input_mem_hybrid::can_reuse(const llm_graph_params & params) {
 
     res &= inp_rs->head == mctx->get_recr()->get_head();
     res &= inp_rs->rs_z == mctx->get_recr()->get_rs_z();
+    res &= inp_rs->view_row0 == mctx->get_recr()->s_copy_view_row0(params.ubatch.n_seqs); // view offset / gather is topology
 
     return res;
 }
@@ -1148,6 +1150,7 @@ bool llm_graph_input_mem_hybrid_k::can_reuse(const llm_graph_params & params) {
 
     res &= inp_rs->head == mctx->get_recr()->get_head();
     res &= inp_rs->rs_z == mctx->get_recr()->get_rs_z();
+    res &= inp_rs->view_row0 == mctx->get_recr()->s_copy_view_row0(params.ubatch.n_seqs); // view offset / gather is topology
 
     return res;
 }
@@ -1236,6 +1239,7 @@ bool llm_graph_input_mem_hybrid_iswa::can_reuse(const llm_graph_params & params)
 
     res &= inp_rs->head == mctx->get_recr()->get_head();
     res &= inp_rs->rs_z == mctx->get_recr()->get_rs_z();
+    res &= inp_rs->view_row0 == mctx->get_recr()->s_copy_view_row0(params.ubatch.n_seqs); // view offset / gather is topology
 
     return res;
 }
@@ -3412,7 +3416,8 @@ ggml_tensor * llm_graph_context::build_rs(
            uint32_t   rs_head,
            uint32_t   rs_size,
             int32_t   rs_zero,
-        const llm_graph_get_rows_fn & get_state_rows) const {
+        const llm_graph_get_rows_fn & get_state_rows,
+            int32_t   view_row0) const {
 
     GGML_UNUSED(rs_size);
     ggml_tensor * states = ggml_reshape_2d(ctx0, s, state_size, s->ne[1]);
@@ -3425,7 +3430,15 @@ ggml_tensor * llm_graph_context::build_rs(
     // copy states
     // NOTE: assuming the copy destinations are ALL contained between rs_head and rs_head + n_rs
     // {state_size, rs_size} -> {state_size, n_seqs}
-    ggml_tensor * output_states = get_state_rows(ctx0, states, state_copy_main);
+    // when the source rows are consecutive (view_row0 >= 0: the identity map, a uniform rollback
+    // slot, or any single sequence), they are a view of the cache: no 3 MB-per-seq-per-layer gather.
+    // The delta-net then reads the state where it lives and its fused writeback stores the new
+    // slots; in place for the identity case (each thread reads its own row before writing).
+    // LLAMA_RS_VIEW=0 disables (bisect knob)
+    static const bool rs_view = getenv("LLAMA_RS_VIEW") ? atoi(getenv("LLAMA_RS_VIEW")) != 0 : true;
+    ggml_tensor * output_states = (view_row0 >= 0 && rs_view)
+        ? ggml_view_2d(ctx0, states, state_size, n_seqs, states->nb[1], (size_t) view_row0*states->nb[1])
+        : get_state_rows(ctx0, states, state_copy_main);
     ggml_build_forward_expand(gf, output_states);
 
     // copy extra states which won't be changed further (between n_seqs and n_rs)
@@ -3456,6 +3469,7 @@ static std::unique_ptr<llm_graph_input_rs> build_rs_inp_impl(
 
     inp->head = mctx_cur->get_head();
     inp->rs_z = mctx_cur->get_rs_z();
+    inp->view_row0 = mctx_cur->s_copy_view_row0(n_seqs);
 
     return inp;
 }
@@ -3476,9 +3490,15 @@ ggml_tensor * llm_graph_context::build_rs(
         const llm_graph_get_rows_fn & get_state_rows) const {
     const auto * kv_state = inp->mctx;
 
+    // only the plain gather can be replaced by a view; custom row functions (mamba's fused
+    // scan) keep their own op
+    using plain_fn = ggml_tensor * (*)(ggml_context *, ggml_tensor *, ggml_tensor *);
+    const plain_fn * fp = get_state_rows.target<plain_fn>();
+    const int32_t view_row0 = (fp != nullptr && *fp == ggml_get_rows) ? inp->view_row0 : -1;
+
     return build_rs(s, inp->s_copy_main, inp->s_copy_extra, state_size, n_seqs,
                     kv_state->get_n_rs(), kv_state->get_head(), kv_state->get_size(), kv_state->get_rs_z(),
-                    get_state_rows);
+                    get_state_rows, view_row0);
 }
 
 ggml_tensor * llm_graph_context::build_rwkv_token_shift_load(

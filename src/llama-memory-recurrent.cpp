@@ -1243,6 +1243,49 @@ ggml_tensor * llama_memory_recurrent_context::get_s_l(int32_t il) const {
     return mem->s_l[il];
 }
 
+int32_t llama_memory_recurrent_context::s_copy_peek(int i) const {
+    const uint32_t cell_idx = i + mem->head;
+    const int32_t  src0     = mem->cells[cell_idx].src0;
+
+    if (mem->n_rs_seq == 0) {
+        return src0;
+    }
+
+    uint32_t idx = 0;
+    if (!mem->cells[cell_idx].seq_id.empty()) {
+        const llama_seq_id seq = *mem->cells[cell_idx].seq_id.begin();
+        if (seq >= 0 && (size_t) seq < mem->rs_idx.size()) {
+            idx = mem->rs_idx[seq];
+        }
+    }
+    return (int32_t)(idx * mem->size) + src0;
+}
+
+bool llama_memory_recurrent_context::s_copy_is_identity(uint32_t n_seqs) const {
+    for (uint32_t i = 0; i < n_seqs; ++i) {
+        if (s_copy_peek(i) != (int32_t) (mem->head + i)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+int32_t llama_memory_recurrent_context::s_copy_view_row0(uint32_t n_seqs) const {
+    if (n_seqs == 0) {
+        return -1;
+    }
+    const int32_t row0 = s_copy_peek(0);
+    if (row0 < 0) {
+        return -1;
+    }
+    for (uint32_t i = 1; i < n_seqs; ++i) {
+        if (s_copy_peek(i) != row0 + (int32_t) i) {
+            return -1;
+        }
+    }
+    return row0;
+}
+
 int32_t llama_memory_recurrent_context::s_copy(int i) const {
     const uint32_t cell_idx = i + mem->head;
     const int32_t  src0     = mem->cells[cell_idx].src0;

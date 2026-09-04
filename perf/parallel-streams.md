@@ -338,3 +338,120 @@ fused kernel might add ~10% there. Not worth building ahead of the per-slot serv
 (~55 ms/step at 8 slots, `run-parallel-streams` 168 ms step vs the 112 ms pass) and per-stream FA
 cost at long contexts, which are the walls that remain. The policy at budget 8 is the pick for
 the Turbo4 line too: 2 slots 34.3, 4 slots 43.4, 8 slots 48.5 aggregate, single slot untouched.
+
+## Round overhead attributed, 1-8 streams (2026-09-04, owner: "pin down where the round overhead spends its time")
+
+**It is not the server.** The compiled-in `spec-prof` timers (delta of the last two 5-second dumps,
+`perf/server-prof-parse.py`), Turbo4 SOA-V1, prompt 06, per round in ms:
+
+| slots | round | draft call | target decode | of which GPU wait | CPU submit + post | loop gap |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1, d3 | 99.7 | 11.0 | 88.3 | 86.4 | 2.1 | 0 |
+| 2, d3 | 144.8 | 15.1 | 128.9 | 126.8 | 2.8 | 0 |
+| 4, d3 | 223.5 | 23.3 | 198.5 | 196.2 | 3.6 | 0 |
+| 8, d1 | 241.0 | 23.7 | 215.2 | 213.2 | 3.7 | 0 |
+| 8, off | 164.6 | 0 | 163.8 | 162.2 | 2.3 | 0 |
+
+Server CPU is 2-4 ms at any slot count. The growth is inside the target graph: 8 slots without
+speculation is an 8-column pass that `llama-bench` times at 113 ms and the server waits 162 for.
+
+**Where the graph spends it.** `GGML_METAL_PROFILE=1` on the driver, verify graph of 4 tokens per
+stream repeated 10x and differenced (`llama-multiseq-repro MSR_TAIL_REPEAT`, `perf/trace-profdiff.py`;
+serialized encoders, so totals exceed the real graph time but attribution holds), ms per graph:
+
+| family | 1 | 2 | 4 | 8 | per extra stream |
+|---|---:|---:|---:|---:|---:|
+| projections (MUL_MAT) | 72 | 108 | 152 | 286 (32 cols, generic) | - |
+| SSM_CONV | 3.2 | 6.1 | 11.8 | 23.1 | 2.8 |
+| GET_ROWS (state gather) | 2.3 | 4.4 | 8.1 | 15.5 | 1.9 |
+| CPY (state writeback) | 1.7 | 2.4 | 5.4 | 11.8 | 1.5 |
+| GATED_DELTA_NET | 1.5 | 2.8 | 5.7 | 11.3 | 1.4 |
+| FLASH_ATTN_EXT | 0.6 | 0.9 | 1.3 | 2.1 | 0.2 |
+| everything else | ~9 | ~9 | ~10 | ~12 | ~0.4 |
+
+~8 ms per extra stream, almost all of it the 48 GDN layers' per-sequence state machinery;
+attention is negligible at this context (the FA per-stream cost at 96K is a separate matter).
+
+**Fixed (branch `gdn-decode-kernels`, default-on, sha-identical):**
+- `SSM_CONV` at decode widths (`ne1 <= 16`): the batched kernel dispatched `ne01 x n_seqs`
+  two-thread threadgroups (20480 x S for a 4-tap conv over 4 tokens: 480 us/call at 8 seqs). New
+  `kernel_ssm_conv_f32_f32_rows`, one thread per (row, token), 256/threadgroup: **23.1 -> 4.7 ms**
+  per graph at 8 streams, 3.2 -> 0.8 at 1.
+- `GET_ROWS` on f32 rows >= 4096 wide with 16-byte alignment (the 786432-float recurrent states)
+  moves float4 (`kernel_get_rows_f32x4`): **15.5 -> 11.1 ms** at 8 streams, 2.3 -> 1.2 at 1; now
+  ~216 GB/s, i.e. at memory bandwidth.
+- `kernel_cpy_f32_gather_x4` (flat float4 copy of a strided f32 source into a contiguous
+  destination) for the copies the row-per-threadgroup generic kernel handled; the state writeback
+  itself turned out to already be the flat `kernel_cpy_cont` at 240 GB/s.
+
+End to end (Turbo4 SOA-V1, prompt 06, 400 tokens, `ovh-*` -> `ovh2-*`): 1 slot d3 26.9 -> **27.8**,
+2 slots 35.7 -> **37.5**, 4 slots 46.6 -> **49.1**, 8 slots d1 56.2 -> **59.6**, 8 slots off 47.1 ->
+48.4, 1 slot no-spec 12.92 -> 13.17. f16 pick: shas identical (`95eb7e65977e` / `6678b0507d41`),
+27.1/27.3 at 300 and 29.8/29.8 at 600 (morning: 26.8/26.7, 29.2/29.2), b1 13.17 (13.02).
+
+**What remains in the state path, and the next lever.** The gather and the writeback are now
+bandwidth-bound copies of the full 3 MB state per sequence per GDN layer, 2 x 25 MB per layer at
+8 streams: ~22 ms of the 339 ms graph at 8 streams and 2.9 of 85 at one stream (3.4% of the
+single-stream verify graph). They can only go away by not copying: (a) in `build_rs`, when the
+sequence-to-cell map `s_copy_main` is the identity onto `rs_head..rs_head+n_seqs` (steady state:
+every slot keeps its cell), use a view of the cache rows instead of `ggml_get_rows` - the choice
+must enter the graph-reuse key (`llm_graph_input_rs::can_reuse` checks sizes only); (b) have the
+delta-net kernel write the new state into the cache rows directly instead of into its output
+block and a CPY (the `GGML_GDN_FUSE_WB` snapshot writeback already has the addressing; the state
+block layout `[head][row][k]` matches the cache row, and each threadgroup owns its slice, so
+in-place is plausible). `GATED_DELTA_NET` itself (11 ms at 8 streams, 236 us/dispatch for 4
+tokens) is sequential over tokens per head and is the remaining kernel-side per-stream cost.
+
+## In-place recurrent states (2026-09-04, owner: "I like not copying things that don't need copying")
+
+**Built (branch `gdn-decode-kernels`, default-on, `LLAMA_RS_VIEW=0` disables):**
+- `build_rs` views the cache rows instead of gathering them whenever the sequences' source rows are
+  consecutive (`llama_memory_recurrent_context::s_copy_view_row0`: the identity map, a uniform
+  rollback slot, or any single sequence). The delta-net then reads the state where it lives.
+  The row offset is part of the graph topology and sits in every recurrent reuse check (the plain
+  `llm_graph_input_rs` AND the three hybrid wrappers, which duplicate the checks).
+- The delta-net's fused write-back now also covers the no-snapshot case (`K == 1`), so the new
+  state goes straight into the cache rows; in place for the identity case, which is safe because
+  each thread reads its own state row into registers before the token loop and writes only that
+  row.
+- Side items from the 8-slot spec-on profile: the width-1 conv takes the rows kernel too (250 ->
+  11 us/call), and the gather copies use 32-bit index math (the conv-state snapshot copy 103 -> 28
+  us).
+
+Two bugs found on the way, both by the tracer's new tools (`LLAMA_TRACE_WATCH=<tensor>` re-hashes
+a tensor after every node; `LLAMA_TRACE_CANARY=<bytes>` hashes the memory after each node's
+reserved allocation before and after it runs):
+1. **f16 scratch overrun in the stored-SoA fold** (`178e78ecb`; hotfix on prod `7415209e2`): the
+   fold makes a `[K, 1, S]` projection an S-column op at encode time, but the scratch reservation
+   judged the original shape and reserved nothing for S = 3..5, so the f16 convert wrote S*K halves
+   over the next tensor. Harmless in most allocations, fatal once the view changed the layout. Hits
+   the Turbo4 SOA-V1 line at 3-5 verify columns across slots; single-slot runs never fold.
+2. **Hybrid reuse checks without the topology flag**: with the flag only in `llm_graph_input_rs`,
+   a rollback graph of the same shape as the previous round reused the view graph and read the
+   current slot instead of snapshot row r - every spec-on arm changed output (f16 pick
+   `fa7d59465c1c`, stopping at 269 tokens) while the no-spec anchor stayed byte-identical.
+
+Also learned: view-vs-gather as a topology that flips on every rollback costs a graph rebuild per
+flip (~2% on the 1-slot spec picks); the consecutive-rows rule keeps single-slot graphs on one
+topology (the view offset changes, the graph does not).
+
+**Numbers** (all shas canonical: f16 `95eb7e65977e` / `6678b0507d41`, MTP `0f1a97ed24bc`, Turbo4
+`12c3dc6bb2dd` / `63a78a7669cb`; driver logits bitwise equal view vs gather at 1-4 seqs):
+
+| | before (this branch, `ovh2`) | in-place (`ovh5`) |
+|---|---:|---:|
+| f16 pick 300 / 600 | 27.1-27.3 / 29.8 | 27.10 / 29.67 |
+| f16 no-spec anchor | 13.17 | **13.99** |
+| Turbo4 pick 600 (ref 29.45) | - | **29.96** |
+| Turbo4 1 slot d3 | 27.8 | 27.9 |
+| Turbo4 2 slots d3 | 37.5 | 37.7 |
+| Turbo4 4 slots (d1) | 43.4 | **47.5** |
+| Turbo4 8 slots no spec | 48.4 | **60.3** |
+| Turbo4 1 slot no spec | 13.17 | 13.99 |
+
+Verify graph, per-op profile: n=1 85.5 -> 81.6 ms, n=8 339 -> 315 ms; the state gather and the
+state/conv copies are gone from the top list. What remains per stream is the delta-net kernel itself
+(170 us/dispatch at width 1 with 2 snapshot slots at 8 slots; sequential over tokens per head and
+bandwidth-bound on K x 25 MB snapshot writes) and, on the server side, the per-round checkpoint work
+that runs even when the depth policy has switched speculation off (8 slots with the drafter loaded
+58.3 vs 60.3 without).

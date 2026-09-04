@@ -60,7 +60,9 @@ static const ggml_tensor * ggml_metal_gdn_wb_op(const ggml_tensor * cpy) {
 
     const ggml_tensor * op = cpy->src[0]->view_src;
 
-    if (!op || op->op != GGML_OP_GATED_DELTA_NET || ggml_get_op_params_i32(op, 0) <= 1) {
+    // K == 1 (no rollback snapshots): the single new state is copied the same way, from the
+    // block right after the attention scores into the cache rows; fuse that too
+    if (!op || op->op != GGML_OP_GATED_DELTA_NET) {
         return nullptr;
     }
 
@@ -1284,8 +1286,20 @@ int ggml_metal_op_get_rows(ggml_metal_op_t ctx, int idx) {
 
     auto pipeline = ggml_metal_library_get_pipeline_get_rows(lib, op->src[0]->type);
 
+    // f32 rows with 16-byte-aligned rows (the recurrent states: 786432 floats per row) move as
+    // float4: the scalar kernel runs at ~80 GB/s on them
+    const bool rows_x4 = op->src[0]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32 &&
+                         ne00 % 4 == 0 && nb00 == 4 && nb0 == 4 && (nb01 | nb02 | nb03 | nb1 | nb2 | nb3) % 16 == 0 &&
+                         ((uintptr_t) op->src[0]->data % 16) == 0 && ((uintptr_t) op->data % 16) == 0 && ne00 >= 4096;
+    if (rows_x4) {
+        pipeline = ggml_metal_library_get_pipeline(lib, "kernel_get_rows_f32x4");
+        if (!pipeline.pipeline) {
+            pipeline = ggml_metal_library_compile_pipeline(lib, "kernel_get_rows_f32x4", "kernel_get_rows_f32x4", nullptr);
+        }
+    }
+
     ggml_metal_kargs_get_rows args = {
-        /*.ne00t =*/ ggml_is_quantized(op->src[0]->type) ? ne00/16 : ne00,
+        /*.ne00t =*/ rows_x4 ? ne00/4 : ggml_is_quantized(op->src[0]->type) ? ne00/16 : ne00,
         /*.ne00  =*/ ne00,
         /*.nb01  =*/ nb01,
         /*.nb02  =*/ nb02,
@@ -1750,6 +1764,23 @@ int ggml_metal_op_ssm_conv(ggml_metal_op_t ctx, int idx) {
         /*.nb2  =*/ nb2,
     };
 
+    // decode/verify widths: one thread per (row, token) with 256-thread threadgroups; the batched
+    // kernel at these widths dispatches ne01 x ne02 two-thread threadgroups (480 us/call at 8 seqs)
+    if (ne1 >= 1 && ne1 <= 16 && op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_F32) {
+        auto pipeline = ggml_metal_library_get_pipeline(lib, "kernel_ssm_conv_f32_f32_rows");
+        if (!pipeline.pipeline) {
+            pipeline = ggml_metal_library_compile_pipeline(lib, "kernel_ssm_conv_f32_f32_rows", "kernel_ssm_conv_f32_f32_rows", nullptr);
+        }
+        ggml_metal_encoder_set_pipeline(enc, pipeline);
+        ggml_metal_encoder_set_bytes(enc, &args, sizeof(args), 0);
+        ggml_metal_encoder_set_buffer(enc, ggml_metal_get_buffer_id(op->src[0]), 1);
+        ggml_metal_encoder_set_buffer(enc, ggml_metal_get_buffer_id(op->src[1]), 2);
+        ggml_metal_encoder_set_buffer(enc, ggml_metal_get_buffer_id(op),         3);
+        const int64_t n = (int64_t) ne01*ne1;
+        ggml_metal_encoder_dispatch_threadgroups(enc, (int) ((n + 255)/256), 1, ne02, 256, 1, 1);
+        return 1;
+    }
+
     // Use batched kernel for prefill (ne1 > 1) to reduce threadgroup dispatch overhead
     const bool use_batched = (ne1 > 1);
 
@@ -1971,6 +2002,14 @@ int ggml_metal_op_gated_delta_net(ggml_metal_op_t ctx, int idx) {
     }
 
     const bool fuse_wb = cpy != nullptr;
+    if (getenv("GGML_GDN_DEBUG")) {
+        const ggml_tensor * st = op->src[5];
+        fprintf(stderr, "gdn: tok=%lld seqs=%lld K=%d fuse=%d state ne=[%lld,%lld,%lld,%lld] nb=[%zu,%zu,%zu,%zu] view_src=%s data_off=%lld | dst ne=[%lld,%lld] %s\n",
+            (long long) op->src[2]->ne[2], (long long) op->src[2]->ne[3], ggml_get_op_params_i32(op, 0), (int) fuse_wb,
+            (long long) st->ne[0], (long long) st->ne[1], (long long) st->ne[2], (long long) st->ne[3], st->nb[0], st->nb[1], st->nb[2], st->nb[3],
+            st->view_src ? st->view_src->name : "-", st->view_src ? (long long) ((char *) st->data - (char *) st->view_src->data) : 0LL,
+            (long long) op->ne[0], (long long) op->ne[1], cpy ? cpy->name : "");
+    }
 
     // the kernel writes the state cache, which is not part of this node's ranges,
     // so order it against earlier nodes before touching the encoder
@@ -2303,6 +2342,113 @@ int ggml_metal_op_cpy(ggml_metal_op_t ctx, int idx) {
         ggml_metal_encoder_dispatch_threadgroups(enc, std::max(ntg, 1), ne1, ne2*ne3, 256, 1, 1);
 
         return 1;
+    }
+
+    // strided f32 source -> contiguous f32 destination, rows not 16-byte aligned (the conv-state
+    // updates: [3,10240,S] views with 28-byte row stride): scalar flat copy, one thread per element
+    if (op->src[0]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32 &&
+        ggml_is_contiguous(op) && !ggml_is_contiguous(op->src[0]) &&
+        ggml_nelements(op) == ggml_nelements(op->src[0]) && nb00 == 4 &&
+        !(ne00 % 4 == 0 && (nb01 | nb02 | nb03) % 16 == 0 && ((uintptr_t) op->src[0]->data % 16) == 0 && ((uintptr_t) op->data % 16) == 0)) {
+        auto pipeline_g = ggml_metal_library_get_pipeline(lib, "kernel_cpy_f32_gather");
+        if (!pipeline_g.pipeline) {
+            pipeline_g = ggml_metal_library_compile_pipeline(lib, "kernel_cpy_f32_gather", "kernel_cpy_f32_gather", nullptr);
+        }
+        ggml_metal_kargs_cpy_gather_x4 gargs = {
+            /*.ne00x4 =*/ ne00, // element count along dim 0 for the scalar kernel
+            /*.ne01   =*/ ne01,
+            /*.ne02   =*/ ne02,
+            /*.ne03   =*/ ne03,
+            /*.nb01   =*/ nb01,
+            /*.nb02   =*/ nb02,
+            /*.nb03   =*/ nb03,
+        };
+        const int64_t n = ggml_nelements(op);
+        ggml_metal_encoder_set_pipeline(enc, pipeline_g);
+        ggml_metal_encoder_set_bytes   (enc, &gargs, sizeof(gargs), 0);
+        ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[0]), 1);
+        ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         2);
+        ggml_metal_encoder_dispatch_threadgroups(enc, (int) ((n + 255)/256), 1, 1, 256, 1, 1);
+        return 1;
+    }
+
+    // strided f32 source -> contiguous f32 destination with the same element count: one thread
+    // per float4 over a flat grid. The generic kernel dispatches one threadgroup per source row,
+    // which for the GDN state writeback ([128,128,48,S] head-interleaved view -> cache rows) is
+    // 6144 x S threadgroups of 512 bytes: 210 us per layer at 8 seqs, launch-bound
+    if (op->src[0]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32 &&
+        ggml_is_contiguous(op) && !ggml_is_contiguous(op->src[0]) &&
+        ggml_nelements(op) == ggml_nelements(op->src[0]) &&
+        nb00 == 4 && ne00 % 4 == 0 && (nb01 | nb02 | nb03) % 16 == 0 &&
+        ((uintptr_t) op->src[0]->data % 16) == 0 && ((uintptr_t) op->data % 16) == 0) {
+        auto pipeline_g = ggml_metal_library_get_pipeline(lib, "kernel_cpy_f32_gather_x4");
+        if (!pipeline_g.pipeline) {
+            pipeline_g = ggml_metal_library_compile_pipeline(lib, "kernel_cpy_f32_gather_x4", "kernel_cpy_f32_gather_x4", nullptr);
+        }
+        ggml_metal_kargs_cpy_gather_x4 gargs = {
+            /*.ne00x4 =*/ ne00/4,
+            /*.ne01   =*/ ne01,
+            /*.ne02   =*/ ne02,
+            /*.ne03   =*/ ne03,
+            /*.nb01   =*/ nb01,
+            /*.nb02   =*/ nb02,
+            /*.nb03   =*/ nb03,
+        };
+        const int64_t n = ggml_nelements(op)/4;
+        ggml_metal_encoder_set_pipeline(enc, pipeline_g);
+        ggml_metal_encoder_set_bytes   (enc, &gargs, sizeof(gargs), 0);
+        ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[0]), 1);
+        ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         2);
+        ggml_metal_encoder_dispatch_threadgroups(enc, (int) ((n + 255)/256), 1, 1, 256, 1, 1);
+        return 1;
+    }
+
+    // chunk-contiguous same-type copies whose shapes differ (the GDN state writeback: a
+    // [128,128,48,S] view of the kernel output into the [786432,S] cache rows): each side is a
+    // run of equal-size contiguous chunks with one outer stride; move them as rows
+    {
+        auto chunks = [](const ggml_tensor * t, uint64_t & chunk_bytes, int64_t & count, uint64_t & stride) {
+            const uint64_t ts = ggml_type_size(t->type);
+            if (t->nb[0] != ts) return false;
+            uint64_t chunk = (uint64_t) t->ne[0]; int d = 1;
+            while (d < 4 && t->nb[d] == chunk*ts) { chunk *= t->ne[d]; d++; }
+            count = 1; stride = 0; int n_outer = 0;
+            for (int k = d; k < 4; ++k) { if (t->ne[k] > 1) { n_outer++; count = t->ne[k]; stride = t->nb[k]; } }
+            if (n_outer > 1) return false;
+            chunk_bytes = chunk*ts;
+            return true;
+        };
+        uint64_t cs = 0, cd = 0, ss = 0, sd = 0; int64_t ns = 0, nd = 0;
+        const bool ok_shape = op->src[0]->type == op->type && !ggml_is_quantized(op->type) &&
+            chunks(op->src[0], cs, ns, ss) && chunks(op, cd, nd, sd);
+        // a fully contiguous side is one big chunk: split it to match the other side's chunking
+        if (ok_shape && nd == 1 && ns > 1 && cd == cs*ns) { nd = ns; cd = cs; sd = cs; }
+        if (ok_shape && ns == 1 && nd > 1 && cs == cd*nd) { ns = nd; cs = cd; ss = cd; }
+        if (ok_shape &&
+            cs == cd && ns == nd && cs % 16 == 0 && (ss | sd) % 16 == 0 &&
+            ((uintptr_t) op->src[0]->data % 16) == 0 && ((uintptr_t) op->data % 16) == 0) {
+            auto pipeline_rows = ggml_metal_library_get_pipeline(lib, "kernel_cpy_cont_rows");
+            if (!pipeline_rows.pipeline) {
+                pipeline_rows = ggml_metal_library_compile_pipeline(lib, "kernel_cpy_cont_rows", "kernel_cpy_cont_rows", nullptr);
+            }
+            ggml_metal_kargs_cpy_cont_rows cargs = {
+                /*.nb_row =*/ cs,
+                /*.ne2    =*/ 1,
+                /*.nb1    =*/ sd,
+                /*.nb2    =*/ 0,
+                /*.nb3    =*/ 0,
+                /*.nb01   =*/ ss,
+                /*.nb02   =*/ 0,
+                /*.nb03   =*/ 0,
+            };
+            const int ntg = (int) std::min<uint64_t>((cs/16 + 255)/256, 1024);
+            ggml_metal_encoder_set_pipeline(enc, pipeline_rows);
+            ggml_metal_encoder_set_bytes   (enc, &cargs, sizeof(cargs), 0);
+            ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[0]), 1);
+            ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         2);
+            ggml_metal_encoder_dispatch_threadgroups(enc, std::max(ntg, 1), (int) ns, 1, 256, 1, 1);
+            return 1;
+        }
     }
 
     auto pipeline = ggml_metal_library_get_pipeline_cpy(lib, op->src[0]->type, op->type);

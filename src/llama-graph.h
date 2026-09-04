@@ -278,6 +278,11 @@ public:
     // used in view offsets, need to match for valid graph reuse
     uint32_t head;
     int32_t rs_z;
+
+    // first source row when the gather is a run of consecutive cache rows (identity, uniform rollback
+    // slot, any single seq), else -1: build_rs then views the rows instead of ggml_get_rows. Part of
+    // the graph topology (and the view offset), so it is checked by can_reuse
+    int32_t view_row0 = -1;
 };
 
 class llm_graph_input_cross_embd : public llm_graph_input_i {
@@ -1280,7 +1285,8 @@ struct llm_graph_context {
                uint32_t   rs_head,
                uint32_t   rs_size,
                 int32_t   rs_zero,
-            const llm_graph_get_rows_fn & get_state_rows = ggml_get_rows) const;
+            const llm_graph_get_rows_fn & get_state_rows = ggml_get_rows,
+            int32_t   view_row0 = -1) const;
 
     llm_graph_input_rs * build_rs_inp() const;
 
