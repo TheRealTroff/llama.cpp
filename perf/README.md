@@ -978,6 +978,7 @@ Wins, each with its mechanism:
   in `kernel_flash_attn_ext_vec_reduce`.
 - `gdn-writeback-fusion.md` - GDN snapshot writeback fusion, +6.2%.
 - `drafter-quant-routing.md` - drafter was Q4_K_M and missed every Q4_0 fast path, +3.8%.
+- `ud-model.md` - **OPEN 2026-09-04, owner's decision: run the unsloth UD-Q4_K_M file AS-IS.** Free knobs: depth 3/2 +11% over the depth-4 pick, MM_MIN inert; decomposition: width-4 target matmuls are 81% of the round at 2.0-2.4x byte floor; generic skinny tile REFUTED for every format (dequant form, not registers or bytes); acch instances for UD's formats -6.9% prefill, KLD-priced in the file. UD is its own sha lineage - never compare with the Q4_0 pick's shas or t/s.
 - `verify-round-profile.md` - the row-contiguous CPY fast path, +9.5%.
 
 Refuted - do not reopen without new information:
