@@ -1038,8 +1038,19 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm(ggml_meta
         tsrc0 == GGML_TYPE_Q4_0 && tsrc1 == GGML_TYPE_F32 && !has_tensor && !bc_inp &&
         op->ne[0] >= 4096 && op->ne[1] == 512 && op->src[0]->ne[0] <= 6144 &&
         op->ne[0] % 64 == 0;
-    if (!soa && acc_half && tsrc0 == GGML_TYPE_Q4_0 && tsrc1 == GGML_TYPE_F32 && !has_tensor) {
-        snprintf(base, 256, n64 ? "kernel_mul_mm_acch_n64_q4_0_f32" : "kernel_mul_mm_acch_q4_0_f32");
+    // half-accumulate instances exist for q4_0 and for the UD-Q4_K_M formats (perf/ud-model.md
+    // step 4); the n64 tile stays q4_0-only
+    const bool acch_type = tsrc0 == GGML_TYPE_Q4_0 || tsrc0 == GGML_TYPE_Q8_0 ||
+                           tsrc0 == GGML_TYPE_Q3_K || tsrc0 == GGML_TYPE_Q4_K ||
+                           tsrc0 == GGML_TYPE_Q5_K || tsrc0 == GGML_TYPE_Q6_K ||
+                           tsrc0 == GGML_TYPE_IQ3_S || tsrc0 == GGML_TYPE_IQ4_NL ||
+                           tsrc0 == GGML_TYPE_IQ4_XS;
+    if (!soa && acc_half && acch_type && tsrc1 == GGML_TYPE_F32 && !has_tensor) {
+        if (n64) {
+            snprintf(base, 256, "kernel_mul_mm_acch_n64_q4_0_f32");
+        } else {
+            snprintf(base, 256, "kernel_mul_mm_acch_%s_f32", ggml_type_name(tsrc0));
+        }
     } else {
         snprintf(base, 256, "kernel_mul_mm_%s_%s", soa ? "q4_0" : ggml_type_name(tsrc0), ggml_type_name(tsrc1));
     }
