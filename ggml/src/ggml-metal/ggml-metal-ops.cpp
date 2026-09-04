@@ -2516,7 +2516,7 @@ int ggml_metal_op_pool_2d(ggml_metal_op_t ctx, int idx) {
 }
 
 // convert f32 src1 to f16 for the small-batch mul_mv_ext kernels (fewer y load instructions)
-static bool ggml_metal_mul_mat_use_f16_src1(const ggml_tensor * op) {
+static bool ggml_metal_mul_mat_use_f16_src1_n(const ggml_tensor * op, int64_t ne11) {
     static const int env = getenv("GGML_MV_EXT_F16Y") ? atoi(getenv("GGML_MV_EXT_F16Y")) : 1;
     if (env == 0 && op->src[0]->type != GGML_TYPE_Q4_0_SOA) {
         return false;
@@ -2527,7 +2527,6 @@ static bool ggml_metal_mul_mat_use_f16_src1(const ggml_tensor * op) {
     if (op->src[0]->ne[0] % 128 != 0) {
         return false;
     }
-    const int64_t ne11 = op->src[1]->ne[1];
     if (ne11 < 2 || ne11 > 8) {
         return false;
     }
@@ -2554,12 +2553,32 @@ static bool ggml_metal_mul_mat_use_f16_src1(const ggml_tensor * op) {
     }
 }
 
+static bool ggml_metal_mul_mat_use_f16_src1(const ggml_tensor * op) {
+    return ggml_metal_mul_mat_use_f16_src1_n(op, op->src[1]->ne[1]);
+}
+
+// stored-SoA weights fold a broadcast [K, T, S] activation into [K, T*S] columns at encode time
+// (ggml_metal_op_mul_mat); every shape-dependent decision here has to see the folded column count
+static bool ggml_metal_mul_mat_soa_folds(const ggml_tensor * op) {
+    return op->src[0]->type == GGML_TYPE_Q4_0_SOA &&
+           op->src[0]->ne[2] == 1 && op->src[0]->ne[3] == 1 &&
+           (op->src[1]->ne[2] > 1 || op->src[1]->ne[3] > 1) &&
+           ggml_is_contiguous(op->src[1]) && ggml_is_contiguous(op);
+}
+
+static int64_t ggml_metal_mul_mat_eff_ne11(const ggml_tensor * op) {
+    return ggml_metal_mul_mat_soa_folds(op) ? op->src[1]->ne[1]*op->src[1]->ne[2]*op->src[1]->ne[3] : op->src[1]->ne[1];
+}
+
 size_t ggml_metal_op_mul_mat_extra_src1f16(const ggml_tensor * op) {
-    if (op->src[0]->type == GGML_TYPE_Q4_0_SOA &&
-        (op->src[1]->ne[1] == 2 || op->src[1]->ne[1] >= 6)) {
+    // the f16 activation scratch lives right after dst; this must match the encode-time route
+    // (the fold made a [K,1,S] projection a 3-column f16y op while this reserved nothing: the
+    // convert then wrote S*K halves over the next tensor - found by the 2026-09-04 in-place state hunt)
+    const int64_t ne11 = ggml_metal_mul_mat_eff_ne11(op);
+    if (op->src[0]->type == GGML_TYPE_Q4_0_SOA && (ne11 == 2 || ne11 >= 6)) {
         return 0;
     }
-    if (!ggml_metal_mul_mat_use_f16_src1(op)) {
+    if (!ggml_metal_mul_mat_use_f16_src1_n(op, ne11)) {
         return 0;
     }
     return GGML_PAD(ggml_nelements(op->src[1])*sizeof(ggml_fp16_t), 32);
@@ -2696,10 +2715,7 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
     // a contiguous [K, T, S] activation (per-sequence GDN projections in a multi-slot graph) is the
     // same matmul as [K, T*S]: fold the batch dims into the column count so the width routes
     // (w1..w8, skinny, mm) apply with N = T*S columns, exactly like the token-major projections.
-    if (op->src[0]->type == GGML_TYPE_Q4_0_SOA &&
-        op->src[0]->ne[2] == 1 && op->src[0]->ne[3] == 1 &&
-        (op->src[1]->ne[2] > 1 || op->src[1]->ne[3] > 1) &&
-        ggml_is_contiguous(op->src[1]) && ggml_is_contiguous(op)) {
+    if (ggml_metal_mul_mat_soa_folds(op)) {
         ggml_tensor src1f = *op->src[1];
         ggml_tensor dstf  = *op;
         src1f.ne[1] = op->src[1]->ne[1]*op->src[1]->ne[2]*op->src[1]->ne[3];
