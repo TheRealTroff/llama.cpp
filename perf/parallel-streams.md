@@ -503,3 +503,28 @@ arm `9ad7e023c6ab`, MTP 22.09 (`0f1a97ed24bc`), b1 13.98, Turbo4 29.96/29.94 at 
 8 slots, `GGML_MM_SKINNY_N16=1 LLAMA_SPEC_SLOT_BUDGET_WIDE=16`: **62.3 t/s aggregate** (this
 morning's 8-slot Turbo4 cell: 27.5). Open: server checkpoint work when the budget turns speculation
 off, the delta-net's snapshot write bandwidth, the in-place view on other recurrent architectures.
+
+## Snapshot write-back ceiling, probed (2026-09-04 evening, owner: "might as well run the probes")
+
+With speculation on, the delta-net writes K = depth + 1 snapshot slots of the full state (3 MB per
+sequence per layer) so a rejected draft can roll back by pointing at slot r. `LLAMA_GDN_WB_SLOTS=1`
+caps the writes at one slot (rollbacks then read stale state - a ceiling probe, never a config).
+The existing probe only trimmed the copy node, which the fused write-back skips, so it was inert
+under the pick env (identical shas proved it); the cap now also reaches the op's snapshot count.
+Per-round time from the server timers (`perf/server-prof-parse.py`), prompt 06, 400 tokens:
+
+| point | slots written | all slots | one slot | ceiling |
+|---|---:|---:|---:|---:|
+| Turbo4 1 slot, depth 3 | 4 | 96.3 ms | 93.2 | 3.1 ms (3.2%) |
+| Turbo4 4 slots, depth 3 | 4 | 209.2 | 200.1 | 9.1 ms (4.3%) |
+| Turbo4 8 slots, depth 1 | 2 | 216.7 | 211.1 | 5.6 ms (2.6%) |
+| f16 1 slot, depth 4 | 5 | 105.0 | 101.4 | 3.6 ms (3.4%) |
+
+(aggregate t/s under the cap is confounded by the changed acceptance and is not the number.) What
+a real scheme could keep: recompute-on-rollback (write only the new state, keep the input row, re-run
+the delta-net over the accepted prefix when a draft is rejected) reaches the one-slot write cost at
+every depth but pays a delta-net pass on ~half the rounds - ~1.5 ms at one slot (net ~+2.5%), ~6 ms
+at 4 slots (net ~3%), and MORE than it saves at 8 slots depth 1 (a width-1 pass there is ~8 ms of
+state traffic against 5.6 saved). f16 snapshot slots would halve the writes everywhere (~half the
+ceiling) at a precision cost in the one place where it compounds across tokens - would need the KLD
+pricing first. Verdict: a 2-3% lever at depth 3-4, nothing at the 8-slot point; recorded, not built.

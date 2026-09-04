@@ -564,7 +564,11 @@ ggml_tensor * llm_build_delta_net_base::build_recurrent_attn(
     const int64_t K = cparams.n_rs_seq + 1;
 
     // state s is 4D [S_v, S_v, H_v, n_seqs]; K snapshot slots are written into the output.
-    ggml_tensor * gdn_out = ggml_gated_delta_net(ctx0, q, k, v, g, b, s, K);
+    // CEILING PROBE ONLY (see LLAMA_GDN_WB_SLOTS below): the fused writeback stores every slot below
+    // the op's snapshot count, so the cap has to reach the op itself to mean anything there
+    static const int env_wb_slots_op = getenv("LLAMA_GDN_WB_SLOTS") ? atoi(getenv("LLAMA_GDN_WB_SLOTS")) : 0;
+    const int64_t K_op = env_wb_slots_op > 0 ? std::min<int64_t>(K, env_wb_slots_op) : K;
+    ggml_tensor * gdn_out = ggml_gated_delta_net(ctx0, q, k, v, g, b, s, K_op);
     if (n_seq_tokens > 1) {
         res->add_fused_node({LLM_FUSED_OP_GDN_CH, gdn_out, il});
     } else {
