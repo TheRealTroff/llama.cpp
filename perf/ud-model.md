@@ -63,19 +63,105 @@ instrument. Not run yet (GPU-serialized behind steps 2-5).
 
 ## Step 2: round decomposition at depth 3 (perf/run-ud-decomp.sh, TAG ud-decomp-sep04-d3)
 
-(running)
+Anchor 17.37 t/s @300 (acc 59.0%, sha `73ea53bbe98f` - the depth-3 arm shares the
+depth-4/b1 sha at 300), decode-prof 17.43, profiled 15.20 (inflation 1.14, low because big
+ops dominate). 108 rounds, 2.78 tokens/round, **~160 ms/round real**; serialized GPU
+163.8 ms/round, so the profiler's sum is close to the wall here.
 
-## Step 4: acc-half mul_mm for UD's formats (branch ud-acch-types)
+| bucket (serialized ms/round) | ms | share |
+|---|--:|--:|
+| **m1 MUL_MAT (target, width 4)** | **132.2** | **81%** |
+| m1 flash_attn | 7.5 | 4.6% |
+| m1 elementwise/other | 6.4 | 3.9% |
+| m1 GDN | 3.2 | 2.0% |
+| m2 drafter (q4_0 proj 5.9 + other mm 5.0 + misc 3.3 + FA 0.4) | 14.6 | 8.9% |
+
+Per-call cost of the width-4 target projections against their byte floor (bytes at the
+format's bpw, floor at 273 GB/s):
+
+| tensor (format, shape) | us/call | floor us | x floor | ms/round |
+|---|--:|--:|--:|--:|
+| ffn_up/gate iq4_xs [5120,17408] | 411 | 173 | **2.37** | 25.3 |
+| ffn_up/gate q5_K [5120,17408] | 455 | 224 | 2.03 | 12.9 |
+| ffn_down q5_K [17408,5120] | 493 | 224 | 2.20 | 11.0 |
+| ffn_up/gate q4_K [5120,17408] | 383 | 184 | 2.09 | 10.8 |
+| ffn_down iq4_xs [17408,5120] | 404 | 173 | 2.33 | 9.8 |
+| attn_qkv-ish q5_K [6144,5120] | 189 | 79 | 2.38 | 8.4 |
+| q4_K [5120,10240] | 234 | 108 | 2.17 | 6.8 |
+| lm_head q6_K [5120,248320] | 5026 | 3820 | 1.32 | 5.0 |
+| ffn_down q4_K [17408,5120] | 407 | 184 | 2.21 | 4.1 |
+| q3_K [5120,17408] | 402 | 140 | 2.87 | 2.4 |
+| iq3_s [17408,5120] | 828 | 140 | **5.9** | 2.5 |
+| drafter q4_0 [5120,17408] (r4kp, for reference) | 228 | 184 | **1.24** | 2.3 |
+
+- **Every UD projection runs at 2.0-2.4x its byte floor at width 4** (iq3_s at 5.9x, but
+  only 3 calls/round); the same shape in q4_0 on the r4kp kernel runs at 1.24x. If the
+  generic skinny tile (step 5) brings UD's projections to ~1.3x, the m1 MUL_MAT bucket
+  drops ~55 ms and the round goes ~160 -> ~105 ms, i.e. ~17.4 -> ~26 t/s at depth 3.
+  That is the ceiling for step 5, not a prediction - the skinny tile on q4_0 measured
+  ~1.5x floor at width 4 before the SoA kernels replaced it (m4-width4-*.md).
+- The q6_K lm_head is already at 1.32x (one call, 5.0 ms); not a first-order lever.
+- The drafter is 8.9% of the round and already on its fast path; the small q8_0
+  [5120,48] calls (97/round, 4.4 ms) are the ssm vectors - dispatch-bound, hidden under
+  concurrent encode in the real run (small-ne01 lesson).
+
+## Step 4: acc-half mul_mm for UD's formats (branch ud-acch-types) - prefill -6.9%, KLD pending
 
 Built: `kernel_mul_mm_acch_{q8_0,q3_K,q4_K,q5_K,q6_K,iq3_s,iq4_nl,iq4_xs}_f32` instances of
-the same template as the q4_0 probe; host gate widened (n64 tile stays q4_0). Same
-`GGML_MM_ACC_HALF=1` flag. Changes prefill numerics -> needs its own KLD pricing on UD
-(q8_0 reference logits, `run-quant-kld.sh`) before adoption. Not measured yet.
+the same template as the q4_0 probe (half accumulate); host gate widened, n64 tile stays
+q4_0. Same `GGML_MM_ACC_HALF=1` flag, so the pick env picks it up unchanged.
 
-## Step 5: skinny MMA generalized over the dequant block type (branch ud-skinny-generic)
+| depth 3, n_predict 300 | prompt (8288 tok) | decode t/s | acc | sha |
+|---|--:|--:|--:|---|
+| prod 7e4076e4a (4 arms + anchor) | 73.0-73.3 s | 17.37 | 59.0% | 73ea53bbe98f |
+| acch build | **68.18 s (-6.9%)** | 18.39 | 64.6% | 10e1c40ab4bc |
+
+Prefill numerics change, so this is a NEW UD sha lineage (`10e1c40ab4bc` @300); the decode
+t/s and acceptance difference is trajectory (different text), not a decode effect - the
+acch kernel only runs at ne11 > 8. Same size of win as on Q4_0 (+8.3% there, prefill-decomp.md).
+Routing proof and KLD pricing (q8_0 reference, 16 chunks) running - TAG kld-ud-acch-sep04.
+
+## Step 5: skinny MMA generalized over the dequant block type - REFUTED at width 4 (branch ud-skinny-generic)
 
 Built: `kernel_mul_mm_skinny_t<block_q, nl, dequantize_func>`, the q4_0 skinny tile (32
 rows x 8 cols, K-slice 64, 2 simdgroups, slice t+1 dequantized in registers under slice
-t's MACs) with the per-thread 32-element dequant done by the generic block dequantizer
-(the ones `kernel_mul_mm` uses). Instances for the same eight formats. Host route
-`GGML_MM_SKINNY_GEN=N` sends ne11 in [max(2,N), 8] there for those types. Not measured yet.
+t's MACs) with the per-thread 32-element dequant done by the generic block dequantizers
+(the ones `kernel_mul_mm` uses). Instances for q8_0/q3_K/q4_K/q5_K/q6_K/iq3_s/iq4_nl/iq4_xs;
+host route `GGML_MM_SKINNY_GEN=N` sends ne11 in [max(2,N), 8] there. All eight pipelines
+compile and engage (pipeline names read from the timing invocation's stderr); output is
+**byte-identical** (sha `5e76afaba36c` @600, `73ea53bbe98f` @300).
+
+**It is slower for every format.** Depth 3, GEN=2 vs off, same binary:
+
+| | off | GEN=2 |
+|---|--:|--:|
+| e2e @600 | 17.82 | **15.40 (-13.6%)** |
+| e2e @300 anchor | 17.37 | 15.09 |
+| bare pp4 (llama-bench) | 30.05 | 26.19 |
+| m1 MUL_MAT serialized ms/rd | 132.2 | 164.9 |
+
+Per call (us, width 4, profiled): iq4_xs [5120,17408] 411 -> 451; q5_K [5120,17408] 455 ->
+582; q5_K [17408,5120] 493 -> 628; q4_K [5120,17408] 383 -> 467; q6_K head 5026 -> 6968;
+q8_0 [5120,48] 45 -> 92 (small-ne01, dispatch-starved - the route should exclude it anyway).
+The drafter's q4_0 r4kp calls are unchanged (230 us), as expected.
+
+Why (mechanism, not a guess): the upstream K-quant `kernel_mul_mv_*_f32` runs ONE column
+per threadgroup (`r1 = tgpig.y`), so at width 4 it streams the weights four times and
+survives on cache - and it still wins, because its inner loop is the lean integer form
+(`acc += y * (q & mask)`, scales applied once per block). The skinny tile streams the
+weights once but pays the generic 16-element `dequantize_*` (scale/min extraction and
+float conversion per call, then a half store to threadgroup memory and an MMA) per
+weight. Offline prescreen (agx-spill-probe, all cv set): **zero spill on every instance**,
+text 4812 B (q4_0 skinny) vs 6262 q4_K / 8322 q5_K / 6644 q6_K / 5904 iq4_xs / 4590 q8_0,
+so registers are not the cause; the dequant form is. Same instruction-economy wall the
+Q4_0 mv plane hit (`m4-width5-crossover.md`); the SoA kernels won there by restructuring
+the dequant, not by changing the tile.
+
+**What would actually move UD's width-4 plane** (NOT built - it is step 6-class work,
+outside the agreed scope): an ext-style multi-column mv for the three FFN formats
+(q4_K/q5_K/iq4_xs), i.e. the lean per-block integer inner loop of the existing mv kernels
+holding 4 columns of y and 4 accumulators per row so the weights stream once. Upstream
+has this (`mul_mv_ext`, r1_2..r1_5) for q4_0/q8_0/iq4_nl/iq4_xs-class 32-blocks only.
+Ceiling from the decomposition: ~55 ms of the 160 ms round if the projections reach
+~1.3x floor. The generic skinny stays in the tree behind its env flag as the negative
+control; do not put GGML_MM_SKINNY_GEN in any pick.

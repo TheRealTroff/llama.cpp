@@ -20,6 +20,8 @@ OUT=/Users/troff/play/kvquant-experiments/results
 TAG=${TAG:-ud-knobs-$(date +%m%d-%H%M)}
 NPRED=${NPRED:-600}
 DEPTHS=${DEPTHS:-"4 3 2"}
+EXTRA_ENV=${EXTRA_ENV:-}  # plain string, word-split at use (bash 3.2 + set -u rejects an empty array)
+RUN_B1=${RUN_B1:-1}
 MMMINS=${MMMINS:-"8 4 2"}
 TSV=$OUT/$TAG.tsv
 mkdir -p "$OUT"
@@ -37,6 +39,7 @@ echo "=== UD free knobs: $TAG ==="
 echo "commit : $(cd "$B" && git rev-parse --short HEAD) on $(cd "$B" && git rev-parse --abbrev-ref HEAD)"
 echo "binary : $(date -r "$BIN/llama-server" '+%Y-%m-%d %H:%M')"
 echo "model  : $M"
+echo "extra  : $EXTRA_ENV"
 
 run_one() {
   local label=$1 depth=$2 mmmin=$3
@@ -44,7 +47,7 @@ run_one() {
   local -a spec
   if [ "$depth" = 0 ]; then spec=(--spec-type none); else spec=(-md "$MD" --spec-type draft-dflash --spec-draft-n-max "$depth"); fi
   if lsof -ti :$PORT >/dev/null 2>&1; then echo "[$label] ABORT: port busy"; return 1; fi
-  env "${PICK_ENV[@]}" GGML_MM_MIN=$mmmin "$BIN/llama-server" -m "$M" -c 10240 -fa on -ctk f16 -ctv f16 \
+  env "${PICK_ENV[@]}" GGML_MM_MIN=$mmmin $EXTRA_ENV "$BIN/llama-server" -m "$M" -c 10240 -fa on -ctk f16 -ctv f16 \
     "${spec[@]}" --port $PORT >"$slog" 2>&1 &
   local pid=$! ok=0
   for i in $(seq 1 200); do
@@ -81,5 +84,5 @@ for mm in $MMMINS; do
     run_one "d${d}-mm${mm}" "$d" "$mm"
   done
 done
-run_one "b1-mm8" 0 8
+[ "$RUN_B1" = 1 ] && run_one "b1-mm8" 0 8
 echo; echo "tsv: $TSV"
