@@ -3113,8 +3113,18 @@ static int ggml_metal_op_mul_mat_impl(ggml_metal_op_t ctx, int idx, ggml_tensor 
                                    ne11 >= 6 && ne11 <= env_mm_skinny_max;
     const bool runtime_repack_skinny = env_mm_skinny > 0 && ne11 >= std::max(2, env_mm_skinny) &&
                                        op->src[0]->type == GGML_TYPE_Q4_0;
+    // GGML_MM_SKINNY_GEN=N: route ne11 in [max(2,N), 8] to the generic-format skinny tile
+    // (kernel_mul_mm_skinny_t) for the UD-Q4_K_M formats, which have no SoA/repack path and
+    // otherwise run the per-column mul_mv at these widths (perf/ud-model.md step 5)
+    static const int env_mm_skinny_gen = getenv("GGML_MM_SKINNY_GEN") ? atoi(getenv("GGML_MM_SKINNY_GEN")) : 0;
+    const bool generic_skinny = env_mm_skinny_gen > 0 && ne11 >= std::max(2, env_mm_skinny_gen) && ne11 <= 8 &&
+                                ne00 % 64 == 0 && ne00 % ggml_blck_size(op->src[0]->type) == 0 &&
+                                (op->src[0]->type == GGML_TYPE_Q8_0  || op->src[0]->type == GGML_TYPE_Q3_K  ||
+                                 op->src[0]->type == GGML_TYPE_Q4_K  || op->src[0]->type == GGML_TYPE_Q5_K  ||
+                                 op->src[0]->type == GGML_TYPE_Q6_K  || op->src[0]->type == GGML_TYPE_IQ3_S ||
+                                 op->src[0]->type == GGML_TYPE_IQ4_NL || op->src[0]->type == GGML_TYPE_IQ4_XS);
 
-    if ((stored_soa_skinny || runtime_repack_skinny) &&
+    if ((stored_soa_skinny || runtime_repack_skinny || generic_skinny) &&
         op->src[1]->type == GGML_TYPE_F32 &&
         !ggml_is_transposed(op->src[0]) &&
         !ggml_is_transposed(op->src[1]) &&
@@ -3125,7 +3135,7 @@ static int ggml_metal_op_mul_mat_impl(ggml_metal_op_t ctx, int idx, ggml_tensor 
         uint64_t nb01_eff = nb01;
 
         bool repack_soa = stored_soa_skinny;
-        const bool use_di = stored_soa_skinny ? true :
+        const bool use_di = stored_soa_skinny ? true : generic_skinny ? false :
             ggml_metal_op_mul_mat_try_repack_q4_0(ctx, op, bid_src0, nb01_eff, &repack_soa);
 
         const bool use_n16 = env_skinny_n16 && repack_soa && ne11 > 8 && ne11 <= 16;
