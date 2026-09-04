@@ -2686,9 +2686,36 @@ static bool ggml_metal_op_mul_mat_try_repack_q4_0(ggml_metal_op_t ctx, const ggm
     return true;
 }
 
+static int ggml_metal_op_mul_mat_impl(ggml_metal_op_t ctx, int idx, ggml_tensor * op);
+
 int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
     ggml_tensor * op = ctx->node(idx);
 
+    // stored-SoA weights (Q4_0_SOA GGUFs) have no broadcast kernels: the soa_w*/ext routes need
+    // ne12 == ne13 == 1 and the ext fallback names a kernel that does not exist. A 2D weight times
+    // a contiguous [K, T, S] activation (per-sequence GDN projections in a multi-slot graph) is the
+    // same matmul as [K, T*S]: fold the batch dims into the column count so the width routes
+    // (w1..w8, skinny, mm) apply with N = T*S columns, exactly like the token-major projections.
+    if (op->src[0]->type == GGML_TYPE_Q4_0_SOA &&
+        op->src[0]->ne[2] == 1 && op->src[0]->ne[3] == 1 &&
+        (op->src[1]->ne[2] > 1 || op->src[1]->ne[3] > 1) &&
+        ggml_is_contiguous(op->src[1]) && ggml_is_contiguous(op)) {
+        ggml_tensor src1f = *op->src[1];
+        ggml_tensor dstf  = *op;
+        src1f.ne[1] = op->src[1]->ne[1]*op->src[1]->ne[2]*op->src[1]->ne[3];
+        src1f.ne[2] = 1; src1f.ne[3] = 1;
+        src1f.nb[2] = src1f.nb[1]*src1f.ne[1]; src1f.nb[3] = src1f.nb[2];
+        dstf.ne[1] = op->ne[1]*op->ne[2]*op->ne[3];
+        dstf.ne[2] = 1; dstf.ne[3] = 1;
+        dstf.nb[2] = dstf.nb[1]*dstf.ne[1]; dstf.nb[3] = dstf.nb[2];
+        dstf.src[1] = &src1f;
+        return ggml_metal_op_mul_mat_impl(ctx, idx, &dstf);
+    }
+
+    return ggml_metal_op_mul_mat_impl(ctx, idx, op);
+}
+
+static int ggml_metal_op_mul_mat_impl(ggml_metal_op_t ctx, int idx, ggml_tensor * op) {
     ggml_metal_library_t lib = ctx->lib;
     ggml_metal_encoder_t enc = ctx->enc;
 
@@ -2829,9 +2856,14 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
     // skinny simdgroup-matrix kernel for speculative-verify batches
     // GGML_MM_SKINNY=N: route ne11 in [max(2,N), 8] to the skinny kernel (0/unset = off)
     static const int env_mm_skinny = getenv("GGML_MM_SKINNY") ? atoi(getenv("GGML_MM_SKINNY")) : 0;
+    // GGML_MM_SKINNY_MAX=N (default 8): widest ne11 the skinny route takes. The kernel tiles 8
+    // columns per threadgroup and the grid iterates column tiles, so 9..16 run as two column
+    // tiles that each re-read the weight rows (probe for the 9-16 hole; a 16-column tile that
+    // shares the dequantized A tile is the real kernel)
+    static const int env_mm_skinny_max = getenv("GGML_MM_SKINNY_MAX") ? atoi(getenv("GGML_MM_SKINNY_MAX")) : 8;
 
     const bool stored_soa_skinny = op->src[0]->type == GGML_TYPE_Q4_0_SOA &&
-                                   ne11 >= 6 && ne11 <= 8;
+                                   ne11 >= 6 && ne11 <= env_mm_skinny_max;
     const bool runtime_repack_skinny = env_mm_skinny > 0 && ne11 >= std::max(2, env_mm_skinny) &&
                                        op->src[0]->type == GGML_TYPE_Q4_0;
 
@@ -2840,7 +2872,7 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
         !ggml_is_transposed(op->src[0]) &&
         !ggml_is_transposed(op->src[1]) &&
         props_dev->has_simdgroup_mm &&
-        ne00 % 32 == 0 && ne11 <= 8) {
+        ne00 % 32 == 0 && ne11 <= env_mm_skinny_max) {
         // optionally read the deinterleaved side copy (repack infra from the mv probe)
         ggml_metal_buffer_id bid_src0 = ggml_metal_get_buffer_id(op->src[0]);
         uint64_t nb01_eff = nb01;

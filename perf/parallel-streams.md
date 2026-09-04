@@ -299,3 +299,42 @@ the UNIQUE set, and whether 3 slots would rather have depth 2 with a 9-column sk
 the budget rule is the cheap policy; the kernel family for 9-32 columns remains the real lever
 (3 slots at depth 1 leave 25% of the skinny width unused). `LLAMA_SPEC_ADAPTIVE` now actually
 changes DFlash depth - its 2026-08 numbers were measured with the drafter ignoring it.
+
+## Turbo4 line under the policy, the SOA-V1 multi-slot crash, and the wider-skinny probe (2026-09-04)
+
+**Crash, fixed (branch `soa-multislot-fix`):** the Turbo4 pick's SOA-V1 GGUFs (stored
+`Q4_0_SOA` weights) segfaulted at `-np >= 2` on the first multi-slot graph, with or without the
+depth policy. Cause: the stored-SoA routes (`soa_w*`, skinny) require `ne12 == ne13 == 1`; the
+per-sequence GDN projections of a multi-slot graph are broadcast matmuls (`[K, T, S]` x 2D
+weight, `ne12 = S`), so they fell through to the ext matvec, whose name for this type
+(`kernel_mul_mv_ext_q4_0_soa_di_f16_r1_4`) does not exist in the library - pipeline compile
+fails, then a null dispatch. A single slot never builds a broadcast projection. Fix in
+`ggml_metal_op_mul_mat`: for 2D SoA weights with contiguous src1/dst, fold the batch dims into
+the column count (`[K, T*S]`, same bytes, same math) so every width route applies. Driver check:
+SOA-V1 at 2 and 3 seqs matches the plain Q4_0 file within noise.
+
+**Turbo4 ladder** (SOA-V1 files, DFlash n3 pick, prompt 06, 300 tokens; single slot on this
+prompt 25.3 aggregate / 26.3 per stream, `t4-b*m*` results):
+
+| slots | budget 8 / skinny <= 8 (effective depth) | budget 16 / skinny <= 16 | budget 24 / skinny <= 24 |
+|---:|---:|---:|---:|
+| 2 | **34.3** (d3, 8 cols) | d3 34.3; d4 25.0; d5 24.5; d7 24.6 | - |
+| 3 | - | d4 (15 cols) 34.4 | - |
+| 4 | **43.4** (d1, 8 cols) | d3 (16 cols) 40.1 | d5 (24 cols) 31.7 |
+| 8 | **48.5** (off, 8 cols) | d1 (16 cols) 49.9 | d2 (24 cols) 46.7 |
+
+Acceptance on this prompt by depth: 84% (1), 74% (2 at 8 slots), 53% (3), 46% (4), 37% (5),
+28% (7). Deeper drafts at >= 2 slots lose even when the columns stay on a skinny route.
+
+**Wider skinny, probed and shelved.** `GGML_MM_SKINNY_MAX` (default 8, on this branch) lets the
+existing 32x8 skinny tile run several column tiles; full-pass `llama-bench -p N -n 0` on the
+SOA-V1 model: 8 cols 112 ms; 10-16 cols **180-184 ms** (two tiles) vs the generic tile's 290;
+20-24 cols 256-258 (three tiles) vs 293-294; 32 cols 328 vs 296 (generic wins). A fused
+16-column tile that shares the dequantized A tile would land near the 8-column pass (~120-140
+ms), but the ladder says the win it could unlock is small: at 2 slots the extra depth is
+acceptance-limited (d7 gives ~3.0 tokens/round vs d3's ~2.6, +15% for +10-20% pass cost); at
+8 slots depth 1 over 16 columns already ties speculation-off through the two-tile route, so a
+fused kernel might add ~10% there. Not worth building ahead of the per-slot server overhead
+(~55 ms/step at 8 slots, `run-parallel-streams` 168 ms step vs the 112 ms pass) and per-stream FA
+cost at long contexts, which are the walls that remain. The policy at budget 8 is the pick for
+the Turbo4 line too: 2 slots 34.3, 4 slots 43.4, 8 slots 48.5 aggregate, single slot untouched.
