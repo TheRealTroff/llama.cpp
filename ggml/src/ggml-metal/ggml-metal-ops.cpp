@@ -82,6 +82,43 @@ static const ggml_tensor * ggml_metal_gdn_wb_op(const ggml_tensor * cpy) {
     return op;
 }
 
+// if cpy moves the kept per-token inputs of a gated-delta-net op (ext semantics, n_keep > 0)
+// into the kept-input store, return that op, else null. same rules as ggml_metal_gdn_wb_op:
+// a pure function of the graph
+static const ggml_tensor * ggml_metal_gdn_xk_op(const ggml_tensor * cpy) {
+    if (cpy->op != GGML_OP_CPY || !cpy->src[0]) {
+        return nullptr;
+    }
+
+    const ggml_tensor * op = cpy->src[0]->view_src;
+
+    if (!op || op->op != GGML_OP_GATED_DELTA_NET || ggml_get_op_params_i32(op, 3) == 0) {
+        return nullptr;
+    }
+
+    if (ggml_get_op_params_i32(op, 1) == 0) {
+        return nullptr;
+    }
+
+    if (cpy->src[0]->type != GGML_TYPE_F32 || cpy->type != GGML_TYPE_F32) {
+        return nullptr;
+    }
+
+    if (!ggml_is_contiguous(cpy->src[0]) || cpy->nb[0] != sizeof(float)) {
+        return nullptr;
+    }
+
+    // the kept inputs start right after the K snapshots
+    const int64_t K = ggml_get_op_params_i32(op, 0);
+    const ggml_tensor * v = op->src[2];
+    const int64_t off = ggml_nelements(v) + K*v->ne[0]*v->ne[0]*v->ne[1]*v->ne[3];
+    if ((size_t) ((char *) cpy->src[0]->data - (char *) op->data) != (size_t) off*sizeof(float)) {
+        return nullptr;
+    }
+
+    return op;
+}
+
 static ggml_metal_buffer_id ggml_metal_get_buffer_id(const ggml_tensor * t) {
     if (!t) {
         return { nullptr, 0 };
@@ -269,9 +306,12 @@ static int ggml_metal_op_encode_impl(ggml_metal_op_t ctx, int idx) {
         return 1;
     }
 
-    // the gated-delta-net op wrote these snapshots into the cache already
+    // the gated-delta-net op wrote these snapshots (or kept inputs) into the cache already
     if (ggml_metal_gdn_wb_enabled() && node->op == GGML_OP_CPY) {
         const ggml_tensor * op = ggml_metal_gdn_wb_op(node);
+        if (!op) {
+            op = ggml_metal_gdn_xk_op(node);
+        }
 
         if (op) {
             const ggml_cgraph * gf = ctx->graph();
@@ -1986,7 +2026,8 @@ int ggml_metal_op_gated_delta_net(ggml_metal_op_t ctx, int idx) {
     // write them straight to the cache instead, so ggml_metal_op_encode_impl can drop
     // that copy. the copy sits a few nodes later (the attention output path comes
     // first), so look for it over the same window the copy side uses
-    const ggml_tensor * cpy = nullptr;
+    const ggml_tensor * cpy    = nullptr;
+    const ggml_tensor * cpy_xk = nullptr;
 
     if (ggml_metal_gdn_wb_enabled()) {
         const ggml_cgraph * gf = ctx->graph();
@@ -1994,14 +2035,28 @@ int ggml_metal_op_gated_delta_net(ggml_metal_op_t ctx, int idx) {
         const int gi = ctx->node_idx(idx);
 
         for (int j = gi + 1; j < gf->n_nodes && j <= gi + GGML_METAL_GDN_WB_WINDOW; j++) {
-            if (ggml_metal_gdn_wb_op(gf->nodes[j]) == op) {
+            if (!cpy && ggml_metal_gdn_wb_op(gf->nodes[j]) == op) {
                 cpy = gf->nodes[j];
-                break;
+            }
+            if (!cpy_xk && ggml_metal_gdn_xk_op(gf->nodes[j]) == op) {
+                cpy_xk = gf->nodes[j];
             }
         }
     }
 
     const bool fuse_wb = cpy != nullptr;
+    const bool fuse_xk = cpy_xk != nullptr;
+
+    // ext semantics
+    const bool    ext    = ggml_get_op_params_i32(op, 3) != 0;
+    const int32_t n_keep = ext ? ggml_get_op_params_i32(op, 1) : 0;
+    const int32_t n_x    = ext ? ggml_get_op_params_i32(op, 2) : 0;
+    const int32_t K      = ggml_get_op_params_i32(op, 0);
+    const ggml_tensor * xp   = ext ? op->src[6] : nullptr;
+    const ggml_tensor * xrep = ext ? op->src[7] : nullptr;
+    const int32_t xp_cap = xp ? (int32_t) xp->ne[1] : 0;
+    // kept-input region: right after the K snapshots in dst, [seq][token][n_x]
+    const uint64_t xk_off_dst = (uint64_t) (ggml_nelements(op->src[2]) + (int64_t) K*ne20*ne20*ne21*ne23)*sizeof(float);
     if (getenv("GGML_GDN_DEBUG")) {
         const ggml_tensor * st = op->src[5];
         fprintf(stderr, "gdn: tok=%lld seqs=%lld K=%d fuse=%d state ne=[%lld,%lld,%lld,%lld] nb=[%zu,%zu,%zu,%zu] view_src=%s data_off=%lld | dst ne=[%lld,%lld] %s\n",
@@ -2013,11 +2068,11 @@ int ggml_metal_op_gated_delta_net(ggml_metal_op_t ctx, int idx) {
 
     // the kernel writes the state cache, which is not part of this node's ranges,
     // so order it against earlier nodes before touching the encoder
-    if (fuse_wb && !ggml_metal_op_concurrency_check(ctx, cpy)) {
+    if ((fuse_wb && !ggml_metal_op_concurrency_check(ctx, cpy)) || (fuse_xk && !ggml_metal_op_concurrency_check(ctx, cpy_xk))) {
         ggml_metal_op_concurrency_reset(ctx);
     }
 
-    auto pipeline = ggml_metal_library_get_pipeline_gated_delta_net(lib, op, fuse_wb);
+    auto pipeline = ggml_metal_library_get_pipeline_gated_delta_net(lib, op, fuse_wb, ext);
 
     int ida = 0;
 
@@ -2059,6 +2114,12 @@ int ggml_metal_op_gated_delta_net(ggml_metal_op_t ctx, int idx) {
         /*.nb3  =*/ nb3,
         /*.wb_nb1 =*/ fuse_wb ? cpy->nb[1] : 0,
         /*.wb_nb2 =*/ fuse_wb ? cpy->nb[2] : 0,
+        /*.n_keep =*/ n_keep,
+        /*.n_x    =*/ n_x,
+        /*.xp_cap =*/ xp_cap,
+        /*.xk_off =*/ fuse_xk ? 0 : xk_off_dst,
+        /*.xk_nb1 =*/ fuse_xk ? cpy_xk->nb[2] : (uint64_t) n_keep*n_x*sizeof(float),
+        /*.xk_nb2 =*/ fuse_xk ? cpy_xk->nb[1] : (uint64_t) n_x*sizeof(float),
     };
 
     ggml_metal_encoder_set_pipeline(enc, pipeline);
@@ -2071,6 +2132,9 @@ int ggml_metal_op_gated_delta_net(ggml_metal_op_t ctx, int idx) {
     ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[5]), ida++); // state
     ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         ida++); // dst
     ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(fuse_wb ? cpy : op), ida++); // snapshot writeback
+    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(xp   ? xp   : op), ida++); // replay inputs
+    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(xrep ? xrep : op), ida++); // replay counts
+    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(fuse_xk ? cpy_xk : op), ida++); // kept inputs
 
     const int nsg = pipeline.nsg;
 
@@ -2078,6 +2142,9 @@ int ggml_metal_op_gated_delta_net(ggml_metal_op_t ctx, int idx) {
 
     if (fuse_wb) {
         ggml_metal_op_concurrency_add(ctx, cpy);
+    }
+    if (fuse_xk) {
+        ggml_metal_op_concurrency_add(ctx, cpy_xk);
     }
 
     return 1;

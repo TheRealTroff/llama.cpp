@@ -986,6 +986,13 @@ typedef struct {
     // strides in the state cache, used when the snapshot writeback is fused
     uint64_t wb_nb1; // per-seq
     uint64_t wb_nb2; // per-slot
+    // ext semantics (ggml_gated_delta_net_ext)
+    int32_t  n_keep; // tokens whose inputs are kept (slot 1 = the state before them)
+    int32_t  n_x;    // floats per kept token row
+    int32_t  xp_cap; // token rows per seq in xp (0 = no replay input)
+    uint64_t xk_off; // byte offset of the kept-input region in the bound xk buffer
+    uint64_t xk_nb1; // per-seq stride of the kept-input region
+    uint64_t xk_nb2; // per-token stride of the kept-input region
 } ggml_metal_kargs_gated_delta_net;
 
 typedef struct {

@@ -3289,6 +3289,57 @@ constant short FC_gated_delta_net_ne30 [[function_constant(FC_GATED_DELTA_NET + 
 constant short FC_gated_delta_net_K    [[function_constant(FC_GATED_DELTA_NET + 2)]];
 // write snapshots directly into the state cache, instead of into dst
 constant bool  FC_gated_delta_net_WB   [[function_constant(FC_GATED_DELTA_NET + 3)]];
+// ext semantics (ggml_gated_delta_net_ext): replay kept tokens first, slot 1 = the state before
+// the last n_keep tokens, keep those tokens' inputs
+constant bool  FC_gated_delta_net_XK   [[function_constant(FC_GATED_DELTA_NET + 4)]];
+
+// one recurrence step on this thread's NSG state elements; returns this row's (unscaled) output
+template<short NSG>
+static inline float kernel_gated_delta_net_step(
+        thread float (&ls)[NSG],
+        const short tx,
+        const uint  i20,
+        device const float * q_ptr,
+        device const float * k_ptr,
+        device const float * v_ptr,
+        device const float * g_ptr,
+        device const float * b_ptr) {
+    float s_k = 0.0f;
+
+    if (FC_gated_delta_net_ne30 == 1) {
+        const float g_exp = exp(g_ptr[0]);
+
+        FOR_UNROLL (short j = 0; j < NSG; j++) {
+            const short is = tx*NSG + j;
+            ls[j] *= g_exp;
+
+            s_k += ls[j]*k_ptr[is];
+        }
+    } else {
+        // KDA
+        FOR_UNROLL (short j = 0; j < NSG; j++) {
+            const short is = tx*NSG + j;
+            ls[j] *= exp(g_ptr[is]);
+
+            s_k += ls[j]*k_ptr[is];
+        }
+    }
+
+    s_k = simd_sum(s_k);
+
+    const float d = (v_ptr[i20] - s_k)*b_ptr[0];
+
+    float y = 0.0f;
+
+    FOR_UNROLL (short j = 0; j < NSG; j++) {
+        const short is = tx*NSG + j;
+        ls[j] += k_ptr[is]*d;
+
+        y += ls[j]*q_ptr[is];
+    }
+
+    return simd_sum(y);
+}
 
 #if 1
 template<short NSG>
@@ -3302,12 +3353,16 @@ kernel void kernel_gated_delta_net_impl(
         device const char * s,
         device       char * dst,
         device       char * wb,
+        device const char * xp,
+        device const char * xrep,
+        device       char * xk,
         uint3 tgpig[[threadgroup_position_in_grid]],
         uint3 tpitg[[thread_position_in_threadgroup]],
         uint3   ntg[[threads_per_threadgroup]])  {
 #define S_v FC_gated_delta_net_ne20
 #define G   FC_gated_delta_net_ne30
 #define K   FC_gated_delta_net_K
+#define XK  FC_gated_delta_net_XK
 
     const uint tx = tpitg.x;
     const uint ty = tpitg.y;
@@ -3352,45 +3407,85 @@ kernel void kernel_gated_delta_net_impl(
     // per-(seq,head) offset within a slot
     const uint state_out_base = (i23*args.ne21 + i21)*S_v*S_v + i20*S_v;
 
-    for (short t = 0; t < args.ne22; t++) {
-        float s_k = 0.0f;
+    // ext: replay this seq's kept tokens (packed [q | k | v | g | b] rows of n_x floats) before the
+    // batch, from the given state; no output, no snapshots
+    if (XK && args.xp_cap > 0) {
+        const int n_rep = ((device const int32_t *) xrep)[i23];
+        const uint H_k  = args.ne01;
+        const uint H_v  = args.ne21;
 
-        if (G == 1) {
-            const float g_exp = exp(g_ptr[0]);
+        for (int t = 0; t < n_rep; t++) {
+            device const float * x = (device const float *) (xp) + (i23*args.xp_cap + t)*args.n_x;
 
-            FOR_UNROLL (short j = 0; j < NSG; j++) {
-                const short is = tx*NSG + j;
-                ls[j] *= g_exp;
-
-                s_k += ls[j]*k_ptr[is];
-            }
-        } else {
-            // KDA
-            FOR_UNROLL (short j = 0; j < NSG; j++) {
-                const short is = tx*NSG + j;
-                ls[j] *= exp(g_ptr[is]);
-
-                s_k += ls[j]*k_ptr[is];
-            }
+            kernel_gated_delta_net_step<NSG>(ls, tx, i20,
+                    x + i01*S_v,
+                    x + S_v*H_k + i11*S_v,
+                    x + 2*S_v*H_k + i21*S_v,
+                    x + 2*S_v*H_k + S_v*H_v + i21*G,
+                    x + 2*S_v*H_k + S_v*H_v + G*H_v + i21);
         }
+    }
 
-        s_k = simd_sum(s_k);
-
-        const float d = (v_ptr[i20] - s_k)*b_ptr[0];
-
-        float y = 0.0f;
-
+    // ext: slot 1 = the state before the last n_keep tokens. All of them: the state right here
+    if (XK && K == 2 && args.n_keep == args.ne22) {
+        device float * dst_state = FC_gated_delta_net_WB
+            ? (device float *) (wb + i23*args.wb_nb1 + args.wb_nb2) + (i21*S_v*S_v + i20*S_v)
+            : (device float *) (dst) + attn_size + state_size_per_snap + state_out_base;
         FOR_UNROLL (short j = 0; j < NSG; j++) {
             const short is = tx*NSG + j;
-            ls[j] += k_ptr[is]*d;
-
-            y += ls[j]*q_ptr[is];
+            dst_state[is] = ls[j];
         }
+    }
 
-        y = simd_sum(y);
+    for (short t = 0; t < args.ne22; t++) {
+        const float y = kernel_gated_delta_net_step<NSG>(ls, tx, i20, q_ptr, k_ptr, v_ptr, g_ptr, b_ptr);
 
         if (tx == 0) {
             dst_attn[t*args.ne21*S_v] = y*scale;
+        }
+
+        if (XK) {
+            if (K == 2 && t == args.ne22 - args.n_keep - 1) {
+                device float * dst_state = FC_gated_delta_net_WB
+                    ? (device float *) (wb + i23*args.wb_nb1 + args.wb_nb2) + (i21*S_v*S_v + i20*S_v)
+                    : (device float *) (dst) + attn_size + state_size_per_snap + state_out_base;
+                FOR_UNROLL (short j = 0; j < NSG; j++) {
+                    const short is = tx*NSG + j;
+                    dst_state[is] = ls[j];
+                }
+            }
+            // keep this token's inputs: one row group per head writes q/k (the v-head that owns
+            // the k-head), every row writes its v element, one thread writes g/b
+            if (args.n_keep > 0 && t >= args.ne22 - args.n_keep) {
+                const uint H_k = args.ne01;
+                const uint H_v = args.ne21;
+                device float * x = (device float *) (xk + args.xk_off + i23*args.xk_nb1 + (uint64_t) (t - (args.ne22 - args.n_keep))*args.xk_nb2);
+                if (tgpig.x == 0 && ty == 0 && i21 < H_k) {
+                    FOR_UNROLL (short j = 0; j < NSG; j++) {
+                        const short is = tx*NSG + j;
+                        x[i21*S_v + is]           = q_ptr[is];
+                        x[S_v*H_k + i21*S_v + is] = k_ptr[is];
+                    }
+                }
+                if (tx == 0) {
+                    x[2*S_v*H_k + i21*S_v + i20] = v_ptr[i20];
+                }
+                if (tgpig.x == 0 && ty == 0) {
+                    if (G == 1) {
+                        if (tx == 0) {
+                            x[2*S_v*H_k + S_v*H_v + i21] = g_ptr[0];
+                        }
+                    } else {
+                        FOR_UNROLL (short j = 0; j < NSG; j++) {
+                            const short is = tx*NSG + j;
+                            x[2*S_v*H_k + S_v*H_v + i21*G + is] = g_ptr[is];
+                        }
+                    }
+                    if (tx == 0) {
+                        x[2*S_v*H_k + S_v*H_v + G*H_v + i21] = b_ptr[0];
+                    }
+                }
+            }
         }
 
         q_ptr += args.ns02;
@@ -3400,7 +3495,7 @@ kernel void kernel_gated_delta_net_impl(
         b_ptr += args.ne21;
         g_ptr += args.ne21*G;
 
-        if (K > 1) {
+        if (!XK && K > 1) {
             const int target_slot = (int)args.ne22 - 1 - (int)t;
             if (target_slot >= 0 && target_slot < (int)K) {
                 device float * dst_state = FC_gated_delta_net_WB
@@ -3414,7 +3509,7 @@ kernel void kernel_gated_delta_net_impl(
         }
     }
 
-    if (K == 1) {
+    if (K == 1 || XK) {
         // fused writeback: the new state goes straight to the cache rows (in place when the input
         // state is a view of the same rows: this thread read its row before the token loop)
         device float * dst_state = FC_gated_delta_net_WB
@@ -3429,6 +3524,7 @@ kernel void kernel_gated_delta_net_impl(
 #undef S_v
 #undef G
 #undef K
+#undef XK
 }
 
 typedef decltype(kernel_gated_delta_net_impl<4>) kernel_gated_delta_net_t;

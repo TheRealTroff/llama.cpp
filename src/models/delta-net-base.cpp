@@ -561,6 +561,11 @@ ggml_tensor * llm_build_delta_net_base::build_recurrent_attn(
     }
 
     const int64_t D = S_v * S_v * H_v;
+
+    if (inp->gdn_replay) {
+        return build_recurrent_attn_replay(inp, ssm_states_all, q, k, v, g, b, s, il);
+    }
+
     const int64_t K = cparams.n_rs_seq + 1;
 
     // state s is 4D [S_v, S_v, H_v, n_seqs]; K snapshot slots are written into the output.
@@ -614,6 +619,108 @@ ggml_tensor * llm_build_delta_net_base::build_recurrent_attn(
         (size_t) kv_head * row_size);
 
     ggml_build_forward_expand(gf, ggml_cpy(ctx0, src, dst));
+
+    return output;
+}
+
+// recompute-on-rollback (llama_memory_recurrent::gdn_replay). One extra state write instead of
+// n_rs_seq: slot 0 = the new state (group 0, in place for a single seq), slot 1 = the state
+// before this batch's last n_keep tokens (group 1), and those tokens' delta-net inputs go to the
+// kept-input store. A seq rolled back by r tokens reads group 1 and replays its first
+// n_keep - r kept tokens inside this op before its new tokens; the state math is the same
+// kernel step, so the replayed state matches the snapshot it replaces.
+ggml_tensor * llm_build_delta_net_base::build_recurrent_attn_replay(
+        llm_graph_input_rs * inp,
+        ggml_tensor *        ssm_states_all,
+        ggml_tensor *        q,
+        ggml_tensor *        k,
+        ggml_tensor *        v,
+        ggml_tensor *        g,
+        ggml_tensor *        b,
+        ggml_tensor *        s,
+        int                  il) {
+    const auto * mctx_cur   = inp->mctx;
+    const auto   kv_head    = mctx_cur->get_head();
+    const uint32_t mem_size = mctx_cur->get_size();
+
+    const int64_t S_v          = s->ne[0];
+    const int64_t H_v          = s->ne[2];
+    const int64_t n_seqs       = s->ne[3];
+    const int64_t n_seq_tokens = q->ne[2];
+
+    const int64_t D        = S_v * S_v * H_v;
+    const int64_t n_x      = mctx_cur->get_n_embd_x();
+    const int64_t n_rs_seq = mctx_cur->get_n_rs_seq();
+    const int64_t n_keep   = inp->n_keep;
+    const int64_t K        = n_keep > 0 ? 2 : 1;
+
+    GGML_ASSERT(g->ne[0] == 1 && "recompute-on-rollback expects a scalar gate");
+    GGML_ASSERT(n_x == 2*S_v*q->ne[1] + S_v*H_v + 2*H_v);
+    GGML_ASSERT(n_keep <= n_seq_tokens);
+
+    ggml_tensor * x_all = mctx_cur->get_x_l(il);
+
+    // the kept inputs of the rolled-back seqs (their source cells), [n_x, n_rs_seq, n_seqs]
+    ggml_tensor * xp   = nullptr;
+    ggml_tensor * xrep = nullptr;
+    if (inp->n_rep_max > 0) {
+        xp = ggml_get_rows(ctx0, x_all, inp->xk_rows);
+        xp = ggml_reshape_3d(ctx0, xp, n_x, n_rs_seq, n_seqs);
+        cb(xp, "gdn_replay_inputs", il);
+        xrep = inp->xk_rep;
+    }
+
+    ggml_tensor * gdn_out = ggml_gated_delta_net_ext(ctx0, q, k, v, g, b, s, xp, xrep, K, n_keep, n_x);
+    if (n_seq_tokens > 1) {
+        res->add_fused_node({LLM_FUSED_OP_GDN_CH, gdn_out, il});
+    } else {
+        res->add_fused_node({LLM_FUSED_OP_GDN_AR, gdn_out, il});
+    }
+
+    const int64_t attn_score_elems    = S_v * H_v * n_seq_tokens * n_seqs;
+    const int64_t state_size_per_snap = S_v * S_v * H_v * n_seqs;
+
+    ggml_tensor * output = ggml_view_4d(ctx0, gdn_out,
+        S_v, H_v, n_seq_tokens, n_seqs,
+        ggml_row_size(gdn_out->type, S_v),
+        ggml_row_size(gdn_out->type, S_v * H_v),
+        ggml_row_size(gdn_out->type, S_v * H_v * n_seq_tokens),
+        0);
+    cb(output, "attn_output", il);
+
+    const size_t row_size = hparams.n_embd_s() * ggml_element_size(ssm_states_all);
+
+    // snapshot slot i -> group i (0: the new state, 1: the state before the kept tokens)
+    ggml_tensor * src = ggml_view_3d(ctx0, gdn_out,
+        D, n_seqs, K,
+        ggml_row_size(gdn_out->type, D),
+        ggml_row_size(gdn_out->type, state_size_per_snap),
+        ggml_row_size(gdn_out->type, attn_score_elems));
+
+    ggml_tensor * dst = ggml_view_3d(ctx0, ssm_states_all,
+        D, n_seqs, K,
+        ssm_states_all->nb[1],
+        (size_t) mem_size * row_size,
+        (size_t) kv_head * row_size);
+
+    ggml_build_forward_expand(gf, ggml_cpy(ctx0, src, dst));
+
+    // the kept tokens' inputs -> the store rows of this batch's cells, tokens 0..n_keep-1
+    if (n_keep > 0) {
+        ggml_tensor * xsrc = ggml_view_3d(ctx0, gdn_out,
+            n_x, n_keep, n_seqs,
+            ggml_row_size(gdn_out->type, n_x),
+            ggml_row_size(gdn_out->type, n_x * n_keep),
+            ggml_row_size(gdn_out->type, attn_score_elems + K * state_size_per_snap));
+
+        ggml_tensor * xdst = ggml_view_3d(ctx0, x_all,
+            n_x, n_keep, n_seqs,
+            ggml_row_size(x_all->type, n_x),
+            x_all->nb[1],
+            (size_t) kv_head * x_all->nb[1]);
+
+        ggml_build_forward_expand(gf, ggml_cpy(ctx0, xsrc, xdst));
+    }
 
     return output;
 }

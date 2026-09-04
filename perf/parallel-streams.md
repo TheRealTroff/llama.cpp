@@ -527,4 +527,8 @@ every depth but pays a delta-net pass on ~half the rounds - ~1.5 ms at one slot 
 at 4 slots (net ~3%), and MORE than it saves at 8 slots depth 1 (a width-1 pass there is ~8 ms of
 state traffic against 5.6 saved). f16 snapshot slots would halve the writes everywhere (~half the
 ceiling) at a precision cost in the one place where it compounds across tokens - would need the KLD
-pricing first. Verdict: a 2-3% lever at depth 3-4, nothing at the 8-slot point; recorded, not built.
+pricing first. Verdict: a 2-3% lever at depth 3-4, nothing at the 8-slot point; ~~recorded, not built~~
+**BUILT the same afternoon (owner: "do the recompute-on-rollback snapshot scheme"), branch
+`gdn-replay-rollback`, `LLAMA_GDN_REPLAY=1`: `gdn-replay-rollback.md`. The replay runs inside the
+next round's kernel (register-resident state, no separate pass), so the "pays a delta-net pass"
+cost above did not materialize; measured against this table: 1 slot depth 3 -0.65 ms (-0.7%), depth 4 -1.05 ms (-1.0%), **4 slots depth 3 -6.8 ms (-3.3%, +2.8% aggregate)**, 8 slots flat; the single-slot shortfall is the replay's own serial recurrence steps, ~1.2 ms per round against the 2.1 ms two slots can remove.**

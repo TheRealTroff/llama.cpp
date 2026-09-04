@@ -10786,6 +10786,15 @@ static void ggml_compute_forward_gated_delta_net_one_chunk(
     // K (snapshot slot count) is an op param; state holds s0 only [S_v, S_v, H, n_seqs].
     const int64_t K = ggml_get_op_params_i32(dst, 0);
     GGML_ASSERT(K >= 1);
+
+    // ext semantics (ggml_gated_delta_net_ext): replay xp tokens first, slot 1 = the state
+    // before the last n_keep tokens, and those tokens' inputs are packed after the snapshots
+    const bool    ext    = ggml_get_op_params_i32(dst, 3) != 0;
+    const int64_t n_keep = ext ? ggml_get_op_params_i32(dst, 1) : 0;
+    const int64_t n_x    = ext ? ggml_get_op_params_i32(dst, 2) : 0;
+    const ggml_tensor * src_xp   = ext ? dst->src[6] : nullptr;
+    const ggml_tensor * src_xrep = ext ? dst->src[7] : nullptr;
+    const int64_t xp_cap = src_xp ? src_xp->ne[1] : 0;
     // per-seq stride in floats (seq s starts at state + s * seq_stride)
     const int64_t state_seq_stride = src_state->nb[3] / sizeof(float);
 
@@ -10802,6 +10811,7 @@ static void ggml_compute_forward_gated_delta_net_one_chunk(
     const int64_t state_size_per_snap = S_v * S_v * H * n_seqs;
     float * attn_out_base  = (float *)dst->data;
     float * state_out_base = (float *)dst->data + attn_score_elems;
+    float * xk_out_base    = state_out_base + K * state_size_per_snap; // ext: [seq][token][n_x]
 
     // snapshot slot mapping: slot 0 = most recent state, slot s = s tokens back.
     // When n_tokens < K only slots 0..n_tokens-1 are written; older slots are caller-owned.
@@ -10839,6 +10849,68 @@ static void ggml_compute_forward_gated_delta_net_one_chunk(
         // attn output pointer for first token of this (head, seq)
         float * attn_data = attn_out_base + (iv3 * n_tokens * H + iv1) * S_v;
 
+        // one recurrence step on s_out; attn_out may be null (replayed tokens produce no output)
+        auto step = [&](const float * q_d, const float * k_d, const float * v_d, const float * g_d, const float beta_val, float * attn_out) {
+            // state is stored transposed: s_out[j*S_v + i] = S[i][j]
+            // so row j of s_out = column j of S (contiguous access)
+
+            if (kda) {
+                // precompute exp(g) into delta scratch (reused below)
+                for (int64_t i = 0; i < S_v; ++i) {
+                    delta[i] = expf(g_d[i]);
+                }
+                // S[i][:] *= exp(g[i]) => for each row j of M: M[j][i] *= exp(g[i])
+                for (int64_t j = 0; j < S_v; ++j) {
+                    ggml_vec_mul_f32(S_v, &s_out[j * S_v], &s_out[j * S_v], delta);
+                }
+            } else {
+                ggml_vec_scale_f32(S_v * S_v, s_out, expf(g_d[0]));
+            }
+
+            // delta[j] = sum_i S[i][j] * k[i] = dot(row j of M, k)
+            for (int64_t j = 0; j < S_v; ++j) {
+                float sum = 0.0f;
+                ggml_vec_dot_f32(S_v, &sum, 0, &s_out[j * S_v], 0, k_d, 0, 1);
+                delta[j] = (v_d[j] - sum) * beta_val;
+            }
+
+            // outer product: S[i][j] += k[i] * delta[j] => M[j][i] += delta[j] * k[i]
+            for (int64_t j = 0; j < S_v; ++j) {
+                ggml_vec_mad_f32(S_v, &s_out[j * S_v], k_d, delta[j]);
+            }
+
+            if (attn_out) {
+                // attn_out[j] = sum_i S[i][j] * q[i] = dot(row j of M, q)
+                for (int64_t j = 0; j < S_v; ++j) {
+                    float sum = 0.0f;
+                    ggml_vec_dot_f32(S_v, &sum, 0, &s_out[j * S_v], 0, q_d, 0, 1);
+                    attn_out[j] = sum * scale;
+                }
+            }
+        };
+
+        // ext: replay the kept tokens of this seq before the batch (no output)
+        if (ext && src_xp) {
+            const int64_t n_rep = ((const int32_t *) src_xrep->data)[iv3];
+            GGML_ASSERT(n_rep >= 0 && n_rep <= xp_cap);
+            const int64_t H_k = neq1;
+            for (int64_t t = 0; t < n_rep; t++) {
+                const float * x = (const float *) src_xp->data + (iv3 * xp_cap + t) * n_x;
+                const float * q_d = x + iq1 * S_v;
+                const float * k_d = x + S_v * H_k + ik1 * S_v;
+                const float * v_d = x + 2 * S_v * H_k + iv1 * S_v;
+                const float * g_d = x + 2 * S_v * H_k + S_v * H + iv1 * neg0;
+                const float beta_val = x[2 * S_v * H_k + S_v * H + neg0 * H + iv1];
+                step(q_d, k_d, v_d, g_d, beta_val, nullptr);
+            }
+            // slot 1 = the state before the last n_keep tokens: all of them
+            if (n_keep == n_tokens) {
+                memcpy(state_out_base + state_size_per_snap + (iv3 * H + iv1) * S_v * S_v, s_out, S_v * S_v * sizeof(float));
+            }
+        } else if (ext && n_keep == n_tokens) {
+            memcpy(state_out_base + state_size_per_snap + (iv3 * H + iv1) * S_v * S_v, s_out, S_v * S_v * sizeof(float));
+        }
+
         for (int64_t t = 0; t < n_tokens; t++) {
             const float * q_d = (const float *)((const char *)src_q->data + iq3 * nbq3 + t * nbq2 + iq1 * nbq1);
             const float * k_d = (const float *)((const char *)src_k->data + ik3 * nbk3 + t * nbk2 + ik1 * nbk1);
@@ -10847,8 +10919,29 @@ static void ggml_compute_forward_gated_delta_net_one_chunk(
             const float beta_val = *(const float *)((const char *)src_beta->data + iv3 * nbb3 + t * nbb2 + iv1 * nbb1);
             const float * g_d    =  (const float *)((const char *)src_g->data    + iv3 * nbg3 + t * nbg2 + iv1 * nbg1);
 
-            // state is stored transposed: s_out[j*S_v + i] = S[i][j]
-            // so row j of s_out = column j of S (contiguous access)
+            if (ext) {
+                step(q_d, k_d, v_d, g_d, beta_val, attn_data);
+                attn_data += S_v * H; // advance to next token
+
+                if (K == 2 && t == n_tokens - n_keep - 1) {
+                    memcpy(state_out_base + state_size_per_snap + (iv3 * H + iv1) * S_v * S_v, s_out, S_v * S_v * sizeof(float));
+                }
+                if (n_keep > 0 && t >= n_tokens - n_keep) {
+                    const int64_t H_k = neq1;
+                    float * x = xk_out_base + (iv3 * n_keep + (t - (n_tokens - n_keep))) * n_x;
+                    if (iv1 < H_k) {
+                        memcpy(x + iv1 * S_v,             q_d, S_v * sizeof(float));
+                        memcpy(x + S_v * H_k + iv1 * S_v, k_d, S_v * sizeof(float));
+                    }
+                    memcpy(x + 2 * S_v * H_k + iv1 * S_v, v_d, S_v * sizeof(float));
+                    memcpy(x + 2 * S_v * H_k + S_v * H + iv1 * neg0, g_d, neg0 * sizeof(float));
+                    x[2 * S_v * H_k + S_v * H + neg0 * H + iv1] = beta_val;
+                }
+                if (t == n_tokens - 1 && K > 1) {
+                    memcpy(state_out_base + (iv3 * H + iv1) * S_v * S_v, s_out, S_v * S_v * sizeof(float));
+                }
+                continue;
+            }
 
             if (kda) {
                 // precompute exp(g) into delta scratch (reused below)

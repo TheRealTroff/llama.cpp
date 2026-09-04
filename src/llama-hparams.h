@@ -383,6 +383,10 @@ struct llama_hparams {
     // dimension of the recurrent state embeddings
     uint32_t n_embd_s() const;
 
+    // floats per token of kept delta-net inputs [q | k | v | g | beta] for the recompute-on-rollback
+    // scheme (scalar-gate delta-net layers: qwen3next / qwen3.5); 0 when not applicable
+    uint32_t n_embd_gdn_x() const;
+
     uint32_t n_pos_per_embd() const;
 
     // note: currently only support if either all or none of the layers are MLA

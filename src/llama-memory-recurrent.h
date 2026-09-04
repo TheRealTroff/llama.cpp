@@ -91,6 +91,11 @@ public:
         int32_t   src0 = -1; // like src, but only used when setting the inputs (allowing to copy once)
         int32_t   tail = -1;
 
+        // gdn_replay: kept tokens to re-run before this batch (set by find_slot for the batch cells)
+        int32_t   xk_replay = 0;
+        // gdn_replay: a rollback is pending (the logical state is not materialized in group 0)
+        bool      xk_pending = false;
+
         std::set<llama_seq_id> seq_id;
 
         bool has_seq_id(const llama_seq_id & id) const {
@@ -112,6 +117,22 @@ public:
     std::vector<ggml_tensor *> r_l;
     std::vector<ggml_tensor *> s_l;
 
+    // recompute-on-rollback (LLAMA_GDN_REPLAY=1, delta-net models with n_rs_seq > 0): instead of
+    // 1 + n_rs_seq full-state snapshot groups, s_l holds 2 groups - group 0 the current state,
+    // group 1 the state before the last n_keep tokens of the seq's last batch - and x_l keeps
+    // those tokens' delta-net inputs (n_embd_x floats each). A rollback of r <= n_keep tokens
+    // re-runs the recurrence over the first n_keep - r kept tokens from group 1 inside the next
+    // batch's delta-net op. r_l keeps its 1 + n_rs_seq groups (small, written by the conv path).
+    bool gdn_replay = false;
+
+    uint32_t n_embd_x = 0;
+
+    // per layer: [n_embd_x * n_rs_seq, size] (row = cell, token j at j*n_embd_x)
+    std::vector<ggml_tensor *> x_l;
+
+    // per seq: tokens kept from its last batch (bounds the rollback), 0 = none
+    std::vector<uint32_t> xk_n_keep;
+
 private:
     //const llama_model & model;
     const llama_hparams & hparams;
@@ -128,6 +149,17 @@ private:
 
     void state_write_meta(llama_io_write_i & io, const std::vector<std::pair<uint32_t, uint32_t>> & cell_ranges, llama_seq_id seq_id = -1) const;
     void state_write_data(llama_io_write_i & io, const std::vector<std::pair<uint32_t, uint32_t>> & cell_ranges) const;
+
+    // gdn_replay: one entry per written cell - its source row and, with a rollback pending,
+    // how many kept tokens to replay on the CPU from group 1 to materialize the logical state
+    struct xk_write_cell {
+        uint32_t src;
+        bool     pending;
+        uint32_t n_rep;
+    };
+    mutable std::vector<xk_write_cell> xk_write_cells;
+
+    void state_write_s_replay(llama_io_write_i & io, int32_t il, const xk_write_cell & c) const;
 
     bool state_read_meta(llama_io_read_i & io, uint32_t cell_count, llama_seq_id dest_seq_id = -1);
     bool state_read_data(llama_io_read_i & io, uint32_t cell_count);
@@ -170,6 +202,19 @@ public:
 
     ggml_tensor * get_r_l(int32_t il) const;
     ggml_tensor * get_s_l(int32_t il) const;
+
+    // gdn_replay (recompute-on-rollback) accessors, see llama_memory_recurrent
+    bool          gdn_replay() const;
+    uint32_t      get_n_rs_seq() const;
+    uint32_t      get_n_embd_x() const;
+    ggml_tensor * get_x_l(int32_t il) const;
+    // ssm-state source row of seq i: group 1 while a rollback is pending, else like s_copy_peek
+    int32_t       s_copy_ss_peek(int i) const;
+    int32_t       s_copy_ss_view_row0(uint32_t n_seqs) const;
+    // plain source cell of seq i (no snapshot group)
+    int32_t       s_copy_src0(int i) const;
+    // kept tokens seq i re-runs before this batch
+    int32_t       xk_replay(int i) const;
 
     int32_t s_copy(int i) const;
 

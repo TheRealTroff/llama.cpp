@@ -236,6 +236,25 @@ bool llama_hparams::is_recr(uint32_t il) const {
     GGML_ABORT("%s: il (%u) out of bounds (n_layer_all: %u)\n", __func__, il, n_layer_all);
 }
 
+uint32_t llama_hparams::n_embd_gdn_x() const {
+    if (wkv_head_size != 0 || n_embd_head_kda != 0 || n_embd_head_la != 0) {
+        return 0;
+    }
+    if (ssm_dt_rank == 0 || ssm_n_group == 0 || ssm_d_state == 0 || ssm_d_inner == 0) {
+        return 0;
+    }
+    // qwen3next / qwen3.5 mapping: head_k_dim = d_state, n_k_heads = n_group,
+    // n_v_heads = dt_rank, head_v_dim = d_inner / n_v_heads; the op requires head_k_dim == head_v_dim
+    const uint32_t S_k = ssm_d_state;
+    const uint32_t H_k = ssm_n_group;
+    const uint32_t H_v = ssm_dt_rank;
+    const uint32_t S_v = ssm_d_inner / ssm_dt_rank;
+    if (S_k != S_v) {
+        return 0;
+    }
+    return 2*S_k*H_k + S_v*H_v + H_v + H_v;
+}
+
 uint32_t llama_hparams::n_pos_per_embd() const {
     return rope_type == LLAMA_ROPE_TYPE_MROPE || rope_type == LLAMA_ROPE_TYPE_IMROPE ? 4 : 1;
 }

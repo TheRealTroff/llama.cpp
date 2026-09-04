@@ -2602,6 +2602,32 @@ extern "C" {
             struct ggml_tensor  * state,
             int64_t               K);
 
+    // recompute-on-rollback variant. Instead of K "last K states" snapshots the op keeps ONE
+    // extra state and the inputs needed to re-derive anything between it and the final state:
+    //   xp   : F32 [n_x, n_cap, n_seqs] or NULL - per-token inputs [q | k | v | g | beta] (n_x =
+    //          2*S_k*H_k + S_v*H_v + G*H_v + H_v floats) to run through the recurrence BEFORE this
+    //          batch's tokens, from the given state. Row i holds the tokens of seq i.
+    //   xrep : I32 [n_seqs] or NULL - how many leading tokens of xp row i to replay (0 = none).
+    //   n_keep > 0 requires K == 2: slot 0 = final state, slot 1 = the state BEFORE the last
+    //          n_keep tokens of this batch. The inputs of those n_keep tokens are packed after the
+    //          snapshots in the output, n_keep*n_x floats per seq ([seq][token][n_x]), so the
+    //          caller can store them and hand them back as xp later.
+    //   n_keep == 0 requires K == 1 (final state only).
+    // xp == NULL with n_keep == 0 is the plain K == 1 op.
+    GGML_API struct ggml_tensor * ggml_gated_delta_net_ext(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * q,
+            struct ggml_tensor  * k,
+            struct ggml_tensor  * v,
+            struct ggml_tensor  * g,
+            struct ggml_tensor  * beta,
+            struct ggml_tensor  * state,
+            struct ggml_tensor  * xp,
+            struct ggml_tensor  * xrep,
+            int64_t               K,
+            int64_t               n_keep,
+            int64_t               n_x);
+
     // DSA lightning indexer
     //
     // q:       [n_embd_idx, n_head_idx, n_batch, ne3 ]

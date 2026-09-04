@@ -266,6 +266,9 @@ public:
 
     bool can_reuse(const llm_graph_params & params) override;
 
+    // the checks behind can_reuse, for the hybrid inputs that carry an rs input
+    bool can_reuse_rs(const llama_memory_recurrent_context * mctx, const llama_ubatch & ubatch);
+
     ggml_tensor * s_copy;  // I32 [n_rs]
 
     // views of s_copy, computed once per graph
@@ -283,6 +286,21 @@ public:
     // slot, any single seq), else -1: build_rs then views the rows instead of ggml_get_rows. Part of
     // the graph topology (and the view offset), so it is checked by can_reuse
     int32_t view_row0 = -1;
+
+    // recompute-on-rollback (llama_memory_recurrent::gdn_replay): the ssm state reads group 1 for a
+    // seq with a rollback pending and the delta-net replays its kept tokens first
+    bool gdn_replay = false;
+
+    ggml_tensor * s_copy_ss  = nullptr;  // I32 [n_seqs]: ssm-state source rows
+    ggml_tensor * s_copy_xg  = nullptr;  // I32 [(1 + n_rs_seq) * (n_rs - n_seqs)]: extra-cell rows, per group
+    ggml_tensor * s_copy_none = nullptr; // I32 [0]: the generic extra copy is replaced by s_copy_xg
+    ggml_tensor * xk_rows    = nullptr;  // I32 [n_seqs]: kept-input store rows (source cells)
+    ggml_tensor * xk_rep     = nullptr;  // I32 [n_seqs]: kept tokens to replay per seq
+
+    // topology, checked by can_reuse
+    int32_t view_row0_ss = -1;
+    int32_t n_rep_max    = 0;  // max replay count over the batch (0: no replay input in the graph)
+    int32_t n_keep       = 0;  // tokens the batch keeps (0: no kept-input write, K = 1)
 };
 
 class llm_graph_input_cross_embd : public llm_graph_input_i {
@@ -1296,6 +1314,22 @@ struct llm_graph_context {
                 int32_t   state_size,
                 int32_t   n_seqs,
             const llm_graph_get_rows_fn & get_state_rows = ggml_get_rows) const;
+
+    void build_rs_extra_groups(
+            llm_graph_input_rs * inp,
+            ggml_tensor * s,
+                int32_t   state_size,
+                int32_t   n_seqs,
+                int32_t   n_grp) const;
+
+    // the delta-net ssm state: build_rs, or with recompute-on-rollback the group-1 read for
+    // rolled-back seqs plus the kept-input store moves for displaced cells
+    ggml_tensor * build_rs_gdn(
+            llm_graph_input_rs * inp,
+            ggml_tensor * s,
+            ggml_tensor * x,
+                int32_t   state_size,
+                int32_t   n_seqs) const;
 
     ggml_tensor * build_rwkv_token_shift_load(
         llm_graph_input_rs * inp,
