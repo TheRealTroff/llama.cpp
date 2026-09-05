@@ -480,3 +480,97 @@ Floors at 273 GB/s on the format's own bytes: iq4_xs 173.4 us, q4_0/q4_K 183.6, 
    kernel shows too) and the ~16 ms of formats still on the ext/per-column paths (item 2 of the
    open list); the ~5% in-graph tax over synthetic (234.6 vs 220.9 us for iq4_xs up/gate; the
    drafter's q4_0 shows 227 vs 221) is common to all of them.
+
+## Step 8: prefill - the f32 64-column mul_mm tile for the K-quant formats (2026-09-05 evening, branch `ud-soa-iq4xs`)
+
+Opened after step 7 (owner: "If you can move prefill, it would be fableous"). The wall-clock case:
+on the benchmark request prefill is 73.6 s against 12.8 s of decode, and the whole remaining
+decode-kernel plane is worth ~1 s, while UD's prefill sat 5.3 s behind the Q4_0 line's non-acch
+prefill (73.0 vs 67.7). Prefill is compute-bound, so the +7% bytes are not it.
+
+**Measurement.** UD's prefill decomposes from the step-7 profile log the way Q4_0's did: m1
+serialized 72.8 s against a 73.6 s wall - GPU-busy end to end - of which MUL_MAT 64.7 s (iq4_xs
+22.7, q5_K 20.2, q4_K 16.2, q3_K 1.8, iq4_nl 1.5, q6_K 1.4, iq3_s 0.9), FA 3.0, GDN 2.1. Per format
+the n=512 kernels run at iq4_xs 6.5-6.6 TFLOPS, q4_K 6.3-6.4, q5_K 5.7-5.9, q3_K 5.9 against
+q4_0's 6.7-6.8 on the same shapes (`metalprof-buckets.py`'s parse, TFLOPS from the row's own
+count and shape). The n=512 perf cases for the K-quant types were added to `test-backend-ops`
+(both lists), and the kernels captured and replayed at the gate/up shape (`profiles/ud-mm-n512-sep05`,
+same driver as step 7, `--kernel mul_m`); timings from an uncaptured pass, ms per call:
+
+| kernel (n=512, [17408,5120]) | ms | live | regs | hot loop instr/K-step | issue/stall | exec/disp |
+|---|--:|--:|--:|--:|--:|--:|
+| mul_mm_q4_0_f32 | 13.28 | 364 | 56 | 174 | 99.0/1.0 | 488M |
+| mul_mm_iq4_xs_f32 | 13.65 | 393 | 54 | 204 | 98.6/1.4 | 571M |
+| mul_mm_q4_K_f32 | 14.02 | 418 | 53 | 218 | 97.9/2.1 | 626M |
+| mul_mm_q3_K_f32 | 15.15 | 461 | 56 | 272 | 95.1/4.9 | 761M |
+| mul_mm_q5_K_f32 | 15.47 | 479 | 54 | 279 | 95.5/4.5 | 796M |
+| mul_mm_acch_n64_q4_0_f32 (the Q4_0 pick) | 12.40 | 442 | 69 | 234 (per 64 cols) | 98.8/1.2 | 328M |
+
+- **Every mul_mm is issue-bound with zero spill and one hot K-loop; the K-quant deficit is
+  dequant instruction count**, nothing else. Per 32-wide K-step each thread dequantizes 16
+  weights once for a 32-column output tile: q4_0 pays ~48 instructions for it, iq4_xs +30,
+  q4_K +44, q3_K +98, q5_K +105 (the scale/min unpack plus and/select/add/convert/FMA per
+  element - ~6 ops per element, the format's arithmetic minimum in this form).
+- **The MMA instructions dominate the cycles, so instruction counts undercount them.** The acch
+  n64 kernel executes 33% fewer instructions than the f32 32-column kernel and is 6.7% faster.
+  A two-term fit over q4_0/iq4_xs/q4_K (time = MMA cycles + c x non-MMA instructions per step)
+  gives ~10.9 ms of MMA cycles and 0.017 ms per non-MMA instruction per K-step at this shape:
+  the non-MMA share is 18% for q4_0 and 29% for q5_K, and that share is what a wider tile halves.
+
+**Lever built: `kernel_mul_mm_n64_{q4_0,q4_K,q5_K,q6_K,q3_K,iq4_xs}_f32`** - the existing
+`kernel_mul_mm` template instantiated at NR1=64 with f32 accumulators (the only in-tree n64 was
+the acch q4_0 one), plus the f32 direct-store helper templated on the tile count. Same
+accumulation order as the 32-column kernel, so the output is bit-identical. Offline prescreen:
+all seven instantiations zero spill (text 4.9-6.0 KB vs 3.6-4.7 for the 32-column kernels).
+Route in `ggml_metal_library_get_pipeline_mul_mm`: `GGML_MM_N64=1` (already in the pick env),
+f32 types above, N=512, M>=4096, M%64==0, no bounds-check tile, K<=`GGML_MM_N64_KMAX` (default
+6144, the acch tile's measured boundary); the acch q4_0 route is untouched (`GGML_MM_ACC_HALF`
+still wins for q4_0, so the Q4_0 pick and the drafter are unchanged). `GGML_MM_N64_F32=0` is the
+A/B off switch. Correctness: n=512 CPU-reference cases for all six types at both FFN shapes,
+route names read from the test runs (`kernel_mul_mm_n64_*`).
+
+**Synthetic (`perf/run-ud-mm-n64-ab.sh`, TAG `ud-mm-n64-sep05`, 2 interleaved reps, ms/call):**
+
+| type | gate/up base -> n64 | ffn_down (K=17408) base -> n64 |
+|---|---|---|
+| q5_K | 16.02 -> 14.27 (**-10.9%**) | 16.19 -> 14.73 (-9.0%) |
+| q3_K | 15.57 -> 14.07 (-9.6%) | 15.92 -> 14.62 (-8.2%) |
+| q6_K | 14.72 -> 13.72 (-6.8%) | 14.98 -> 14.13 (-5.7%) |
+| q4_K | 14.40 -> 13.67 (-5.1%) | 14.84 -> 14.15 (-4.6%) |
+| iq4_xs | 14.01 -> 13.54 (-3.4%) | 14.29 -> 13.94 (-2.5%) |
+| q4_0 (f32, reference) | 13.64 -> 13.36 (-2.1%) | 13.86 -> 13.80 (-0.5%) |
+
+The gain orders exactly by dequant length, as the trace said it would. On q4_0 the f32 n64 tile is
+still 7% behind the acch n64 (13.36 vs 12.40): the half accumulate is a real second effect on
+q4_0, only the tile widening transfers to UD. ffn_down (K=17408, 640 threadgroups) gains on every
+K-quant, so the K guard is a q4_0-acch boundary, not a general one; projected over the step-7
+profile's prefill rows (61 of 65 s eligible): -3.8 s.
+
+**E2e (`run-ud-knobs.sh` B=ud-soa, depth 3, n_predict 300, prompt 8288 tokens, TAG
+`ud-mm-n64-e2e-sep05-*`, interleaved base / n64 K<=6144 / n64 K<=20000 / base):**
+
+| arm | prefill | decode t/s | sha |
+|---|--:|--:|---|
+| base (`GGML_MM_N64_F32=0`) | 73.54 s | 23.45 | 73ea53bbe98f |
+| n64 f32, K<=6144 | 70.70 s (-3.9%) | 23.47 | 73ea53bbe98f |
+| **n64 f32, K<=20000** | **69.98 s (-4.8%)** | 23.54 | 73ea53bbe98f |
+| base again | 73.40 s | 23.37 | 73ea53bbe98f |
+
+Engagement confirmed in the server run (`-lv 5`, TAG `ud-mm-n64-engage-sep05`, prefill 70.15 s, same sha):
+all five `kernel_mul_mm_n64_{iq4_xs,q4_K,q5_K,q6_K,q3_K}_f32` pipelines load, the drafter's q4_0 stays
+on `kernel_mul_mm_acch_q4_0_f32`.
+
+**Byte-identical (the canonical UD 300-token sha on every arm), decode untouched, -3.5 s of
+prefill; the guard lifted to cover ffn_down is the better point.** UD prefill 73.5 -> 70.0 s
+against the Q4_0 pick's 62.5 (acch) / 67.7 (f32). Recommendation: adopt with
+`GGML_MM_N64_KMAX=20000` in the UD pick (or flip the default for the f32 tiles); no quality
+question arises. The Q4_0 line could also take the f32 n64 tile instead of acch if the owner ever
+wants the acch KLD cost back (13.36 vs 12.40 ms per call, i.e. ~-7% of its mm time).
+
+**What the trace says is left in UD prefill mm** (not built): after n64 the K-quant kernels sit
+3-7% behind q4_0's f32 tile per call (q5_K 14.27 vs 13.36), ~1.5 s of prefill, and the dequant
+chains are at their per-element arithmetic minimum in the byte-load form - a uint-load +
+nibble-spread form for q5_K's high bit is worth ~10% of its dequant, so ~0.5 s. The bigger items
+are now FA (3.0 s), GDN (2.1 s) and the acch question (-6.9% wall for -2.5 pt same-top, still
+not recommended). Open list order: adopt n64 f32 (owner), offline GGUF (another context),
+remaining decode formats, FA ladder.

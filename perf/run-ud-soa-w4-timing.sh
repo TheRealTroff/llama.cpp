@@ -13,7 +13,7 @@ for rep in $(seq 1 $REPS); do
     label=${arm%%:*}; rest=${arm#*:}; type=${rest%%:*}; envs=${rest#*:}; envs=${envs//,/ }
     out=$(cd "$B" && env GGML_MV_REPACK=2 $envs "$BIN" perf -o MUL_MAT -b MTL0 -p "type_a=$type,type_b=f32,m=$M,n=$N,k=$K," 2>&1)
     us=$(echo "$out" | grep -oE '[0-9]+\.[0-9]+ us/run' | head -1 | cut -d' ' -f1)
-    kn=$(echo "$out" | grep -oE 'loaded kernel_mul_mv_[A-Za-z0-9_=]+' | grep -v cpy | tail -1 | sed 's/loaded //')
+    kn=$(echo "$out" | grep -oE 'loaded kernel_mul_m[mv]_[A-Za-z0-9_=]+' | grep -v cpy | tail -1 | sed 's/loaded //')
     printf '%-11s %-4s %9s  %s\n' "$label" "$rep" "$us" "$kn"
   done
 done

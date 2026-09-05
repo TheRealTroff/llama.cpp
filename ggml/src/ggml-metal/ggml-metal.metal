@@ -15670,8 +15670,9 @@ kernel void kernel_mul_mm(
 
 // direct device store of the accumulator tiles; the half-accumulate variant never takes
 // this path (its condition is compile-time false), the overload only keeps the code valid
-static inline void mul_mm_store_direct(thread simdgroup_float8x8 (&mc)[8], device float * C, int ne0) {
-    for (short i = 0; i < 8; i++) {
+template<short N>
+static inline void mul_mm_store_direct(thread simdgroup_float8x8 (&mc)[N], device float * C, int ne0) {
+    for (short i = 0; i < N; i++) {
         simdgroup_store(mc[i], C + 8*(i%4) + 8*ne0*(i/4), ne0, 0, false);
     }
 }
@@ -16923,6 +16924,15 @@ template [[host_name("kernel_mul_mm_q4_0_f32")]]    kernel mul_mm_t kernel_mul_m
 // half-accumulate probe (GGML_MM_ACC_HALF=1): does the MMA lowering reach the 2x f16 FMA rate?
 template [[host_name("kernel_mul_mm_acch_q4_0_f32")]] kernel mul_mm_t kernel_mul_mm<half, half4x4,   simdgroup_half8x8,   half,   half2x4,   simdgroup_half8x8,   block_q4_0,    2,     dequantize_q4_0,    float,  float4x4,  float, float2x4, half, simdgroup_half8x8>;
 template [[host_name("kernel_mul_mm_acch_n64_q4_0_f32")]] kernel mul_mm_t kernel_mul_mm<half, half4x4, simdgroup_half8x8, half, half2x4, simdgroup_half8x8, block_q4_0, 2, dequantize_q4_0, float, float4x4, float, float2x4, half, simdgroup_half8x8, 64>;
+// f32-accumulate 64-column tiles (UD line prefill, perf/ud-model.md step 8): the A-tile dequant is paid
+// once per 64 output columns instead of 32, which is where the K-quant formats' prefill deficit lives.
+// Same accumulation order as the 32-column kernel. Route: GGML_MM_N64=1 without GGML_MM_ACC_HALF.
+template [[host_name("kernel_mul_mm_n64_q4_0_f32")]]   kernel mul_mm_t kernel_mul_mm<half, half4x4, simdgroup_half8x8, half, half2x4, simdgroup_half8x8, block_q4_0,   2,     dequantize_q4_0,   float, float4x4, float, float2x4, float, simdgroup_float8x8, 64>;
+template [[host_name("kernel_mul_mm_n64_q4_K_f32")]]   kernel mul_mm_t kernel_mul_mm<half, half4x4, simdgroup_half8x8, half, half2x4, simdgroup_half8x8, block_q4_K,   QK_NL, dequantize_q4_K,   float, float4x4, float, float2x4, float, simdgroup_float8x8, 64>;
+template [[host_name("kernel_mul_mm_n64_q5_K_f32")]]   kernel mul_mm_t kernel_mul_mm<half, half4x4, simdgroup_half8x8, half, half2x4, simdgroup_half8x8, block_q5_K,   QK_NL, dequantize_q5_K,   float, float4x4, float, float2x4, float, simdgroup_float8x8, 64>;
+template [[host_name("kernel_mul_mm_n64_q6_K_f32")]]   kernel mul_mm_t kernel_mul_mm<half, half4x4, simdgroup_half8x8, half, half2x4, simdgroup_half8x8, block_q6_K,   QK_NL, dequantize_q6_K,   float, float4x4, float, float2x4, float, simdgroup_float8x8, 64>;
+template [[host_name("kernel_mul_mm_n64_q3_K_f32")]]   kernel mul_mm_t kernel_mul_mm<half, half4x4, simdgroup_half8x8, half, half2x4, simdgroup_half8x8, block_q3_K,   QK_NL, dequantize_q3_K,   float, float4x4, float, float2x4, float, simdgroup_float8x8, 64>;
+template [[host_name("kernel_mul_mm_n64_iq4_xs_f32")]] kernel mul_mm_t kernel_mul_mm<half, half4x4, simdgroup_half8x8, half, half2x4, simdgroup_half8x8, block_iq4_xs, QK_NL, dequantize_iq4_xs, float, float4x4, float, float2x4, float, simdgroup_float8x8, 64>;
 template [[host_name("kernel_mul_mm_q4_1_f32")]]    kernel mul_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   half,   half2x4,   simdgroup_half8x8,   block_q4_1,    2,     dequantize_q4_1,    float,  float4x4,  float, float2x4>;
 template [[host_name("kernel_mul_mm_q5_0_f32")]]    kernel mul_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   half,   half2x4,   simdgroup_half8x8,   block_q5_0,    2,     dequantize_q5_0,    float,  float4x4,  float, float2x4>;
 template [[host_name("kernel_mul_mm_q5_1_f32")]]    kernel mul_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   half,   half2x4,   simdgroup_half8x8,   block_q5_1,    2,     dequantize_q5_1,    float,  float4x4,  float, float2x4>;

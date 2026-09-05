@@ -81,3 +81,7 @@ The ranking held on the higher-fidelity file: per-format SoA layouts plus the wi
 scalar kernels for iq4_xs, q4_K and q5_K (branch `ud-soa-iq4xs`, `ud-model.md` step 6) took
 UD from 17.8 to 24.0 t/s at 600 tokens, depth 3, byte-identical output - +34.5% in one day,
 every kernel at ~1.3x its byte floor. Lever 2 of the list above, transplanted.
+
+Same evening, prefill (`ud-model.md` step 8): the K-quant formats' prefill deficit was dequant
+instruction count paid once per 32 output columns; a 64-column f32 tile (the acch n64 tile's
+geometry without the half accumulate) cut UD prefill 73.5 -> 70.0 s, byte-identical.

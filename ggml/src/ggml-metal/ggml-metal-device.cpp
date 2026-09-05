@@ -1064,12 +1064,23 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm(ggml_meta
 
     static const bool acc_half = getenv("GGML_MM_ACC_HALF") != nullptr;
     static const bool n64_enabled = getenv("GGML_MM_N64") != nullptr;
-    const bool n64 = n64_enabled && acc_half &&
-        tsrc0 == GGML_TYPE_Q4_0 && tsrc1 == GGML_TYPE_F32 && !has_tensor && !bc_inp &&
-        op->ne[0] >= 4096 && op->ne[1] == 512 && op->src[0]->ne[0] <= 6144 &&
+    // n64 K guard: the acch q4_0 tile measured a loss above K=6144 (mm-acch-n64.md); overridable for
+    // the f32 K-quant tiles, whose dequant tax is larger (GGML_MM_N64_KMAX, default 6144)
+    static const int n64_kmax = getenv("GGML_MM_N64_KMAX") ? atoi(getenv("GGML_MM_N64_KMAX")) : 6144;
+    // (!bc_out: the f32 tile's bounds-checked store path would need 16 KiB of threadgroup memory)
+    const bool n64_shape = n64_enabled && tsrc1 == GGML_TYPE_F32 && !has_tensor && !bc_inp && !bc_out && !soa &&
+        op->ne[0] >= 4096 && op->ne[1] == 512 && op->src[0]->ne[0] <= n64_kmax &&
         op->ne[0] % 64 == 0;
+    const bool n64 = n64_shape && acc_half && tsrc0 == GGML_TYPE_Q4_0;
+    // f32-accumulate 64-column tiles for the UD line's formats (and q4_0 without acch)
+    static const bool n64_f32_enabled = !getenv("GGML_MM_N64_F32") || atoi(getenv("GGML_MM_N64_F32")) != 0;  // GGML_MM_N64_F32=0 = A/B off switch
+    const bool n64_f32 = n64_f32_enabled && n64_shape && !(acc_half && tsrc0 == GGML_TYPE_Q4_0) &&
+        (tsrc0 == GGML_TYPE_Q4_0 || tsrc0 == GGML_TYPE_Q4_K || tsrc0 == GGML_TYPE_Q5_K ||
+         tsrc0 == GGML_TYPE_Q6_K || tsrc0 == GGML_TYPE_Q3_K || tsrc0 == GGML_TYPE_IQ4_XS);
     if (!soa && acc_half && tsrc0 == GGML_TYPE_Q4_0 && tsrc1 == GGML_TYPE_F32 && !has_tensor) {
         snprintf(base, 256, n64 ? "kernel_mul_mm_acch_n64_q4_0_f32" : "kernel_mul_mm_acch_q4_0_f32");
+    } else if (n64_f32) {
+        snprintf(base, 256, "kernel_mul_mm_n64_%s_f32", ggml_type_name(tsrc0));
     } else {
         snprintf(base, 256, "kernel_mul_mm_%s_%s", soa ? "q4_0" : ggml_type_name(tsrc0), ggml_type_name(tsrc1));
     }
@@ -1101,9 +1112,9 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm(ggml_meta
         res.smem = smem_a;
     } else {
         res.nr0 = 64;
-        res.nr1 = n64 ? 64 : 32;
+        res.nr1 = (n64 || n64_f32) ? 64 : 32;
 
-        res.smem = n64 || bc_out ? 8192 : (4096 + 2048);
+        res.smem = n64 || n64_f32 || bc_out ? 8192 : (4096 + 2048);
     }
 
     res.nsg = N_MM_SIMD_GROUP_X * N_MM_SIMD_GROUP_Y;

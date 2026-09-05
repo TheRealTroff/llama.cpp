@@ -22,7 +22,7 @@ for arm in $ARMS; do
         ( cd "$B" && env MTL_CAPTURE_ENABLED=1 GGML_METAL_CAPTURE_COMPUTE=2 GGML_MV_REPACK=2 $envs \
             "$BIN" perf -o MUL_MAT -b MTL0 -p "type_a=$type,type_b=f32,m=$M,n=$N,k=$K," ) >"$log" 2>&1
         trace=$(grep -oE '/tmp/perf-metal-[0-9]+\.gputrace' "$log" | head -1)
-        kn=$(grep -oE 'loaded kernel_mul_mv_[A-Za-z0-9_=]+' "$log" | grep -v cpy | tail -1)
+        kn=$(grep -oE 'loaded kernel_mul_m[mv]_[A-Za-z0-9_=]+' "$log" | grep -v cpy | tail -1)
         [ -n "$trace" ] && [ -d "$trace" ] || { echo "$label: NO TRACE (see $log)"; continue; }
         mv "$trace" "$OUT/$label.gputrace"
         echo "$label: $kn  $(du -sh "$OUT/$label.gputrace" | cut -f1)"
@@ -32,7 +32,7 @@ for arm in $ARMS; do
             || { echo "$label: replay FAILED (see $OUT/$label.replay.log)"; continue; }
     fi
     python3 "$STATS" --all "$OUT/$label.replay/streamData" >"$OUT/$label.stats.txt" 2>&1
-    "$PY" "$B/perf/shaderprof-table.py" "$OUT/$label.replay/raw" --kernel mul_mv --top 60 --json "$OUT/$label.instr.json" >"$OUT/$label.instr.txt" 2>&1
+    "$PY" "$B/perf/shaderprof-table.py" "$OUT/$label.replay/raw" --kernel mul_m --top 60 --json "$OUT/$label.instr.json" >"$OUT/$label.instr.txt" 2>&1
     echo "$label: stats $(grep -c . "$OUT/$label.stats.txt") lines, instr $(grep -c '^   [0-9]' "$OUT/$label.instr.txt") rows, replay $(du -sh "$OUT/$label.replay" | cut -f1)"
 done
 echo "done: $OUT"
