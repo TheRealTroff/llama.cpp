@@ -85,3 +85,7 @@ every kernel at ~1.3x its byte floor. Lever 2 of the list above, transplanted.
 Same evening, prefill (`ud-model.md` step 8): the K-quant formats' prefill deficit was dequant
 instruction count paid once per 32 output columns; a 64-column f32 tile (the acch n64 tile's
 geometry without the half accumulate) cut UD prefill 73.5 -> 70.0 s, byte-identical.
+
+FA, same night (`ud-model.md` step 9): the f16 FA kernel loaded K tiles transposed from device
+memory (a 40-instruction address block per 8 tiles); computing S^T = K Q^T with Q staged transposed
+is -7..-8% on every f16 FA form, byte-identical, +0.8% decode / -0.5% prefill at 8K, more with context.

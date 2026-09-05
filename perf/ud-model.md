@@ -574,3 +574,82 @@ nibble-spread form for q5_K's high bit is worth ~10% of its dequant, so ~0.5 s. 
 are now FA (3.0 s), GDN (2.1 s) and the acch question (-6.9% wall for -2.5 pt same-top, still
 not recommended). Open list order: adopt n64 f32 (owner), offline GGUF (another context),
 remaining decode formats, FA ladder.
+
+## Step 9: flash attention - the transposed-Q QK form (2026-09-05 night, owner: "then take a look at FA")
+
+FA is 3.0 s of UD's prefill (3.1 on Q4_0, same kernel: `kernel_flash_attn_ext_f16_dk256_dv256` at
+nsg=4, nwg=1, 8 queries x 64 keys per threadgroup, 16 calls per KV rung from 2560 to 8448, the top
+rung 22.9 ms in-graph) and 7.5 ms of the 118 ms decode round (the same kernel at nwg=8, widths 3-8).
+Quadratic in context, so its share grows with the prompt.
+
+**Measurement** (`perf/run-fa-prefill-profile.sh`, `profiles/fa-prefill-sep05`, kv 8448 and 16384 at
+512 rows; timings uncaptured): 972 live instructions, 90 registers, zero spill, 91% issue / 9%
+stall, 896M instructions per dispatch at kv 8448 for 103.8M MMAs = **8.6 instructions per MMA
+against mul_mm's 5.5**; at the test's FLOP count 5.1 TFLOPS against mul_mm's 6.8. The hot-loop
+rule catches only the innermost QK body, so the read is by execution-count tier
+(`shaderprof-compare.py --tiers`, new): per 64-key chunk each simdgroup executes **1105
+instructions for 128 MMAs** -
+
+| tier | per chunk per SG | instr | issue share | what it is |
+|---|--:|--:|--:|---|
+| innermost QK body (unroll-4 step, 8 MMAs) | 3.9 x 194 = 749 | 194 | 63% | 89 non-MMA per 8 MMAs: a ~40-instruction 10/12 B address block, then 24 load instructions for 8 K tiles + 8 Q tiles, then the 8 MMAs |
+| per-chunk body (softmax + PV + barriers) | 320 | 320 | 27% | 64 PV MMAs at ~4 non-MMA each, 64 plain V loads, the online softmax for 2 rows |
+| per-key-tile / per-chunk glue | ~36 | 43 | 1% | |
+
+The QK side pays 11 non-MMA instructions per MMA, the PV side 4. The difference is the operand
+form: PV loads V tiles untransposed (`simdgroup_load(mv, pv, NS20, 0, false)`); QK loads K tiles
+**transposed from device memory** (`simdgroup_load(mk, pk, NS10, 0, true)`) - every lane needs two
+column-strided addresses per tile, which is the address block. K^T is only needed because the
+kernel computes S = Q K^T with Q as the left operand.
+
+**Lever built: `kernel_flash_attn_ext_qt_f16_dk{128,256}` (`GGML_FA_QT=1`, "=0" off, f16 K/V only,
+takes precedence below acch)** - compute S^T = K Q^T instead: the K tile loads untransposed
+(contiguous rows), Q is staged transposed once per threadgroup (`sq[(4i+c)*Q + j]`, same threadgroup
+bytes) and its tiles load with stride Q, and the score tile is stored with the transpose flag once
+per key tile, so `ss` keeps its [query][key] layout and the softmax/PV code is untouched. Same
+products in the same k order, so the output should be bit-identical; the quantized-K paths (Turbo4)
+keep their form (`static_assert` pins QT to the f16 path, one 8-query tile, DK % 16 == 0). Template
+parameter `QT` on the impl and the wrapper, default false; the existing pipelines compile unchanged.
+
+- Offline prescreen: text 12580 vs 12586 B, spill 48 vs 32 B (threshold noise; replay read the
+  baseline at 0/90 regs). **The text size did not move** - this form change is invisible to the
+  prescreen and only timing or the per-tier decode sees it.
+- Correctness: **2188/2188** f16 `FLASH_ATTN_EXT` cases against the CPU reference with `GGML_FA_QT=1`
+  (113 QT pipelines loaded in the run: every nsg/nwg/gqah/mask form).
+- Kernel timings (`results/fa-qt-sep05/timing.txt`, interleaved QT=0/1, 2 reps, us):
+
+| form | QT=0 | QT=1 | delta |
+|---|--:|--:|--:|
+| prefill nwg=1, kv 8448, 512 rows | 20652 | 18925 | **-8.4%** |
+| prefill nwg=1, kv 16384, 512 rows | 41080 | 37702 | **-8.2%** |
+| decode nwg=8, kv 8448, width 4 | 414.0 | 385.7 | **-6.8%** |
+| decode nwg=8, kv 8448, width 5 | 416.7 | 387.6 | -7.0% |
+
+Both routes win, decode included (the width-3..8 verify FA is this kernel at nwg=8). E2e gate below.
+
+**E2e (UD, depth 3, n_predict 300, n64 tile on in every arm, `run-ud-knobs.sh`, TAGs
+`ud-fa-qt-e2e-sep05-*`, interleaved base / QT / QT / base):**
+
+| arm | prefill | decode t/s | sha |
+|---|--:|--:|---|
+| base (`GGML_FA_QT=0`) | 70.30 s | 23.41 | 73ea53bbe98f |
+| QT | 69.95 s | 23.66 | 73ea53bbe98f |
+| QT | 69.68 s | 23.68 | 73ea53bbe98f |
+| base | 70.04 s | 23.57 | 73ea53bbe98f |
+
+**Byte-identical; prefill -0.5% (70.17 -> 69.82 s, the predicted 8% of a 3.0 s FA ladder), decode
++0.8% (23.49 -> 23.67, predicted ~+0.5% from FA's 7.5 ms of the round).** Small at an 8K prompt
+because FA is 4% of prefill and 6% of the round here; it is a 7-8% kernel win on every f16 FA form
+and grows with context (quadratic on the prefill side). Recommendation: adopt `GGML_FA_QT=1` on both
+lines (the kernel is shared; the Q4_0 pick runs the same f16 forms; the Turbo4 line's quantized-K
+kernels are untouched by it). Branch `ud-soa-iq4xs`; cherry-picks cleanly onto prod (FA kernel +
+getter only).
+
+**What is left in FA, from the tiers:** after QT the QK body still carries the Q tile reloads (32
+threadgroup loads per key tile, ~2 instructions each) - the loop-order swap (load each Q tile once
+per DK slice, accumulate into NC=2 key-tile accumulators) removes half of them, byte-identical, worth
+maybe 3%; and the structural item is the 8-query tile - K/V are re-streamed from cache once per 8
+queries (64x per head at 512 rows) and the per-chunk softmax/barrier body is paid per 8 queries. A
+16-query prefill instantiation halves both but the QK/PV code assumes one 8-row Q tile, the
+threadgroup memory lands exactly at the 32 KB limit, and registers are at 90: real surgery, prefill
+only (decode widths would waste the wider tile). Not built.
