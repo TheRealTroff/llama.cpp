@@ -93,3 +93,28 @@ and code size can reject candidates, but they cannot predict scheduling cost.
 
 Each environment arm must be a separate process because Metal routing flags are
 cached in function-local statics.
+
+## Addendum 2026-09-05: the f32 64-column tile, and what acch is really worth on Q4_0
+
+The UD line (`ud-model.md` step 8) built `kernel_mul_mm_n64_{q4_0,q4_K,q5_K,q6_K,q3_K,iq4_xs}_f32`:
+the same NR1=64 geometry with f32 accumulators, bit-identical to the 32-column kernel. On the
+Q4_0 line it is routed by the pick's `GGML_MM_N64=1` whenever `GGML_MM_ACC_HALF` is off (this
+branch also makes `=0` mean off for both flags - the presence trap in the README). Per call at
+n=512 gate/up it is 13.36 ms against 13.64 (f32 32-col) and 12.40 (acch n64).
+
+E2e on the Q4_0 pick (`run-ud-knobs.sh` B=mm-n64-f32, uniform-Q4_0, depth 4, n_predict 300,
+interleaved, TAGs `q40-mm-n64-e2e-sep05-*`):
+
+| arm | prefill (8288 tok) | sha @300 |
+|---|--:|---|
+| pick (acch + n64) | 65.37 s | `95eb7e65977e` |
+| f32 n64, `GGML_MM_ACC_HALF=0 GGML_MM_N64_KMAX=20000` | 68.05 s | `9ad7e023c6ab` (pre-acch lineage) |
+| f32 32-column, `GGML_MM_ACC_HALF=0 GGML_MM_N64=0` | 68.66 s | `9ad7e023c6ab` |
+| pick again | 65.64 s | `95eb7e65977e` |
+
+So on Q4_0 the f32 tile is worth 0.9% of prefill (its dequant chain is the shortest, there is
+little to halve), and the acch route's real e2e value is the remaining **2.7 s (4.1%)**. The
+trade if the owner drops acch: +2.7 s prefill for the KLD cost back (same-top 89.88 -> 90.75,
+mean KLD 0.060 -> 0.054, `kldacch-aug28`). Decode t/s across these arms is NOT comparable (two
+lineages, acceptance 51.4 vs 57.5 is trajectory). The tile itself is a free, lossless +0.9% on
+whichever route runs f32. Branch `mm-n64-f32` off prod; the pick is unchanged pending the owner.

@@ -221,7 +221,7 @@ What each flag buys, and where it came from:
 | `GGML_METAL_GET_MEMCPY=1` | 0 | get_tensor_async readbacks (logits, 5 MB/round) as memcpy-after-wait instead of a blit command buffer queued behind the graph, +3.3% e2e | cpu-round-overhead.md |
 | `GGML_MM_N64=1` | 0 | 64x64 Q4_0 half-accumulate tile on the measured width-512, short-K, sufficiently parallel region; +1.27% full prefill | mm-acch-n64.md |
 
-**Presence-based flags (2026-09-02 trap):** `GGML_MM_ACC_HALF`, `GGML_MM_N64` and
+**Presence-based flags (2026-09-02 trap; on branch `mm-n64-f32` `GGML_MM_ACC_HALF=0` and `GGML_MM_N64=0` mean OFF):** `GGML_MM_ACC_HALF`, `GGML_MM_N64` and
 `GGML_FA_ACC_HALF` are tested with `getenv() != nullptr`, so `=0` ENABLES them. To turn one
 off, unset it (`env -u GGML_MM_ACC_HALF ...`). A "no-acch" KLD arm run with `=0` reproduced
 the acch arm to the digit before this was noticed (`turbo4-quality.md`). Every other
