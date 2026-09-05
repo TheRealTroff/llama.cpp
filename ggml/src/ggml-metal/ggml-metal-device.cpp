@@ -952,6 +952,20 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_iq4_xs_so
     return res.pipeline ? res : ggml_metal_library_compile_pipeline(lib, name, name, nullptr);
 }
 
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_repack_kq_soa(ggml_metal_library_t lib, enum ggml_type type, bool halfs) {
+    char name[64];
+    snprintf(name, sizeof(name), "kernel_repack_%s_soa%s", ggml_type_name(type), halfs ? "h" : "");
+    auto res = ggml_metal_library_get_pipeline(lib, name);
+    return res.pipeline ? res : ggml_metal_library_compile_pipeline(lib, name, name, nullptr);
+}
+
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_kq_soa_w4(ggml_metal_library_t lib, enum ggml_type type, int variant) {
+    char name[64];
+    snprintf(name, sizeof(name), "kernel_mul_mv_%s_soa_w4_v%d", ggml_type_name(type), variant < 1 ? 1 : variant > 2 ? 2 : variant);
+    auto res = ggml_metal_library_get_pipeline(lib, name);
+    return res.pipeline ? res : ggml_metal_library_compile_pipeline(lib, name, name, nullptr);
+}
+
 ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w7(ggml_metal_library_t lib, int rows) {
     const char * name = rows == 4 ? "kernel_mul_mv_q4_0_soa_w7_r4" :
                                     "kernel_mul_mv_q4_0_soa_w7_r2";

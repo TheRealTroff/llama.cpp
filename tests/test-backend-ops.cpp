@@ -10180,6 +10180,12 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 
     // UD line: iq4_xs SoA width-4 route (GGML_MV_REPACK=2 GGML_MV_SOA_IQ4XS=n) at the UD projection shapes
     for (int n : {3, 4, 5}) {
+        for (ggml_type t : {GGML_TYPE_Q4_K, GGML_TYPE_Q5_K}) {
+            test_cases.emplace_back(new test_mul_mat(t, GGML_TYPE_F32, 17408, n,  5120, {1, 1}, {1, 1}));
+            test_cases.emplace_back(new test_mul_mat(t, GGML_TYPE_F32,  5120, n, 17408, {1, 1}, {1, 1}));
+            test_cases.emplace_back(new test_mul_mat(t, GGML_TYPE_F32,  6144, n,  5120, {1, 1}, {1, 1}));
+            test_cases.emplace_back(new test_mul_mat(t, GGML_TYPE_F32, 10240, n,  5120, {1, 1}, {1, 1}));
+        }
         test_cases.emplace_back(new test_mul_mat(GGML_TYPE_IQ4_XS, GGML_TYPE_F32, 17408, n,  5120, {1, 1}, {1, 1}));
         test_cases.emplace_back(new test_mul_mat(GGML_TYPE_IQ4_XS, GGML_TYPE_F32,  5120, n, 17408, {1, 1}, {1, 1}));
         test_cases.emplace_back(new test_mul_mat(GGML_TYPE_IQ4_XS, GGML_TYPE_F32, 12288, n,  5120, {1, 1}, {1, 1}));

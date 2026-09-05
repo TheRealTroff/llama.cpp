@@ -258,4 +258,31 @@ for every variant, including the six UD shapes at widths 3/4/5 added to test-bac
 - **v2 (exact scale) is 7% behind v5**: the pre-rounded half scale (<= 2^-11 relative per
   32-block) buys the per-pack `float(d)*float(ls)` plus a convert. This is a numerics
   decision the owner makes, priced by KLD like acch; v2 is the exact fallback.
-- e2e at depth 3 (base / v5 / v2 / base, `run-ud-knobs.sh` at 600): pending below.
+- **e2e at depth 3, n_predict 600, `run-ud-knobs.sh` (B=llama.cpp-ud-soa), base / v5 / v2 / base:
+  17.788 / 19.999 / 19.842 / 17.785 t/s = v5 +12.4%, v2 +11.6%, acceptance 60.9% on every arm,
+  sha `5e76afaba36c` on every arm** (the UD 600-token lineage sha: the half-rounded scales moved
+  no byte of this trajectory). The ~12% is the iq4_xs share of the round only (39 of 132 ms of
+  width-4 matmul at -43%): the q4_K/q5_K lines below carry the rest.
+
+### q4_K / q5_K, same day, same body (`GGML_MV_SOA_KQ=1|2`)
+
+The scale-and-min form w = s*q - m with the min folded out of the element loop
+(`acc -= m * sum8(v)`, the 8-element activation sums shared across the 4 rows); q5_K keeps a
+byte-per-pack high-bit plane after the packs. Layouts: v1 exact `[half2 d,dmin x nsb][u8 sc x
+8nsb][u8 mn x 8nsb][pad16][packs][hbits]` (148/180 B per 256 vs 144/176), v2 half planar
+`[half d*sc x 8nsb][half dmin*mn x 8nsb][packs][hbits]` (160/192 B, +11%/+9% bytes). Both
+zero spill (text 3392-4760 B); q4_K 55/55 and q5_K 23/23 vs CPU at the UD shapes, both variants,
+route names read from the test run. `run-ud-iq4xs-soa-ab.sh` with `TYPE=q4_K|q5_K
+ENVNAME=GGML_MV_SOA_KQ`, TAGs `ud-q4_K-soa-sep05` / `ud-q5_K-soa-sep05`, 2 interleaved reps:
+
+| shape (us/call) | q4_K base | q4_K v1 | **q4_K v2** | q5_K base | q5_K v1 | **q5_K v2** |
+|---|--:|--:|--:|--:|--:|--:|
+| ffn_gate_up 17408x5120 | 376-390 | 272-275 | **244 (-36%)** | 451 | 318 | **292 (-35%)** |
+| ffn_down 5120x17408 | 408 | 286 | **264 (-35%)** | 490 | 333 | **314 (-36%)** |
+| attn_qkv 10240x5120 | 231 | 166 | **150 (-35%)** | 278-286 | 194 | **180 (-36%)** |
+| attn_gate 6144x5120 | 146 | 105 | **94 (-36%)** | 178 | 121 | **110 (-38%)** |
+
+Floors at 273 GB/s: q4_K 17408x5120 = 184 us (v2 1.33x), q5_K = 224 us (v2 1.30x). The
+exact-scale v1 is 8-11% behind v2 (two scale products and two converts per pack per row);
+v2 is the half-planar form, the numerics decision is the owner's, priced by sha/KLD at e2e.
+Combined e2e (base / IQ4XS=5+KQ=2 / same / base, depth 3, 600): pending below.
