@@ -74,3 +74,10 @@ the early CPY fast path took batch-1 from 79 to 72.7 ms/token.
 Verify slope (`verify-slope-close.md`), MV_NC V2, width-6 SoA, wider loads, reg-limit env,
 skinny BSPLIT (real per-call, ~0 e2e at the current pick), FA half-accumulate, and the
 mv plane at every probed level (`m4-width5-crossover.md` item 4).
+
+## Addendum 2026-09-05: the same lever on the UD-Q4_K_M line
+
+The ranking held on the higher-fidelity file: per-format SoA layouts plus the width-3/4/5
+scalar kernels for iq4_xs, q4_K and q5_K (branch `ud-soa-iq4xs`, `ud-model.md` step 6) took
+UD from 17.8 to 24.0 t/s at 600 tokens, depth 3, byte-identical output - +34.5% in one day,
+every kernel at ~1.3x its byte floor. Lever 2 of the list above, transplanted.

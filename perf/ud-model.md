@@ -314,4 +314,35 @@ width/variant, names read from the runs. `run-ud-iq4xs-soa-ab.sh N=3|5`, TAGs
 
 Width 5 is the big one because the incumbent there is the register-heavy `ext r1_5`; on the
 SoA side width 5 costs only +13% over width 4 for +1 verify column (iq4_xs 256 vs 227), so
-the depth optimum may move back up from 3. Depth sweep with all routes on: pending below.
+the depth optimum may move back up from 3. Depth sweep with all routes on (600 tokens, f16 KV,
+TAG `ud-soa-all-depths-sep05`): **depth 4 21.87 / depth 3 23.98 / depth 2 21.99 t/s**, sha
+`5e76afaba36c` on every arm - depth 3 stays the operating point (yesterday's base curve was
+16.02 / 17.82 / 17.86). KV line held at f16 for this round (owner, 2026-09-05: "big enough
+change for one round"); Turbo4 on UD is an untried follow-up, nothing in it depends on the
+weight format.
+Batch-1 anchor in the same sweep: 12.641 t/s (yesterday 12.67) - machine state healthy, and the
+route does not touch width 1. **Engagement confirmed in the server run itself** (`EXTRA_ARGS="-lv 5"`,
+TAG `ud-soa-engage-sep05`): `kernel_repack_{iq4_xs,q4_K,q5_K}_soah` and
+`kernel_mul_mv_{iq4_xs,q4_K,q5_K}_soa_w4_v{5,2,2}` all load in the depth-3 run.
+
+### Where this leaves the UD line (2026-09-05 evening)
+
+| | t/s @600, depth 3 | vs Q4_0 pick (29.9) |
+|---|--:|--:|
+| UD, prod (yesterday) | 17.8 | 0.60x |
+| UD, branch `ud-soa-iq4xs`, IQ4XS=5 + KQ=2 | **24.0** | 0.80x |
+
+Adoption is the owner's call. What it costs: three runtime side buffers (~12 GiB; 48 GiB machine)
+and the half-planar scale rounding, which moved no byte of any 600-token arm at any depth
+(sha `5e76afaba36c` throughout) - the exact variants (`IQ4XS=2`, `KQ=1`) are 7-11% slower per
+call and equally correct if the owner wants zero rounding on principle. Open, in order of value:
+
+1. **Offline GGUF storage** for the three layouts (the `Q4_0_SOA_V1` path: new ggml types,
+   `llama-gguf-repack`, readers at widths 1-2 and the mm/prefill path) - removes the ~12 GiB
+   and the first-call repack; the Q4_0 line measured that step at +2%.
+2. **Remaining width-4 formats** ~10 ms of the (now ~100 ms) round: q6_K attn/ffn tensors
+   (0.6 GiB; the q6_K head is already 1.32x floor), q3_K, iq3_s (5.9x floor, 3 calls/round),
+   iq4_nl (6 tensors; same table as iq4_xs with a per-32 scale - the cheapest to add).
+3. **Turbo4 KV on UD** - untried, weight-format independent.
+4. A fresh round decomposition at the new point, then the acch prefill question again
+   (unchanged: -6.9% wall for -2.5 pt same-top, not recommended).

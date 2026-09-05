@@ -982,7 +982,7 @@ Wins, each with its mechanism:
   in `kernel_flash_attn_ext_vec_reduce`.
 - `gdn-writeback-fusion.md` - GDN snapshot writeback fusion, +6.2%.
 - `drafter-quant-routing.md` - drafter was Q4_K_M and missed every Q4_0 fast path, +3.8%.
-- `ud-model.md` - **OPEN 2026-09-04, owner's decision: run the unsloth UD-Q4_K_M file AS-IS.** Free knobs: depth 3/2 +11% over the depth-4 pick, MM_MIN inert; decomposition: width-4 target matmuls are 81% of the round at 2.0-2.4x byte floor; generic skinny tile REFUTED for every format (dequant form, not registers or bytes); acch instances for UD's formats -6.9% prefill, KLD-priced in the file. UD is its own sha lineage - never compare with the Q4_0 pick's shas or t/s.
+- `ud-model.md` - **OPEN 2026-09-04, owner's decision: run the unsloth UD-Q4_K_M file AS-IS.** Free knobs: depth 3/2 +11% over the depth-4 pick, MM_MIN inert; decomposition: width-4 target matmuls are 81% of the round at 2.0-2.4x byte floor; generic skinny tile REFUTED for every format (dequant form, not registers or bytes); acch instances for UD's formats -6.9% prefill, KLD-priced in the file. UD is its own sha lineage - never compare with the Q4_0 pick's shas or t/s. **Step 6 BUILT 2026-09-05 (owner opened it), branch `ud-soa-iq4xs`, UNMERGED:** iq4_xs/q4_K/q5_K SoA side-buffer layouts + 4x4 scalar kernels at widths 3/4/5 (`GGML_MV_SOA_IQ4XS=5 GGML_MV_SOA_KQ=2`), every kernel ~1.3x byte floor, **UD depth 3 @600 17.8 -> 24.0 t/s (+34.5%), sha-identical**; depth 3 stays; adoption, offline GGUF storage (~12 GiB side buffers today) and the remaining formats are the file's open list.
 - `verify-round-profile.md` - the row-contiguous CPY fast path, +9.5%.
 
 Refuted - do not reopen without new information:
