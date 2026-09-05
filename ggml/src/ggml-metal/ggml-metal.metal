@@ -16969,6 +16969,9 @@ template [[host_name("kernel_mul_mm_q4_0_f32")]]    kernel mul_mm_t kernel_mul_m
 // half-accumulate probe (GGML_MM_ACC_HALF=1): does the MMA lowering reach the 2x f16 FMA rate?
 template [[host_name("kernel_mul_mm_acch_q4_0_f32")]] kernel mul_mm_t kernel_mul_mm<half, half4x4,   simdgroup_half8x8,   half,   half2x4,   simdgroup_half8x8,   block_q4_0,    2,     dequantize_q4_0,    float,  float4x4,  float, float2x4, half, simdgroup_half8x8>;
 template [[host_name("kernel_mul_mm_acch_n64_q4_0_f32")]] kernel mul_mm_t kernel_mul_mm<half, half4x4, simdgroup_half8x8, half, half2x4, simdgroup_half8x8, block_q4_0, 2, dequantize_q4_0, float, float4x4, float, float2x4, half, simdgroup_half8x8, 64>;
+// acch tiles with f16 activations (GGML_MM_F16B=1 on the Q4_0 acch pick)
+template [[host_name("kernel_mul_mm_acch_q4_0_f16")]]     kernel mul_mm_t kernel_mul_mm<half, half4x4, simdgroup_half8x8, half, half2x4, simdgroup_half8x8, block_q4_0, 2, dequantize_q4_0, float, float4x4, half, half2x4, half, simdgroup_half8x8>;
+template [[host_name("kernel_mul_mm_acch_n64_q4_0_f16")]] kernel mul_mm_t kernel_mul_mm<half, half4x4, simdgroup_half8x8, half, half2x4, simdgroup_half8x8, block_q4_0, 2, dequantize_q4_0, float, float4x4, half, half2x4, half, simdgroup_half8x8, 64>;
 // f32-accumulate 64-column tiles (UD line prefill, perf/ud-model.md step 8): the A-tile dequant is paid
 // once per 64 output columns instead of 32, which is where the K-quant formats' prefill deficit lives.
 // Same accumulation order as the 32-column kernel. Route: GGML_MM_N64=1 without GGML_MM_ACC_HALF.

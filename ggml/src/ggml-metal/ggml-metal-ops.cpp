@@ -2814,7 +2814,7 @@ static bool ggml_metal_mul_mat_use_f16_src1_mm(const ggml_tensor * op) {
         return false;
     }
     switch (op->src[0]->type) {
-        case GGML_TYPE_Q4_0: return !acc_half; // the acch tile is f32-B only
+        case GGML_TYPE_Q4_0: (void) acc_half; return true; // acch tiles have f16-B instantiations too
         case GGML_TYPE_Q8_0:
         case GGML_TYPE_IQ4_NL:
         case GGML_TYPE_Q3_K:
