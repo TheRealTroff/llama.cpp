@@ -95,6 +95,17 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_cpy(ggml_metal_l
     return res;
 }
 
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_cvt_f32_f16_cont(ggml_metal_library_t lib) {
+    const char * name = "kernel_cvt_f32_f16_cont";
+
+    ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
+    if (!res.pipeline) {
+        res = ggml_metal_library_compile_pipeline(lib, name, name, nullptr);
+    }
+
+    return res;
+}
+
 ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_pool_1d(ggml_metal_library_t lib, const ggml_tensor * op, ggml_op_pool op_pool) {
     GGML_ASSERT(ggml_is_contiguous(op->src[0]));
     GGML_ASSERT(op->src[0]->type == GGML_TYPE_F32 && op->src[0]->type == op->type);
@@ -1007,12 +1018,13 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_ext(ggml_
     return res;
 }
 
-ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm(ggml_metal_library_t lib, const ggml_tensor * op) {
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm(ggml_metal_library_t lib, const ggml_tensor * op, ggml_type tsrc1_override) {
     char base[256];
     char name[256];
 
     const ggml_type tsrc0 = op->src[0]->type;
-    const ggml_type tsrc1 = op->src[1]->type;
+    // tsrc1_override = GGML_TYPE_F16 when the op casts its activations into the f16 scratch (GGML_MM_F16B)
+    const ggml_type tsrc1 = tsrc1_override != GGML_TYPE_COUNT ? tsrc1_override : op->src[1]->type;
     const bool soa = tsrc0 == GGML_TYPE_Q4_0_SOA;
 
     const bool bc_inp = op->src[0]->ne[0] % 32 != 0;
@@ -1039,7 +1051,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm(ggml_meta
     // the f32 K-quant tiles, whose dequant tax is larger (GGML_MM_N64_KMAX, default 6144)
     static const int n64_kmax = getenv("GGML_MM_N64_KMAX") ? atoi(getenv("GGML_MM_N64_KMAX")) : 6144;
     // (!bc_out: the f32 tile's bounds-checked store path would need 16 KiB of threadgroup memory)
-    const bool n64_shape = n64_enabled && tsrc1 == GGML_TYPE_F32 && !has_tensor && !bc_inp && !bc_out && !soa &&
+        const bool n64_shape = n64_enabled && (tsrc1 == GGML_TYPE_F32 || tsrc1 == GGML_TYPE_F16) && !has_tensor && !bc_inp && !bc_out && !soa &&
         op->ne[0] >= 4096 && op->ne[1] == 512 && op->src[0]->ne[0] <= n64_kmax &&
         op->ne[0] % 64 == 0;
     const bool n64 = n64_shape && acc_half && tsrc0 == GGML_TYPE_Q4_0;
@@ -1048,10 +1060,10 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm(ggml_meta
     const bool n64_f32 = n64_f32_enabled && n64_shape && !(acc_half && tsrc0 == GGML_TYPE_Q4_0) &&
         (tsrc0 == GGML_TYPE_Q4_0 || tsrc0 == GGML_TYPE_Q4_K || tsrc0 == GGML_TYPE_Q5_K ||
          tsrc0 == GGML_TYPE_Q6_K || tsrc0 == GGML_TYPE_Q3_K || tsrc0 == GGML_TYPE_IQ4_XS);
-    if (!soa && acc_half && tsrc0 == GGML_TYPE_Q4_0 && tsrc1 == GGML_TYPE_F32 && !has_tensor) {
-        snprintf(base, 256, n64 ? "kernel_mul_mm_acch_n64_q4_0_f32" : "kernel_mul_mm_acch_q4_0_f32");
-    } else if (n64_f32) {
-        snprintf(base, 256, "kernel_mul_mm_n64_%s_f32", ggml_type_name(tsrc0));
+    if (!soa && acc_half && tsrc0 == GGML_TYPE_Q4_0 && (tsrc1 == GGML_TYPE_F32 || tsrc1 == GGML_TYPE_F16) && !has_tensor) {
+        snprintf(base, 256, n64 ? "kernel_mul_mm_acch_n64_q4_0_%s" : "kernel_mul_mm_acch_q4_0_%s", ggml_type_name(tsrc1));
+        } else if (n64_f32) {
+        snprintf(base, 256, "kernel_mul_mm_n64_%s_%s", ggml_type_name(tsrc0), ggml_type_name(tsrc1));
     } else {
         snprintf(base, 256, "kernel_mul_mm_%s_%s", soa ? "q4_0" : ggml_type_name(tsrc0), ggml_type_name(tsrc1));
     }
@@ -1802,6 +1814,11 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext(
         }
     }
 
+    // transposed-Q QK form for the f16 mm kernel (perf/ud-model.md step 9); "=0" means off
+    static const bool fa_qt = getenv("GGML_FA_QT") != nullptr && atoi(getenv("GGML_FA_QT")) != 0;
+    if (fa_qt && !fa_acc_half && op->src[1]->type == GGML_TYPE_F16 && op->src[2]->type == GGML_TYPE_F16 && dk == dv && (dk == 128 || dk == 256)) {
+        snprintf(base, 256, "kernel_flash_attn_ext_qt_f16_dk%d_dv%d", dk, dv);
+    }
     snprintf(name, 256, "%s_mask=%d_sinks=%d_bias=%d_scap=%d_kvpad=%d_bcm=%d_ns10=%d_ns20=%d_nsg=%d_nwg=%d_gqah=%d",
             base,
             has_mask,

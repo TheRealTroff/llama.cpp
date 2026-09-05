@@ -118,3 +118,21 @@ trade if the owner drops acch: +2.7 s prefill for the KLD cost back (same-top 89
 mean KLD 0.060 -> 0.054, `kldacch-aug28`). Decode t/s across these arms is NOT comparable (two
 lineages, acceptance 51.4 vs 57.5 is trajectory). The tile itself is a free, lossless +0.9% on
 whichever route runs f32. Branch `mm-n64-f32` off prod; the pick is unchanged pending the owner.
+
+### The prefill stack on the Q4_0 pick (2026-09-05 night, `ud-model.md` steps 8-10 carried over)
+
+This branch now also carries the transposed-Q FA form (`GGML_FA_QT=1`) and the f16-activation
+mul_mm route (`GGML_MM_F16B=1`, with `kernel_mul_mm_acch{,_n64}_q4_0_f16` so the acch pick takes it).
+Q4_0 pick, depth 4, n_predict 300, interleaved pick / pick+QT+F16B / same / pick
+(TAGs `q40-prefill-stack-sep05-*`):
+
+| arm | prefill | decode t/s | sha |
+|---|--:|--:|---|
+| pick (acch + n64) | 64.99 s | 27.24 | `95eb7e65977e` |
+| + `GGML_FA_QT=1 GGML_MM_F16B=1` | 63.90 s | 27.40 | `95eb7e65977e` |
+| same | 63.87 s | 27.21 | `95eb7e65977e` |
+| pick | 64.96 s | 27.26 | `95eb7e65977e` |
+
+**-1.1 s (-1.7%) of prefill, byte-identical on the acch lineage, decode flat.** Per call the acch f16-B
+tile is -1.5% (gate/up) / -2.0% (ffn_down); the FA form is -7..-8% of a 3.1 s ladder. Both flags are
+recommended for the pick; the pick env in `run-prod-pick.sh` is unchanged pending the owner.

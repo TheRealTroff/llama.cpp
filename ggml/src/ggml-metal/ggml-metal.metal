@@ -11039,8 +11039,9 @@ template<
     short DV,         // V head size
     short Q,          // queries per threadgroup
     short C,          // cache items per threadgroup
-    short GQAH,       // query heads sharing one KV head in this threadgroup grid
-    short NSG>        // number of simd groups
+        short GQAH,       // query heads sharing one KV head in this threadgroup grid
+    short NSG,        // number of simd groups
+    bool  QT = false> // f16 QK form: Q staged transposed, K tiles loaded untransposed, S^T stored transposed (perf/ud-model.md step 9)
 void kernel_flash_attn_ext_impl(
         constant ggml_metal_kargs_flash_attn_ext & args,
         device const char * q,
@@ -11174,7 +11175,14 @@ void kernel_flash_attn_ext_impl(
         }
 
         for (short i = tiisg; i < DK4; i += NW) {
-            if (valid) {
+                        if constexpr (QT) {
+                // transposed staging [DK][Q]: the f16 QK path loads Q^T tiles with stride Q, untransposed
+                const q4_t qv = valid ? (q4_t) q4[i] : (q4_t) 0;
+                sq[(4*i + 0)*Q + j] = qv[0];
+                sq[(4*i + 1)*Q + j] = qv[1];
+                sq[(4*i + 2)*Q + j] = qv[2];
+                sq[(4*i + 3)*Q + j] = qv[3];
+            } else if (valid) {
                 sq4[j*DK4 + i] = (q4_t) q4[i];
             } else {
                 sq4[j*DK4 + i] = 0;
@@ -11347,8 +11355,8 @@ void kernel_flash_attn_ext_impl(
                 pk += sgitg*(8*NS10);
                 ps += sgitg*(8*1);
 
-                static_assert((C/8) % NSG == 0, "");
-
+                                static_assert((C/8) % NSG == 0, "");
+                static_assert(!QT || (DK % 16 == 0 && Q == 8), "QT form assumes one 8-query tile and DK % 16 == 0");
                 constexpr short NC = (C/8)/NSG;
 
                 FOR_UNROLL (short cc = 0; cc < NC; ++cc) {
@@ -11373,25 +11381,39 @@ void kernel_flash_attn_ext_impl(
                         q8x8_t mq[2];
 
                         // note: too much unroll can tank the performance for large heads
-                        #pragma unroll 4
+                                                #pragma unroll 4
                         for (short i = 0; i < DK8/2; ++i) {
                             simdgroup_barrier(mem_flags::mem_none);
 
-                            simdgroup_load(mq[0], pq + 0*8 + 16*i, DK);
-                            simdgroup_load(mq[1], pq + 1*8 + 16*i, DK);
+                            if constexpr (QT) {
+                                // S^T = K Q^T: the K tile loads untransposed (no per-lane column addressing)
+                                // and Q^T comes from the transposed staging; same products, same k order
+                                simdgroup_load(mq[0], pq + (16*i + 0)*Q, Q);
+                                simdgroup_load(mq[1], pq + (16*i + 8)*Q, Q);
 
-                            simdgroup_load(mk[0], pk + 0*8 + 16*i, NS10, 0, true);
-                            simdgroup_load(mk[1], pk + 1*8 + 16*i, NS10, 0, true);
+                                simdgroup_load(mk[0], pk + 0*8 + 16*i, NS10, 0, false);
+                                simdgroup_load(mk[1], pk + 1*8 + 16*i, NS10, 0, false);
 
-                            simdgroup_barrier(mem_flags::mem_none);
+                                simdgroup_barrier(mem_flags::mem_none);
 
-                            simdgroup_multiply_accumulate(mqk, mq[0], mk[0], mqk);
-                            simdgroup_multiply_accumulate(mqk, mq[1], mk[1], mqk);
+                                simdgroup_multiply_accumulate(mqk, mk[0], mq[0], mqk);
+                                simdgroup_multiply_accumulate(mqk, mk[1], mq[1], mqk);
+                            } else {
+                                simdgroup_load(mq[0], pq + 0*8 + 16*i, DK);
+                                simdgroup_load(mq[1], pq + 1*8 + 16*i, DK);
+
+                                simdgroup_load(mk[0], pk + 0*8 + 16*i, NS10, 0, true);
+                                simdgroup_load(mk[1], pk + 1*8 + 16*i, NS10, 0, true);
+
+                                simdgroup_barrier(mem_flags::mem_none);
+
+                                simdgroup_multiply_accumulate(mqk, mq[0], mk[0], mqk);
+                                simdgroup_multiply_accumulate(mqk, mq[1], mk[1], mqk);
+                            }
                         }
                     }
 
-                    simdgroup_store(mqk, ps, SH, 0, false);
-
+                                        simdgroup_store(mqk, ps, SH, 0, QT); // QT: mqk holds S^T; the transposed store lands the same [q][key] block
                     pk += 8*(NSG*NS10);
                     ps += 8*(NSG);
                 }
@@ -11770,8 +11792,9 @@ template<
     void (*deq_v)(device const vd4x4_t *, short, thread v4x4_t &),
     short DK,         // K head size
     short DV,         // V head size
-    short Q  = OP_FLASH_ATTN_EXT_NQPSG, // queries per threadgroup
-    short C  = OP_FLASH_ATTN_EXT_NCPSG> // cache items per threadgroup
+        short Q  = OP_FLASH_ATTN_EXT_NQPSG, // queries per threadgroup
+    short C  = OP_FLASH_ATTN_EXT_NCPSG, // cache items per threadgroup
+    bool  QT = false>                   // transposed-Q QK form (f16 K only, perf/ud-model.md step 9)
 kernel void kernel_flash_attn_ext(
         constant ggml_metal_kargs_flash_attn_ext & args,
         device const char * q,
@@ -11794,13 +11817,13 @@ kernel void kernel_flash_attn_ext(
       //case 2: kernel_flash_attn_ext_impl<FWD_TMPL, 2>(FWD_ARGS); break;
         case 4:
             switch (FC_flash_attn_ext_gqa_heads) {
-                case 4: kernel_flash_attn_ext_impl<FWD_TMPL, 4, 4>(FWD_ARGS); break;
-                case 6: kernel_flash_attn_ext_impl<FWD_TMPL, 6, 4>(FWD_ARGS); break;
-                default: kernel_flash_attn_ext_impl<FWD_TMPL, 1, 4>(FWD_ARGS); break;
+                case 4: kernel_flash_attn_ext_impl<FWD_TMPL, 4, 4, QT>(FWD_ARGS); break;
+                case 6: kernel_flash_attn_ext_impl<FWD_TMPL, 6, 4, QT>(FWD_ARGS); break;
+                default: kernel_flash_attn_ext_impl<FWD_TMPL, 1, 4, QT>(FWD_ARGS); break;
             }
             break;
         case 8:
-            kernel_flash_attn_ext_impl<FWD_TMPL, 1, 8>(FWD_ARGS);
+            kernel_flash_attn_ext_impl<FWD_TMPL, 1, 8, QT>(FWD_ARGS);
             break;
     }
 #undef FWD_TMPL
@@ -11886,6 +11909,10 @@ template [[host_name("kernel_flash_attn_ext_f16_dk576_dv512")]]  kernel flash_at
 
 template [[host_name("kernel_flash_attn_ext_acch_f16_dk128_dv128")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES_ACCH, half4x4, 1, dequantize_f16, half4x4, 1, dequantize_f16, 128, 128>;
 template [[host_name("kernel_flash_attn_ext_acch_f16_dk256_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES_ACCH, half4x4, 1, dequantize_f16, half4x4, 1, dequantize_f16, 256, 256>;
+// transposed-Q QK form (GGML_FA_QT=1, perf/ud-model.md step 9): the f16 K tiles load untransposed and the
+// score tile is stored transposed once per key tile; same products in the same order (byte-identical gate).
+template [[host_name("kernel_flash_attn_ext_qt_f16_dk128_dv128")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, half4x4, 1, dequantize_f16, half4x4, 1, dequantize_f16, 128, 128, OP_FLASH_ATTN_EXT_NQPSG, OP_FLASH_ATTN_EXT_NCPSG, true>;
+template [[host_name("kernel_flash_attn_ext_qt_f16_dk256_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, half4x4, 1, dequantize_f16, half4x4, 1, dequantize_f16, 256, 256, OP_FLASH_ATTN_EXT_NQPSG, OP_FLASH_ATTN_EXT_NCPSG, true>;
 
 #if defined(GGML_METAL_HAS_BF16)
 template [[host_name("kernel_flash_attn_ext_bf16_dk32_dv32"  )]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES_BF, bfloat4x4,  1, dequantize_bf16, bfloat4x4,  1, dequantize_bf16, 32,  32>;
@@ -12776,6 +12803,24 @@ kernel void kernel_cpy_t_t(
         device const T0 * src = (device T0 *)(src0 + i03*args.nb03 + i02*args.nb02 + i01*args.nb01 + i00*args.nb00);
         dst_data[i00] = (T1) src[0];
         break;
+    }
+}
+
+// contiguous f32 -> f16 cast, 8 elements per thread, no per-element index arithmetic (the generic
+// kernel_cpy does four 64-bit divisions per element - at 2.6M elements per prefill mul_mm call that
+// costs more than the f16 tile saves; perf/ud-model.md step 10)
+kernel void kernel_cvt_f32_f16_cont(
+        constant ggml_metal_kargs_cvt_cont & args,
+        device  const float4 * src0,
+        device        half4  * dst,
+        uint tpig[[thread_position_in_grid]]) {
+    const int64_t i = (int64_t) tpig*2;   // float4 index; two float4 per thread
+    const int64_t n4 = args.n/4;
+    if (i + 1 < n4) {
+        dst[i]     = (half4) src0[i];
+        dst[i + 1] = (half4) src0[i + 1];
+    } else if (i < n4) {
+        dst[i]     = (half4) src0[i];
     }
 }
 
@@ -16467,6 +16512,9 @@ template [[host_name("kernel_mul_mm_q4_0_f32")]]    kernel mul_mm_t kernel_mul_m
 // half-accumulate probe (GGML_MM_ACC_HALF=1): does the MMA lowering reach the 2x f16 FMA rate?
 template [[host_name("kernel_mul_mm_acch_q4_0_f32")]] kernel mul_mm_t kernel_mul_mm<half, half4x4,   simdgroup_half8x8,   half,   half2x4,   simdgroup_half8x8,   block_q4_0,    2,     dequantize_q4_0,    float,  float4x4,  float, float2x4, half, simdgroup_half8x8>;
 template [[host_name("kernel_mul_mm_acch_n64_q4_0_f32")]] kernel mul_mm_t kernel_mul_mm<half, half4x4, simdgroup_half8x8, half, half2x4, simdgroup_half8x8, block_q4_0, 2, dequantize_q4_0, float, float4x4, float, float2x4, half, simdgroup_half8x8, 64>;
+// acch tiles with f16 activations (GGML_MM_F16B=1 on the Q4_0 acch pick)
+template [[host_name("kernel_mul_mm_acch_q4_0_f16")]]     kernel mul_mm_t kernel_mul_mm<half, half4x4, simdgroup_half8x8, half, half2x4, simdgroup_half8x8, block_q4_0, 2, dequantize_q4_0, float, float4x4, half, half2x4, half, simdgroup_half8x8>;
+template [[host_name("kernel_mul_mm_acch_n64_q4_0_f16")]] kernel mul_mm_t kernel_mul_mm<half, half4x4, simdgroup_half8x8, half, half2x4, simdgroup_half8x8, block_q4_0, 2, dequantize_q4_0, float, float4x4, half, half2x4, half, simdgroup_half8x8, 64>;
 // f32-accumulate 64-column tiles (UD line prefill, perf/ud-model.md step 8): the A-tile dequant is paid
 // once per 64 output columns instead of 32, which is where the K-quant formats' prefill deficit lives.
 // Same accumulation order as the 32-column kernel. Route: GGML_MM_N64=1 without GGML_MM_ACC_HALF.
@@ -16476,6 +16524,13 @@ template [[host_name("kernel_mul_mm_n64_q5_K_f32")]]   kernel mul_mm_t kernel_mu
 template [[host_name("kernel_mul_mm_n64_q6_K_f32")]]   kernel mul_mm_t kernel_mul_mm<half, half4x4, simdgroup_half8x8, half, half2x4, simdgroup_half8x8, block_q6_K,   QK_NL, dequantize_q6_K,   float, float4x4, float, float2x4, float, simdgroup_float8x8, 64>;
 template [[host_name("kernel_mul_mm_n64_q3_K_f32")]]   kernel mul_mm_t kernel_mul_mm<half, half4x4, simdgroup_half8x8, half, half2x4, simdgroup_half8x8, block_q3_K,   QK_NL, dequantize_q3_K,   float, float4x4, float, float2x4, float, simdgroup_float8x8, 64>;
 template [[host_name("kernel_mul_mm_n64_iq4_xs_f32")]] kernel mul_mm_t kernel_mul_mm<half, half4x4, simdgroup_half8x8, half, half2x4, simdgroup_half8x8, block_iq4_xs, QK_NL, dequantize_iq4_xs, float, float4x4, float, float2x4, float, simdgroup_float8x8, 64>;
+// the same tiles with f16 activations (GGML_MM_F16B=1 casts src1 into the scratch first)
+template [[host_name("kernel_mul_mm_n64_q4_0_f16")]]   kernel mul_mm_t kernel_mul_mm<half, half4x4, simdgroup_half8x8, half, half2x4, simdgroup_half8x8, block_q4_0,   2,     dequantize_q4_0,   float, float4x4, half, half2x4, float, simdgroup_float8x8, 64>;
+template [[host_name("kernel_mul_mm_n64_q4_K_f16")]]   kernel mul_mm_t kernel_mul_mm<half, half4x4, simdgroup_half8x8, half, half2x4, simdgroup_half8x8, block_q4_K,   QK_NL, dequantize_q4_K,   float, float4x4, half, half2x4, float, simdgroup_float8x8, 64>;
+template [[host_name("kernel_mul_mm_n64_q5_K_f16")]]   kernel mul_mm_t kernel_mul_mm<half, half4x4, simdgroup_half8x8, half, half2x4, simdgroup_half8x8, block_q5_K,   QK_NL, dequantize_q5_K,   float, float4x4, half, half2x4, float, simdgroup_float8x8, 64>;
+template [[host_name("kernel_mul_mm_n64_q6_K_f16")]]   kernel mul_mm_t kernel_mul_mm<half, half4x4, simdgroup_half8x8, half, half2x4, simdgroup_half8x8, block_q6_K,   QK_NL, dequantize_q6_K,   float, float4x4, half, half2x4, float, simdgroup_float8x8, 64>;
+template [[host_name("kernel_mul_mm_n64_q3_K_f16")]]   kernel mul_mm_t kernel_mul_mm<half, half4x4, simdgroup_half8x8, half, half2x4, simdgroup_half8x8, block_q3_K,   QK_NL, dequantize_q3_K,   float, float4x4, half, half2x4, float, simdgroup_float8x8, 64>;
+template [[host_name("kernel_mul_mm_n64_iq4_xs_f16")]] kernel mul_mm_t kernel_mul_mm<half, half4x4, simdgroup_half8x8, half, half2x4, simdgroup_half8x8, block_iq4_xs, QK_NL, dequantize_iq4_xs, float, float4x4, half, half2x4, float, simdgroup_float8x8, 64>;
 template [[host_name("kernel_mul_mm_q4_1_f32")]]    kernel mul_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   half,   half2x4,   simdgroup_half8x8,   block_q4_1,    2,     dequantize_q4_1,    float,  float4x4,  float, float2x4>;
 template [[host_name("kernel_mul_mm_q5_0_f32")]]    kernel mul_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   half,   half2x4,   simdgroup_half8x8,   block_q5_0,    2,     dequantize_q5_0,    float,  float4x4,  float, float2x4>;
 template [[host_name("kernel_mul_mm_q5_1_f32")]]    kernel mul_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   half,   half2x4,   simdgroup_half8x8,   block_q5_1,    2,     dequantize_q5_1,    float,  float4x4,  float, float2x4>;
