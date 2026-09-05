@@ -21,6 +21,7 @@ TAG=${TAG:-ud-knobs-$(date +%m%d-%H%M)}
 NPRED=${NPRED:-600}
 DEPTHS=${DEPTHS:-"4 3 2"}
 EXTRA_ENV=${EXTRA_ENV:-}  # plain string, word-split at use (bash 3.2 + set -u rejects an empty array)
+EXTRA_ARGS=${EXTRA_ARGS:-} # extra llama-server args, word-split at use (e.g. "-lv 5" for pipeline-load lines)
 RUN_B1=${RUN_B1:-1}
 MMMINS=${MMMINS:-"8 4 2"}
 TSV=$OUT/$TAG.tsv
@@ -48,7 +49,7 @@ run_one() {
   if [ "$depth" = 0 ]; then spec=(--spec-type none); else spec=(-md "$MD" --spec-type draft-dflash --spec-draft-n-max "$depth"); fi
   if lsof -ti :$PORT >/dev/null 2>&1; then echo "[$label] ABORT: port busy"; return 1; fi
   env "${PICK_ENV[@]}" GGML_MM_MIN=$mmmin $EXTRA_ENV "$BIN/llama-server" -m "$M" -c 10240 -fa on -ctk f16 -ctv f16 \
-    "${spec[@]}" --port $PORT >"$slog" 2>&1 &
+    "${spec[@]}" $EXTRA_ARGS --port $PORT >"$slog" 2>&1 &
   local pid=$! ok=0
   for i in $(seq 1 200); do
     curl -sf -o /dev/null "http://127.0.0.1:$PORT/health" && { ok=1; break; }

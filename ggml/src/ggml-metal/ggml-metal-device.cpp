@@ -945,9 +945,11 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_repack_iq4_xs_so
 }
 
 // UD line (perf/ud-model.md step 6): iq4_xs width-4 SoA kernels, variant = GGML_MV_SOA_IQ4XS
-ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_iq4_xs_soa_w4(ggml_metal_library_t lib, int variant) {
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_iq4_xs_soa(ggml_metal_library_t lib, int width, int variant) {
     char name[64];
-    snprintf(name, sizeof(name), "kernel_mul_mv_iq4_xs_soa_w4_v%d", variant < 1 ? 1 : variant > 6 ? 6 : variant);
+    // widths 3 and 5 exist only for the two constant-table half-product forms (v2 exact, v5 half planar)
+    const int v = width == 4 ? (variant < 1 ? 1 : variant > 6 ? 6 : variant) : (variant >= 5 ? 5 : 2);
+    snprintf(name, sizeof(name), "kernel_mul_mv_iq4_xs_soa_w%d_v%d", width, v);
     auto res = ggml_metal_library_get_pipeline(lib, name);
     return res.pipeline ? res : ggml_metal_library_compile_pipeline(lib, name, name, nullptr);
 }
@@ -959,9 +961,9 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_repack_kq_soa(gg
     return res.pipeline ? res : ggml_metal_library_compile_pipeline(lib, name, name, nullptr);
 }
 
-ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_kq_soa_w4(ggml_metal_library_t lib, enum ggml_type type, int variant) {
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_kq_soa(ggml_metal_library_t lib, enum ggml_type type, int width, int variant) {
     char name[64];
-    snprintf(name, sizeof(name), "kernel_mul_mv_%s_soa_w4_v%d", ggml_type_name(type), variant < 1 ? 1 : variant > 2 ? 2 : variant);
+    snprintf(name, sizeof(name), "kernel_mul_mv_%s_soa_w%d_v%d", ggml_type_name(type), width, variant < 1 ? 1 : variant > 2 ? 2 : variant);
     auto res = ggml_metal_library_get_pipeline(lib, name);
     return res.pipeline ? res : ggml_metal_library_compile_pipeline(lib, name, name, nullptr);
 }

@@ -3398,14 +3398,14 @@ static int ggml_metal_op_mul_mat_impl(ggml_metal_op_t ctx, int idx, ggml_tensor 
 
         // iq4_xs width-4 SoA route (UD line): GGML_MV_SOA_IQ4XS=1..6 selects the kernel variant
         static const int env_soa_iq4xs = getenv("GGML_MV_SOA_IQ4XS") ? atoi(getenv("GGML_MV_SOA_IQ4XS")) : 0;
-        const bool use_iq4xs_soa = env_soa_iq4xs && op->src[0]->type == GGML_TYPE_IQ4_XS && ne11 == 4 && use_f16y &&
+        const bool use_iq4xs_soa = env_soa_iq4xs && op->src[0]->type == GGML_TYPE_IQ4_XS && ne11 >= 3 && ne11 <= 5 && use_f16y &&
                                    ne12 == 1 && ne13 == 1 && ne00 % 256 == 0 && ne01 % 4 == 0 &&
                                    ggml_metal_mul_mat_soa_w4_rows(ne01) &&
                                    ggml_metal_op_mul_mat_try_repack_iq4_xs(ctx, op, bid_src0, nb01_eff, env_soa_iq4xs >= 5);
         // q4_K / q5_K width-4 SoA route: GGML_MV_SOA_KQ=1 (exact scale/min) or 2 (half planar)
         static const int env_soa_kq = getenv("GGML_MV_SOA_KQ") ? atoi(getenv("GGML_MV_SOA_KQ")) : 0;
         const bool use_kq_soa = env_soa_kq && (op->src[0]->type == GGML_TYPE_Q4_K || op->src[0]->type == GGML_TYPE_Q5_K) &&
-                                ne11 == 4 && use_f16y && ne12 == 1 && ne13 == 1 && ne00 % 256 == 0 && ne01 % 4 == 0 &&
+                                ne11 >= 3 && ne11 <= 5 && use_f16y && ne12 == 1 && ne13 == 1 && ne00 % 256 == 0 && ne01 % 4 == 0 &&
                                 ggml_metal_mul_mat_soa_w4_rows(ne01) &&
                                 ggml_metal_op_mul_mat_try_repack_kq(ctx, op, bid_src0, nb01_eff, env_soa_kq >= 2);
 
@@ -3493,8 +3493,8 @@ static int ggml_metal_op_mul_mat_impl(ggml_metal_op_t ctx, int idx, ggml_tensor 
         static const int env_soa_w5_qw = getenv("GGML_MV_SOA_W5_QW") ? atoi(getenv("GGML_MV_SOA_W5_QW")) : 0;
         const bool use_soa_w5_qw = use_soa_w5 && env_soa_w5_qw && env_soa_w5 == 4 && env_soa_w5_hp && !use_soa_skh;
 
-        auto pipeline = use_iq4xs_soa ? ggml_metal_library_get_pipeline_mul_mv_iq4_xs_soa_w4(lib, env_soa_iq4xs) :
-                        use_kq_soa ? ggml_metal_library_get_pipeline_mul_mv_kq_soa_w4(lib, op->src[0]->type, env_soa_kq) :
+        auto pipeline = use_iq4xs_soa ? ggml_metal_library_get_pipeline_mul_mv_iq4_xs_soa(lib, ne11, env_soa_iq4xs) :
+                        use_kq_soa ? ggml_metal_library_get_pipeline_mul_mv_kq_soa(lib, op->src[0]->type, ne11, env_soa_kq) :
                         use_soa_w3 ? ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w3_r4kp(lib) :
                         use_soa_w7 ? ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w7(lib, env_soa_w7) :
                         use_soa_w6 ? ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w6(lib, env_soa_w6, env_soa_w6_hp != 0) :
@@ -3544,7 +3544,10 @@ static int ggml_metal_op_mul_mat_impl(ggml_metal_op_t ctx, int idx, ggml_tensor 
             const int rows = use_soa_w7 ? env_soa_w7 : use_soa_w6 ? env_soa_w6 : soa_w5_rows;
             const int rpt  = rows == 4 ? 4 : 2;
             ggml_metal_encoder_dispatch_threadgroups(enc, (ne01 + rpt - 1)/rpt, 1, 1, 32, 1, 1);
-        } else if (use_soa_w3 || use_iq4xs_soa || use_kq_soa) {
+        } else if (use_iq4xs_soa || use_kq_soa) {
+            // widths 3/4: 4 rows x 2 simdgroups (K split); width 5: 4 rows x 1 simdgroup (full K)
+            ggml_metal_encoder_dispatch_threadgroups(enc, (ne01 + 3)/4, 1, 1, 32, ne11 == 5 ? 1 : 2, 1);
+        } else if (use_soa_w3) {
             ggml_metal_encoder_dispatch_threadgroups(enc, (ne01 + 3)/4, 1, 1, 32, 2, 1);
         } else if (use_soa_w4) {
             const int rpt = soa_w4_r4kp == 4 ? 2 : soa_w4_r4kp     ? 4 :

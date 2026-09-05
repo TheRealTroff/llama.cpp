@@ -285,4 +285,33 @@ ENVNAME=GGML_MV_SOA_KQ`, TAGs `ud-q4_K-soa-sep05` / `ud-q5_K-soa-sep05`, 2 inter
 Floors at 273 GB/s: q4_K 17408x5120 = 184 us (v2 1.33x), q5_K = 224 us (v2 1.30x). The
 exact-scale v1 is 8-11% behind v2 (two scale products and two converts per pack per row);
 v2 is the half-planar form, the numerics decision is the owner's, priced by sha/KLD at e2e.
-Combined e2e (base / IQ4XS=5+KQ=2 / same / base, depth 3, 600): pending below.
+**Combined e2e, depth 3, n_predict 600, `run-ud-knobs.sh`, base / IQ4XS=5+KQ=2 / same / base:
+17.768 / 23.874 / 23.939 / 17.792 t/s = +34.5%, sha `5e76afaba36c` on every arm (byte-identical
+text), acceptance 60.5 vs 60.9** (the drafts differ slightly because the drafter reads the
+target's activations, the committed text does not). The step-2 decomposition's "~55 ms off a
+160 ms round -> ~26 t/s" ceiling assumed 1.3x floor on every projection; the three formats
+carry ~89% of the width-4 matmul bytes and land at 1.30-1.33x, so this is most of that ceiling
+at the same operating point. Residency for now: three runtime side buffers (~12 GiB with the
+half-planar layouts' +6-11% bytes) - the offline GGUF is the productization step, as on the
+Q4_0 line.
+
+### Widths 3 and 5, same body (2026-09-05 afternoon)
+
+The kernels are templated on the column count with explicit named activation streams (an
+array-of-half8 form changed the codegen: width-4 text shrank, width-5 ballooned to 18-20 KB and
+q5_K spilled; the explicit form reproduces the measured width-4 text byte-for-byte). Widths 3
+and 4 keep the two-simdgroup K split; width 5 is one simdgroup over the full K, the q4_0
+w5_r4h geometry. All zero spill; 29/55/23 tests vs CPU at the UD shapes for every
+width/variant, names read from the runs. `run-ud-iq4xs-soa-ab.sh N=3|5`, TAGs
+`ud-<type>-soa-w<N>-sep05`, us/call, 2 interleaved reps:
+
+| shape | iq4_xs w3 base -> v5 | q4_K w3 base -> v2 | q5_K w3 base -> v2 | iq4_xs w5 base -> v5 | q4_K w5 base -> v2 | q5_K w5 base -> v2 |
+|---|---|---|---|---|---|---|
+| ffn_gate_up | 324 -> 217 (-33%) | 318 -> 238 (-25%) | 390 -> 287 (-26%) | 520 -> 256 (-51%) | 414 -> 277 (-33%) | 490 -> 323 (-34%) |
+| ffn_down | 348 -> 237 (-32%) | 366 -> 257 (-30%) | 432 -> 308 (-29%) | 508 -> 280 (-45%) | 449 -> 299 (-33%) | 527 -> 345 (-35%) |
+| attn_qkv | 192 -> 133 (-31%) | 193-203 -> 146 (-26%) | 237 -> 174 (-27%) | 303 -> 159 (-48%) | 254 -> 171 (-33%) | 301 -> 198 (-34%) |
+| attn_gate | 124 -> 76 (-39%) | 122 -> 85 (-30%) | 151 -> 108 (-29%) | 188-194 -> 102 (-47%) | 165 -> 110 (-33%) | 194 -> 126 (-35%) |
+
+Width 5 is the big one because the incumbent there is the register-heavy `ext r1_5`; on the
+SoA side width 5 costs only +13% over width 4 for +1 verify column (iq4_xs 256 vs 227), so
+the depth optimum may move back up from 3. Depth sweep with all routes on: pending below.
