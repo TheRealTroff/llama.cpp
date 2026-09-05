@@ -344,5 +344,139 @@ call and equally correct if the owner wants zero rounding on principle. Open, in
    (0.6 GiB; the q6_K head is already 1.32x floor), q3_K, iq3_s (5.9x floor, 3 calls/round),
    iq4_nl (6 tensors; same table as iq4_xs with a per-32 scale - the cheapest to add).
 3. **Turbo4 KV on UD** - untried, weight-format independent.
-4. A fresh round decomposition at the new point, then the acch prefill question again
-   (unchanged: -6.9% wall for -2.5 pt same-top, not recommended).
+4. ~~A fresh round decomposition at the new point~~ **DONE, step 7 below**; then the acch prefill
+   question again (unchanged: -6.9% wall for -2.5 pt same-top, not recommended).
+
+## Step 7: round decomposition at the SoA point (2026-09-05 evening, `run-ud-decomp.sh` B=ud-soa, TAG `ud-decomp-sep05-soa`)
+
+Same harness, same prompt, same depth 3 and pick env as step 2, plus `GGML_MV_SOA_IQ4XS=5
+GGML_MV_SOA_KQ=2` (the engaged pipelines are on record from `ud-soa-engage-sep05`; the per-call
+times below match the synthetic A/B within 4%, which is the in-graph proof). Anchor **23.45 t/s @300,
+acc 59.0%, sha `73ea53bbe98f`** (step 2: 17.37, same acc, same sha, and the same 191/324 drafts -
+the trajectory is byte-identical drafter-side too). 108 rounds, 2.78 tokens/round,
+**118.1 ms/round real** (step 2: 159.4); decode-prof arm 23.39; profiled arm 19.94 (inflation
+1.18, was 1.14 - the small ops are a larger share now). Bare passes: pp1 12.44 t/s (80.4 ms),
+**pp4 42.23 (94.7 ms): the width-4 pass costs 1.18x the batch-1 pass**, against 1.65x in step 2 and
+~1.2x on the Q4_0 pick - the ratio step 5 was chasing is closed.
+
+**Real round (server spec-prof, cumulative over 86 rounds):** target verify sync 104.5 ms (step 2
+141.9), drafter call 14.4 (14.2), target submit 2.8 (2.9), accept+post 0.75 (0.7). The first
+verify round is 460 ms - it carries the one-time SoA repack of the three side buffers - and that
+one round lifts the cumulative sync average by ~4 ms, so the steady-state round is ~100 ms of
+target sync + ~18 ms of drafter/host, i.e. the 118 measured. Speculation now buys UD 1.88x over
+its 12.44 batch-1 floor (step 1: 1.19x; the Q4_0 pick: 1.94x).
+
+| bucket (serialized ms/round) | step 2 | **step 7** | share |
+|---|--:|--:|--:|
+| m1 MUL_MAT width 4, the three SoA formats (q5_K + iq4_xs + q4_K) | 110.5 | **71.1** | 58% |
+| m1 MUL_MAT width 4, other formats (q6_K 3.0, q8_0 4.7, iq3_s 3.4, q3_K 2.9, iq4_nl 2.4) | 16.5 | 16.4 | 13% |
+| m1 lm_head q6_K | 5.1 | 5.1 | 4% |
+| m1 flash_attn | 7.5 | 7.5 | 6% |
+| m1 elementwise/other | 6.4 | 6.0 | 5% |
+| m1 GDN | 3.2 | 3.1 | 3% |
+| m2 drafter (q4_0 proj 5.9 + head 5.0 + misc 2.9 + FA 0.4) | 14.6 | 14.1 | 11% |
+| **total** | 163.8 | **123.3** | |
+
+The whole drop is the three SoA formats (-39.4 ms serialized, -41.3 ms real); every other bucket
+is unchanged to the tenth, so the routes touched nothing else. `metalprof-buckets.py` now floors
+every quant type (bpw table) and prints a per-format summary; per format, calls/round and the
+in-graph multiple of the 273 GB/s byte floor (the format's own bytes, not the side-buffer bytes):
+
+| m1 width-4 format | ms/rd | floor | step 2 x | **step 7 x** | calls/rd | note |
+|---|--:|--:|--:|--:|--:|---|
+| q5_K | 27.00 | 18.20 | 2.19 | **1.48** | 134.6 | ffn 1.35-1.44x, attn_qkv 1.41, attn_gate [6144,5120] 1.66 |
+| iq4_xs | 25.21 | 17.92 | 2.36 | **1.41** | 120.2 | ffn_up/gate 1.35x (234.6 us, A/B 227), ffn_down 1.46, [6144,5120] 1.77 |
+| q4_K | 18.88 | 13.13 | 2.16 | **1.44** | 105.9 | ffn 1.36-1.46x, small shapes 1.52-1.81 |
+| q6_K (incl. head) | 8.09 | 5.55 | 1.45 | 1.46 | 24.7 | ext r1_4 already ~1.5x; head 1.32 |
+| q8_0 [5120,48] ssm vectors | 4.74 | 0.26 | 18.5 | 18.1 | 106.9 | dispatch-bound, hidden under concurrent encode in the real graph |
+| iq3_s | 3.37 | 0.58 | 5.87 | 5.84 | 4.1 | plain per-column mv |
+| q3_K | 2.92 | 1.01 | 2.88 | 2.90 | 7.2 | ext r1_4 |
+| iq4_nl | 2.42 | 1.24 | 1.99 | 1.94 | 7.2 | ext r1_4 |
+
+- **In-graph the big FFN shapes sit at 1.35-1.46x, the synthetic A/B said 1.30-1.35x** - the
+  same shape-for-shape numbers within 4% (iq4_xs up/gate 234.6 vs 227 us, q4_K 249 vs 244, q5_K
+  303 vs 292). The format aggregates are pulled up to 1.41-1.48x by the **short shapes**: the
+  [6144,5120] and [5120,6144] attention projections run at 1.52-1.81x on all three formats (1280-1536
+  threadgroups of 64 threads against 4352 for ffn_up/gate). The q4_0 r4kp_v3 shows the same
+  geometry sensitivity in the drafter (1.24x at [5120,17408], 1.31 at [17408,5120], 3.8x at
+  [5120,1024]); it is the kernel's fixed per-threadgroup cost against a short K-stream, not a
+  format effect.
+- **What is left in the width-4 matmul plane, priced from this table:** the three SoA formats at
+  q4_0's 1.24x everywhere would be ~61 ms against 71.1 (-10 ms, mostly the short shapes); the
+  remaining formats brought to ~1.4x (iq3_s 3.4 -> 0.8, q3_K 2.9 -> 1.4, iq4_nl 2.4 -> 1.7, q6_K
+  non-head 3.0 -> 2.4) is ~-5 ms. Together ~15 ms of a 118 ms round (~13%), and the q8_0 vector
+  calls are not real time. The rest of the round is now attention (7.5), elementwise (6.0), GDN
+  (3.1) and the drafter (14.1 - 12% of the round, same absolute as on the Q4_0 pick, so the
+  drafter-stack levers transfer unchanged).
+
+### GPU trace at the SoA point: the three kernels against q4_0 r4kp_v3 and their ext incumbents
+
+`perf/run-ud-soa-profile.sh`: seven captures at the ffn_gate_up shape (m=17408, k=5120, n=4,
+`GGML_MV_REPACK=2`, each arm's pipeline name read from its own capture stderr), headless replay,
+`gpuprofiler-stats.py --all`, `shaderprof-table.py --json`, and the new `perf/shaderprof-compare.py`
+(per-dispatch normalization, hot loop = rows at >= 0.9 max executed, size fingerprint, stall sites).
+Timings are from a separate uncaptured pass (`perf/run-ud-soa-w4-timing.sh`, 2 interleaved reps,
+spread < 1%). Bundle: `kvquant-experiments/profiles/ud-soa-w4-sep05/` (gputraces, streamData,
+stats, per-instruction JSON/text; the raw replay bundles were deleted for disk - ~3 min each to
+regenerate from the trace). 87040 pack-iterations per dispatch (4352 threadgroups x 2 simdgroups
+x 10); "/iter" is executed instructions per pack-iteration, i.e. per 4 rows x 8 k x 4 columns.
+
+| kernel | us | x floor | regs | spill B | live | dev loads | exec/disp | /iter | issue/stall % | hot loop | us per M issued |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|
+| q4_0 soa_w4_r4kp_v3 (reference) | 221.3 | 1.21 | 66 | 0 | 402 | 12 | 25.62M | 294 | 88.1/11.9 | 283 | 7.61 |
+| **iq4_xs soa_w4_v5** | 220.9 | 1.27 | 74 | 0 | 357 | **44** | **22.17M** | 255 | 86.5/**13.5** | 244 | 8.62 |
+| **q4_K soa_w4_v2** | 236.9 | 1.29 | 70 | 0 | 406 | 16 | 26.44M | 304 | **95.7/4.3** | 293 | 8.58 |
+| **q5_K soa_w4_v2** | 283.3 | 1.26 | 81 | 0 | 478 | 20 | 32.39M | 372 | 91.8/8.2 | 361 | 8.03 |
+| ext_iq4_xs_f16_r1_4 (incumbent) | 403.0 | 2.32 | 96 | 16 | 620 | 46 | 30.88M | 355 | 87.2/12.8 | 348 | 11.38 |
+| ext_q4_K_f16_r1_4 | 370.0 | 2.01 | 96 | 32 | 689 | 28 | 35.42M | 407 | 84.8/15.2 | 390 | 8.85 |
+| ext_q5_K_f16_r1_4 | 442.9 | 1.97 | 96 | 64 | 831 | 36 | 46.75M | 537 | 85.1/14.9 | 514 | 8.06 |
+
+Floors at 273 GB/s on the format's own bytes: iq4_xs 173.4 us, q4_0/q4_K 183.6, q5_K 224.5.
+"us per M issued" = us x issue share / (exec per dispatch), the per-instruction issue cost.
+
+1. **One economy point for all four SoA kernels, a different one for the three incumbents.**
+   SoA: 66-81 registers, zero spill, 22-32M executed per dispatch, 86-96% issue, 1.21-1.29x
+   floor. Ext r1_4: 96 registers on every format (the register cliff `results.md` recorded for
+   nr0), 16/32/64 B spilled, 25-31% more dynamic instructions per dispatch, and **zero FP16
+   instructions** - the ext kernels take f16 activations but convert and multiply in f32, while
+   the SoA kernels carry the 32 products per pack in half (FP16 count 32). The layout change bought
+   its -36..-45% as fewer instructions (iq4_xs -28%, q4_K -25%, q5_K -31%), a cheaper instruction
+   for iq4_xs (11.4 -> 8.6 us/M), and 1-11 points of stall; nothing in it is a scheduling effect.
+
+2. **The mix: three dequant characters at one price.**
+   - **iq4_xs v5 executes the fewest instructions in the fleet** (255/iter against q4_0's 294:
+     the table lookup replaces the nibble -> int -> float -> subtract chain) **but the 16-entry
+     `constant` table compiles to a device load per nibble**: 44 loads in the loop against
+     q4_0's 12, the difference being exactly 4 rows x 8 nibbles. Those loads set its character -
+     13.5% stall, the top three stall sites all 12 B load consumers (0.92/0.87/0.47%), and the
+     dearest per-instruction issue among the SoA kernels (8.62 vs q4_0's 7.61: a load issues
+     dearer than an FMA). Net: the same 221 us as q4_0 for 5.6% fewer bytes, 1.27x vs 1.21x.
+     The lane-held-table `simd_shuffle` forms (v3/v6) were the register-resident alternative and
+     doubled the text and the time; this trace says the lookup's real cost is ~6 points of
+     x-floor, and there is no cheaper form on the table (the iq4nl values are not arithmetic).
+   - **q4_K v2 is the most issue-bound kernel measured on this machine: 95.7% issue, 4.3% stall,
+     flat** (largest site 0.19%; the fleet range in `instruction-economy-league.md` was 64-89%).
+     Its +10 instructions/iter over q4_0 are the min-fold (the 8-element activation sums shared
+     by the 4 rows, then 4 FMAs), ~3%; the rest of its 1.29x is the half-planar layout's +11%
+     bytes. There is nothing left in it at this geometry.
+   - **q5_K v2 carries the high-bit plane: +78 instructions/iter over q4_0 (+27%), +68 over
+     q4_K** - 4 byte loads and a shift/and/or per element (the 8 B:140 / 10 B:83 fingerprint of
+     the 2-operand integer forms) - at 8.2% stall and 81 registers. Per byte it is the most
+     efficient of the three (1.26x on a 22% larger floor); per instruction the heaviest. The
+     one form lever the trace names is here: fold the high bit as a separate `16*s*(h . v)`
+     term with a select per element instead of merging it into the nibble (~-8 of 372 ops, so
+     ~2%, ~0.5 ms/round - priced, not worth a probe on its own).
+
+3. **The instruction-economy law holds across the formats.** Per-instruction issue cost is
+   7.6-8.6 us/M for every kernel in the table except ext_iq4_xs (11.4 - the same LUT loads on
+   f32 arithmetic with spill), so time = executed instructions x that cost / issue share to a
+   few percent, and the way to read a UD kernel is: count its loads, count its instructions per
+   pack-iteration, and check the issue share; register pressure only enters through spill.
+
+4. **Kernel headroom at width 4, from this table:** to the q4_0 reference's 1.21x, iq4_xs has 5%,
+   q4_K 6%, q5_K 4% - ~3.5 ms of the round's 71 ms SoA bucket. **The width-4 kernel plane on UD
+   is within ~5% of the Q4_0 line's kernel on every format.** The rest of the round's matmul
+   time is geometry (the short attention shapes at 1.5-1.8x in the real graph, which the q4_0
+   kernel shows too) and the ~16 ms of formats still on the ext/per-column paths (item 2 of the
+   open list); the ~5% in-graph tax over synthetic (234.6 vs 220.9 us for iq4_xs up/gate; the
+   drafter's q4_0 shows 227 vs 221) is common to all of them.

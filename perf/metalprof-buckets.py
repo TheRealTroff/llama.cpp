@@ -20,7 +20,11 @@ PAT = re.compile(
     r'ggml_metal_prof:\s+([\d.]+)\s+(\d+)\s+([\d.]+)\s+(m\d) (\S+)\s+(\S+)\s+'
     r's0=\[([\d,]+)\] s1=\[([\d,]+)\] dst=\[([\d,]+)\]')
 
-Q4_0_BYTES_PER_WEIGHT = 18.0/32.0
+# bytes per weight of the STORED format (the floor is the format's own bytes, not the
+# side-buffer layout a fast path may read - perf/ud-model.md step 2 convention)
+BPW = {'q4_0': 18/32, 'q8_0': 34/32, 'iq4_nl': 18/32, 'q4_K': 144/256, 'q5_K': 176/256,
+       'q6_K': 210/256, 'q3_K': 110/256, 'q2_K': 84/256, 'iq4_xs': 136/256, 'iq3_s': 110/256,
+       'f16': 2.0, 'bf16': 2.0, 'f32': 4.0}
 PEAK_GBS = 273e9
 
 
@@ -52,10 +56,10 @@ def is_decode(r):
 
 def bucket(r):
     ctx, op = r['ctx'], r['op']
-    if op == 'MUL_MAT' and r['typ'] == 'q4_0':
-        return f'{ctx} lm_head' if r['s0'][1] == 248320 else f'{ctx} q4_0 proj'
+    if op == 'MUL_MAT' and r['s0'][1] == 248320:
+        return f'{ctx} lm_head'
     if op == 'MUL_MAT':
-        return f'{ctx} MUL_MAT other'
+        return f"{ctx} mm {r['typ']}"
     if op == 'FLASH_ATTN_EXT':
         return f'{ctx} flash_attn'
     if op in ('GATED_DELTA_NET', 'SSM_CONV'):
@@ -85,8 +89,8 @@ def main():
         b = bucket(r)
         buckets[b] = buckets.get(b, 0.0) + r['total']/rounds
         floor = ''
-        if r['op'] == 'MUL_MAT' and r['typ'] == 'q4_0':
-            fb = r['s0'][0]*r['s0'][1]*Q4_0_BYTES_PER_WEIGHT
+        if r['op'] == 'MUL_MAT' and r['typ'] in BPW:
+            fb = r['s0'][0]*r['s0'][1]*BPW[r['typ']]
             fus = fb/PEAK_GBS*1e6
             mus = r['total']/r['count']*1e3
             floor = f'  floor={fus:.1f}us x{mus/fus:.2f}'
@@ -100,6 +104,21 @@ def main():
         print(f'  {b:<24} {buckets[b]:8.2f}')
         total += buckets[b]
     print(f'  {"TOTAL":<24} {total:8.2f}')
+    # per-format matmul summary: ms/round, byte floor at PEAK_GBS, ratio
+    fmt = {}
+    for r in dec:
+        if r['op'] != 'MUL_MAT' or r['typ'] not in BPW:
+            continue
+        key = (r['ctx'], r['typ'])
+        f = fmt.setdefault(key, [0.0, 0.0, 0])
+        f[0] += r['total']/rounds
+        f[1] += r['s0'][0]*r['s0'][1]*BPW[r['typ']]*r['count']/rounds/PEAK_GBS*1e3
+        f[2] += r['count']
+    print(f'\nMUL_MAT by format (ms/round, byte floor at {PEAK_GBS/1e9:.0f} GB/s):')
+    print(f'  {"ctx type":<14} {"ms":>8} {"floor":>8} {"x":>6} {"calls/rd":>9}')
+    for key in sorted(fmt, key=lambda k: -fmt[k][0]):
+        ms, fl, n = fmt[key]
+        print(f'  {key[0]+" "+key[1]:<14} {ms:8.2f} {fl:8.2f} {ms/fl if fl else 0:6.2f} {n/rounds:9.1f}')
     print(f'\ntop rows (ms/round):')
     for t, desc in sorted(det, reverse=True)[:args.top]:
         print(f'  {t:7.2f}  {desc}')
