@@ -711,3 +711,35 @@ every arm, decode 23.5-23.7 either way.** `GGML_MM_F16B=1` recommended on both l
 69.8 -> f16 activations 67.7 s (**-7.9%**), against the Q4_0 pick's 65.4 (acch). Lesson for the
 record: a backend-side cast must be a dedicated contiguous kernel; the generic cpy is index-math
 bound and a plausible-looking +2% lever measured as a -5% loss until the profile said which row grew.
+
+### Step 9 addendum (2026-09-06): the transposed-Q kernel traced - why the text size did not move
+
+Owner asked whether we understand it. The QT kernel captured and decoded next to the baseline
+(`profiles/fa-prefill-qt-sep05`, `shaderprof-compare.py --tiers`):
+
+| | baseline | QT |
+|---|--:|--:|
+| live instructions (static) | 972 | 970 |
+| device load instructions (static) | 101 | 85 |
+| threadgroup stores (static) | 26 | 32 |
+| executed per dispatch | 896.0M | 856.2M (-4.4%) |
+| issue / stall | 91.1 / 8.9 | 92.7 / 7.3 |
+| innermost QK body (per unroll-4 step) | 194 instr, 14 B loads 48, 10 B 96 | 182 instr, 14 B loads 32, 10 B 104 |
+| per-chunk body | 320 | 327 |
+| us per M issued | 21.0 | 20.5 |
+
+**The mechanism is the load instruction count, not the address block I named.** A transposed 8x8
+half tile load from device memory lowers to three load instructions per tile (each lane fetches its
+two halves from two rows separately); the untransposed load is one. Eight K tiles per step: 24 -> 8
+loads (-16, exactly the 14 B delta), while the address arithmetic stayed (10 B forms went UP by 8).
+The step is -12 instructions net, -4.4% executed per dispatch; loads issue dearer than ALU, so the
+per-instruction cost fell 2.4% as well, and the stall share fell 1.6 points: -4.4% x -2.4% x stall =
+the measured -8.4%.
+
+**Why the offline text size was flat (12580 vs 12586 B):** the static bytes sum the prologue, the
+per-chunk body and the inner body with equal weight, and the change moved bytes between levels at
+equal size - -16 x 14 B loads and +8 x 10 B ALU in the inner body, +7 instructions in the per-chunk
+body (the transposed score store), plus the transposed Q staging in the prologue. The runtime
+weights those levels 3.9 : 1 : 0.003 per chunk. Text size is a bad proxy exactly when a form change
+swaps instruction classes at equal byte size or moves work between loop levels; it ranks
+register-pressure and unrolling changes, not this.
