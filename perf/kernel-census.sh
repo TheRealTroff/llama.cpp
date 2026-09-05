@@ -24,10 +24,10 @@ for i in $(seq 0 $((n-1))); do
     id=$(python3 -c "import json;print(json.load(open('$OUT/row$i.json'))['id'])"); filt=$(python3 -c "import json;print(json.load(open('$OUT/row$i.json'))['filter'] or '')"); op=$(python3 -c "import json;print(json.load(open('$OUT/row$i.json'))['op'])")
     if [ -z "$filt" ]; then echo "$id: no filter for op $op (extend case_filter)"; python3 "$B/perf/kernel-census.py" metrics "$OUT" "$OUT/row$i.json"; continue; fi
     : > "$OUT/$id.timing.txt"
-    for rep in 1 2; do (cd "$B" && env GGML_MV_REPACK=2 ${=ENVS} "$BIN" perf -o "$op" -b MTL0 -p "$filt" 2>&1) | grep -E 'us/run|loaded kernel_' >> "$OUT/$id.timing.txt"; done
+    for rep in 1 2; do (cd "$B" && env GGML_MV_REPACK=2 $ENVS "$BIN" perf -o "$op" -b MTL0 -p "$filt" 2>&1) | grep -E 'us/run|loaded kernel_' >> "$OUT/$id.timing.txt"; done
     if ! grep -q 'us/run' "$OUT/$id.timing.txt"; then echo "$id: NO PERF CASE for '$filt'"; python3 "$B/perf/kernel-census.py" metrics "$OUT" "$OUT/row$i.json"; continue; fi
     if [ ! -d "$OUT/$id.gputrace" ]; then
-        (cd "$B" && env MTL_CAPTURE_ENABLED=1 GGML_METAL_CAPTURE_COMPUTE=2 GGML_MV_REPACK=2 ${=ENVS} "$BIN" perf -o "$op" -b MTL0 -p "$filt") > "$OUT/$id.capture.log" 2>&1
+        (cd "$B" && env MTL_CAPTURE_ENABLED=1 GGML_METAL_CAPTURE_COMPUTE=2 GGML_MV_REPACK=2 $ENVS "$BIN" perf -o "$op" -b MTL0 -p "$filt") > "$OUT/$id.capture.log" 2>&1
         trace=$(grep -oE '/tmp/perf-metal-[0-9]+\.gputrace' "$OUT/$id.capture.log" | head -1)
         [ -n "$trace" ] && [ -d "$trace" ] && mv "$trace" "$OUT/$id.gputrace" || { echo "$id: NO TRACE"; python3 "$B/perf/kernel-census.py" metrics "$OUT" "$OUT/row$i.json"; continue; }
     fi
