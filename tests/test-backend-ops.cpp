@@ -10643,6 +10643,16 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
 
     // Examples from granite-4.0-h-1b/ggml-model-Q8_0.gguf
     test_cases.emplace_back(new test_ssm_conv(GGML_TYPE_F32, {515, 3328, 1, 1}, {4, 3328, 1, 1})); // prefill
+    // kernel census coverage (perf/kernel-census.md): the Qwen3.8-27B streaming ops at the prefill
+    // ubatch (512) and verify (4) widths, so the census can time/capture every top row of a profile
+    test_cases.emplace_back(new test_ssm_conv(GGML_TYPE_F32, {515, 10240, 1, 1}, {4, 10240, 1, 1}));
+    test_cases.emplace_back(new test_ssm_conv(GGML_TYPE_F32, {7, 10240, 1, 1}, {4, 10240, 1, 1}));
+    for (int64_t nt : {512, 4}) {
+        test_cases.emplace_back(new test_rms_norm(GGML_TYPE_F32, {5120, nt, 1, 1}, false, 1e-6f));
+        test_cases.emplace_back(new test_bin_bcast(ggml_add, GGML_TYPE_F32, {5120, nt, 1, 1}, {1, 1, 1, 1}));
+        test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 16, 128, nt, 1));
+    }
+    test_cases.emplace_back(new test_glu(GGML_GLU_OP_SWIGLU, GGML_TYPE_F32, { 2*17408, 4, 1, 1 }, 0, false));
     test_cases.emplace_back(new test_ssm_conv(GGML_TYPE_F32, {937, 8192, 1, 1}, {4, 8192, 1, 1})); // prefill
     test_cases.emplace_back(new test_ssm_conv(GGML_TYPE_F32, {4,   3328, 1, 1}, {4, 3328, 1, 1})); // generate
     test_cases.emplace_back(new test_ssm_conv_bias_silu(GGML_TYPE_F32, {515, 3328, 1, 1}, {4, 3328, 1, 1}, true));  // prefill
