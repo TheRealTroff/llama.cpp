@@ -938,6 +938,20 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_
     return res.pipeline ? res : ggml_metal_library_compile_pipeline(lib, name, name, nullptr);
 }
 
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_repack_iq4_xs_soa(ggml_metal_library_t lib, bool halfs) {
+    const char * name = halfs ? "kernel_repack_iq4_xs_soah" : "kernel_repack_iq4_xs_soa";
+    auto res = ggml_metal_library_get_pipeline(lib, name);
+    return res.pipeline ? res : ggml_metal_library_compile_pipeline(lib, name, name, nullptr);
+}
+
+// UD line (perf/ud-model.md step 6): iq4_xs width-4 SoA kernels, variant = GGML_MV_SOA_IQ4XS
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_iq4_xs_soa_w4(ggml_metal_library_t lib, int variant) {
+    char name[64];
+    snprintf(name, sizeof(name), "kernel_mul_mv_iq4_xs_soa_w4_v%d", variant < 1 ? 1 : variant > 6 ? 6 : variant);
+    auto res = ggml_metal_library_get_pipeline(lib, name);
+    return res.pipeline ? res : ggml_metal_library_compile_pipeline(lib, name, name, nullptr);
+}
+
 ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w7(ggml_metal_library_t lib, int rows) {
     const char * name = rows == 4 ? "kernel_mul_mv_q4_0_soa_w7_r4" :
                                     "kernel_mul_mv_q4_0_soa_w7_r2";

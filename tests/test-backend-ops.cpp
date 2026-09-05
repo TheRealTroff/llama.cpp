@@ -10178,6 +10178,16 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
+    // UD line: iq4_xs SoA width-4 route (GGML_MV_REPACK=2 GGML_MV_SOA_IQ4XS=n) at the UD projection shapes
+    for (int n : {3, 4, 5}) {
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_IQ4_XS, GGML_TYPE_F32, 17408, n,  5120, {1, 1}, {1, 1}));
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_IQ4_XS, GGML_TYPE_F32,  5120, n, 17408, {1, 1}, {1, 1}));
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_IQ4_XS, GGML_TYPE_F32, 12288, n,  5120, {1, 1}, {1, 1}));
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_IQ4_XS, GGML_TYPE_F32,  6144, n,  5120, {1, 1}, {1, 1}));
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_IQ4_XS, GGML_TYPE_F32, 10240, n,  5120, {1, 1}, {1, 1}));
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_IQ4_XS, GGML_TYPE_F32,  5120, n,  6144, {1, 1}, {1, 1}));
+    }
+
     // Q4_0_SOA_V1 direct readers: one compact correctness case per dispatch family.
     for (int n : {1, 2, 3, 4, 5, 6, 7, 8, 32}) {
         test_cases.emplace_back(new test_mul_mat(
@@ -10402,7 +10412,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     }
 
     for (int bs : {1, 2, 3, 4, 5, 6, 7, 8}) {
-        for (ggml_type type_a : {GGML_TYPE_Q4_0}) {
+        for (ggml_type type_a : {GGML_TYPE_Q4_0, GGML_TYPE_IQ4_XS, GGML_TYPE_Q4_K, GGML_TYPE_Q5_K}) {
             test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32, 17408, bs,  5120, {1, 1}, {1, 1})); // ffn_gate + ffn_up   x128
             test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32,  5120, bs, 17408, {1, 1}, {1, 1})); // ffn_down            x64
             test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32,  5120, bs,  6144, {1, 1}, {1, 1})); // attn_output/ssm_out x64

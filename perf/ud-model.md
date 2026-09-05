@@ -1,4 +1,4 @@
-# UD-Q4_K_M as the target: optimizing the exact unsloth file (2026-09-04, OPEN)
+# UD-Q4_K_M as the target: optimizing the exact unsloth file (2026-09-04, OPEN; step 6 opened 2026-09-05)
 
 Owner's decision 2026-09-04: run `Qwen3.8-27B-UD-Q4_K_M.gguf` **as-is** (no requant, no
 hybrid), and see whether the Q4_0 stack's lessons carry. Agreed order: (1) free knobs,
@@ -216,3 +216,46 @@ three FFN formats q4_K/q5_K/iq4_xs, so the inner loop keeps the lean integer for
 per-block bookkeeping hoisted. Ceiling from the decomposition: ~55 ms of the 160 ms round if
 the projections reach ~1.3x floor. The generic skinny stays in the tree behind its env flag
 as the negative control; do not put GGML_MM_SKINNY_GEN in any pick.
+
+## Step 6: iq4_xs SoA layout + width-4 scalar kernel (2026-09-05, branch `ud-soa-iq4xs`, worktree `llama.cpp-ud-soa`)
+
+Opened by the owner 2026-09-05 ("I absolutely want to see where we can get with this
+substantially higher fidelity quant"). The move the Q4_0 line made after its ext family hit
+the register ceiling, redone for iq4_xs first: it is the biggest line of the depth-3 round
+(ffn up/gate 25.3 ms + down 9.8 + q/gate ~4 = ~39 ms of 132) and the format closest to q4_0
+(4-bit indices into a 16-entry table, one 6-bit scale per 32, one f16 super-scale per 256).
+
+**Layout** (runtime side buffer for now, per tensor, cached like the q4_0 repack; other widths
+read the original weights, so no layout conflict exists): per row with nsb = ne00/256,
+`[half d x nsb][int8 (ls-32) x 8*nsb][pad16][uint pack8 x 32*nsb]` (exact, 138 B/256 vs 136)
+or `[half d*(ls-32) x 8*nsb][uint pack8 x 32*nsb]` (scale pre-rounded to half, 144 B/256,
++5.9% bytes). Pack p holds k = 8p..8p+7 in k order, so the q4_0 r4kp_v3 body transplants with
+the nibble replaced by a table lookup. Repack kernels `kernel_repack_iq4_xs_soa{,h}`, mul_mv
+`kernel_mul_mv_iq4_xs_soa_w4_v1..v6`, route `GGML_MV_SOA_IQ4XS=<v>` at ne11 == 4 on the
+whitelisted row counts (all five UD row counts are on it), f16y activations as before.
+
+| v | scale | product | lookup | text B | spill | ffn_gate_up us | ffn_down | attn_q | attn_gate |
+|--:|---|---|---|--:|--:|--:|--:|--:|--:|
+| base | ext r1_4 (incumbent) | | | | | 411-432 | 412 | 291 | 153 |
+| 1 | exact d*int8 | f32 | constant table | 3582 | 16 | 300 | 323-340 | 217 | 117 |
+| 2 | exact -> half | half | constant table | 3504 | 0 | 243 | 265 | 176 | 94 |
+| 3 | exact -> half | half | simd_shuffle | 6646 | 0 | 439 | 454 | 316 | 166 |
+| 4 | exact d*int8 | f32 | simd_shuffle | 6764 | 32 | 493 | 512 | 355 | 187 |
+| **5** | **half planar** | **half** | **constant table** | 3240 | 0 | **227** | **249** | **165** | **86** |
+| 6 | half planar | half | simd_shuffle | 6280 | 0 | 434 | 448 | 311 | 164 |
+
+(`perf/run-ud-iq4xs-soa-ab.sh`, TAG `ud-iq4xs-soa-0905-1433`, 2 interleaved reps, spread
+<1%, every arm's pipeline name read from its own stderr; 29/29 iq4_xs MUL_MAT cases vs CPU
+for every variant, including the six UD shapes at widths 3/4/5 added to test-backend-ops.)
+
+- **v5 is -40 to -45% per call and sits at ~1.31x the 273 GB/s byte floor** (ffn_gate_up
+  47.4 MB -> 173 us floor; 1.23x on its own +5.9% bytes) - exactly the ~1.3x the step-2
+  decomposition assumed for its ~55 ms ceiling. The q4_0 v3 kernel reads 1.24x on the same
+  shape, so the table lookup costs ~7 points, not the 2x the K-quant record feared.
+- **The lookup form decides everything**: `simd_shuffle` from a lane-held table doubles the
+  text and the time (v3/v6 lose to the incumbent); the 16-entry `constant` table folds into
+  the dequant chain. The f32-product forms spill (16/32 B) and land between.
+- **v2 (exact scale) is 7% behind v5**: the pre-rounded half scale (<= 2^-11 relative per
+  32-block) buys the per-pack `float(d)*float(ls)` plus a convert. This is a numerics
+  decision the owner makes, priced by KLD like acch; v2 is the exact fallback.
+- e2e at depth 3 (base / v5 / v2 / base, `run-ud-knobs.sh` at 600): pending below.
