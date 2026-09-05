@@ -2796,7 +2796,42 @@ static int64_t ggml_metal_mul_mat_eff_ne11(const ggml_tensor * op) {
     return ggml_metal_mul_mat_soa_folds(op) ? op->src[1]->ne[1]*op->src[1]->ne[2]*op->src[1]->ne[3] : op->src[1]->ne[1];
 }
 
+// prefill-side f16 activations (perf/ud-model.md step 10, GGML_MM_F16B=1): the mul_mm tile converts
+// its B operand to half at staging anyway, so casting src1 once into the scratch and running the
+// *_f16 tile is byte-identical and skips the per-K-step convert plus half the B bytes. Must agree
+// with the encode-time route in ggml_metal_op_mul_mat (same gate, same GGML_MM_MIN).
+static bool ggml_metal_mul_mat_use_f16_src1_mm(const ggml_tensor * op) {
+    static const int env = getenv("GGML_MM_F16B") ? atoi(getenv("GGML_MM_F16B")) : 0;
+    static const int ne11_mm_min = getenv("GGML_MM_MIN") ? atoi(getenv("GGML_MM_MIN")) : 8;
+    static const bool acc_half = getenv("GGML_MM_ACC_HALF") != nullptr && atoi(getenv("GGML_MM_ACC_HALF")) != 0;
+    if (env == 0 || op->src[1]->type != GGML_TYPE_F32) {
+        return false;
+    }
+    if (ggml_is_transposed(op->src[0]) || ggml_is_transposed(op->src[1]) || op->src[0]->ne[0] < 64 || op->src[1]->ne[1] <= ne11_mm_min) {
+        return false;
+    }
+    if (op->src[1]->ne[2] != 1 || op->src[1]->ne[3] != 1 || op->src[0]->ne[2] != 1 || op->src[0]->ne[3] != 1 || !ggml_is_contiguous(op->src[1]) || (op->src[1]->ne[0]*op->src[1]->ne[1]) % 8 != 0) {
+        return false;
+    }
+    switch (op->src[0]->type) {
+        case GGML_TYPE_Q4_0: return !acc_half; // the acch tile is f32-B only
+        case GGML_TYPE_Q8_0:
+        case GGML_TYPE_IQ4_NL:
+        case GGML_TYPE_Q3_K:
+        case GGML_TYPE_Q4_K:
+        case GGML_TYPE_Q5_K:
+        case GGML_TYPE_Q6_K:
+        case GGML_TYPE_IQ4_XS:
+            return true;
+        default:
+            return false;
+    }
+}
+
 size_t ggml_metal_op_mul_mat_extra_src1f16(const ggml_tensor * op) {
+    if (ggml_metal_mul_mat_use_f16_src1_mm(op)) {
+        return GGML_PAD(ggml_nelements(op->src[1])*sizeof(ggml_fp16_t), 32);
+    }
     // the f16 activation scratch lives right after dst; this must match the encode-time route
     // (the fold made a [K,1,S] projection a 3-column f16y op while this reserved nothing: the
     // convert then wrote S*K halves over the next tensor - found by the 2026-09-04 in-place state hunt)
@@ -3575,7 +3610,38 @@ static int ggml_metal_op_mul_mat_impl(ggml_metal_op_t ctx, int idx, ggml_tensor 
         //    default: break;
         //}
 
-        auto pipeline = ggml_metal_library_get_pipeline_mul_mm(lib, op);
+                // prefill f16 activations (GGML_MM_F16B=1): cast src1 into the scratch after dst, run the *_f16 tile
+        ggml_metal_buffer_id bid_src1 = ggml_metal_get_buffer_id(op->src[1]);
+        const bool use_f16b = ggml_metal_mul_mat_use_f16_src1_mm(op);
+        if (use_f16b) {
+            assert(ggml_metal_op_mul_mat_extra_src1f16(op) != 0);
+
+                        ggml_metal_buffer_id bid_y16 = ggml_metal_get_buffer_id(op);
+            bid_y16.offs += ggml_nbytes(op);
+
+            // contiguous vectorized cast (the generic kernel_cpy is one element per thread with 64-bit
+            // index divisions - it cost more than the f16 tile saved, +5% prefill wall)
+            auto pipeline_cvt = ggml_metal_library_get_pipeline_cvt_f32_f16_cont(lib);
+
+            ggml_metal_kargs_cvt_cont cargs = {
+                /*.n =*/ ne10*ne11,
+            };
+
+            const int64_t nthr = (ne10*ne11)/8;
+
+            ggml_metal_encoder_set_pipeline(enc, pipeline_cvt);
+            ggml_metal_encoder_set_bytes   (enc, &cargs, sizeof(cargs), 0);
+            ggml_metal_encoder_set_buffer  (enc, bid_src1, 1);
+            ggml_metal_encoder_set_buffer  (enc, bid_y16,  2);
+
+            ggml_metal_encoder_dispatch_threadgroups(enc, (nthr + 255)/256, 1, 1, 256, 1, 1);
+
+            ggml_metal_op_concurrency_reset(ctx);
+
+            bid_src1 = bid_y16;
+        }
+
+        auto pipeline = ggml_metal_library_get_pipeline_mul_mm(lib, op, use_f16b ? GGML_TYPE_F16 : GGML_TYPE_COUNT);
 
         ggml_metal_kargs_mul_mm args = {
             /*.ne00 =*/ ne00,
@@ -3584,10 +3650,10 @@ static int ggml_metal_op_mul_mat_impl(ggml_metal_op_t ctx, int idx, ggml_tensor 
             /*.nb02 =*/ nb02,
             /*.nb03 =*/ nb03,
             /*.ne12 =*/ ne12,
-            /*.nb10 =*/ nb10,
-            /*.nb11 =*/ nb11,
-            /*.nb12 =*/ nb12,
-            /*.nb13 =*/ nb13,
+            /*.nb10 =*/ use_f16b ? sizeof(ggml_fp16_t)                : nb10,
+            /*.nb11 =*/ use_f16b ? sizeof(ggml_fp16_t)*ne10           : nb11,
+            /*.nb12 =*/ use_f16b ? sizeof(ggml_fp16_t)*ne10*ne11      : nb12,
+            /*.nb13 =*/ use_f16b ? sizeof(ggml_fp16_t)*ne10*ne11*ne12 : nb13,
             /*.ne0  =*/ ne0,
             /*.ne1  =*/ ne1,
             /*.r2   =*/ r2,
@@ -3597,7 +3663,7 @@ static int ggml_metal_op_mul_mat_impl(ggml_metal_op_t ctx, int idx, ggml_tensor 
         ggml_metal_encoder_set_pipeline(enc, pipeline);
         ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);
         ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[0]), 1);
-        ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[1]), 2);
+        ggml_metal_encoder_set_buffer  (enc, bid_src1, 2);
         ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         3);
 
         const size_t smem = pipeline.smem;

@@ -10424,6 +10424,12 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
             test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32,  5120, bs, 17408, {1, 1}, {1, 1}));
         }
     }
+    // f16 activations into the prefill mul_mm (perf/ud-model.md step 10): the kernel converts its B tile
+    // to half at staging anyway, so an f16 B is byte-identical and skips the convert + half the bytes
+    for (ggml_type type_a : {GGML_TYPE_Q4_0, GGML_TYPE_IQ4_XS, GGML_TYPE_Q4_K, GGML_TYPE_Q5_K}) {
+        test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F16, 17408, 512,  5120, {1, 1}, {1, 1}));
+        test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F16,  5120, 512, 17408, {1, 1}, {1, 1}));
+    }
 
     for (int bs : {1, 2, 3, 4, 5, 6, 7, 8}) {
         for (ggml_type type_a : {GGML_TYPE_Q4_0, GGML_TYPE_IQ4_XS, GGML_TYPE_Q4_K, GGML_TYPE_Q5_K}) {

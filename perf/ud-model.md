@@ -653,3 +653,61 @@ queries (64x per head at 512 rows) and the per-chunk softmax/barrier body is pai
 16-query prefill instantiation halves both but the QK/PV code assumes one 8-row Q tile, the
 threadgroup memory lands exactly at the 32 KB limit, and registers are at 90: real surgery, prefill
 only (decode widths would waste the wider tile). Not built.
+
+## Step 10: prefill, what else moves (2026-09-05 late; owner: "anything that moves prefill is super-interesting")
+
+**The "pre-batch-1 CPU gap" of `prefill-decomp.md` item 3 is closed - it is GPU, not CPU.** From
+tonight's server log (`ud-fa-qt-e2e-sep05-base`): the slot launches at 0:09.100 and the spec-prof
+`decode` bracket for batch 1 prints 16.714 s at 0:25.814, so the bracket opened at 0:09.100 - the
+whole 16.7 s from launch is inside it; `dec_sub_pp` (llama_decode) is 12.455 s of that, and the
+remaining 4.26 s is the fourth 512-token ubatch executing after llama_decode returned submit-only,
+the same 4.2 s per ubatch as the other three (2048 tokens = 16.7 s = 8.16 ms/token throughout).
+Nothing free there.
+
+**f16 activations into the prefill mul_mm.** The tile converts its B operand to half at staging on
+every K step (`(S1_2x4)(*yj)`) and re-reads the f32 activation block from cache once per 64-row
+tile (2.85 GB per gate/up call). The `kernel_mul_mm_*_f16` instantiations exist for every format;
+per call at n=512 gate/up, f32-B -> f16-B (2 reps, `results/ud-mm-f16b-sep05.txt`): q5_K 15.46 ->
+15.18 ms (-1.8%), q4_K 14.03 -> 13.67 (-2.5%), iq4_xs 13.64 -> 13.37 (-2.0%), q4_0 13.29 -> 12.97
+(-2.4%). Casting src1 to f16 once is the same round-to-nearest the tile applies, so it is
+byte-identical by construction. Built backend-side like the decode f16y path: `GGML_MM_F16B=1`
+reserves an f16 scratch after dst for mm-routed f32-B ops on the quant types with an f16 tile,
+casts with `kernel_cpy_f32_f16` (0.06 ms against a 13 ms call), and runs the `_f16` tile; the n64
+tiles got f16-B instantiations so the two compose; the acch q4_0 route (f32-B only) is excluded.
+Expected ~-2% of the 61 s of prefill mm, ~1.2 s.
+
+**GDN at prefill: 2.1 s, a latency-bound scan.** `kernel_gated_delta_net_f32_4` at 512 tokens runs
+2.72 ms per layer call (768 calls): one threadgroup per (head, 4 state rows) walks all 512 tokens
+sequentially with two `simd_sum`s per token - about 0.3 TFLOPS of useful work, starved, not at a
+roof. A chunked delta-rule kernel (intra-chunk matmuls + inter-chunk state) would turn it into
+MMA-parallel work; upstream has none for Metal. Up to ~2 s (3%) of prefill, several days, and not
+byte-identical (different summation order). Parked as the next big item after the mm plane.
+
+**Elementwise prefill passes** (RMS_NORM 0.39 s, SWIGLU 0.52, SILU 0.33, ADD 0.31, CONCAT 0.30,
+SSM_CONV 0.24, MUL 0.17): all memory-bound at ~1.2x their bandwidth floor (SWIGLU on [17408,512]
+f32: 107 MB per call, 0.51 ms measured vs 0.39 floor). Fusion could take ~0.5 s of the ~2.3 s;
+the CONCAT (the SSM conv-state prepend, 0.33 ms x 768) is avoidable in principle.
+
+**Result (fast cast built, same night).** The first route used the generic `kernel_cpy_f32_f16` and
+LOST: e2e prefill 69.7 -> 73.4 s (+5.3%) at an identical sha. The profiled run put it in the mm rows
+themselves (the cast is encoded inside the op): ffn_down calls went 14.1 -> 15.4 ms because
+`kernel_cpy_t_t` runs one element per thread with four 64-bit index divisions per element - ~6 G
+elements/s, 1.5 ms for an 8.9M-element activation, more than the tile saves. `kernel_cvt_f32_f16_cont`
+(8 elements per thread, contiguous, no index math; route gated on contiguous src1) fixes it:
+
+| n=512, n64 tile, f32-B -> fast-cast f16-B | gate/up [17408,5120] | ffn_down [5120,17408] |
+|---|---|---|
+| q5_K | 13.80 -> 13.41 ms (-2.8%) | 14.14 -> 13.72 (-3.0%) |
+| q4_K | 13.27 -> 12.88 (-3.0%) | 13.65 -> 13.16 (-3.6%) |
+| iq4_xs | 13.14 -> 12.77 (-2.8%) | 13.48 -> 13.07 (-3.1%) |
+| q4_0 (f32 acc) | 12.93 -> 12.54 (-3.0%) | 13.33 -> 12.81 (-3.9%) |
+
+(cast included; 12/12 n=512 CPU-reference cases with the route on, `kernel_cvt_f32_f16_cont` +
+`kernel_mul_mm_n64_*_f16` named in the runs). **E2e UD depth 3 @300, interleaved base / f16b / f16b /
+base (n64 + QT on): prefill 69.70 / 67.70 / 67.70 / 69.72 s = -2.0 s (-2.9%), sha `73ea53bbe98f` on
+every arm, decode 23.5-23.7 either way.** `GGML_MM_F16B=1` recommended on both lines.
+
+**Tonight's prefill stack on UD, all byte-identical:** 73.5 s -> n64 tiles 70.0 -> FA transposed-Q
+69.8 -> f16 activations 67.7 s (**-7.9%**), against the Q4_0 pick's 65.4 (acch). Lesson for the
+record: a backend-side cast must be a dedicated contiguous kernel; the generic cpy is index-math
+bound and a plausible-looking +2% lever measured as a -5% loss until the profile said which row grew.

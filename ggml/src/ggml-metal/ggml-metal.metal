@@ -13263,6 +13263,24 @@ kernel void kernel_cpy_t_t(
     }
 }
 
+// contiguous f32 -> f16 cast, 8 elements per thread, no per-element index arithmetic (the generic
+// kernel_cpy does four 64-bit divisions per element - at 2.6M elements per prefill mul_mm call that
+// costs more than the f16 tile saves; perf/ud-model.md step 10)
+kernel void kernel_cvt_f32_f16_cont(
+        constant ggml_metal_kargs_cvt_cont & args,
+        device  const float4 * src0,
+        device        half4  * dst,
+        uint tpig[[thread_position_in_grid]]) {
+    const int64_t i = (int64_t) tpig*2;   // float4 index; two float4 per thread
+    const int64_t n4 = args.n/4;
+    if (i + 1 < n4) {
+        dst[i]     = (half4) src0[i];
+        dst[i + 1] = (half4) src0[i + 1];
+    } else if (i < n4) {
+        dst[i]     = (half4) src0[i];
+    }
+}
+
 typedef decltype(kernel_cpy_t_t<float, float>) kernel_cpy_t;
 
 template [[host_name("kernel_cpy_f32_f32")]]   kernel kernel_cpy_t kernel_cpy_t_t<float,   float>;
@@ -16960,6 +16978,13 @@ template [[host_name("kernel_mul_mm_n64_q5_K_f32")]]   kernel mul_mm_t kernel_mu
 template [[host_name("kernel_mul_mm_n64_q6_K_f32")]]   kernel mul_mm_t kernel_mul_mm<half, half4x4, simdgroup_half8x8, half, half2x4, simdgroup_half8x8, block_q6_K,   QK_NL, dequantize_q6_K,   float, float4x4, float, float2x4, float, simdgroup_float8x8, 64>;
 template [[host_name("kernel_mul_mm_n64_q3_K_f32")]]   kernel mul_mm_t kernel_mul_mm<half, half4x4, simdgroup_half8x8, half, half2x4, simdgroup_half8x8, block_q3_K,   QK_NL, dequantize_q3_K,   float, float4x4, float, float2x4, float, simdgroup_float8x8, 64>;
 template [[host_name("kernel_mul_mm_n64_iq4_xs_f32")]] kernel mul_mm_t kernel_mul_mm<half, half4x4, simdgroup_half8x8, half, half2x4, simdgroup_half8x8, block_iq4_xs, QK_NL, dequantize_iq4_xs, float, float4x4, float, float2x4, float, simdgroup_float8x8, 64>;
+// the same tiles with f16 activations (GGML_MM_F16B=1 casts src1 into the scratch first)
+template [[host_name("kernel_mul_mm_n64_q4_0_f16")]]   kernel mul_mm_t kernel_mul_mm<half, half4x4, simdgroup_half8x8, half, half2x4, simdgroup_half8x8, block_q4_0,   2,     dequantize_q4_0,   float, float4x4, half, half2x4, float, simdgroup_float8x8, 64>;
+template [[host_name("kernel_mul_mm_n64_q4_K_f16")]]   kernel mul_mm_t kernel_mul_mm<half, half4x4, simdgroup_half8x8, half, half2x4, simdgroup_half8x8, block_q4_K,   QK_NL, dequantize_q4_K,   float, float4x4, half, half2x4, float, simdgroup_float8x8, 64>;
+template [[host_name("kernel_mul_mm_n64_q5_K_f16")]]   kernel mul_mm_t kernel_mul_mm<half, half4x4, simdgroup_half8x8, half, half2x4, simdgroup_half8x8, block_q5_K,   QK_NL, dequantize_q5_K,   float, float4x4, half, half2x4, float, simdgroup_float8x8, 64>;
+template [[host_name("kernel_mul_mm_n64_q6_K_f16")]]   kernel mul_mm_t kernel_mul_mm<half, half4x4, simdgroup_half8x8, half, half2x4, simdgroup_half8x8, block_q6_K,   QK_NL, dequantize_q6_K,   float, float4x4, half, half2x4, float, simdgroup_float8x8, 64>;
+template [[host_name("kernel_mul_mm_n64_q3_K_f16")]]   kernel mul_mm_t kernel_mul_mm<half, half4x4, simdgroup_half8x8, half, half2x4, simdgroup_half8x8, block_q3_K,   QK_NL, dequantize_q3_K,   float, float4x4, half, half2x4, float, simdgroup_float8x8, 64>;
+template [[host_name("kernel_mul_mm_n64_iq4_xs_f16")]] kernel mul_mm_t kernel_mul_mm<half, half4x4, simdgroup_half8x8, half, half2x4, simdgroup_half8x8, block_iq4_xs, QK_NL, dequantize_iq4_xs, float, float4x4, half, half2x4, float, simdgroup_float8x8, 64>;
 template [[host_name("kernel_mul_mm_q4_1_f32")]]    kernel mul_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   half,   half2x4,   simdgroup_half8x8,   block_q4_1,    2,     dequantize_q4_1,    float,  float4x4,  float, float2x4>;
 template [[host_name("kernel_mul_mm_q5_0_f32")]]    kernel mul_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   half,   half2x4,   simdgroup_half8x8,   block_q5_0,    2,     dequantize_q5_0,    float,  float4x4,  float, float2x4>;
 template [[host_name("kernel_mul_mm_q5_1_f32")]]    kernel mul_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   half,   half2x4,   simdgroup_half8x8,   block_q5_1,    2,     dequantize_q5_1,    float,  float4x4,  float, float2x4>;
