@@ -3,6 +3,10 @@
 Small-batch Metal decode and speculative-decoding work on Qwen3.8-27B, M4 Pro (20-core
 GPU, 273 GB/s), macOS 26.5.2.
 
+**Ranked history of what moved single-stream decode: `what-moved-the-needle.md`**
+(2026-09-05). Read it before proposing a lever - it lists what paid, what was closed, and
+the two decisions that mattered as much as the kernels.
+
 ## Only one build is the right build
 
 **`/Users/troff/play/llama.cpp-prod/build`.** It is now the only llama.cpp build directory
