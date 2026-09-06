@@ -1172,3 +1172,22 @@ Byte-identical at both lengths. At 96K the Turbo4 prefill is now +3.4% over f16 
 +12% (was +34%); the round's remaining gap is the decode FA kernel at 1.37x f16 per call (~50 vs 36 ms of
 the round across the 16 attention layers). The 8K t/s lead over f16 is the trajectory's acceptance (66.9
 vs 60.9% on this prompt), not the kernel - compare round times, not t/s, across cache types.
+
+**E2e, Q4_0 line (the Turbo4 pick's own file, `-c 102400`, pick env + Turbo4 flags, `GGML_FA_TR=3`):**
+
+| arm | prefill | decode t/s | acc | verify round | prefill ubatch | sha |
+|---|--:|--:|--:|--:|--:|---|
+| 8K Turbo4 depth 3 @600: prod kernel / TR / TR | 68.8 / 69.0 / 68.8 s | 31.18 / 30.99 / 31.06 | 70.7% | | | `12c3dc6bb2dd` (canonical) |
+| 96K f16 depth 3 @600 (hot machine, see below) | 1136.4 s | 19.05 | 51.7% | 119.1 ms | 17.50 s | `94e3851bd506` (= the 2026-09-02 f16 text) |
+| 96K Turbo4 depth 3 @600, TR (same state) | 1166.5 s (+2.7%) | 17.39 | 52.0% | **132.3 ms (+11%)** | 17.97 s | `de52f2778bc1` (= the 2026-09-02 Turbo4 text) |
+
+Both shas are the 2026-09-02 filled-100k texts to the byte. Turbo4's 96K round on the Q4_0 file:
+**182 ms (2026-09-02 and this morning's kernel) -> 132 ms**, f16's 119. At 8K on Q4_0 the TR form is a
+wash (the FA share of an 8K round is small and the prefill did not move: the 8K prefill on this line has
+been 8-13% behind the f16 line since its first mint - 71.5 s vs 63.0 on 2026-09-04, 68.8 vs 60.5 tonight -
+route proof with `-lv 5` is the next batch). **Hot-machine caveat:** the f16 96K arm ran third in a row of
+20-minute GPU runs and prefilled in 1136 s against the 1015 s on record (`fa-long-context.md`) - the f16
+kernels' native text is byte-identical between prod and this branch at every production specialization
+(9268 / 11728 / 10638 B, prescreen), and the text sha matches, so the difference is machine state; the
+Turbo4 arm ran right after it in the same state, which is what the pair compares. Re-run the f16 arm cold
+before quoting either absolute.
