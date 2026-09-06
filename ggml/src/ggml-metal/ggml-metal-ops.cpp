@@ -4249,7 +4249,7 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
 
     if (!use_vec) {
         // half8x8 kernel
-        const int nqptg = OP_FLASH_ATTN_EXT_NQPSG; // queries per threadgroup
+        const int nqptg = ggml_metal_flash_attn_ext_q16(op) ? 16 : OP_FLASH_ATTN_EXT_NQPSG; // queries per threadgroup
         const int ncpsg = OP_FLASH_ATTN_EXT_NCPSG; // cache values per simdgroup
 
         GGML_ASSERT(nqptg <= 32);
@@ -4361,7 +4361,10 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
 
         // simdgroups per threadgroup (a.k.a. warps)
         //nsg = ne01 <= nqptg ? MAX(4, MIN(nsgmax, MIN(ne11/ncpsg, (int64_t) pipeline.maxTotalThreadsPerThreadgroup/32))) : 4;
-        int32_t nsg = ne00 >= 512 ? 8 : 4;
+        // the 16-row query tile runs 8 simdgroups (one score tile and 4 output tiles per simdgroup: zero
+        // spill where 4 simdgroups spill 32 B, perf/fa-long-context.md); GGML_FA_Q16_NSG overrides
+        static const int env_fa_q16_nsg = getenv("GGML_FA_Q16_NSG") ? atoi(getenv("GGML_FA_Q16_NSG")) : 8;
+        int32_t nsg = ne00 >= 512 ? 8 : (nqptg == 16 ? env_fa_q16_nsg : 4);
 
         const size_t smem = FATTN_SMEM(nsg);
 

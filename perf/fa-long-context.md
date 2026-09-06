@@ -214,3 +214,52 @@ how many times it streams the cache, which is once per 8 queries. The Q = 16 que
 stream per query as well as the loads per MMA - it is the lever on both sides of the wall, and at 96K
 it is the only one. The numbers above are the baseline it has to beat: 255 ms per 512-row call at 96K,
 ~48 such calls per ubatch x 16 attention layers ... = the ~400 s of a 1254 s prefill that FA is at 96K.
+
+## Q = 16: built the same night (owner: "I think we should have a look at least")
+
+It was not the several-day job the first estimate said. The kernel is generic in the query count
+outside two blocks, and the shared-memory arithmetic comes out at exactly the 32 KB threadgroup limit
+at DK = DV = 256 (16 x (256 + 2 x 256 + 4 x 64) halves), so the O accumulator stays in threadgroup
+memory and the register-resident form is not needed. What changed:
+
+- **QK:** the QR block generalized over NQT = Q/8 query tiles: NC x NQT score accumulators, each K
+  tile load feeds NQT MMAs, the Q^T tiles of both query tiles are loaded per step (stride Q, column
+  offset 8*qt), the stores land at row offset 8*qt. Q = 16 always takes this block (QR = 0 allowed).
+- **PV:** a Q > 8 branch processes the simdgroup's output columns in two halves so the live O tiles
+  stay at 8 (2 query tiles x 4 column tiles); each V tile load feeds both query tiles; same MMA order
+  per output tile as the 8-row block.
+- **Host:** `GGML_FA_Q16=1` routes `kernel_flash_attn_ext_qt16_f16_dk256_dv256` for f16 K/V, head 256,
+  >= 32 query rows and (after the sweep) caches longer than `GGML_FA_Q16_KVMIN` (32768); the query
+  count feeds the mask-block kernel, the grid and the shared-memory size as before; 8 simdgroups per
+  threadgroup (`GGML_FA_Q16_NSG`).
+
+Prescreen (mask on, nwg 1): 4 simdgroups spill 32 B at QR 0 (4 accumulators and 4 P tiles live per
+simdgroup) and up to 128 B with a register head; **8 simdgroups spill nothing at any QR** (one score
+tile and 4 output tiles per simdgroup), 9268 B at QR 0.
+
+All 4869 f16 `FLASH_ATTN_EXT` cases pass with the route engaged (60 `qt16` pipelines), with and
+without a register head. Timing, 512 query rows, interleaved with the gated Q = 8 route
+(`GGML_FA_QR=8`), pipeline names read from the runs:
+
+| cache | Q=8 QR=8 (gated) | Q=16 nsg 8 | Q=16 nsg 4 (spills) |
+|---|--:|--:|--:|
+| 8448 | 17.7 / 17.5 ms | 19.0 / 18.9 (**+7.5%**) | 22.1 / 22.3 |
+| 24576 | 55.1 / 55.3 | 55.1 / 55.0 (flat) | 63.3 / 63.7 |
+| 49152 | 137 / 130 / 131 | 115.4 / 114.9 / 114.8 (**-12..-16%**) | |
+| 98304 | 312 / 303 (plain QT, the QR gate is off here) | 239.8 / 240.5 (**-21%**) | 259 / 260 |
+
+(The 96K base ran 255-265 ms cool earlier in the evening and 294-312 ms in these back-to-back sweeps;
+Q = 16 read 238-243 ms in every run. The interleaved pairs are the comparison; the cool-vs-hot spread
+of the stream-bound base is itself a symptom of what it is bound by.)
+
+Why it pays only at long context: with 8 simdgroups each simdgroup runs the same MMAs per chunk as
+the 8-row form and the QK tier still loads 1.5 tiles per MMA (K loads halve, Q^T loads from threadgroup
+memory double); the PV tier improves to 0.75 loads per MMA. What halves outright is the number of times
+the cache is streamed per query - the bound past ~50K and irrelevant below it, where the larger
+threadgroup's per-chunk fixed cost shows as +7%. The 4-simdgroup form would have 1.0 loads per MMA in QK
+but pays its 32 B spill everywhere. A register head (QR) on the 8-simdgroup form does not help (both
+query tiles' Q loads would need to fit).
+
+Gate: Q = 16 above 32K cache entries, Q = 8 with QR = 8 below (the two routes meet at 24K). E2e at
+96K: pending (`longctx-96k-sep06-q16`); byte-identity expected by construction (per-row softmax and the
+same MMA order per tile), to be read from the sha.

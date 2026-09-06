@@ -1807,6 +1807,23 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext_b
     return res;
 }
 
+// GGML_FA_Q16=1: the 16-row query tile of the transposed-Q f16 kernel for prefill-sized query batches
+// (perf/fa-long-context.md); "=0" off
+bool ggml_metal_flash_attn_ext_q16(const ggml_tensor * op) {
+    static const bool fa_q16 = getenv("GGML_FA_Q16") != nullptr && atoi(getenv("GGML_FA_Q16")) != 0;
+    static const bool fa_qt  = getenv("GGML_FA_QT")  != nullptr && atoi(getenv("GGML_FA_QT"))  != 0;
+    static const bool fa_acc_half = getenv("GGML_FA_ACC_HALF") != nullptr; // presence-based, as the FA getter reads it
+    if (!fa_q16 || !fa_qt || fa_acc_half) {
+        return false;
+    }
+    // pays from ~32K cache entries up (-12..-16% at 48K, -21% at 96K), flat at 24K, +7% at 8K: the 16-row
+    // tile halves the cache stream per query, which is the bound only at long context
+    static const int fa_q16_kvmin = getenv("GGML_FA_Q16_KVMIN") != nullptr ? atoi(getenv("GGML_FA_Q16_KVMIN")) : 32768;
+    return op->src[1]->type == GGML_TYPE_F16 && op->src[2]->type == GGML_TYPE_F16 &&
+           op->src[0]->ne[0] == 256 && op->src[2]->ne[0] == 256 && op->src[0]->ne[1] >= 32 &&
+           op->src[1]->ne[1] > fa_q16_kvmin;
+}
+
 ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext(
         ggml_metal_library_t lib,
         const ggml_tensor * op,
@@ -1863,6 +1880,9 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext(
     static const bool fa_qt = getenv("GGML_FA_QT") != nullptr && atoi(getenv("GGML_FA_QT")) != 0;
     if (fa_qt && !fa_acc_half && op->src[1]->type == GGML_TYPE_F16 && op->src[2]->type == GGML_TYPE_F16 && dk == dv && (dk == 128 || dk == 256)) {
         snprintf(base, 256, "kernel_flash_attn_ext_qt_f16_dk%d_dv%d", dk, dv);
+    }
+    if (ggml_metal_flash_attn_ext_q16(op)) {
+        snprintf(base, 256, "kernel_flash_attn_ext_qt16_f16_dk%d_dv%d", dk, dv);
     }
     // QT form only: Q^T tiles held in registers across the KV loop (perf/fa-long-context.md); "=0" off
     static const int fa_qr = getenv("GGML_FA_QR") != nullptr ? atoi(getenv("GGML_FA_QR")) : 0; // Q^T tiles in registers
