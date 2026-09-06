@@ -164,6 +164,23 @@ Forms measured to matter on AGX/g16s (each worth re-trying on any slow inner loo
   redundant work and only added the threadgroup round trip plus a fatter dequant form.
   Read the pipeline names FIRST, then the fork's prior record for that kernel family
   (`results.md` had the K-quant ext ceiling on file), then explain the number.
+- **A 16-entry lookup table belongs in a `constant` array, not in a lane-held register
+  read with `simd_shuffle`** (2026-09-05, `perf/ud-model.md` step 6 in the fork): on the
+  iq4_xs SoA kernel the constant table folds into the dequant chain (text 3240 B, 1.31x
+  byte floor); the shuffle form doubles the text (6.6 KB) AND the time, losing to the
+  incumbent it was meant to replace. The offline text size ranked it correctly before any
+  GPU run.
+- **Do not write column streams as `half8 v[NC]` arrays indexed under `#pragma unroll`**
+  (same day): templating a measured kernel on the column count with an array form changed
+  the codegen - width-4 text shrank 3240 -> 2604, the width-5 instantiation ballooned to
+  18-20 KB and the q5_K one started spilling 16 B. Explicit named streams (`v0..v4`, extra
+  ones guarded by `if (NC > 3)`) reproduce the measured width-4 text byte-for-byte and give
+  sane width-3/5 kernels. Text-size identity to the measured kernel is the cheap regression
+  check for any template refactor of a tuned body.
+- **Pre-rounding a per-block scale to half in the layout is free at e2e** where the
+  product is already half: iq4_xs/q4_K/q5_K half-planar layouts were 7-11% faster per call
+  than the exact d*int8 forms and moved no byte of a 600-token trajectory at any depth.
+  Still record it as a numerics decision and keep the exact variant routable.
 - Tile shape and K-split across simdgroups: single digits at best (~4.6% and ~1%
   respectively at width 4). Measure them AFTER the form is right.
 

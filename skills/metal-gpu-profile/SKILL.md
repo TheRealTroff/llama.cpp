@@ -34,6 +34,16 @@ Related tooling that is NOT in `references/` and was invisible to a fresh sessio
   call). Note the MXU utilization counters are undefined for gen 16 in the catalogue,
   so MMA occupancy cannot be read directly on M4.
 
+## Step 0 - Run the census first
+
+Before opening any single kernel by hand, run the fork's `perf/kernel-census.sh <profiled
+server.log>` with the pick's routing env (`perf/kernel-census.md`). It times, captures and decodes
+every top kernel of a profiled run and ranks them by instructions and loads per GFLOP (MMA class)
+or x byte floor (streaming class) against the class best, and diffs against the last snapshot.
+Every 2026-09-05 kernel win came from that comparison done by hand on one kernel; the census does
+it for all of them. Steps 1-3 below are what it runs per kernel, and what you use to go deeper on
+a flagged row.
+
 ## Step 1 - Capture (headless)
 
 ggml already has capture built in. Both env vars are required:
@@ -128,6 +138,47 @@ kernel win):
 - **issue share x issue rate, not instruction count or stall alone, predicts time.**
   Measured both failure directions: an unroll cut dynamic instructions 15% and lost
   (stall rose), a sumy variant issued 25% MORE instructions more smoothly and lost.
+- **Count `Device load instruction count` against what the source streams.** A `constant`
+  table indexed by a runtime value compiles to one device load per lookup: the iq4_xs SoA
+  kernel shows 44 loads where its q4_0 twin shows 12, the difference being exactly 4 rows x
+  8 nibbles of LUT, and those loads are the kernel's whole stall (13.5%, three 12 B
+  load-consumer sites). A `simd_shuffle` from a lane-held table is the register-resident
+  alternative and doubled text and time (`perf/ud-model.md` step 6-7).
+- **Several arms at once:** `perf/run-ud-soa-profile.sh` is the worked driver (capture ->
+  headless replay -> stats -> per-instruction JSON per arm, pipeline name from each capture's
+  own stderr, skips arms already captured), `perf/shaderprof-compare.py` reads the JSONs side
+  by side (exec/dispatch, issue/stall, hot loop share, size fingerprint, stall sites), and
+  time the same kernels in a separate uncaptured pass. Delete each `<out>/raw/` after decoding
+  (0.7-1.8 GB per arm; the JSON/stats/streamData are what you keep).
+- **Per-instruction issue cost, `us x issue share / executed per dispatch`, is 7.6-8.6 us/M
+  across every mv kernel measured on the M4 Pro** (q4_0, iq4_xs, q4_K, q5_K, SoA and ext) -
+  the outlier is a load-heavy f32 form at 11.4. So time = executed x cost / issue share, and the
+  fleet's issue-share range is now 64-96% (q4_K SoA v2 at 95.7% is the high).
+- **On `simdgroup_matrix` (mul_mm) kernels, instruction counts undercount the MMA ops:** each
+  MMA instruction occupies the ALU for many cycles, so a 64-column tile that executes 33% fewer
+  instructions than the 32-column kernel runs only 6.7% faster. Read these kernels as MMA cycles
+  (fixed per FLOP) plus non-MMA instructions per K-step (dequant, staging, tg loads); fit the two
+  terms across formats of the same shape (`perf/ud-model.md` step 8: ~10.9 ms MMA + 0.017 ms per
+  non-MMA instruction/step at n=512 [17408,5120]) and the per-format dequant tax falls out. The
+  lever for a long dequant chain is then tile width (paid once per NR1 columns), not the chain.
+- **Kernels with several loops of different trip counts (flash-attention: an inner QK loop, a
+  per-key-tile loop, a per-chunk softmax/PV body) need the execution-count TIER view, not the
+  hot-loop rule** - `perf/shaderprof-compare.py --tiers` groups rows by executed count; divide
+  each tier's exec/dispatch by (simdgroups x chunks) to get instructions per unit of work.
+  Worked case (`perf/ud-model.md` step 9): the prefill FA kernel ran 1105 instructions per
+  64-key chunk per simdgroup for 128 MMAs; the QK tier was 749 of them (89 non-MMA per 8 MMAs)
+  and its size sequence showed a ~40-instruction 10/12 B address block ahead of the loads - the
+  `simdgroup_load(..., transpose=true)` from device memory. Computing S^T = K Q^T instead
+  (K tiles loaded plain, Q staged transposed once, score tile stored with the transpose flag) was
+  -7..-8% on every FA form, byte-identical. Traced afterwards (2026-09-06): the win is the LOAD
+  INSTRUCTION COUNT, not the address block - a transposed 8x8 half tile load lowers to 3 load
+  instructions, the plain one to 1 (24 -> 8 per unrolled step, the exact 14 B delta), while the
+  address arithmetic stayed; -4.4% executed, -2.4% per-instruction cost, -1.6 pt stall. The offline
+  TEXT SIZE did not move (12580 vs 12586 B) because bytes moved between loop levels at equal size
+  (-16 loads +8 ALU in the inner body, +7 in the per-chunk body, + the prologue staging) and static
+  bytes weight the levels equally where the runtime weights them 3.9 : 1 : 0.003. Text size ranks
+  register/unroll changes; it cannot see an instruction-class swap or a loop-level move. Count
+  loads per MMA instead: FA QK was 2 per MMA where mul_mm pays ~0.5.
 - A stall share concentrated in 1-2 load-consumer sites usually means per-iteration
   address recomputation feeding the loads - a SOURCE-form fix (see the
   `metal-kernel-prescreen` skill, step 5), not a scheduling fix.
