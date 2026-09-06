@@ -3167,8 +3167,8 @@ static int ggml_metal_op_mul_mat_impl(ggml_metal_op_t ctx, int idx, ggml_tensor 
     if (ggml_metal_is_kq_soa_type(op->src[0]->type) &&
         op->src[1]->type == GGML_TYPE_F32 && ne11 == 1 && ne12 == 1 && ne13 == 1 &&
         !ggml_is_transposed(op->src[0]) && !ggml_is_transposed(op->src[1]) &&
-        ne00 % 256 == 0 && nb10 == sizeof(float)) {
-        auto pipeline = ggml_metal_library_get_pipeline_mul_mv_kq_soa_w1(lib, op->src[0]->type);
+        ne00 % 256 == 0 && nb10 == sizeof(float) && nb11 == (uint64_t) ne10*sizeof(float)) {
+        auto pipeline = ggml_metal_library_get_pipeline_mul_mv_kq_soa_w1(lib, op->src[0]->type, ne11);
 
         ggml_metal_kargs_mul_mv_ext args = {
             /*.ne00  =*/ ne00,

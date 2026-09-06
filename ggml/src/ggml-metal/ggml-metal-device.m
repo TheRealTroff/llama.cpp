@@ -1092,7 +1092,12 @@ struct ggml_metal_buffer_id ggml_metal_device_get_repack_buffer(ggml_metal_devic
             return res;
         }
     } else {
-        buf = [dev->mtl_device newBufferWithLength:size options:MTLResourceStorageModePrivate];
+        // GGML_MV_REPACK_SHARED=1: probe - shared storage like the mapped model buffer (ud-model.md step 14)
+        static int repack_shared = -1;
+        if (repack_shared < 0) {
+            repack_shared = getenv("GGML_MV_REPACK_SHARED") && atoi(getenv("GGML_MV_REPACK_SHARED")) != 0;
+        }
+        buf = [dev->mtl_device newBufferWithLength:size options:repack_shared ? MTLResourceStorageModeShared : MTLResourceStorageModePrivate];
         if (buf == nil) {
             GGML_LOG_ERROR("%s: failed to allocate repack buffer of size %zu\n", __func__, size);
             [dev->repack_lock unlock];

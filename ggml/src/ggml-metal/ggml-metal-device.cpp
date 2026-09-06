@@ -987,9 +987,12 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_repack_kq_soa(gg
 }
 
 // width-1 readers for the stored SoA rows (IQ4_XS_SOA / Q4_K_SOA / Q5_K_SOA): 4 rows x 2 simdgroups, f32 y
-ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_kq_soa_w1(ggml_metal_library_t lib, enum ggml_type type) {
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_kq_soa_w1(ggml_metal_library_t lib, enum ggml_type type, int width) {
+    // GGML_MV_KQ_SOA_W1=0: the first (4-row, NC=1) q4_K width-1 body, kept for the A/B (step 14)
+    static const int env_v = getenv("GGML_MV_KQ_SOA_W1") ? atoi(getenv("GGML_MV_KQ_SOA_W1")) : 1;
     char name[64];
-    snprintf(name, sizeof(name), "kernel_mul_mv_%s_soa_w1", ggml_type_name(ggml_metal_soa_base_type(type)));
+    snprintf(name, sizeof(name), "kernel_mul_mv_%s_soa_w%d%s", ggml_type_name(ggml_metal_soa_base_type(type)), width,
+             (type == GGML_TYPE_Q4_K_SOA && width == 1 && env_v == 0) ? "_v0" : "");
     auto res = ggml_metal_library_get_pipeline(lib, name);
     return res.pipeline ? res : ggml_metal_library_compile_pipeline(lib, name, name, nullptr);
 }

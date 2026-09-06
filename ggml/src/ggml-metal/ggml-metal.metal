@@ -7717,8 +7717,124 @@ kernel void NAME( \
     threadgroup float partial[2][4]; \
     kernel_mul_mv_kq_soa_impl<2, HB, 1, 2, float>(args, src0, src1, dst, partial, tgpig, tiisg, sgitg); \
 }
-KQ_SOA_W1_KERNEL(kernel_mul_mv_q4_K_soa_w1, 0)
+KQ_SOA_W1_KERNEL(kernel_mul_mv_q4_K_soa_w1_v0, 0)
 KQ_SOA_W1_KERNEL(kernel_mul_mv_q5_K_soa_w1, 1)
+
+// Stored Q4_K_SOA at width 1 (perf/ud-model.md step 14): the upstream kernel_mul_mv_q4_K_f32 form
+// (NC = 2 measured 10-30% slower than the ext SoA reader at width 2 - refuted, only NC = 1 is routed)
+// on the stored packs. 2 rows per simdgroup, 4 superblocks in flight per simdgroup (ix), 8 threads
+// per superblock: iq picks the 128-element half, ir the 8-element pack, so a thread's four packs are
+// the (2iq, 2iq+1, 4+2iq, 5+2iq) sub-blocks at pack ir. Nibble i is masked IN PLACE (value * 16^i)
+// and the 16^-i is folded into the activations once per superblock, so the per-element chain is
+// and + convert + fma like upstream's; the exact scales/mins come from the header plane through
+// upstream's kmask form. Exact d/dmin/scales: f32 numerics of the plain kernel's class.
+template <int NC>
+void kernel_mul_mv_q4_K_soa_w1_impl(
+        constant ggml_metal_kargs_mul_mv_ext & args,
+        device const char * src0,
+        device const float * src1,
+        device float * dst,
+        uint3 tgpig,
+        ushort tiisg,
+        ushort sgitg) {
+    constexpr uint16_t kmask1 = 0x3f3f;
+    constexpr uint16_t kmask2 = 0x0f0f;
+    constexpr uint16_t kmask3 = 0xc0c0;
+    constexpr int NR0 = 2;
+
+    const short ix = tiisg/8;  // 0...3: superblock in flight
+    const short it = tiisg%8;  // 0...7
+    const short iq = it/4;     // 0 or 1: 128-element half
+    const short ir = it%4;     // 0...3: pack within the sub-block
+
+    const int nsb = args.ne00/256;
+    const int first_row = 4*(int)tgpig.x + NR0*(int)sgitg;
+
+    device const char * r0 = src0 + (uint64_t)min(first_row + 0, args.ne01 - 1)*args.nb01;
+    device const char * r1 = src0 + (uint64_t)min(first_row + 1, args.ne01 - 1)*args.nb01;
+    device const uint  * qp0 = (device const uint  *)(r0 + 32*nsb) + 8*iq + ir;
+    device const uint  * qp1 = (device const uint  *)(r1 + 32*nsb) + 8*iq + ir;
+    device const uchar * hp0 = (device const uchar *)(r0 + 160*nsb);
+    device const uchar * hp1 = (device const uchar *)(r1 + 160*nsb);
+
+    // the fold of 16^-i for the in-place nibble masks
+    const float4 inv_lo = float4(1.f, 1.f/16.f, 1.f/256.f, 1.f/4096.f);
+    const float4 inv_hi = inv_lo * (1.f/65536.f);
+
+    float sumf[NR0][NC] = {};
+
+    for (int ib = ix; ib < nsb; ib += 4) {
+        // per row: exact scales/mins (upstream's kmask form on the header plane), d, dmin - hoisted
+        // above the column loop so the column pass holds one column's activations at a time
+        uint16_t sc16[NR0][4];
+        float d[NR0], dmin[NR0];
+        device const uint  * qp[NR0] = { qp0 + 32*ib, qp1 + 32*ib };
+        device const uchar * hp[NR0] = { hp0 + 16*ib, hp1 + 16*ib };
+        for (short row = 0; row < NR0; ++row) {
+            device const uint16_t * sc = (device const uint16_t *)(hp[row] + 4) + iq;
+            sc16[row][0] = sc[0] & kmask1;
+            sc16[row][1] = sc[2] & kmask1;
+            sc16[row][2] = ((sc[4] >> 0) & kmask2) | ((sc[0] & kmask3) >> 2);
+            sc16[row][3] = ((sc[4] >> 4) & kmask2) | ((sc[2] & kmask3) >> 2);
+            d[row]    = ((device const half *) hp[row])[0];
+            dmin[row] = ((device const half *) hp[row])[1];
+        }
+
+        for (short c = 0; c < NC; ++c) {
+            device const float * y4 = src1 + (uint64_t)c*args.ne10 + ib*256 + 64*iq + 8*ir;
+            const float4 a0 = *(device const float4 *)(y4 +   0), a1 = *(device const float4 *)(y4 +   4);
+            const float4 b0 = *(device const float4 *)(y4 +  32), b1 = *(device const float4 *)(y4 +  36);
+            const float4 c0 = *(device const float4 *)(y4 + 128), c1 = *(device const float4 *)(y4 + 132);
+            const float4 d0 = *(device const float4 *)(y4 + 160), d1 = *(device const float4 *)(y4 + 164);
+            const float4 sumy = float4(a0[0]+a0[1]+a0[2]+a0[3]+a1[0]+a1[1]+a1[2]+a1[3],
+                                       b0[0]+b0[1]+b0[2]+b0[3]+b1[0]+b1[1]+b1[2]+b1[3],
+                                       c0[0]+c0[1]+c0[2]+c0[3]+c1[0]+c1[1]+c1[2]+c1[3],
+                                       d0[0]+d0[1]+d0[2]+d0[3]+d1[0]+d1[1]+d1[2]+d1[3]);
+            const float4 yl[8] = { a0*inv_lo, a1*inv_hi, b0*inv_lo, b1*inv_hi,
+                                   c0*inv_lo, c1*inv_hi, d0*inv_lo, d1*inv_hi };
+
+            for (short row = 0; row < NR0; ++row) {
+                thread const uint8_t * sc8 = (thread const uint8_t *) sc16[row];
+                const uint q[4] = { qp[row][0], qp[row][4], qp[row][16], qp[row][20] };
+                float4 acc = float4(0.f);
+                FOR_UNROLL (short k = 0; k < 4; ++k) {
+                    const uint qk = q[k];
+                    acc[k] += yl[2*k + 0][0] * (qk & 0x0000000Fu)
+                            + yl[2*k + 0][1] * (qk & 0x000000F0u)
+                            + yl[2*k + 0][2] * (qk & 0x00000F00u)
+                            + yl[2*k + 0][3] * (qk & 0x0000F000u)
+                            + yl[2*k + 1][0] * (qk & 0x000F0000u)
+                            + yl[2*k + 1][1] * (qk & 0x00F00000u)
+                            + yl[2*k + 1][2] * (qk & 0x0F000000u)
+                            + yl[2*k + 1][3] * (qk & 0xF0000000u);
+                }
+                sumf[row][c] += d[row] * (acc[0]*sc8[0] + acc[1]*sc8[1] + acc[2]*sc8[4] + acc[3]*sc8[5])
+                             - dmin[row] * (sumy[0]*sc8[2] + sumy[1]*sc8[3] + sumy[2]*sc8[6] + sumy[3]*sc8[7]);
+            }
+        }
+    }
+
+    for (short row = 0; row < NR0; ++row) {
+        for (short c = 0; c < NC; ++c) {
+            const float s = simd_sum(sumf[row][c]);
+            if (tiisg == 0 && first_row + row < args.ne01) {
+                dst[(uint64_t)c*args.ne01 + first_row + row] = s;
+            }
+        }
+    }
+}
+
+kernel void kernel_mul_mv_q4_K_soa_w1(
+        constant ggml_metal_kargs_mul_mv_ext & args,
+        device const char * src0,
+        device const float * src1,
+        device float * dst,
+        uint3 tgpig [[threadgroup_position_in_grid]],
+        ushort tiisg [[thread_index_in_simdgroup]],
+        ushort sgitg [[simdgroup_index_in_threadgroup]]) {
+    kernel_mul_mv_q4_K_soa_w1_impl<1>(args, src0, src1, dst, tgpig, tiisg, sgitg);
+}
+
 
 // v4/v5: the v2 codegen form at the other two tile geometries, to isolate what pays.
 // v4 = 2 rows, full K, one simdgroup (R2's geometry); v5 = 4 rows, full K, one simdgroup.
@@ -16392,19 +16508,35 @@ inline void dequantize_kq_soa_mm(
     const float qh_val = ilm < 2 ? 16.f : 256.f;
     const uint q0 = packs[0];
     const uint q1 = packs[1];
-    const uint h0 = HB ? hbits[0] : 0;
-    const uint h1 = HB ? hbits[1] : 0;
+    if (!HB) {
+        // q4_K: nibble c of the pack masked in place (value * 16^c) with 16^-c folded into the per-tile
+        // scale: and + convert + fma per element. The block reader scales its high-nibble tiles by
+        // (d/16 in HALF) * (v<<4), and that half division rounds (or flushes) for d below ~2^-10;
+        // deriving the tile scale from the same half quotient keeps every product exact and the
+        // result bit-identical to the block reader (the plain file's text). The exact d*sc form is
+        // the more accurate one and a numerics option (ud-model.md step 14), not the default.
+        const float dl4 = (ilm < 2 ? (float) dh : (float) (dh / 16.h) * 16.f) * sc[0];
+        const float4 dlo = dl4 * float4(1.f, 1.f/16.f, 1.f/256.f, 1.f/4096.f);
+        const float4 dhi = dlo * (1.f/65536.f);
+        const uint4 mlo = uint4(0x0000000Fu, 0x000000F0u, 0x00000F00u, 0x0000F000u);
+        const uint4 mhi = mlo << 16;
+        float4x4 rf;
+        rf[0] = dlo * float4(uint4(q0) & mlo) - ml;
+        rf[1] = dhi * float4(uint4(q0) & mhi) - ml;
+        rf[2] = dlo * float4(uint4(q1) & mlo) - ml;
+        rf[3] = dhi * float4(uint4(q1) & mhi) - ml;
+        reg = (type4x4) rf;
+        return;
+    }
+    const uint h0 = hbits[0];
+    const uint h1 = hbits[1];
     for (int i = 0; i < 4; ++i) {
         const uint q = (i < 2 ? q0 : q1) >> (16*(i & 1));
         const uint h = (i < 2 ? h0 : h1) >> (4*(i & 1));
         for (int c = 0; c < 4; ++c) {
             const int v = (q >> (4*c)) & 0xf;
             const int qe = ilm < 2 ? v : (v << 4);
-            if (HB) {
-                reg[i][c] = dl * (qe + ((h >> c) & 1 ? qh_val : 0)) - ml;
-            } else {
-                reg[i][c] = dl * qe - ml;
-            }
+            reg[i][c] = dl * (qe + ((h >> c) & 1 ? qh_val : 0)) - ml;
         }
     }
 }
