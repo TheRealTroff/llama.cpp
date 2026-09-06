@@ -39,3 +39,24 @@ text size cannot see an instruction-class swap (the transposed-Q case), and timi
 the uncaptured runs only.
 
 ## Census runs
+
+### census-ud-sep06 (2026-09-06, UD full prefill stack: SoA w3-5 + n64 + QT + F16B, depth 3, benchprompt)
+
+`kvquant-experiments/census/census-ud-sep06/` (snapshot.json, per-row traces and decoded profiles).
+31 of 32 rows measured (the [256,4] decode RMS_NORM has no case). The table did the ranking:
+
+| rank by flag | row | what the census says | what it means |
+|---|---|---|---|
+| 1 | decode FA, `flash_attn_ext_qt_f16` nwg=8, width 4, kv 8448 (3.6 ms/rd x 2 rows = 6% of the round) | **16.9 instr/GFLOP = 4.5x class best, 4.0x the loads, 2.23 TFLOPS = 3.1x below roof**, 16% stall | the 8-query tile runs 4 real queries (2x padding by construction) on top of the QK operand path the prefill row still shows at 2.15x; the largest per-work outlier in the whole table |
+| 2 | prefill GDN `gated_delta_net_f32_4` (2.0 s) | 10.2x its byte floor, 25% stall, 44-instruction hot loop | the latency-bound token scan (step 10); the decode form of the same kernel sits at 1.37x floor, i.e. the prefill shape is the problem, not the kernel per token |
+| 3 | prefill FA `flash_attn_ext_qt_f16` nwg=1, 512 rows (0.33 s per rung) | 8.08 instr/GFLOP = 2.15x class best, 1.75 loads/GFLOP, 5.69 TFLOPS = 1.22x below roof | what is left after the transposed-Q form: Q-tile reloads and the 8-query tile's per-chunk overhead (step 9) |
+| 4 | q5_K mul_mm, all five shapes | 5.0 instr/GFLOP = 1.33x the class best (iq4_xs 3.78), 6.6-6.8 TFLOPS | the high-bit plane's dequant chain (step 8); q3_K 4.81, q6_K 4.20, q4_K 4.07 in between |
+| 5 | iq3_s mul_mm (0.68 s) | 7.09 instr/GFLOP = 1.89x, ran `mul_mm_iq3_s_f32` | the n64/f16 route did not engage for iq3_s in this run - checked below |
+| 6 | SSM_CONV prefill (0.21 s) | 1.75x byte floor | small, real |
+| - | every other prefill mul_mm | 0.97-1.06x the 6.96 TFLOPS roof, 98-99% issue, zero spill | **the prefill matmul plane is at the roof by the census's own measure; iq4_xs at 7.1 TFLOPS moves the roof number itself** |
+| - | decode SoA mv kernels (5 rows) | 1.26-1.39x byte floor, zero spill | as step 7 measured |
+| - | SWIGLU / ADD / RMS_NORM prefill | 0.75-1.44x floor at 45-86% stall | streaming kernels at their floor stall by design; the flag now ignores stall below 1.3x floor |
+
+Two things the first pass of the tool taught: `-p` is a std::regex (array brackets must be escaped -
+the reason the earlier FA filter "did not match"), and each replay leaves ~1.7 GB in
+`/tmp/com.apple.gputools.profiling` - the driver now deletes it per row after two passes filled the disk.

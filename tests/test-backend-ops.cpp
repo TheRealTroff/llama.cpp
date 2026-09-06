@@ -10196,7 +10196,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 
     // UD line prefill (perf/ud-model.md step 8): the K-quant mul_mm kernels at the prefill batch
     // width on the two FFN shapes, for the per-format dequant tax measurement and the SoA-fed tile.
-    for (ggml_type t : {GGML_TYPE_Q4_0, GGML_TYPE_IQ4_XS, GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, GGML_TYPE_Q3_K, GGML_TYPE_Q6_K}) {
+    for (ggml_type t : {GGML_TYPE_Q4_0, GGML_TYPE_IQ4_XS, GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, GGML_TYPE_Q3_K, GGML_TYPE_Q6_K, GGML_TYPE_IQ3_S, GGML_TYPE_IQ4_NL}) {
         test_cases.emplace_back(new test_mul_mat(t, GGML_TYPE_F32, 17408, 512,  5120, {1, 1}, {1, 1}));
         test_cases.emplace_back(new test_mul_mat(t, GGML_TYPE_F32,  5120, 512, 17408, {1, 1}, {1, 1}));
     }
@@ -10419,11 +10419,19 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     // its own 6.96 TFLOPS roof and sets the 66 s prefill wall - see perf/prefill-decomp.md
     // (the UD line's formats added 2026-09-05 for the prefill dequant-tax measurement, perf/ud-model.md)
     for (int bs : {512}) {
-        for (ggml_type type_a : {GGML_TYPE_Q4_0, GGML_TYPE_F16, GGML_TYPE_IQ4_XS, GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, GGML_TYPE_Q3_K, GGML_TYPE_Q6_K}) {
+        for (ggml_type type_a : {GGML_TYPE_Q4_0, GGML_TYPE_F16, GGML_TYPE_IQ4_XS, GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, GGML_TYPE_Q3_K, GGML_TYPE_Q6_K, GGML_TYPE_IQ3_S, GGML_TYPE_IQ4_NL}) {
             test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32, 17408, bs,  5120, {1, 1}, {1, 1}));
             test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32,  5120, bs, 17408, {1, 1}, {1, 1}));
         }
     }
+    // kernel census coverage: the attention-projection shapes at the prefill width for the K-quants
+    for (ggml_type t : {GGML_TYPE_IQ4_XS, GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, GGML_TYPE_Q6_K, GGML_TYPE_Q3_K}) {
+        test_cases.emplace_back(new test_mul_mat(t, GGML_TYPE_F32, 10240, 512, 5120, {1, 1}, {1, 1})); // attn_qkv
+        test_cases.emplace_back(new test_mul_mat(t, GGML_TYPE_F32,  6144, 512, 5120, {1, 1}, {1, 1})); // attn_gate
+        test_cases.emplace_back(new test_mul_mat(t, GGML_TYPE_F32, 12288, 512, 5120, {1, 1}, {1, 1})); // attn_q
+        test_cases.emplace_back(new test_mul_mat(t, GGML_TYPE_F32,  5120, 512, 6144, {1, 1}, {1, 1})); // attn_output / ssm_out
+    }
+
     // f16 activations into the prefill mul_mm (perf/ud-model.md step 10): the kernel converts its B tile
     // to half at staging anyway, so an f16 B is byte-identical and skips the convert + half the bytes
     for (ggml_type type_a : {GGML_TYPE_Q4_0, GGML_TYPE_IQ4_XS, GGML_TYPE_Q4_K, GGML_TYPE_Q5_K}) {

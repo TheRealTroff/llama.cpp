@@ -1089,7 +1089,8 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm(ggml_meta
     static const bool n64_f32_enabled = !getenv("GGML_MM_N64_F32") || atoi(getenv("GGML_MM_N64_F32")) != 0;  // GGML_MM_N64_F32=0 = A/B off switch
     const bool n64_f32 = n64_f32_enabled && n64_shape && !(acc_half && tsrc0 == GGML_TYPE_Q4_0) &&
         (tsrc0 == GGML_TYPE_Q4_0 || tsrc0 == GGML_TYPE_Q4_K || tsrc0 == GGML_TYPE_Q5_K ||
-         tsrc0 == GGML_TYPE_Q6_K || tsrc0 == GGML_TYPE_Q3_K || tsrc0 == GGML_TYPE_IQ4_XS);
+         tsrc0 == GGML_TYPE_Q6_K || tsrc0 == GGML_TYPE_Q3_K || tsrc0 == GGML_TYPE_IQ4_XS ||
+         tsrc0 == GGML_TYPE_IQ3_S || tsrc0 == GGML_TYPE_IQ4_NL);
     if (!soa && acc_half && tsrc0 == GGML_TYPE_Q4_0 && (tsrc1 == GGML_TYPE_F32 || tsrc1 == GGML_TYPE_F16) && !has_tensor) {
         snprintf(base, 256, n64 ? "kernel_mul_mm_acch_n64_q4_0_%s" : "kernel_mul_mm_acch_q4_0_%s", ggml_type_name(tsrc1));
         } else if (n64_f32) {

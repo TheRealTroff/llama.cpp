@@ -32,17 +32,20 @@ def case_filter(r):
     if op == 'MUL_MAT':
         return f"type_a={t},type_b=f32,m={s0[1]},n={s1[1]},k={s0[0]},", 'mma' if s1[1] > 8 else 'stream'
     if op == 'FLASH_ATTN_EXT':
-        return f"kv={s1[1]},nb={s0[1]},mask=1,sinks=0,max_bias=0.000000,logit_softcap=0.000000,prec=f32,type_K=f16,type_V=f16,", 'mma'
+        kv = s1[1]
+        if 8448 <= kv < 9216: kv = 8448   # the decode cache grows during the run; the perf case is at 8448
+        return f"kv={kv},nb={s0[1]},mask=1,sinks=0,max_bias=0.000000,logit_softcap=0.000000,prec=f32,type_K=f16,type_V=f16,", 'mma'
+    # NOTE: -p is a std::regex - array brackets must be escaped or they become a character class
     if op == 'SWIGLU':
-        return f"type=f32,ne=[{2*s0[0]},{s0[1]},1,1],", 'stream'
+        return f"type=f32,ne_a=\\[{2*s0[0]},{s0[1]},1,1\\],", 'stream'
     if op == 'RMS_NORM':
-        return f"type=f32,ne=[{s0[0]},{s0[1]},1,1],", 'stream'
+        return f"type=f32,ne=\\[{s0[0]},{s0[1]},1,1\\],", 'stream'
     if op == 'ADD':
-        return f"type=f32,ne=[{s0[0]},{s0[1]},1,1],nr=[1,1,1,1],", 'stream'
+        return f"type=f32,ne=\\[{s0[0]},{s0[1]},1,1\\],nr=\\[1,1,1,1\\],", 'stream'
     if op == 'GATED_DELTA_NET':
         return f"head_count={s0[1]},head_size={s0[0]},n_seq_tokens={s0[2]},n_seqs=1,", 'stream'
     if op == 'SSM_CONV':
-        return f"ne_a=[{s0[0]},{s0[1]},1,1],", 'stream'
+        return f"type=f32,ne_a=\\[{s0[0]},{s0[1]},1,1\\],", 'stream'
     return None, 'stream'
 
 def work(r):
@@ -81,6 +84,12 @@ def plan(args):
                         filter=filt, cls=cls, gflop=gf, bytes=by, rounds=rounds))
     out.sort(key=lambda x: -x['total_ms'])
     sel = [x for x in out if x['total_ms'] >= args.min_ms][:args.top]
+    # always the largest row of every distinct (phase, op): a KV ladder or a small elementwise op never
+    # makes a time-sorted top-N on its own, and those are exactly the kernels nobody opens
+    seen = {(x['phase'], x['op']) for x in sel}
+    for x in out:
+        if (x['phase'], x['op']) not in seen and x['filter'] and x['us_call'] >= 20:
+            sel.append(x); seen.add((x['phase'], x['op']))
     for i, x in enumerate(sel):
         x['id'] = f"{x['phase'][:3]}{i:02d}-{x['op'].lower()}-{x['typ']}-{'x'.join(map(str, x['s0'][:2]))}-n{x['s1'][1] if x['op'] in ('MUL_MAT','FLASH_ATTN_EXT') else x['dst'][-1]}"
     json.dump(sel, sys.stdout, indent=1)
@@ -129,7 +138,8 @@ def metrics(args):
                 m['instr_per_gflop'] = exd/gf/1e6; m['load14_per_gflop'] = ld/gf/1e6
             if m.get('us_run'):
                 m['tflops'] = gf/(m['us_run']*1e-6)/1e3 if gf > 0 else None
-                m['x_floor'] = m['us_run']/(m['bytes']/PEAK_GBS*1e6)
+                # stream class: x the byte floor; mma class: x the measured 6.96 TFLOPS mul_mm roof
+                m['x_floor'] = (6.96/m['tflops']) if (m['cls'] == 'mma' and m.get('tflops')) else m['us_run']/(m['bytes']/PEAK_GBS*1e6)
                 m['instr_per_mb'] = exd/(m['bytes']/1e6)
     json.dump(m, open(os.path.join(d, rid + '.metrics.json'), 'w'), indent=1)
     print(rid, 'ok' if 'exec_per_disp' in m else 'partial')
@@ -145,7 +155,7 @@ def report(args):
             best['instr_per_gflop'] = min(best.get('instr_per_gflop', 1e9), m['instr_per_gflop'])
             best['load14_per_gflop'] = min(best.get('load14_per_gflop', 1e9), m['load14_per_gflop'])
     lines = []
-    lines.append(f"| id | kernel | ms/rd or s/prefill | us/call | class | instr/GFLOP | 14B/GFLOP | TFLOPS | x floor | issue/stall | regs | spill | hot instr | flag |")
+    lines.append(f"| id | kernel | ms/rd or s/prefill | us/call | class | instr/GFLOP | 14B/GFLOP | TFLOPS | x floor (stream) / x roof (mma) | issue/stall | regs | spill | hot instr | flag |")
     lines.append("|---|---|--:|--:|---|--:|--:|--:|--:|--:|--:|--:|--:|---|")
     snap = []
     for m in ms:
@@ -155,7 +165,7 @@ def report(args):
             if m['load14_per_gflop'] > 2*best['load14_per_gflop']: flag.append(f"loads {m['load14_per_gflop']/best['load14_per_gflop']:.1f}x best")
         if m['cls'] == 'stream' and m.get('x_floor') and m['x_floor'] > 1.5 and m['us_call'] > 30: flag.append(f"{m['x_floor']:.1f}x floor")
         if m.get('spill', 0) > 0: flag.append(f"spill {m['spill']}B")
-        if m.get('stall', 0) > 25: flag.append(f"stall {m['stall']:.0f}%")
+        if m.get('stall', 0) > 25 and not (m['cls'] == 'stream' and m.get('x_floor') and m['x_floor'] < 1.3): flag.append(f"stall {m['stall']:.0f}%")  # a streaming kernel at its byte floor is SUPPOSED to stall
         if m['id'] in prev and prev[m['id']].get('us_run') and m.get('us_run'):
             dlt = 100*(m['us_run']/prev[m['id']]['us_run'] - 1)
             if abs(dlt) > 2: flag.append(f"{dlt:+.1f}% vs prev")
