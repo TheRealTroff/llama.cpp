@@ -986,10 +986,21 @@ scale by 16 in half for q5_K as well as q4_K - upstream does that only for q4_K 
 float for q5_K (`/ 16.f`) - and the stored file scored +8% mean KLD / -0.18 pt same-top while every
 600-token sha check (steps 13-14) passed. The plain-file arm on the same logits caught it; the plain
 file was regenerated from the stored one in 18 s (`--reverse`, sha256 = upstream's LFS hash) and
-deleted again after. The exact-scale q4_K tile (`GGML_KQ_SOA_EXACT=1`, step 14's option) is a wash
-on KLD and stays off.
+deleted again after. The exact-scale q4_K tile (step 14's option) is a wash on KLD (mean -1%, tails
++4%, same-top inside the error bar) - **and the owner took it: "I think I want the exact version."
+It is the default for the stored q4_K tile (mm and ext readers) from here; `GGML_KQ_SOA_EXACT=0`
+reproduces upstream's half-quotient tile, i.e. the plain file's numerics.** The width-1 port and the
+width-3/4/5 kernels were exact / half-planar already, so this changes only the prefill and
+width-2/6-8 paths.
 E2e with the corrected tile (TAG `ud-soa-gguf-sep06-final3`, stored file, two arms each): depth 3
 24.541 / 24.463 t/s at **60.5% acceptance - the plain file's acceptance again** (steps 13-14 had
 60.9 and 60.1: the drafter was reading the slightly-off q5_K activations); no-spec 12.603 / 12.577 vs
 plain 12.666 / 12.659; sha `5e76afaba36c`; +23.0 / +19.1 GiB over idle. The stored file is the plain
 file: same text, same KLD, same acceptance, 10.9 GiB less memory, every width at or ahead of plain.
+**Mint with the exact tile as default** (TAG `ud-soa-gguf-sep06-exact`, stored file, pick env, two
+arms each): depth 3 **24.696 / 24.582 t/s** at 60.9% acceptance, no-spec **12.604 / 12.566**, prompt
+65.6 s, **sha `5e76afaba36c` - the canonical UD text survives the exact tile on this prompt** (the
+earlier `8eeaac5af33a` move was the exact tile ON TOP of the q5_K half-division bug; alone it moves no
+byte of the 600 tokens). KLD row: mean 0.013508, same-top 96.579%. +23.1 / +19.1 GiB over idle.
+UD stored lineage for cross-checks from here: `5e76afaba36c` at 600, b1 anchor 12.58, depth-3
+acceptance 60.9%.

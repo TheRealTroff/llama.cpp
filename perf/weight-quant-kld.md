@@ -563,5 +563,7 @@ Three things this run settled:
   600-token greedy sha did not see a 0.18-pt same-top move; the plain-file arm in the same run did.
   Rule: price a storage type against its plain twin on the same logits, never against a sha alone.
 - **The exact-scale q4_K tile is a wash**: mean/median a hair better, 99.0/99.9%/max a hair worse,
-  same-top +0.017 pt inside +-0.116. Upstream's half quotient is a rounding quirk, not a bias worth
-  changing the lineage for. Stays an option, off.
+  same-top +0.017 pt inside +-0.116. Upstream's half quotient is a rounding quirk, not a bias.
+  **ADOPTED as the default anyway (owner, same night: "I think I want the exact version")** -
+  `GGML_KQ_SOA_EXACT=0` is the switch back to the upstream-identical tile. The UD stored file's text
+  lineage moves with it (mint in `ud-model.md` step 15).

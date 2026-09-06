@@ -16431,8 +16431,8 @@ constant short FC_mul_mm_ne13  [[function_constant(FC_MUL_MM + 3)]];
 constant short FC_mul_mm_r2    [[function_constant(FC_MUL_MM + 4)]];
 constant short FC_mul_mm_r3    [[function_constant(FC_MUL_MM + 5)]];
 constant bool  FC_mul_mm_soa   [[function_constant(FC_MUL_MM + 6)]];
-// GGML_KQ_SOA_EXACT=1 (ud-model.md step 14, a numerics option): the stored q4_K tile scales its
-// high-nibble tiles by the exact f32 d*sc instead of reproducing the block reader's half d/16
+// stored q4_K tile scale (ud-model.md step 15): exact f32 d*sc by default (the owner's pick, KLD-priced);
+// GGML_KQ_SOA_EXACT=0 leaves the constant unset and reproduces the block reader's half d/16 quotient
 constant bool  FC_kq_soa_exact [[function_constant(FC_MUL_MM + 7)]];
 constant bool  FC_kq_soa_exact_set = is_function_constant_defined(FC_kq_soa_exact);
 constant bool  FC_kq_soa_exact_v   = FC_kq_soa_exact_set ? FC_kq_soa_exact : false;
@@ -16520,8 +16520,8 @@ inline void dequantize_kq_soa_mm(
         // scale: and + convert + fma per element. The block reader scales its high-nibble tiles by
         // (d/16 in HALF) * (v<<4), and that half division rounds (or flushes) for d below ~2^-10;
         // deriving the tile scale from the same half quotient keeps every product exact and the
-        // result bit-identical to the block reader (the plain file's text). The exact d*sc form is
-        // the more accurate one and a numerics option (ud-model.md step 14), not the default.
+        // result bit-identical to the block reader (the plain file's text) when GGML_KQ_SOA_EXACT=0;
+        // the default is the exact d*sc form (owner's pick 2026-09-06, weight-quant-kld.md).
         const float dl4 = (ilm < 2 || FC_kq_soa_exact_v ? (float) dh : (float) (dh / 16.h) * 16.f) * sc[0];
         const float4 dlo = dl4 * float4(1.f, 1.f/16.f, 1.f/256.f, 1.f/4096.f);
         const float4 dhi = dlo * (1.f/65536.f);
