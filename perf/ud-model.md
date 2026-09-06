@@ -1153,10 +1153,16 @@ dispatch (2.2x f16), 66% issue / 34% stall, the QK chunk loop 285 instructions p
 MMAs) and the V loop 83 per key tile (8 tiles) - about ten instructions per dequantized tile against the
 f16 path's one load, which is the whole remaining gap.
 
-**Open on the kernel:** the Q=16 tile at decode (gqah 6 packs 24 rows at width 4: two 16-row threadgroups
-instead of three 8-row ones would amortize the dequant 1.5x; needs `case 8` GQAH instantiations); a
-cheaper per-tile dequant (the four lanes of a row read the same 4-byte word and the same table entry -
-a lane-cooperative form would trade loads for shuffles, which lost on the iq4_xs kernel).
+**The Q=16 tile at decode: REFUTED** (built anyway - `GGML_FA_Q16_DEC=1`, `case 8` GQAH 4/6 instantiations,
+41/41 cases, 0 spill - on the argument that the per-row dequant halves; the owner pointed out the f16
+record had refuted it ahead of time: the tile buys half the cache stream per query and pays only where the
+stream is the bound, and decode at width 4 is instruction-bound at every length). At 96K width 4: 3990 us vs
+3130 for the 8-row TR form (+27%), width 5 3993 vs 3714; unchanged below 32K (gate). The dequant count
+was not what mattered: the 24 GQA rows leave the second 16-row threadgroup two-thirds empty and the tile
+gives up the threadgroup-staged table. Off by default; do not retry on the amortization hunch.
+**Open on the kernel:** a cheaper per-tile dequant (the four lanes of a row read the same 4-byte word and
+the same table entry - a lane-cooperative form would trade loads for shuffles, which lost on the iq4_xs
+kernel); the Q4_0-line 8K prefill route question (below).
 
 **E2e, UD (stored file, pick env + Turbo4 flags, `GGML_FA_TR=3`, branch build):**
 
