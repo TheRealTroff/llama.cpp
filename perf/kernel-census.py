@@ -43,7 +43,10 @@ def case_filter(r):
     if op == 'ADD':
         return f"type=f32,ne=\\[{s0[0]},{s0[1]},1,1\\],nr=\\[1,1,1,1\\],", 'stream'
     if op == 'GATED_DELTA_NET':
-        return f"head_count={s0[1]},head_size={s0[0]},n_seq_tokens={s0[2]},n_seqs=1,", 'stream'
+        # dst row = S_v * H_v: the value-head count is v_repeat x the k-head count (the 27B target
+        # has 16 k-heads and 48 v-heads; matching only head_count under-times the op 3x, 2026-09-06)
+        vrep = max(1, r['dst'][0] // (s0[0]*s0[1])) if r.get('dst') else 1
+        return f"head_count={s0[1]},head_size={s0[0]},n_seq_tokens={s0[2]},n_seqs=1,v_repeat={vrep},", 'stream'
     if op == 'SSM_CONV':
         return f"type=f32,ne_a=\\[{s0[0]},{s0[1]},1,1\\],", 'stream'
     return None, 'stream'
@@ -66,7 +69,9 @@ def work(r):
     if op in ('RMS_NORM', 'ADD', 'MUL', 'SILU', 'SCALE', 'CPY'): return 0.0, ins*4 + n*4
     if op == 'GATED_DELTA_NET':
         hd, nh, nt = s0[0], s0[1], s0[2]
-        return 6*hd*hd*nh*nt/1e9, (4*hd*nh*nt + 2*hd*hd*nh)*4
+        nv = max(nh, dst[0] // hd) if dst else nh  # value heads (v_repeat x k-heads)
+        # per token: q,k per k-head, v and the output per v-head, g/beta; state in and out per v-head
+        return 6*hd*hd*nv*nt/1e9, ((2*hd*nh + 2*hd*nv + 2*nv)*nt + 2*hd*hd*nv)*4
     return 0.0, ins*4 + n*4
 
 def plan(args):

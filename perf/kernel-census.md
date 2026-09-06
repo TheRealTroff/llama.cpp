@@ -71,3 +71,17 @@ step 11): kv 8448 per call width 3 380 -> 214 us (-44%), width 4 386 -> 219 (-43
 base/gqa/gqa/base decode 24.38/25.04/25.06/24.38 t/s (**+2.8%**), sha `73ea53bbe98f` on every arm,
 prefill unchanged. Nobody had opened that kernel at width 4 because its per-call time looked ordinary;
 the per-work normalization is what made it the top of the table.
+
+**Second lever (same day): rows per simdgroup for the GDN prefill scan (flag #2).** `GGML_GDN_NR=4`
+(`gdn-prefill-scan.md`): the latency chain of one state row per simdgroup becomes four interleaved
+chains sharing the token's loads; per call 2.10 -> 1.17 ms at the real shape, the kernel from 74/22
+to 93/6 issue/stall, UD prefill -1.6%, byte-identical. Two forms refuted on the way (prefetch, 32-bit
+offsets) - the per-instruction profile of the NR=4 kernel names the residue: five per-token 64-bit
+pointer advances at 22% of issue.
+
+**Census correction.** The GDN perf case the filter matched (`head_count=16`) had `v_repeat=1`; the
+27B target has 48 value heads (`dst` row 6144 = 48 x 128), so the isolated timing was a third of the
+in-graph call (0.73 vs 2.64 ms) and the byte/flop model undercounted the same way. `case_filter` now
+derives `v_repeat` from the dst row and `work()` uses the value-head count; the perf list carries the
+real shape (plain and the pick's ext form). Ratios (x floor) were unaffected - bytes and time scaled
+together - which is why the flag still ranked correctly.

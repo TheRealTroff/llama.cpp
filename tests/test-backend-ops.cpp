@@ -10127,6 +10127,15 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 16, 4, 2, 1, true,  true));
     // chunked path: multi-chunk and non-multiple-of-chunk-size (chunk_size=64 GDN, 16 KDA)
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 64,  64, 1));
+    // the multi-row prefill route (GGML_GDN_NR, engages at >= GGML_GDN_NR_MIN tokens): v_repeat 3 like
+    // the 27B target (16 k-heads, 48 v-heads), the plain, KDA, snapshot and ext (kept-token) forms
+    test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 128, 64, 1, 3));
+    test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 128, 40, 2, 3));
+    test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 128, 40, 1, 1, false, true));
+    test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 128, 40, 1, 3, false, false, /*K=*/2));
+    test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 128, 40, 1, 3, false, false, 1, 0, 4));
+    test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 128, 40, 2, 3, false, false, 1, 3, 4));
+    test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 128, 40, 2, 3, false, false, 1, 2, 3, true));
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 64, 127, 1));
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 64, 256, 1));
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 64,  65, 1));
@@ -10659,6 +10668,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
         test_cases.emplace_back(new test_rms_norm(GGML_TYPE_F32, {5120, nt, 1, 1}, false, 1e-6f));
         test_cases.emplace_back(new test_bin_bcast(ggml_add, GGML_TYPE_F32, {5120, nt, 1, 1}, {1, 1, 1, 1}));
         test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 16, 128, nt, 1));
+        // the 27B target's real GDN shape: 16 k-heads, 48 v-heads (v_repeat 3), plain and the pick's
+        // ext form (LLAMA_GDN_REPLAY: 2 slots, the last 4 tokens kept)
+        test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 16, 128, nt, 1, 3));
+        test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 16, 128, nt, 1, 3, false, false, 1, 0, 4));
     }
     test_cases.emplace_back(new test_glu(GGML_GLU_OP_SWIGLU, GGML_TYPE_F32, { 2*17408, 4, 1, 1 }, 0, false));
     test_cases.emplace_back(new test_ssm_conv(GGML_TYPE_F32, {937, 8192, 1, 1}, {4, 8192, 1, 1})); // prefill

@@ -663,7 +663,20 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_gated_delta_net(
     GGML_ASSERT(op->ne[0] == ne20 * ne21);
     GGML_ASSERT(ne20 % 32 == 0);
 
-    snprintf(base, 256, "kernel_gated_delta_net_%s_%d", ggml_type_name(op->src[0]->type), nsg);
+    // GGML_GDN_NR=2|4|8: NR consecutive state rows per simdgroup for batches of at least
+    // GGML_GDN_NR_MIN tokens (default 32) - the prefill scan (perf/gdn-prefill-scan.md)
+    static const int nr_env  = getenv("GGML_GDN_NR")     ? atoi(getenv("GGML_GDN_NR"))     : 0;
+    static const int nr_min  = getenv("GGML_GDN_NR_MIN") ? atoi(getenv("GGML_GDN_NR_MIN")) : 32;
+    const int nr = ((nr_env == 2 || nr_env == 4 || nr_env == 8) && (nsg == 2 || nsg == 4) &&
+                    op->src[2]->ne[2] >= nr_min && ne20 % (nsg*nr_env) == 0) ? nr_env : 1;
+
+    static const bool nr_pf = getenv("GGML_GDN_NR_PF") ? atoi(getenv("GGML_GDN_NR_PF")) != 0 : false;
+
+    if (nr > 1) {
+        snprintf(base, 256, "kernel_gated_delta_net_%s_%d_nr%d%s", ggml_type_name(op->src[0]->type), nsg, nr, (nr_pf && nr >= 4) ? "pf" : "");
+    } else {
+        snprintf(base, 256, "kernel_gated_delta_net_%s_%d", ggml_type_name(op->src[0]->type), nsg);
+    }
     snprintf(name, 256, "%s_ne20=%d_ne30=%d_K=%d_wb=%d_xk=%d", base, ne20, ne30, K, wb ? 1 : 0, xk ? 1 : 0);
 
     ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
@@ -682,6 +695,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_gated_delta_net(
     }
 
     res.nsg = nsg;
+    res.nr0 = nr;
 
     return res;
 }

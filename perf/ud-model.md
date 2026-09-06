@@ -768,3 +768,18 @@ f16 KV too, widths 3-6, same conditions as the Turbo4 route.
 Q4_0 pick verifies at width 5: -21% per FA call; gate below). The remaining width-5/6 gap to the
 width-3/4 number is the second tile being half-empty (24 rows -> 3 full tiles at width 4, 30 rows ->
 4 tiles with 2 empty rows at width 5).
+
+## Step 12: the census's second lever - rows per simdgroup for the GDN prefill scan (2026-09-06)
+
+Owner: "let's try the intermediate routes for now ... keep it byte-identical." Census flag #2 was the
+prefill `kernel_gated_delta_net_f32_4` at 10.5x its byte floor / 25% stall: one simdgroup per state
+row walking 512 tokens through a dependent chain (exp, dot, simd_sum, delta, fma, dot, simd_sum),
+every row of a head re-loading the same q/k/g/beta. `GGML_GDN_NR=4` (`gdn-prefill-scan.md`) gives a
+simdgroup 4 consecutive rows: the chains interleave, the loads amortize, same arithmetic per row in
+the same order. Real shape (16 k-heads, 48 v-heads - the census's perf case had been a third of the
+op, fixed) per call 2.10 -> 1.17 ms (K=1), the pick's ext form 2.38 -> 1.25 ms; the kernel goes
+from 74/22 issue/stall to 93/6, i.e. from latency-bound to issue-bound. **E2e UD depth 3 @300, base /
+nr4 / nr4 / base: prefill 66.87 / 65.80 / 65.64 / 66.71 s (-1.6%), sha `73ea53bbe98f` on every arm,
+decode unchanged (gated at 32 tokens).** Not UD-specific (f32 kernel): Q4_0 pick prefill 64.2 -> 63.0 s (-1.9%), canonical sha `95eb7e65977e`; recommend on both lines.
+Refuted on the way: loads pipelined a token ahead (+9.7%: nothing waits on memory after NR) and
+32-bit token offsets in place of the five 64-bit pointer advances (+2.7%: the add moves to the loads).
