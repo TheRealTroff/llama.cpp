@@ -136,3 +136,10 @@ Q4_0 pick, depth 4, n_predict 300, interleaved pick / pick+QT+F16B / same / pick
 **-1.1 s (-1.7%) of prefill, byte-identical on the acch lineage, decode flat.** Per call the acch f16-B
 tile is -1.5% (gate/up) / -2.0% (ffn_down); the FA form is -7..-8% of a 3.1 s ladder. Both flags are
 recommended for the pick; the pick env in `run-prod-pick.sh` is unchanged pending the owner.
+
+### GQA-reuse FA for f16 KV on the Q4_0 pick (2026-09-06, `ud-model.md` step 11, the kernel census's first lever)
+
+`GGML_FA_GQA_F16=1` routes the existing gqah=6 GQA-reuse FA tile (Turbo4-only until now) for f16 KV at
+widths 3-6. Q4_0 pick, depth 4 (verify width 5), n_predict 300, interleaved pick / +GQA / +GQA / pick
+(TAGs `q40-fa-gqa-sep06-*`, QT + F16B on in all arms): decode 28.11 / 28.50 / 28.48 / 28.16 t/s
+(**+1.3%**), prefill 62.0 s all arms, sha `95eb7e65977e` on every arm. Recommended for the pick.
