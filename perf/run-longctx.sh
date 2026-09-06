@@ -8,8 +8,8 @@ set -u
 if [ -z "${CAFFEINATED:-}" ]; then exec env CAFFEINATED=1 caffeinate -dimsu "$0" "$@"; fi
 B=${B:-/Users/troff/play/llama.cpp-gdn-scan}
 BIN=$B/build/bin
-M=${M:-/Users/troff/play/Qwen3.8-27B-uniform-Q4_0.gguf}
-MD=${MD:-/Users/troff/play/Qwen3.8-27B-DFlash2-pureQ4_0.gguf}
+M=${M:-/Users/troff/play/Qwen3.8-27B-uniform-Q4_0-SOA-V1.gguf}
+MD=${MD:-/Users/troff/play/Qwen3.8-27B-DFlash2-pureQ4_0-SOA-V1.gguf}
 PROMPT=${PROMPT:-/Users/troff/play/kvquant-experiments/data/longprompt-32k.txt}
 CTX=${CTX:-40960}
 NPRED=${NPRED:-300}

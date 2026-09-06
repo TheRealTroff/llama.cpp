@@ -16,8 +16,8 @@ fi
 
 B=/Users/troff/play/llama.cpp-prod
 BIN=$B/build/bin
-M=${M:-/Users/troff/play/Qwen3.8-27B-uniform-Q4_0.gguf}   # overridable: 2026-09-04 UD-vs-Q4_0 acceptance comparison
-MD=/Users/troff/play/Qwen3.8-27B-DFlash2-pureQ4_0.gguf
+M=${M:-/Users/troff/play/Qwen3.8-27B-uniform-Q4_0-SOA-V1.gguf}   # overridable: 2026-09-04 UD-vs-Q4_0 acceptance comparison
+MD=/Users/troff/play/Qwen3.8-27B-DFlash2-pureQ4_0-SOA-V1.gguf
 PORT=8094
 OUT=/Users/troff/play/kvquant-experiments/results
 TAG=${TAG:-corpacc-$(date +%m%d-%H%M)}

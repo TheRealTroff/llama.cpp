@@ -8,8 +8,8 @@ fi
 
 B=${B:-/Users/troff/play/llama.cpp-prod}
 BIN=${BIN:-$B/build/bin}
-M=${M:-/Users/troff/play/Qwen3.8-27B-uniform-Q4_0.gguf}
-MD=${MD:-/Users/troff/play/Qwen3.8-27B-DFlash2-pureQ4_0.gguf}
+M=${M:-/Users/troff/play/Qwen3.8-27B-uniform-Q4_0-SOA-V1.gguf}
+MD=${MD:-/Users/troff/play/Qwen3.8-27B-DFlash2-pureQ4_0-SOA-V1.gguf}
 PORT=${PORT:-8095}
 OUT=${OUT:-/Users/troff/play/kvquant-experiments/results}
 DEPTH=${DEPTH:-7}

@@ -27,8 +27,8 @@ fi
 
 B=/Users/troff/play/llama.cpp-prod
 BIN=$B/build/bin
-GEN=${1:-/Users/troff/play/Qwen3.8-27B-uniform-Q4_0.gguf}
-MD=${MD:-/Users/troff/play/Qwen3.8-27B-DFlash2-pureQ4_0.gguf}
+GEN=${1:-/Users/troff/play/Qwen3.8-27B-uniform-Q4_0-SOA-V1.gguf}
+MD=${MD:-/Users/troff/play/Qwen3.8-27B-DFlash2-pureQ4_0-SOA-V1.gguf}
 NPRED=${NPRED:-2048}
 PORT=8094
 TAG=${TAG:-agree-$(date +%m%d-%H%M)}

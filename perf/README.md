@@ -480,6 +480,13 @@ must be a separate checkout. Two arms that agree to the microsecond are a routin
 
 ## Methodology rules, learned the hard way
 
+- **The plain (non-SoA) model files are gone (owner, 2026-09-06):** `Qwen3.8-27B-uniform-Q4_0.gguf`,
+  `Qwen3.8-27B-DFlash2-pureQ4_0.gguf` and `Qwen3.8-27B-UD-Q4_K_M.gguf` were deleted for disk; the
+  `-SOA-V1` twins are the files, and every `perf/*.sh` default now names them. A/Bs against the
+  plain layout (`run-repack-*`, the runtime-repack arms) need `llama-gguf-repack --reverse` first,
+  which restores the plain file byte-for-byte. The UD stored file needs a build with the stored
+  types (`ud-soa-gguf`, `ud-model.md` step 13).
+
 - **`test-backend-ops -b Metal` is a vacuous pass (2026-08-28).** The backend is named
   `MTL0`, so `-b Metal` matches nothing, every backend prints `Skipping`, and the run
   still ends `3/3 backends passed OK`. A green correctness run proves nothing unless

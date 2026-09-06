@@ -31,8 +31,8 @@ BIN=$B/build/bin
 # M/MD are overridable so this harness can measure a different target without anyone
 # hand-rolling a server invocation - that is the trap the whole file exists to prevent.
 # ARMS filters which labels run (substring match, space separated); default is all of them.
-M=${M:-/Users/troff/play/Qwen3.8-27B-uniform-Q4_0.gguf}
-MD=${MD:-/Users/troff/play/Qwen3.8-27B-DFlash2-pureQ4_0.gguf}
+M=${M:-/Users/troff/play/Qwen3.8-27B-uniform-Q4_0-SOA-V1.gguf}
+MD=${MD:-/Users/troff/play/Qwen3.8-27B-DFlash2-pureQ4_0-SOA-V1.gguf}
 ARMS=${ARMS:-}
 PORT=8093
 OUT=/Users/troff/play/kvquant-experiments/results

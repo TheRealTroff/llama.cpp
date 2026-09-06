@@ -37,7 +37,7 @@ TAG=${TAG:-kld-$(date +%m%d-%H%M)}
 mkdir -p "$OUT" "$SCRATCH"
 
 TESTS=("$@")
-[ ${#TESTS[@]} -eq 0 ] && TESTS=(/Users/troff/play/Qwen3.8-27B-uniform-Q4_0.gguf)
+[ ${#TESTS[@]} -eq 0 ] && TESTS=(/Users/troff/play/Qwen3.8-27B-uniform-Q4_0-SOA-V1.gguf)
 
 BASE="$SCRATCH/kld-base-$TAG.dat"
 NEED=$(python3 -c "print(int(248320*$CTX*2*$CHUNKS/1e9)+2)")

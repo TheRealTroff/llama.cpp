@@ -8,8 +8,8 @@
 set -u
 if [ -z "${CAFFEINATED:-}" ]; then exec env CAFFEINATED=1 caffeinate -dimsu "$0" "$@"; fi
 B=${B:-/Users/troff/play/llama.cpp-prod}; BIN=$B/build/bin
-M=${M:-/Users/troff/play/Qwen3.8-27B-uniform-Q4_0.gguf}
-MD=${MD:-/Users/troff/play/Qwen3.8-27B-DFlash2-pureQ4_0.gguf}
+M=${M:-/Users/troff/play/Qwen3.8-27B-uniform-Q4_0-SOA-V1.gguf}
+MD=${MD:-/Users/troff/play/Qwen3.8-27B-DFlash2-pureQ4_0-SOA-V1.gguf}
 PORT=${PORT:-8099}; NPRED=${NPRED:-300}; CTX=${CTX:-16384}
 # KV=turbo4 for the Turbo4 line (TURBO_AUTO_ASYMMETRIC=0 is exported below when so);
 # SPEC=dflash|none and DEPTH control speculation - 8 slots x depth-4 verify = 40-wide steps.
