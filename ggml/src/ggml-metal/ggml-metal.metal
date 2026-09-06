@@ -11887,6 +11887,9 @@ constant int32_t FC_flash_attn_ext_ns20 [[function_constant(FC_FLASH_ATTN_EXT + 
 constant int32_t FC_flash_attn_ext_nsg  [[function_constant(FC_FLASH_ATTN_EXT + 22)]];
 constant int32_t FC_flash_attn_ext_nwg  [[function_constant(FC_FLASH_ATTN_EXT + 23)]];
 constant int32_t FC_flash_attn_ext_gqa_heads [[function_constant(FC_FLASH_ATTN_EXT + 24)]];
+// QT form only: the transposed Q tiles stay in registers across the KV loop instead of being re-read
+// from threadgroup memory for every score tile (GGML_FA_QR=1, perf/fa-long-context.md)
+constant int32_t FC_flash_attn_ext_qr        [[function_constant(FC_FLASH_ATTN_EXT + 25)]]; // Q^T tiles held in registers (0 = off)
 
 // ref: https://arxiv.org/pdf/2307.08691.pdf
 template<
@@ -12083,6 +12086,19 @@ void kernel_flash_attn_ext_impl(
 
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
+    // QR: the Q^T tiles of this threadgroup, loaded once (DK8 8x8 tiles = DK8 registers per lane)
+    q8x8_t mqr[QT ? DK8 : 1];
+
+    if constexpr (QT) {
+        if (FC_flash_attn_ext_qr > 0) {
+            FOR_UNROLL (short i = 0; i < DK8; ++i) {
+                if (i < FC_flash_attn_ext_qr) {
+                    simdgroup_load(mqr[i], sq + (8*i)*Q, Q);
+                }
+            }
+        }
+    }
+
     float S[NQ] = { [0 ... NQ-1] = 0.0f };
     // note: M has to outlive the loop when NWG > 1 -- the partial results carry it
     float M[NQ] = { [0 ... NQ-1] = -FLT_MAX/2 };
@@ -12237,6 +12253,56 @@ void kernel_flash_attn_ext_impl(
                 static_assert(!QT || (DK % 16 == 0 && Q == 8), "QT form assumes one 8-query tile and DK % 16 == 0");
                 constexpr short NC = (C/8)/NSG;
 
+                if (QT && FC_flash_attn_ext_qr > 0 && DK % 16 == 0) {
+                    // QR form (perf/fa-long-context.md): each Q^T tile load feeds all NC score tiles of this
+                    // simdgroup (the baseline reloads Q per score tile), and the first FC_flash_attn_ext_qr
+                    // tiles come from registers loaded once before the KV loop. K tiles untransposed. Per
+                    // score tile the products accumulate in the same k order as the baseline: byte-identical.
+                    qk8x8_t mqk[NC];
+
+                    FOR_UNROLL (short cc = 0; cc < NC; ++cc) {
+                        mqk[cc] = make_filled_simdgroup_matrix<qk_t, 8>((qk_t) 0.0f);
+                    }
+
+                    k8x8_t mk[2];
+                    q8x8_t mq[2];
+
+                    FOR_UNROLL (short i = 0; i < FC_flash_attn_ext_qr/2; ++i) {
+                        FOR_UNROLL (short cc = 0; cc < NC; ++cc) {
+                            simdgroup_barrier(mem_flags::mem_none);
+
+                            simdgroup_load(mk[0], pk + cc*8*(NSG*NS10) + 0*8 + 16*i, NS10, 0, false);
+                            simdgroup_load(mk[1], pk + cc*8*(NSG*NS10) + 1*8 + 16*i, NS10, 0, false);
+
+                            simdgroup_barrier(mem_flags::mem_none);
+
+                            simdgroup_multiply_accumulate(mqk[cc], mk[0], mqr[2*i + 0], mqk[cc]);
+                            simdgroup_multiply_accumulate(mqk[cc], mk[1], mqr[2*i + 1], mqk[cc]);
+                        }
+                    }
+
+                    #pragma unroll 4
+                    for (short i = FC_flash_attn_ext_qr/2; i < DK8/2; ++i) {
+                        simdgroup_barrier(mem_flags::mem_none);
+
+                        simdgroup_load(mq[0], pq + (16*i + 0)*Q, Q);
+                        simdgroup_load(mq[1], pq + (16*i + 8)*Q, Q);
+
+                        FOR_UNROLL (short cc = 0; cc < NC; ++cc) {
+                            simdgroup_load(mk[0], pk + cc*8*(NSG*NS10) + 0*8 + 16*i, NS10, 0, false);
+                            simdgroup_load(mk[1], pk + cc*8*(NSG*NS10) + 1*8 + 16*i, NS10, 0, false);
+
+                            simdgroup_barrier(mem_flags::mem_none);
+
+                            simdgroup_multiply_accumulate(mqk[cc], mk[0], mq[0], mqk[cc]);
+                            simdgroup_multiply_accumulate(mqk[cc], mk[1], mq[1], mqk[cc]);
+                        }
+                    }
+
+                    FOR_UNROLL (short cc = 0; cc < NC; ++cc) {
+                        simdgroup_store(mqk[cc], ps + cc*8*NSG, SH, 0, QT);
+                    }
+                } else {
                 FOR_UNROLL (short cc = 0; cc < NC; ++cc) {
                     qk8x8_t mqk = make_filled_simdgroup_matrix<qk_t, 8>((qk_t) 0.0f);
 
@@ -12294,6 +12360,7 @@ void kernel_flash_attn_ext_impl(
                                         simdgroup_store(mqk, ps, SH, 0, QT); // QT: mqk holds S^T; the transposed store lands the same [q][key] block
                     pk += 8*(NSG*NS10);
                     ps += 8*(NSG);
+                }
                 }
             } else {
                 // TODO: this is the quantized K cache branch - not optimized yet

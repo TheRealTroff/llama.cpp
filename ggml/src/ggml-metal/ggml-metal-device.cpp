@@ -1864,7 +1864,11 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext(
     if (fa_qt && !fa_acc_half && op->src[1]->type == GGML_TYPE_F16 && op->src[2]->type == GGML_TYPE_F16 && dk == dv && (dk == 128 || dk == 256)) {
         snprintf(base, 256, "kernel_flash_attn_ext_qt_f16_dk%d_dv%d", dk, dv);
     }
-    snprintf(name, 256, "%s_mask=%d_sinks=%d_bias=%d_scap=%d_kvpad=%d_bcm=%d_ns10=%d_ns20=%d_nsg=%d_nwg=%d_gqah=%d",
+    // QT form only: Q^T tiles held in registers across the KV loop (perf/fa-long-context.md); "=0" off
+    static const int fa_qr = getenv("GGML_FA_QR") != nullptr ? atoi(getenv("GGML_FA_QR")) : 0; // Q^T tiles in registers
+    const int qr = (fa_qr > 0 && strstr(base, "_qt_") != nullptr) ? std::min(fa_qr, dk/8) : 0;
+
+    snprintf(name, 256, "%s_mask=%d_sinks=%d_bias=%d_scap=%d_kvpad=%d_bcm=%d_ns10=%d_ns20=%d_nsg=%d_nwg=%d_gqah=%d%s%s",
             base,
             has_mask,
             has_sinks,
@@ -1874,12 +1878,13 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext(
             bc_mask,
             ns10,
             ns20,
-            nsg, nwg, gqa_heads);
+            nsg, nwg, gqa_heads, qr ? "_qr=" : "", qr ? std::to_string(qr).c_str() : "");
 
     ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
     if (!res.pipeline) {
         ggml_metal_cv_t cv = ggml_metal_cv_init();
 
+        ggml_metal_cv_set_int32(cv, qr, FC_FLASH_ATTN_EXT + 25);
         ggml_metal_cv_set_bool(cv, has_mask,  FC_FLASH_ATTN_EXT + 0);
         ggml_metal_cv_set_bool(cv, has_sinks, FC_FLASH_ATTN_EXT + 1);
         ggml_metal_cv_set_bool(cv, has_bias,  FC_FLASH_ATTN_EXT + 2);
