@@ -492,6 +492,12 @@ must be a separate checkout. Two arms that agree to the microsecond are a routin
   plain layout (`run-repack-*`, the runtime-repack arms) need `llama-gguf-repack --reverse` first,
   which restores the plain file byte-for-byte. The UD stored file needs a build with the stored
   types (on prod since the 2026-09-06 merge, `ud-model.md` step 13).
+- **A kernel form that lands on one KV type stales every recorded comparison with the other.** The
+  Sep 5-6 FA stack (QT, QR, Q16, the f16 GQA route) is f16-kernel-only; four days later the Turbo4
+  paragraph's "Turbo4 w4 = f16 w5 round time" was off by 26% the other way (`ud-model.md` step 16).
+  When a form ships for one line, either instantiate it for the other or re-run the other line's
+  benchmark and strike the stale sentence the same session - a line that is not re-measured is not
+  "unchanged", it is unmeasured.
 - **A greedy-text sha is not a numerics gate; the KLD against the plain twin on one set of logits is.**
   The stored UD file passed three 600-token sha checks with a q5_K tile reader that rounded every
   small superblock scale (+8% mean KLD, -0.18 pt same-top); the plain-file arm scored in the same
