@@ -9974,6 +9974,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 5120, n, 17408, {1, 1}, {ns, 1}));
         }
     }
+    // the Q4_0 line's other prefill shapes (attention q/k/v/o, the delta-net projections, the drafter's
+    // head) at the ubatch width, so the census can time every mul_mm row it ranks
+    {
+        for (auto mk : { std::array<int64_t, 2>{10240, 5120}, {5120, 6144}, {6144, 5120}, {12288, 5120}, {1024, 5120}, {48, 5120} }) {
+            test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, mk[0], 512, mk[1], {1, 1}, {1, 1}));
+        }
+    }
 
     // Multi-stream (non-unified KV, one sequence per server slot): nr23[1] = number of
     // sequences in the batch.  Turbo4 with 4+ slots emitted EOS at the first token on

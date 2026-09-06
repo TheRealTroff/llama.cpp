@@ -33,7 +33,11 @@ def case_filter(r):
         return f"type_a={t},type_b=f32,m={s0[1]},n={s1[1]},k={s0[0]},", 'mma' if s1[1] > 8 else 'stream'
     if op == 'FLASH_ATTN_EXT':
         kv = s1[1]
-        if 8448 <= kv < 9216: kv = 8448   # the decode cache grows during the run; the perf case is at 8448
+        # the cache length differs per ubatch/round; snap to the nearest perf-case length (within 12%)
+        for case_kv in (512, 8448, 16384, 24576):
+            if abs(kv - case_kv) <= 0.12*case_kv:
+                kv = case_kv
+                break
         return f"kv={kv},nb={s0[1]},mask=1,sinks=0,max_bias=0.000000,logit_softcap=0.000000,prec=f32,type_K=f16,type_V=f16,", 'mma'
     # NOTE: -p is a std::regex - array brackets must be escaped or they become a character class
     if op == 'SWIGLU':

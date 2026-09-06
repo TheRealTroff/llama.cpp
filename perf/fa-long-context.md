@@ -127,3 +127,34 @@ was paying for (the loads/stores overlap the MMAs), and the shared-Q form alone 
 slower than QR=8 without it. And the route as written failed 881 of the 4869 f16 cases - all on the
 plain (non-QT) kernels it also engaged on, at head sizes 40-576 with 75-row query batches, so a
 scratch-aliasing or tile-count bug in a form that was not going to pay anyway. Not debugged.
+
+## What is left after QR, and the next structural lever
+
+With Q shared across the score tiles and 8 of its 32 tiles resident, the QK tier pays one K load per
+MMA and the PV tier one V load per MMA. Neither can be shared further inside an 8-query tile: each
+simdgroup owns distinct key tiles (K loads are not duplicated across simdgroups) and distinct output
+columns (V loads are not either); only the P tiles are read by all four simdgroups (8 loads per chunk).
+mul_mm sits at 0.5 loads per MMA because every A tile is reused across several B tiles.
+
+**The structural lever is the query tile: Q = 16 rows per threadgroup.** Each K tile and each V tile
+would feed two query tiles, halving the K/V loads per MMA at prefill; the kernel's 8.1 instructions
+per GFLOP would head toward ~6 (-20-25% on the prefill FA kernel; nothing at decode, where the tile
+is already half empty). The kernel is written for one 8-row query tile (`static_assert(Q == 8)` on the
+QT form, a single `mqk` per score column, `NQ = Q/NSG` softmax rows, `lo[PV8/NSG]` output tiles per
+simdgroup): Q = 16 means two score accumulators per key column, twice the softmax rows per simdgroup,
+twice the P/O tiles (the O tiles alone go 16 -> 32 registers per lane), and a doubled `so`/`ss` layout.
+It is the classic FA tile-size knob and the register budget is the question the prescreen would
+answer first. Worth: ~25% of the FA prefill kernel = ~6.5 s (3%) at 25K, ~15% of a 96K prefill.
+Several days; byte-identical by construction if the per-row math is kept (the online softmax is per
+query row). Not built tonight.
+
+Smaller items on the same table: the width-5/6 decode tiles carry a half-empty second 8-row tile
+(30 rows -> 4 tiles); the split-K reduce is a separate dispatch per call; the P tiles are re-read by
+all four simdgroups.
+
+## Census plumbing fixed on the way
+
+The FA filter snaps the cache length to the nearest perf case (512 / 8448 / 16384 / 24576 within 12%)
+instead of demanding an exact match - at long context every ubatch and every round is a different
+length. The Q4_0 line's other prefill matmul shapes (m = 10240, 6144, 12288, 1024, 48 at n = 512) now
+have perf cases, so the acch rows the 25K census could not time will time next run.
