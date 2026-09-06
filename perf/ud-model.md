@@ -883,3 +883,7 @@ returns empty. `run-ud-soa-gguf-ab.sh` now waits for the pid and the port before
 15.3) plus KV/compute - no first-verify repack, no ~12 GiB of side buffers. The plain file is
 redundant once the stored one verifies (`--reverse --verify` restores it byte-for-byte).
 Adoption is the owner's: `-m Qwen3.8-27B-UD-Q4_K_M-SOA-V1.gguf` with the unchanged pick env.
+**The plain `Qwen3.8-27B-UD-Q4_K_M.gguf` was deleted 2026-09-06 (owner: "Delete it. It's trivial
+to download again").** Every UD harness that defaults to it (`run-ud-knobs.sh`, `run-ud-decomp.sh`,
+...) needs `M=` pointed at the stored file, which only a build with the stored types reads
+(this branch / prod after merge); `llama-gguf-repack --reverse` regenerates the plain file.
