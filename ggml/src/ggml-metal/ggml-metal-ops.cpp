@@ -2150,8 +2150,9 @@ int ggml_metal_op_gated_delta_net(ggml_metal_op_t ctx, int idx) {
     ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(xwrow ? xwrow : op), ida++); // kept-input rows
 
     const int nsg = pipeline.nsg;
+    const int nr  = pipeline.nr0 > 1 ? pipeline.nr0 : 1; // state rows per simdgroup (GGML_GDN_NR)
 
-    ggml_metal_encoder_dispatch_threadgroups(enc, op->src[2]->ne[0]/nsg, op->src[2]->ne[1], op->src[2]->ne[3], 32, nsg, 1);
+    ggml_metal_encoder_dispatch_threadgroups(enc, op->src[2]->ne[0]/(nsg*nr), op->src[2]->ne[1], op->src[2]->ne[3], 32, nsg, 1);
 
     if (fuse_wb) {
         ggml_metal_op_concurrency_add(ctx, cpy);

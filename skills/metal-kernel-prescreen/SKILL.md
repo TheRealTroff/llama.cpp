@@ -322,3 +322,27 @@ accumulator banks, while four banks spilled 272 bytes/thread (`nr0=2`, `nxpsg=8`
 This is a measured register-allocation boundary, not a speed result. Keep two banks as the
 first performance candidate; do not benchmark the four-bank shape unless its live state is
 reduced and the probe returns to zero.
+
+## Latency-chain scans: rows per simdgroup, and what the residue is (2026-09-06)
+
+The GDN prefill scan (`perf/gdn-prefill-scan.md` in the fork) is the worked case for a kernel
+whose per-token work is a dependent chain (exp, dot, `simd_sum`, fma, dot, `simd_sum`) on a
+single row of state per simdgroup: 44 instructions per token at 74% issue / 22% stall, 10x its
+byte floor, and the profile's stall sites were the reduction and the `exp`, not loads. The lever
+is **NR consecutive rows per simdgroup** with the same expressions per row in the same order
+(byte-identical by construction, verified by e2e sha): NR=4 interleaves four chains and shares the
+token's loads, 27 instructions per row-token, 93% issue / 6% stall, -44% per call. NR=8 buys 2%
+more for 2x the state registers. Three things the follow-ups taught:
+
+- **Prefetching the next token's inputs LOST 8-10%** once the chains were interleaved: nothing
+  waited on memory any more, and the second live copy of the inputs cost more than it hid (the
+  width-5/6 "every added live load stream spends the slack twice" rule, again).
+- **Per-iteration 64-bit pointer advances are 12 B ops at 4-8 issue units each.** With five
+  advancing pointers they were 22% of the NR=4 loop. Attribute them cheaply: compile throwaway
+  variants (delete the advances; delete the store branch) and diff the loop's size sequence
+  (`agx-spill-probe.py --keep` + `agx-disasm.py --json`) - the block that disappears is the
+  culprit. The signed-32-bit-offset form that fixed the mv kernels did NOT fix this one (+2.7%):
+  the add moved from the loop tail into the load block. What would: strides as function constants
+  (load immediates) plus a token loop unrolled by U, so the pointers advance once per U tokens.
+- **Instructions that do not scale with the row count are per-token overhead** - the NR=1 vs
+  NR=4 profile delta separates per-row from per-token cost without any disassembly.

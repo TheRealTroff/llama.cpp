@@ -154,6 +154,8 @@ points). Interleaved on the ceiling table's points: 1 slot depth 3/4 -1.2%/-1.4%
 (+1.0%/+1.5% t/s), **4 slots depth 3 +3.0% aggregate**, 8 slots depth 1 flat; the state cache
 drops from 1 + depth to 2 groups. What it does not reach, and why (the replayed steps are a
 serial recurrence, a deletion probe does not price re-derivation), is the note's point.
+**Extended a tenth time 2026-09-06 (owner: "no-brainer to adopt"): + `GGML_GDN_NR=4`** - the kernel census's second lever, 4 state rows per simdgroup in the delta-net prefill scan, prefill -1.9% (64.2 -> 63.0 s), byte-identical (`gdn-prefill-scan.md`); mint below.
+
 Mint: Canonical mint TAG `prodpick-sep04-replay` (prod `988dafd69`, all shas canonical, so this mint's spec-arm t/s DO compare with the acch lineage): **27.30/27.16 at 300** (`95eb7e65977e`), **29.88/29.73 at 600** (`6678b0507d41`), batch-1 anchor 14.10 (`95eb7e65977e`), MTP 22.17, partial-env 19.83; **Turbo4 line 30.23/30.12 at 600** (`12c3dc6bb2dd`), 28.90 at 300 (`63a78a7669cb`). Against the merged-prod check earlier today (27.1/27.3 at 300, 29.8 at 600, b1 14.0) the day's spread covers the single-slot delta, as the interleaved A/B said it would; the 4-slot point carries the money.
 
 ```
@@ -161,7 +163,7 @@ GGML_MV_NC=2 GGML_MM_SKINNY=6 GGML_MM_SKINNY_SOA=1 GGML_FA_VEC_MAX=3 GGML_FA_MM_
 GGML_MV_REPACK=1 GGML_MV_SOA_PIN=1 GGML_MV_SOA_W3=1 GGML_MV_SOA_W4=1 GGML_MV_SOA_W4_R4KP=3 GGML_MV_SOA_W5=4 GGML_MV_SOA_W5_HALF=1 \
 GGML_MV_SOA_WL_XL=1 GGML_METAL_GET_MEMCPY=1 \
 DFLASH_FUSED_INJECT=1 DFLASH_ASYNC_INJECT=1 LLAMA_DRAFT_WINDOW=1024 \
-GGML_MM_ACC_HALF=1 GGML_MM_N64=1 LLAMA_GDN_REPLAY=1 \
+GGML_MM_ACC_HALF=1 GGML_MM_N64=1 LLAMA_GDN_REPLAY=1 GGML_GDN_NR=4 \
   llama-server -m Qwen3.8-27B-uniform-Q4_0.gguf -c 10240 -fa on -ctk f16 -ctv f16 \
     -md Qwen3.8-27B-DFlash2-pureQ4_0.gguf --spec-type draft-dflash --spec-draft-n-max 4
 ```
@@ -229,6 +231,7 @@ routing flag in this table is value-based.
 | `GGML_FA_VEC_MAX=3` | 20 | FA vector/batched routing cutoff: widths below it take the vector kernel. **3 since 2026-09-02** (was 5): the spill-free batched kernel beats the vector kernel at widths 3-4 at every context (0.59x at width 4, 8K; 0.26x at 100K), the vector kernel still wins at widths 1-2 (f16 at <= 8K, Turbo4 always). The pick's shas held; NOT universally inert at depth 4 - 1 of 5 corpus prompts forks (short verify widths happen when the drafter's block is not full, `parallel-streams.md`); -4.7% round at depth 3, whose output now matches the canonical depth-4 sha. Open: f16 widths 1-2 would prefer batched above ~30K context, which needs a context-aware rule, not a value | turbo4-filled-100k.md, flash-attn-mm-split.md |
 | `GGML_FA_MM_NWG=8` | 1 | KV split for the mm FA kernel, -60% FA | flash-attn-mm-split.md |
 | `GGML_GDN_FUSE_WB=1` | off | GDN writes the state cache directly, drops ~2.1 GB/round | gdn-writeback-fusion.md |
+| `GGML_GDN_NR=4` | off | GDN prefill scan: 4 state rows per simdgroup (interleaved chains, shared q/k/g/beta loads) for batches >= `GGML_GDN_NR_MIN` (32) tokens; per call 2.38 -> 1.25 ms at 512 tokens, prefill -1.9% Q4_0 pick / -1.6% UD, byte-identical on both lines. **In the pick since 2026-09-06** (owner: "no-brainer") | gdn-prefill-scan.md |
 | `GGML_FA_GQA_HEADS=4,6` | **auto: 6 on pre-M5 with Turbo4 KV, off on tensor hw** (Turbo4 line only) | Turbo4 FA flattens the query heads sharing a KV head into the Q8 tile; widths 3-6, GQA 4/6. Width 4: 5.3x kernel, -22.9% round. Default-on is a departure from the opt-in convention; the pick sets it explicitly | turbo4-fa-gqa-reuse.md |
 | `GGML_FA_GQA4_NWG=6` | 0 (inherit MM_NWG) | KV split for the drafter's GQA4 reuse route | turbo4-fa-gqa-reuse.md |
 | `GGML_FA_GQA_W3_NWG=13` | 0 (inherit) | KV split for the width-3 GQA6 reuse route | turbo4-fa-gqa-reuse.md |

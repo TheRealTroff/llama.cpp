@@ -360,3 +360,14 @@ Three more traps caught by these tools the day they were built:
   `GGML_METAL_GET_MEMCPY=1` (branch `cpu-round-overhead`) defers to a plain memcpy
   after the sync wait: +3.3% e2e, byte-identical. When hunting CPU overhead, look
   for work that is QUEUED BEHIND the graph, not just work beside it.
+
+## Per-row vs per-token attribution by changing the work per simdgroup (2026-09-06)
+
+When a kernel's hot loop has several kinds of work per iteration, profile two instantiations that
+differ in the amount of one kind (e.g. 1 vs 4 state rows per simdgroup, `perf/gdn-prefill-scan.md`)
+and diff the hot rows: the instructions whose count stays fixed are per-iteration overhead
+(there: five 64-bit pointer advances at 4.06 issue units each = 22% of the loop), the rest scale
+with the work. Confirm the identity offline with a deletion variant and `agx-disasm.py` size
+sequences - no mnemonics needed. Also: the census's perf case must match the op's FULL shape;
+the GDN case matched `head_count` but not the value-head repeat and timed a third of the op
+(0.73 vs 2.64 ms) - ratios survived, absolutes did not (`perf/kernel-census.md`).

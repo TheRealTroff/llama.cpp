@@ -3540,6 +3540,427 @@ template [[host_name("kernel_gated_delta_net_f32_1")]] kernel kernel_gated_delta
 template [[host_name("kernel_gated_delta_net_f32_2")]] kernel kernel_gated_delta_net_t kernel_gated_delta_net_impl<2>;
 template [[host_name("kernel_gated_delta_net_f32_4")]] kernel kernel_gated_delta_net_t kernel_gated_delta_net_impl<4>;
 
+// NR consecutive state rows per simdgroup (perf/gdn-prefill-scan.md). One row's per-token chain
+// (exp, dot, simd_sum, fma, dot, simd_sum) is a latency chain that hides nothing; NR independent
+// rows interleave their chains and share the token's q/k/g/b loads. Same arithmetic per row in
+// the same order as kernel_gated_delta_net_step, so the NR=1 kernel's bytes are reproduced.
+template<short NSG, short NR, bool WITH_OUT>
+static inline void kernel_gated_delta_net_step_nr(
+        thread float (&ls)[NR][NSG],
+        thread float (&yo)[NR],
+        const short tx,
+        const uint  i20,
+        device const float * q_ptr,
+        device const float * k_ptr,
+        device const float * v_ptr,
+        device const float * g_ptr,
+        device const float * b_ptr) {
+    float kk[NSG];
+    float qq[NSG];
+
+    FOR_UNROLL (short j = 0; j < NSG; j++) {
+        const short is = tx*NSG + j;
+        kk[j] = k_ptr[is];
+        qq[j] = WITH_OUT ? q_ptr[is] : 0.0f;
+    }
+
+    float s_k[NR];
+
+    FOR_UNROLL (short r = 0; r < NR; r++) {
+        s_k[r] = 0.0f;
+    }
+
+    if (FC_gated_delta_net_ne30 == 1) {
+        const float g_exp = exp(g_ptr[0]);
+
+        FOR_UNROLL (short r = 0; r < NR; r++) {
+            FOR_UNROLL (short j = 0; j < NSG; j++) {
+                ls[r][j] *= g_exp;
+
+                s_k[r] += ls[r][j]*kk[j];
+            }
+        }
+    } else {
+        // KDA
+        float ge[NSG];
+
+        FOR_UNROLL (short j = 0; j < NSG; j++) {
+            ge[j] = exp(g_ptr[tx*NSG + j]);
+        }
+
+        FOR_UNROLL (short r = 0; r < NR; r++) {
+            FOR_UNROLL (short j = 0; j < NSG; j++) {
+                ls[r][j] *= ge[j];
+
+                s_k[r] += ls[r][j]*kk[j];
+            }
+        }
+    }
+
+    FOR_UNROLL (short r = 0; r < NR; r++) {
+        s_k[r] = simd_sum(s_k[r]);
+    }
+
+    const float bb = b_ptr[0];
+
+    float d[NR];
+
+    FOR_UNROLL (short r = 0; r < NR; r++) {
+        d[r] = (v_ptr[i20 + r] - s_k[r])*bb;
+    }
+
+    float y[NR];
+
+    FOR_UNROLL (short r = 0; r < NR; r++) {
+        y[r] = 0.0f;
+
+        FOR_UNROLL (short j = 0; j < NSG; j++) {
+            ls[r][j] += kk[j]*d[r];
+
+            if (WITH_OUT) {
+                y[r] += ls[r][j]*qq[j];
+            }
+        }
+    }
+
+    if (WITH_OUT) {
+        FOR_UNROLL (short r = 0; r < NR; r++) {
+            yo[r] = simd_sum(y[r]);
+        }
+    }
+}
+
+// the arithmetic of kernel_gated_delta_net_step_nr on inputs loaded ahead of time (PF form):
+// g holds exp(g) for G == 1 and the NSG exp(g[is]) values for KDA
+template<short NSG, short NR, bool WITH_OUT>
+static inline void kernel_gated_delta_net_math_nr(
+        thread float (&ls)[NR][NSG],
+        thread float (&yo)[NR],
+        thread const float (&kk)[NSG],
+        thread const float (&qq)[NSG],
+        thread const float (&ge)[NSG],
+        const float bb,
+        thread const float (&vv)[NR]) {
+    float s_k[NR];
+
+    FOR_UNROLL (short r = 0; r < NR; r++) {
+        s_k[r] = 0.0f;
+    }
+
+    if (FC_gated_delta_net_ne30 == 1) {
+        const float g_exp = ge[0];
+
+        FOR_UNROLL (short r = 0; r < NR; r++) {
+            FOR_UNROLL (short j = 0; j < NSG; j++) {
+                ls[r][j] *= g_exp;
+
+                s_k[r] += ls[r][j]*kk[j];
+            }
+        }
+    } else {
+        FOR_UNROLL (short r = 0; r < NR; r++) {
+            FOR_UNROLL (short j = 0; j < NSG; j++) {
+                ls[r][j] *= ge[j];
+
+                s_k[r] += ls[r][j]*kk[j];
+            }
+        }
+    }
+
+    FOR_UNROLL (short r = 0; r < NR; r++) {
+        s_k[r] = simd_sum(s_k[r]);
+    }
+
+    float d[NR];
+
+    FOR_UNROLL (short r = 0; r < NR; r++) {
+        d[r] = (vv[r] - s_k[r])*bb;
+    }
+
+    float y[NR];
+
+    FOR_UNROLL (short r = 0; r < NR; r++) {
+        y[r] = 0.0f;
+
+        FOR_UNROLL (short j = 0; j < NSG; j++) {
+            ls[r][j] += kk[j]*d[r];
+
+            if (WITH_OUT) {
+                y[r] += ls[r][j]*qq[j];
+            }
+        }
+    }
+
+    if (WITH_OUT) {
+        FOR_UNROLL (short r = 0; r < NR; r++) {
+            yo[r] = simd_sum(y[r]);
+        }
+    }
+}
+
+template<short NSG, short NR>
+static inline void kernel_gated_delta_net_load_nr(
+        thread float (&kk)[NSG],
+        thread float (&qq)[NSG],
+        thread float (&ge)[NSG],
+        thread float & bb,
+        thread float (&vv)[NR],
+        const short tx,
+        const uint  i20,
+        device const float * q_ptr,
+        device const float * k_ptr,
+        device const float * v_ptr,
+        device const float * g_ptr,
+        device const float * b_ptr) {
+    FOR_UNROLL (short j = 0; j < NSG; j++) {
+        const short is = tx*NSG + j;
+        kk[j] = k_ptr[is];
+        qq[j] = q_ptr[is];
+    }
+    if (FC_gated_delta_net_ne30 == 1) {
+        ge[0] = exp(g_ptr[0]);
+    } else {
+        FOR_UNROLL (short j = 0; j < NSG; j++) {
+            ge[j] = exp(g_ptr[tx*NSG + j]);
+        }
+    }
+    bb = b_ptr[0];
+    FOR_UNROLL (short r = 0; r < NR; r++) {
+        vv[r] = v_ptr[i20 + r];
+    }
+}
+
+template<short NSG, short NR>
+static inline void kernel_gated_delta_net_store_nr(
+        device float * dst_state,
+        thread float (&ls)[NR][NSG],
+        const short tx) {
+    FOR_UNROLL (short r = 0; r < NR; r++) {
+        FOR_UNROLL (short j = 0; j < NSG; j++) {
+            const short is = tx*NSG + j;
+            dst_state[r*FC_gated_delta_net_ne20 + is] = ls[r][j];
+        }
+    }
+}
+
+template<short NSG, short NR, bool PF>
+kernel void kernel_gated_delta_net_nr_impl(
+        constant ggml_metal_kargs_gated_delta_net & args,
+        device const char * q,
+        device const char * k,
+        device const char * v,
+        device const char * g,
+        device const char * b,
+        device const char * s,
+        device       char * dst,
+        device       char * wb,
+        device const char * xp,
+        device const char * xrep,
+        device       char * xk,
+        device const char * xrow,
+        device const char * xwrow,
+        uint3 tgpig[[threadgroup_position_in_grid]],
+        uint3 tpitg[[thread_position_in_threadgroup]],
+        uint3   ntg[[threads_per_threadgroup]])  {
+#define S_v FC_gated_delta_net_ne20
+#define G   FC_gated_delta_net_ne30
+#define K   FC_gated_delta_net_K
+#define XK  FC_gated_delta_net_XK
+
+    const uint tx = tpitg.x;
+    const uint ty = tpitg.y;
+
+    const uint i23 = tgpig.z; // B (n_seqs)
+    const uint i21 = tgpig.y; // H (head)
+    const uint i20 = (tgpig.x*NSG + ty)*NR; // first of this simdgroup's NR consecutive rows within S_v
+
+    const uint i01 = i21 % args.ne01;
+    const uint i11 = i21 % args.ne11;
+
+    const float scale = 1.0f / sqrt((float)S_v);
+
+    const uint state_in_base = (i23*args.ne21 + i21)*S_v*S_v + i20*S_v;
+    device const float * s_ptr = (device const float *) (s) + state_in_base;
+
+    float ls[NR][NSG];
+
+    FOR_UNROLL (short r = 0; r < NR; r++) {
+        FOR_UNROLL (short j = 0; j < NSG; j++) {
+            const short is = tx*NSG + j;
+            ls[r][j] = s_ptr[r*S_v + is];
+        }
+    }
+
+    device float * dst_attn = (device float *) (dst) + (i23*args.ne22*args.ne21 + i21)*S_v + i20;
+
+    device const float * q_ptr = (device const float *) (q + i23*args.nb03 + i01*args.nb01);
+    device const float * k_ptr = (device const float *) (k + i23*args.nb13 + i11*args.nb11);
+    device const float * v_ptr = (device const float *) (v + i23*args.nb23 + i21*args.nb21);
+
+    device const float * b_ptr = (device const float *) (b) + (i23*args.ne22*args.ne21 + i21);
+    device const float * g_ptr = (device const float *) (g) + (i23*args.ne22*args.ne21 + i21)*G;
+
+    const uint attn_size = args.ne22 * args.ne21 * S_v * args.ne23;
+    const uint state_size_per_snap = S_v * S_v * args.ne21 * args.ne23;
+    const uint state_out_base = (i23*args.ne21 + i21)*S_v*S_v + i20*S_v;
+
+    float yo[NR];
+
+    if (XK && args.xp_cap > 0) {
+        const int n_rep = ((device const int32_t *) xrep)[i23];
+        const uint x_row = args.has_xrow ? (uint) ((device const int32_t *) xrow)[i23] : i23;
+        const uint H_k  = args.ne01;
+        const uint H_v  = args.ne21;
+
+        for (int t = 0; t < n_rep; t++) {
+            device const float * x = (device const float *) (xp) + ((uint64_t) x_row*args.xp_cap + t)*args.n_x;
+
+            kernel_gated_delta_net_step_nr<NSG, NR, false>(ls, yo, tx, i20,
+                    x + i01*S_v,
+                    x + S_v*H_k + i11*S_v,
+                    x + 2*S_v*H_k + i21*S_v,
+                    x + 2*S_v*H_k + S_v*H_v + i21*G,
+                    x + 2*S_v*H_k + S_v*H_v + G*H_v + i21);
+        }
+    }
+
+    if (XK && K == 2 && args.n_keep == args.ne22) {
+        device float * dst_state = FC_gated_delta_net_WB
+            ? (device float *) (wb + i23*args.wb_nb1 + args.wb_nb2) + (i21*S_v*S_v + i20*S_v)
+            : (device float *) (dst) + attn_size + state_size_per_snap + state_out_base;
+        kernel_gated_delta_net_store_nr<NSG, NR>(dst_state, ls, tx);
+    }
+
+    // PF: this token's inputs were loaded during the previous token's chain
+    float kk[NSG];
+    float qq[NSG];
+    float ge[NSG];
+    float bb = 0.0f;
+    float vv[NR];
+
+    if (PF) {
+        kernel_gated_delta_net_load_nr<NSG, NR>(kk, qq, ge, bb, vv, tx, i20, q_ptr, k_ptr, v_ptr, g_ptr, b_ptr);
+    }
+
+    for (short t = 0; t < args.ne22; t++) {
+        if (PF) {
+            // next token's inputs (the last token re-reads itself: no read past the batch)
+            const int  nn = (t + 1 < args.ne22) ? 1 : 0;
+            float kk_n[NSG];
+            float qq_n[NSG];
+            float ge_n[NSG];
+            float bb_n;
+            float vv_n[NR];
+            kernel_gated_delta_net_load_nr<NSG, NR>(kk_n, qq_n, ge_n, bb_n, vv_n, tx, i20,
+                    q_ptr + nn*args.ns02, k_ptr + nn*args.ns12, v_ptr + nn*args.ns22,
+                    g_ptr + nn*args.ne21*G, b_ptr + nn*args.ne21);
+
+            kernel_gated_delta_net_math_nr<NSG, NR, true>(ls, yo, kk, qq, ge, bb, vv);
+
+            FOR_UNROLL (short j = 0; j < NSG; j++) {
+                kk[j] = kk_n[j];
+                qq[j] = qq_n[j];
+                ge[j] = ge_n[j];
+            }
+            bb = bb_n;
+            FOR_UNROLL (short r = 0; r < NR; r++) {
+                vv[r] = vv_n[r];
+            }
+        } else {
+            kernel_gated_delta_net_step_nr<NSG, NR, true>(ls, yo, tx, i20, q_ptr, k_ptr, v_ptr, g_ptr, b_ptr);
+        }
+
+        if (tx == 0) {
+            FOR_UNROLL (short r = 0; r < NR; r++) {
+                dst_attn[t*args.ne21*S_v + r] = yo[r]*scale;
+            }
+        }
+
+        if (XK) {
+            if (K == 2 && t == args.ne22 - args.n_keep - 1) {
+                device float * dst_state = FC_gated_delta_net_WB
+                    ? (device float *) (wb + i23*args.wb_nb1 + args.wb_nb2) + (i21*S_v*S_v + i20*S_v)
+                    : (device float *) (dst) + attn_size + state_size_per_snap + state_out_base;
+                kernel_gated_delta_net_store_nr<NSG, NR>(dst_state, ls, tx);
+            }
+            if (args.n_keep > 0 && t >= args.ne22 - args.n_keep) {
+                const uint H_k = args.ne01;
+                const uint H_v = args.ne21;
+                const uint w_row = args.has_xwrow ? (uint) ((device const int32_t *) xwrow)[i23] : i23;
+                device float * x = (device float *) (xk + args.xk_off + (uint64_t) w_row*args.xk_nb1 + (uint64_t) (t - (args.ne22 - args.n_keep))*args.xk_nb2);
+                if (tgpig.x == 0 && ty == 0 && i21 < H_k) {
+                    FOR_UNROLL (short j = 0; j < NSG; j++) {
+                        const short is = tx*NSG + j;
+                        x[i21*S_v + is]           = q_ptr[is];
+                        x[S_v*H_k + i21*S_v + is] = k_ptr[is];
+                    }
+                }
+                if (tx == 0) {
+                    FOR_UNROLL (short r = 0; r < NR; r++) {
+                        x[2*S_v*H_k + i21*S_v + i20 + r] = v_ptr[i20 + r];
+                    }
+                }
+                if (tgpig.x == 0 && ty == 0) {
+                    if (G == 1) {
+                        if (tx == 0) {
+                            x[2*S_v*H_k + S_v*H_v + i21] = g_ptr[0];
+                        }
+                    } else {
+                        FOR_UNROLL (short j = 0; j < NSG; j++) {
+                            const short is = tx*NSG + j;
+                            x[2*S_v*H_k + S_v*H_v + i21*G + is] = g_ptr[is];
+                        }
+                    }
+                    if (tx == 0) {
+                        x[2*S_v*H_k + S_v*H_v + G*H_v + i21] = b_ptr[0];
+                    }
+                }
+            }
+        }
+
+        q_ptr += args.ns02;
+        k_ptr += args.ns12;
+        v_ptr += args.ns22;
+
+        b_ptr += args.ne21;
+        g_ptr += args.ne21*G;
+
+        if (!XK && K > 1) {
+            const int target_slot = (int)args.ne22 - 1 - (int)t;
+            if (target_slot >= 0 && target_slot < (int)K) {
+                device float * dst_state = FC_gated_delta_net_WB
+                    ? (device float *) (wb + i23*args.wb_nb1 + (uint64_t) target_slot*args.wb_nb2) + (i21*S_v*S_v + i20*S_v)
+                    : (device float *) (dst) + attn_size + (uint)target_slot * state_size_per_snap + state_out_base;
+                kernel_gated_delta_net_store_nr<NSG, NR>(dst_state, ls, tx);
+            }
+        }
+    }
+
+    if (K == 1 || XK) {
+        device float * dst_state = FC_gated_delta_net_WB
+            ? (device float *) (wb + i23*args.wb_nb1) + (i21*S_v*S_v + i20*S_v)
+            : (device float *) (dst) + attn_size + state_out_base;
+        kernel_gated_delta_net_store_nr<NSG, NR>(dst_state, ls, tx);
+    }
+
+#undef S_v
+#undef G
+#undef K
+#undef XK
+}
+
+template [[host_name("kernel_gated_delta_net_f32_2_nr2")]] kernel kernel_gated_delta_net_t kernel_gated_delta_net_nr_impl<2, 2, false>;
+template [[host_name("kernel_gated_delta_net_f32_2_nr4")]] kernel kernel_gated_delta_net_t kernel_gated_delta_net_nr_impl<2, 4, false>;
+template [[host_name("kernel_gated_delta_net_f32_2_nr8")]] kernel kernel_gated_delta_net_t kernel_gated_delta_net_nr_impl<2, 8, false>;
+template [[host_name("kernel_gated_delta_net_f32_4_nr2")]] kernel kernel_gated_delta_net_t kernel_gated_delta_net_nr_impl<4, 2, false>;
+template [[host_name("kernel_gated_delta_net_f32_4_nr4")]] kernel kernel_gated_delta_net_t kernel_gated_delta_net_nr_impl<4, 4, false>;
+template [[host_name("kernel_gated_delta_net_f32_4_nr8")]] kernel kernel_gated_delta_net_t kernel_gated_delta_net_nr_impl<4, 8, false>;
+// PF: the next token's inputs are loaded during this token's chain (GGML_GDN_NR_PF=1)
+template [[host_name("kernel_gated_delta_net_f32_2_nr4pf")]] kernel kernel_gated_delta_net_t kernel_gated_delta_net_nr_impl<2, 4, true>;
+template [[host_name("kernel_gated_delta_net_f32_2_nr8pf")]] kernel kernel_gated_delta_net_t kernel_gated_delta_net_nr_impl<2, 8, true>;
+template [[host_name("kernel_gated_delta_net_f32_4_nr4pf")]] kernel kernel_gated_delta_net_t kernel_gated_delta_net_nr_impl<4, 4, true>;
+template [[host_name("kernel_gated_delta_net_f32_4_nr8pf")]] kernel kernel_gated_delta_net_t kernel_gated_delta_net_nr_impl<4, 8, true>;
+
 #else
 // a simplified version of the above
 // no performance improvement, so keep the above version for now
