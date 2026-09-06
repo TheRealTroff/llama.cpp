@@ -7283,6 +7283,9 @@ void kernel_mul_mv_iq4_xs_soa_impl(
     const int pstart = KS == 2 ? (int)sgitg*(npack/2) : 0;
     const int pend = KS == 2 ? pstart + npack/2 : npack;
     const int doff = SM == 0 ? ((10*nsb + 15)/16)*16 : 16*nsb;
+    // SM 2 (stored IQ4_XS_SOA, width 1): the exact scale from the 8-byte block header plane at the
+    // row's tail - streams the plain file's bytes (136 B/superblock) instead of the half plane's 144
+    const int hoff = 144*nsb;
 
     device const char * r0 = src0 + (uint64_t)(row0 + 0)*args.nb01;
     device const char * r1 = src0 + (uint64_t)(row0 + 1)*args.nb01;
@@ -7296,6 +7299,10 @@ void kernel_mul_mv_iq4_xs_soa_impl(
     device const char * lp1 = r1 + 2*nsb;
     device const char * lp2 = r2 + 2*nsb;
     device const char * lp3 = r3 + 2*nsb;
+    device const uchar * hp0 = (device const uchar *)(r0 + hoff);
+    device const uchar * hp1 = (device const uchar *)(r1 + hoff);
+    device const uchar * hp2 = (device const uchar *)(r2 + hoff);
+    device const uchar * hp3 = (device const uchar *)(r3 + hoff);
     device const uint * qp0 = (device const uint *)(r0 + doff);
     device const uint * qp1 = (device const uint *)(r1 + doff);
     device const uint * qp2 = (device const uint *)(r2 + doff);
@@ -7327,6 +7334,17 @@ void kernel_mul_mv_iq4_xs_soa_impl(
             sf[2] = float(dp2[sb])*float(lp2[blk]);
             sf[3] = float(dp3[sb])*float(lp3[blk]);
             sh[0] = half(sf[0]); sh[1] = half(sf[1]); sh[2] = half(sf[2]); sh[3] = half(sf[3]);
+        } else if (SM == 2) {
+            const int j = blk & 7;
+            device const uchar * hp[4] = { hp0 + 8*sb, hp1 + 8*sb, hp2 + 8*sb, hp3 + 8*sb };
+#pragma unroll
+            for (int r = 0; r < 4; ++r) {
+                const half   d  = *(device const half *) hp[r];
+                const ushort sh16 = (ushort) hp[r][2] | ((ushort) hp[r][3] << 8);
+                const int ls = ((hp[r][4 + j/2] >> 4*(j%2)) & 0xf) | (((sh16 >> 2*j) & 3) << 4);
+                sf[r] = float(d)*float(ls - 32);
+                sh[r] = half(sf[r]);
+            }
         } else {
             sh[0] = dp0[blk]; sh[1] = dp1[blk]; sh[2] = dp2[blk]; sh[3] = dp3[blk];
             sf[0] = float(sh[0]); sf[1] = float(sh[1]); sf[2] = float(sh[2]); sf[3] = float(sh[3]);
@@ -7423,7 +7441,7 @@ kernel void kernel_mul_mv_iq4_xs_soa_w1(
         ushort tiisg [[thread_index_in_simdgroup]],
         ushort sgitg [[simdgroup_index_in_threadgroup]]) {
     threadgroup float partial[2][4];
-    kernel_mul_mv_iq4_xs_soa_impl<1, 1, 0, 1, 2, float>(args, src0, src1, dst, partial, tgpig, tiisg, sgitg);
+    kernel_mul_mv_iq4_xs_soa_impl<2, 0, 0, 1, 2, float>(args, src0, src1, dst, partial, tgpig, tiisg, sgitg);
 }
 
 // ---------------------------------------------------------------------------------------
@@ -7525,6 +7543,9 @@ void kernel_mul_mv_kq_soa_impl(
     const int pend = KS == 2 ? pstart + npack/2 : npack;
     const int doff = SM == 0 ? ((20*nsb + 15)/16)*16 : 32*nsb;
     const int hoff = doff + 128*nsb;
+    // SM 2 (stored Q4_K_SOA / Q5_K_SOA, width 1): exact d, dmin, scales from the 16-byte header
+    // plane after the packs (and hbits) - the plain file's byte count, f32 products
+    const int xoff = hoff + (HB ? 32*nsb : 0);
 
     device const char * r0 = src0 + (uint64_t)(row0 + 0)*args.nb01;
     device const char * r1 = src0 + (uint64_t)(row0 + 1)*args.nb01;
@@ -7547,6 +7568,10 @@ void kernel_mul_mv_kq_soa_impl(
     device const uchar * hp1 = (device const uchar *)(r1 + hoff);
     device const uchar * hp2 = (device const uchar *)(r2 + hoff);
     device const uchar * hp3 = (device const uchar *)(r3 + hoff);
+    device const uchar * xp0 = (device const uchar *)(r0 + xoff);
+    device const uchar * xp1 = (device const uchar *)(r1 + xoff);
+    device const uchar * xp2 = (device const uchar *)(r2 + xoff);
+    device const uchar * xp3 = (device const uchar *)(r3 + xoff);
     using half8 = vec<TY, 8>;
     const device half8 * xv = (const device half8 *)src1;
     const int K8 = args.ne00/8;
@@ -7566,8 +7591,21 @@ void kernel_mul_mv_kq_soa_impl(
             hb[0] = hp0[p]; hb[1] = hp1[p]; hb[2] = hp2[p]; hb[3] = hp3[p];
         }
         half sh[4];
+        float sf[4];
         float mf[4];
-        if (SM == 0) {
+        if (SM == 2) {
+            const int j = blk & 7;
+            device const uchar * xp[4] = { xp0 + 16*sb, xp1 + 16*sb, xp2 + 16*sb, xp3 + 16*sb };
+#pragma unroll
+            for (int r = 0; r < 4; ++r) {
+                const half   d    = ((device const half *) xp[r])[0];
+                const half   dmin = ((device const half *) xp[r])[1];
+                const uchar2 sc = get_scale_min_k4_just2(j, 0, xp[r] + 4);
+                sf[r] = float(d)*float(sc[0]);
+                mf[r] = float(dmin)*float(sc[1]);
+                sh[r] = half(sf[r]);
+            }
+        } else if (SM == 0) {
             sh[0] = half(float(dp0[2*sb])*float(sp0[blk])); mf[0] = float(dp0[2*sb + 1])*float(sp0[mn_off + blk]);
             sh[1] = half(float(dp1[2*sb])*float(sp1[blk])); mf[1] = float(dp1[2*sb + 1])*float(sp1[mn_off + blk]);
             sh[2] = half(float(dp2[2*sb])*float(sp2[blk])); mf[2] = float(dp2[2*sb + 1])*float(sp2[mn_off + blk]);
@@ -7594,6 +7632,10 @@ void kernel_mul_mv_kq_soa_impl(
 #pragma unroll
             for (int ki = 0; ki < 8; ++ki) {
                 const ushort qi = HB ? (((q >> (ki*4)) & 0xFu) | (((h >> ki) & 1u) << 4)) : ((q >> (ki*4)) & 0xFu);
+                if (SM == 2) {
+                    acc[r*NC + 0] += float(v0[ki])*(float(qi)*sf[r]);
+                    continue;
+                }
                 const half wv = half(qi)*sh[r];
                 acc[r*NC + 0] += float(v0[ki]*wv);
                 if (NC > 1) { acc[r*NC + 1] += float(v1[ki]*wv); }
@@ -7673,7 +7715,7 @@ kernel void NAME( \
         ushort tiisg [[thread_index_in_simdgroup]], \
         ushort sgitg [[simdgroup_index_in_threadgroup]]) { \
     threadgroup float partial[2][4]; \
-    kernel_mul_mv_kq_soa_impl<1, HB, 1, 2, float>(args, src0, src1, dst, partial, tgpig, tiisg, sgitg); \
+    kernel_mul_mv_kq_soa_impl<2, HB, 1, 2, float>(args, src0, src1, dst, partial, tgpig, tiisg, sgitg); \
 }
 KQ_SOA_W1_KERNEL(kernel_mul_mv_q4_K_soa_w1, 0)
 KQ_SOA_W1_KERNEL(kernel_mul_mv_q5_K_soa_w1, 1)

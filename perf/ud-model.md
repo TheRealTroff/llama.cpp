@@ -337,9 +337,11 @@ and the half-planar scale rounding, which moved no byte of any 600-token arm at 
 (sha `5e76afaba36c` throughout) - the exact variants (`IQ4XS=2`, `KQ=1`) are 7-11% slower per
 call and equally correct if the owner wants zero rounding on principle. Open, in order of value:
 
-1. **Offline GGUF storage** for the three layouts (the `Q4_0_SOA_V1` path: new ggml types,
+1. ~~**Offline GGUF storage** for the three layouts (the `Q4_0_SOA_V1` path: new ggml types,
    `llama-gguf-repack`, readers at widths 1-2 and the mm/prefill path) - removes the ~12 GiB
-   and the first-call repack; the Q4_0 line measured that step at +2%.
+   and the first-call repack; the Q4_0 line measured that step at +2%.~~ **DONE, step 13
+   (2026-09-06): -10.9 GiB resident, depth-3 parity, sha-identical; b1 -2.8% (q4_K width-1
+   reader) is the open remainder.**
 2. **Remaining width-4 formats** ~10 ms of the (now ~100 ms) round: q6_K attn/ffn tensors
    (0.6 GiB; the q6_K head is already 1.32x floor), q3_K, iq3_s (5.9x floor, 3 calls/round),
    iq4_nl (6 tensors; same table as iq4_xs with a per-32 scale - the cheapest to add).
@@ -783,3 +785,101 @@ nr4 / nr4 / base: prefill 66.87 / 65.80 / 65.64 / 66.71 s (-1.6%), sha `73ea53bb
 decode unchanged (gated at 32 tokens).** Not UD-specific (f32 kernel): Q4_0 pick prefill 64.2 -> 63.0 s (-1.9%), canonical sha `95eb7e65977e`; recommend on both lines.
 Refuted on the way: loads pipelined a token ahead (+9.7%: nothing waits on memory after NR) and
 32-bit token offsets in place of the five 64-bit pointer advances (+2.7%: the add moves to the loads).
+
+## Step 13: the offline SoA GGUF - the ~12 GiB of side buffers go away (2026-09-06, owner: "let's do the offline repack")
+
+The runtime SoA route (step 6) held a second copy of every iq4_xs/q4_K/q5_K weight: the width-3/4/5
+kernels read the half-planar side buffers, widths 1-2 and the prefill tiles read the original rows,
+so both had to stay resident (~12 GiB on top of the 15.3 GiB file, built during the first verify
+round). The Q4_0 line's answer was a storage type the kernels read directly (`q4-0-soa-gguf.md`);
+this is the same step for the three UD formats, branch `ud-soa-gguf`.
+
+**The stored row is the side-buffer row with the original block header appended.** Per row of
+`nsb = ne00/256` superblocks:
+
+| type | row layout | B / superblock | vs plain |
+|---|---|--:|--:|
+| `IQ4_XS_SOA` | `[half d*(ls-32) x 8nsb][uint32 pack8 x 32nsb][u8 hdr8 x nsb]` | 152 | +11.8% |
+| `Q4_K_SOA`   | `[half d*sc x 8nsb][half dmin*m x 8nsb][uint32 pack8 x 32nsb][u8 hdr16 x nsb]` | 176 | +22.2% |
+| `Q5_K_SOA`   | as Q4_K_SOA with `[u8 hbits x 32nsb]` before the header plane | 208 | +18.2% |
+
+The prefix (144/160/192 B per superblock) is byte-for-byte what `kernel_repack_*_soah` wrote, so
+the pick's validated kernels (`kernel_mul_mv_{iq4_xs,q4_K,q5_K}_soa_w{3,4,5}_v5|v2`) read the model
+buffer with no change and no repack - the decode path's numerics and streamed bytes are exactly the
+step-6 ones (the header plane sits after the packs, untouched at widths 3-5). The header plane
+holds the original `d, scales` bytes, which buys two things the half planes cannot: the prefill
+tiles and the width-2/6-8 readers dequantize with the *exact* expressions of `dequantize_iq4_xs /
+q4_K / q5_K` (`dequantize_{iq4_xs,kq}_soa_mm`), and the file reverses byte-for-byte
+(`llama-gguf-repack --reverse`). The alternative - half planes only, 1.1 GiB less - would have
+made prefill read rounded scales and the file one-way; the exact header costs 1.1 GiB of the
+2.06 GiB growth and was the safer productization.
+
+Readers, all new code, no existing hot kernel touched:
+- **widths 3-5** on the row whitelist: the step-6 kernels, routed by type instead of env
+  (`GGML_MV_SOA_IQ4XS`/`KQ` stay for the plain types' runtime side buffers, inert on stored).
+- **widths 2, 6-8, and 3-5 off the whitelist**: `kernel_mul_mv_ext_soa_q4x4_f32_impl`, the q4x4 ext
+  kernel with (row pointer, superblock, tile) addressing through a tag-dispatched
+  `dequantize_soa_mm((device const block_q *) nullptr, row, ne00, blk, il, reg)`; 24
+  instantiations `kernel_mul_mv_ext_{type}_soa_{f32,f16}_r1_{2..5}`.
+- **prefill (mul_mm, incl. the n64 f32/f16 tiles)**: the existing `FC_mul_mm_soa` branch, which
+  was `dequantize_q4_0_soa_mm` hard-wired, now calls the same tag dispatch, so every stored type
+  rides the underlying type's tile instantiation (`kernel_mul_mm_n64_q4_K_f16` + `soa=1`).
+- **width 1**: the step-6 kernel bodies gained a `TY` parameter and `NC` guards; an NC=1
+  instantiation with f32 activations (`kernel_mul_mv_{type}_soa_w1`, 4 rows x 2 simdgroups)
+  replaces the upstream block kernel. This is the one path whose numerics change (half-product
+  form, new summation order): the no-spec b1 anchor is a new sha lineage, the spec arms are not.
+- **CPU**: `ggml_soa_pack_* / unpack_*` in `ggml-quants.c` define the layout once; the quantize /
+  dequantize refs, the `vec_dot` oracle `test-backend-ops` compares Metal against (f32 dot through
+  the exact unpack) and the converter all use them.
+
+Correctness: `test-backend-ops` 84/84 Metal cases for the three types (widths 1-8, 32, 512, the
+17408/5120 FFN pair, an off-whitelist 1024-row shape, the GDN-style `[K,T,S]` fold);
+`test-quantize-fns` passes the three. Conversion of the UD file with `--verify` (every row
+reversed in memory and compared): 339 tensors, 12.14 -> 14.20 GiB (+16.9%); token_embd
+(GET_ROWS) and the twelve 5120x1024 attn_k/v (below 16M elements) stay plain and keep their
+upstream kernels.
+
+**E2e, fresh processes, mirrored (orig stored stored orig), `run-ud-soa-gguf-ab.sh`, TAG
+`ud-soa-gguf-sep06`, the 8288-token canonical prompt, n_predict 600, full pick env in both arms
+(the runtime SoA env is inert on stored types):**
+
+| arm | depth 3 t/s | acc | prompt | sha1 | wired+anon vs idle |
+|---|--:|--:|--:|---|--:|
+| orig + runtime side buffers | 24.757 / 24.738 | 60.5% | 66.32 / 66.66 s | `5e76afaba36c` | +35.02 / +34.44 GiB |
+| stored SoA GGUF | 24.704 / 24.535 | 60.9% | 65.63 / 65.63 s | `5e76afaba36c` | +23.88 / +23.83 GiB |
+
+Decode -0.5% (inside the two-run spread), prefill -1.3%, **-10.9 GiB resident**, the canonical
+UD 600-token sha on every arm (acceptance moves because the drafter reads target activations, the
+committed text does not - as in step 6). The route proof (`-lv 5`, stored file, depth 3): the
+three `*_soa_w4_v5|v2` kernels, `kernel_mul_mv_ext_*_soa_f16_r1_2` at width 2, `kernel_mul_mm_*_f16
+... soa=1` at prefill, `kernel_repack_*` only for the Q4_0 drafter.
+
+**No-spec b1 anchor** (TAG `ud-soa-gguf-sep06-b1v2`, orig stored stored orig): 12.666 / 12.659 vs
+12.324 / 12.292 t/s = **-2.8%**, same sha `5e76afaba36c` (the 600-token text survives the new
+width-1 kernel), +30.0 vs +18.9 GiB. The first width-1 form read the half scale planes (+8..16 B
+per superblock over the plain file) and measured -3.7%; the shipped form (`SM=2`) reads the
+exact header plane and streams the plain file's bytes. What is left is per format, `test-backend-ops
+perf` n=1 (us/call, plain -> stored):
+
+| shape | iq4_xs | q4_K | q5_K |
+|---|--:|--:|--:|
+| 17408x5120 | 205.1 -> 200.7 (-2.2%) | 202.6 -> 232.8 (+14.9%) | 285.9 -> 274.2 (-4.1%) |
+| 5120x17408 | 211.3 -> 205.9 (-2.6%) | 205.8 -> 243.0 (+18.1%) | 291.1 -> 283.7 (-2.5%) |
+
+The iq4_xs and q5_K readers beat their upstream block kernels; the q4_K one loses 15-18% - the
+upstream q4_K kernel runs at ~250 GB/s (0.9x the byte floor), the 4-row body at ~215 GB/s
+(issue-bound: the per-pack scale/min math and the min-fold add ~1.3 instructions per element on a
+~7-per-element budget). Weighted by streamed bytes that is the whole -2.8%. **Open:** port the
+upstream q4_K width-1 form (16 elements per thread, packed scale masks) to the stored packs -
+ceiling ~+1.5% b1 over plain, i.e. the stored file would win at every width. Not done: the pick
+runs depth 3, where the file is at parity.
+
+Harness trap (cost one run): a llama-server's listening socket outlives `kill -TERM` by the length
+of its in-flight prefill plus the Metal teardown, and `kill -9` cannot interrupt the GPU wait; the
+next arm's server binds the same port (`SO_REUSEPORT`), its POST lands on the dying process and
+returns empty. `run-ud-soa-gguf-ab.sh` now waits for the pid and the port before launching.
+
+**What this leaves.** The UD pick's memory is the file (17.4 GiB on disk, +2.06 GiB over the plain
+15.3) plus KV/compute - no first-verify repack, no ~12 GiB of side buffers. The plain file is
+redundant once the stored one verifies (`--reverse --verify` restores it byte-for-byte).
+Adoption is the owner's: `-m Qwen3.8-27B-UD-Q4_K_M-SOA-V1.gguf` with the unchanged pick env.

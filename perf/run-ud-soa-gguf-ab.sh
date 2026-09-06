@@ -21,6 +21,7 @@ NPRED=${NPRED:-600}
 DEPTH=${DEPTH:-3}
 ARMS=${ARMS:-"orig stored stored orig"}
 RUN_B1=${RUN_B1:-1}
+RUN_SPEC=${RUN_SPEC:-1}
 EXTRA_ENV=${EXTRA_ENV:-}
 TSV=$OUT/$TAG.tsv
 mkdir -p "$OUT"
@@ -52,6 +53,10 @@ run_one() {
   local slog="$OUT/$TAG-$label.server.log"
   local -a spec
   if [ "$depth" = 0 ]; then spec=(--spec-type none); else spec=(-md "$MD" --spec-type draft-dflash --spec-draft-n-max "$depth"); fi
+  # the previous server's listening socket outlives its process teardown (Metal residency
+  # sets, an in-flight prefill that kill -9 cannot interrupt): a second listener on the port
+  # gets the next arm's POST routed to the dying process and an empty reply (2026-09-06)
+  for i in $(seq 1 60); do lsof -ti :$PORT >/dev/null 2>&1 || break; sleep 2; done
   if lsof -ti :$PORT >/dev/null 2>&1; then echo "[$label] ABORT: port busy"; return 1; fi
   sleep 5
   local base_gib=$(vm_wired_anon_gib)
@@ -69,7 +74,7 @@ import json
 p = open('/Users/troff/play/benchprompt.txt').read()
 print(json.dumps({'prompt': p, 'n_predict': $NPRED, 'temperature': 0}))" \
   | curl -s -X POST "http://127.0.0.1:$PORT/completion" -d @- > "$OUT/$TAG-$label.json"
-  local fp=$(footprint -p $pid 2>/dev/null | awk '/phys_footprint/ {print $2; exit}')
+  local fp=$(footprint -p $pid 2>/dev/null | sed -n 's/.*Footprint: \([0-9.]* [KMG]B\).*/\1/p' | head -1 | tr -d ' ')
   local mem_gib=$(vm_wired_anon_gib)
   python3 - "$label" "$arm" "$depth" "$fp" "$base_gib" "$mem_gib" <<PY
 import json,sys,hashlib
@@ -87,20 +92,24 @@ print('[%-12s] %-6s depth=%s  %6.3f t/s  acc=%5.1f%%  n=%d  prompt=%.0f ms  sha1
 open('$TSV','a').write('\t'.join(map(str,[label,arm,depth,t.get('predicted_per_second',0),round(acc,2),t.get('predicted_n',0),round(t.get('prompt_ms',0)),sha,fp,round(delta,3)]))+'\n')
 PY
   kill -TERM $pid 2>/dev/null
-  for i in $(seq 1 25); do kill -0 $pid 2>/dev/null || break; sleep 1; done
+  for i in $(seq 1 120); do kill -0 $pid 2>/dev/null || break; sleep 1; done
   kill -9 $pid 2>/dev/null; wait $pid 2>/dev/null
+  for i in $(seq 1 60); do kill -0 $pid 2>/dev/null || break; sleep 1; done
 }
 
-i=0
-for arm in $ARMS; do
-  i=$((i+1))
-  run_one "d${DEPTH}-$arm-$i" $arm $DEPTH
-done
-if [ "$RUN_B1" = 1 ]; then
-  i=0
+# (n, not i: run_one's wait loops use i)
+n=0
+if [ "$RUN_SPEC" = 1 ]; then
   for arm in $ARMS; do
-    i=$((i+1))
-    run_one "b1-$arm-$i" $arm 0
+    n=$((n+1))
+    run_one "d${DEPTH}-$arm-$n" $arm $DEPTH
+  done
+fi
+if [ "$RUN_B1" = 1 ]; then
+  n=0
+  for arm in $ARMS; do
+    n=$((n+1))
+    run_one "b1-$arm-$n" $arm 0
   done
 fi
 echo "results: $TSV"
