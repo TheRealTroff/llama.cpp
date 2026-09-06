@@ -1,4 +1,4 @@
-# Flash attention at long context: baselines, census, and the per-chunk levers (2026-09-06, OPEN)
+# Flash attention at long context: baselines, census, QR and the 16-row query tile (2026-09-06, BUILT - adoption = owner)
 
 Owner: "What's left in the FAs? ... have at it. It sounds like we want some long context baselines."
 At the 8K benchmark prompt FA is 2.7 s of 66 s prefill (4%) and 4.4 ms of a 119 ms decode round
@@ -21,6 +21,7 @@ tokens** (wikitext is ~4 chars/token; the file name says 32K, the token count is
 | 25K, -c 40960 | 24840 | 202.6 s | 122.6 | 24.9 | 50.6% | f9e3a81f2908 | longctx-32k-sep06-base |
 | 96K, -c 102400 | 95508 | 1254.2 s (a first base arm: 1210 s prefill, then GPU OOM in decode) | 76.2 | 13.47 | 49.9% | e9c5beb4a7d5 | longctx-96k-sep06-base2 |
 | 96K, `GGML_FA_QR=8` ungated (two arms) | 95508 | 1288.8 / 1276.2 s | 74.1 / 74.8 | 15.08 / 15.14 | 49.9% | e9c5beb4a7d5 | longctx-96k-sep06-qr8 / qr8b |
+| 96K, `GGML_FA_Q16=1 GGML_FA_QR=8` (both gated) | 95508 | **1015.4 s** | **94.1** | 15.08 | 49.9% | e9c5beb4a7d5 | longctx-96k-sep06-q16 |
 
 Arithmetic check on the 25K point: the 8K prefill is ~60 s of mm+GDN (linear, so ~180 s at 25K) plus
 2.7 s of FA (quadratic, so ~24 s at 25K) = ~204 s expected, 202.6 measured. FA is ~10% of the 25K
@@ -260,6 +261,11 @@ threadgroup's per-chunk fixed cost shows as +7%. The 4-simdgroup form would have
 but pays its 32 B spill everywhere. A register head (QR) on the 8-simdgroup form does not help (both
 query tiles' Q loads would need to fit).
 
-Gate: Q = 16 above 32K cache entries, Q = 8 with QR = 8 below (the two routes meet at 24K). E2e at
-96K: pending (`longctx-96k-sep06-q16`); byte-identity expected by construction (per-row softmax and the
-same MMA order per tile), to be read from the sha.
+Gate: Q = 16 above 32K cache entries, Q = 8 with QR = 8 below (the two routes meet at 24K).
+
+**E2e at 96K (`longctx-96k-sep06-q16`, both routes gated as above): prefill 1254 -> 1015 s, 76.2 -> 94.1
+t/s (-19%), sha `e9c5beb4a7d5` = the base and QR arms - byte-identical.** Decode 15.08 t/s (the QR=8
+decode route; Q = 16 is prefill-only). Against the 2026-09-02 record of 1302-1308 s this is -22%. The
+wall-clock gain exceeds the kernel's -21% times FA's share because at 96K the base FA is stream-bound
+and the ubatches above 32K are most of the prompt; the per-ubatch prefill rate at 96K went from ~73 to
+~95 t/s. Adoption = owner (both flags byte-identical on every sha gate: 8K canonical, 25K, 96K).
