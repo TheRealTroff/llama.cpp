@@ -1157,3 +1157,18 @@ f16 path's one load, which is the whole remaining gap.
 instead of three 8-row ones would amortize the dequant 1.5x; needs `case 8` GQAH instantiations); a
 cheaper per-tile dequant (the four lanes of a row read the same 4-byte word and the same table entry -
 a lane-cooperative form would trade loads for shuffles, which lost on the iq4_xs kernel).
+
+**E2e, UD (stored file, pick env + Turbo4 flags, `GGML_FA_TR=3`, branch build):**
+
+| arm | prefill | decode t/s | acc | verify round | prefill ubatch | sha |
+|---|--:|--:|--:|--:|--:|---|
+| 8K Turbo4 depth 3, prod kernel (morning) | 68.1 s | 24.57 / 24.80 | 66.9% | | | `2802eb28cd29` |
+| 8K Turbo4 depth 3, TR (x2, f16 control 24.53 in the same run) | 66.3 / 66.5 s | **25.37 / 25.47** | 66.9% | | | `2802eb28cd29` |
+| 96K f16 depth 3 (morning) | 1102.1 s | 15.97 | 48.2% | 134.9 ms | 16.96 s | `0f1e46f3edbf` |
+| 96K Turbo4 depth 3, prod kernel (morning) | 1375.3 s | 13.00 | 52.6% | 181.2 ms | 21.16 s | `3b4127a77a1d` |
+| 96K Turbo4 depth 3, TR | **1139.7 s (-17%)** | **14.41 (+11%)** | 52.6% | **151.4 ms (-16%)** | 17.54 s | `3b4127a77a1d` |
+
+Byte-identical at both lengths. At 96K the Turbo4 prefill is now +3.4% over f16 (was +25%) and the round
++12% (was +34%); the round's remaining gap is the decode FA kernel at 1.37x f16 per call (~50 vs 36 ms of
+the round across the 16 attention layers). The 8K t/s lead over f16 is the trajectory's acceptance (66.9
+vs 60.9% on this prompt), not the kernel - compare round times, not t/s, across cache types.
