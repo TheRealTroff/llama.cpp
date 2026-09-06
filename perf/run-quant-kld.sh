@@ -16,7 +16,7 @@ if [ -z "${CAFFEINATED:-}" ]; then
     exec env CAFFEINATED=1 caffeinate -dimsu "$0" "$@"
 fi
 
-B=/Users/troff/play/llama.cpp-prod
+B=${B:-/Users/troff/play/llama.cpp-prod}   # the stored-SoA GGUFs need a build with the stored types (ud-model.md step 13)
 BIN=$B/build/bin
 # W is the scoring corpus. Overridable so the same machinery can score model-GENERATED
 # text instead of wikitext - see run-agreement.sh, which is what makes 'Same top p'
@@ -31,7 +31,8 @@ CTX=${CTX:-2048}
 # passes through from the caller.
 REF_KV=${REF_KV:-f16}
 KV=${KV:-f16}
-SCRATCH=${SCRATCH:-/private/tmp/claude-501/-Users-troff-play/6bc69f4f-7ac7-43fa-85b2-ee8d853452b0/scratchpad}
+SCRATCH=${SCRATCH:-/Users/troff/play/kvquant-experiments/logits}   # ~1.02 GB per chunk; durable, reused across runs of one TAG
+LABEL=${LABEL:-}          # suffix on the per-test log name, for re-scoring one file under another env (exported by the caller)
 OUT=/Users/troff/play/kvquant-experiments/results
 TAG=${TAG:-kld-$(date +%m%d-%H%M)}
 mkdir -p "$OUT" "$SCRATCH"
@@ -69,7 +70,7 @@ fi
 
 # 2. each test model against those logits
 for M in "${TESTS[@]}"; do
-  n=$(basename "$M" .gguf)
+  n=$(basename "$M" .gguf)$LABEL
   echo
   echo "--- $n vs reference ---"
   "$BIN/llama-perplexity" -m "$M" -f "$W" -c "$CTX" --chunks "$CHUNKS" -fa on \

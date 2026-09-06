@@ -6,6 +6,27 @@
 extern "C" {
 #endif
 
+// Stored SoA storage types (perf/ud-model.md step 12): the UD line's iq4_xs/q4_K/q5_K rows in the
+// Metal SoA layout with the original block header appended. Q4_0_SOA is the older Q4_0 contract.
+static inline bool ggml_metal_is_kq_soa_type(enum ggml_type t) {
+    return t == GGML_TYPE_IQ4_XS_SOA || t == GGML_TYPE_Q4_K_SOA || t == GGML_TYPE_Q5_K_SOA;
+}
+
+static inline bool ggml_metal_is_soa_type(enum ggml_type t) {
+    return t == GGML_TYPE_Q4_0_SOA || ggml_metal_is_kq_soa_type(t);
+}
+
+// the quantization a stored SoA type carries (kernel base names, tile instantiations)
+static inline enum ggml_type ggml_metal_soa_base_type(enum ggml_type t) {
+    switch (t) {
+        case GGML_TYPE_Q4_0_SOA:   return GGML_TYPE_Q4_0;
+        case GGML_TYPE_IQ4_XS_SOA: return GGML_TYPE_IQ4_XS;
+        case GGML_TYPE_Q4_K_SOA:   return GGML_TYPE_Q4_K;
+        case GGML_TYPE_Q5_K_SOA:   return GGML_TYPE_Q5_K;
+        default:                   return t;
+    }
+}
+
 struct ggml_metal_buffer_id {
     void * metal; // id<MTLBuffer>
     size_t offs;
@@ -153,6 +174,7 @@ struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_repack_iq
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_iq4_xs_soa(ggml_metal_library_t lib, int width, int variant);
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_repack_kq_soa     (ggml_metal_library_t lib, enum ggml_type type, bool halfs);
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_kq_soa     (ggml_metal_library_t lib, enum ggml_type type, int width, int variant);
+struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_kq_soa_w1  (ggml_metal_library_t lib, enum ggml_type type, int width);
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w7(ggml_metal_library_t lib, int rows);
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w5(ggml_metal_library_t lib, int rows, bool hp);
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w5_qw(ggml_metal_library_t lib, int qw);

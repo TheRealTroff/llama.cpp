@@ -986,6 +986,17 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_repack_kq_soa(gg
     return res.pipeline ? res : ggml_metal_library_compile_pipeline(lib, name, name, nullptr);
 }
 
+// width-1 readers for the stored SoA rows (IQ4_XS_SOA / Q4_K_SOA / Q5_K_SOA): 4 rows x 2 simdgroups, f32 y
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_kq_soa_w1(ggml_metal_library_t lib, enum ggml_type type, int width) {
+    // GGML_MV_KQ_SOA_W1=0: the first (4-row, NC=1) q4_K width-1 body, kept for the A/B (step 14)
+    static const int env_v = getenv("GGML_MV_KQ_SOA_W1") ? atoi(getenv("GGML_MV_KQ_SOA_W1")) : 1;
+    char name[64];
+    snprintf(name, sizeof(name), "kernel_mul_mv_%s_soa_w%d%s", ggml_type_name(ggml_metal_soa_base_type(type)), width,
+             (type == GGML_TYPE_Q4_K_SOA && width == 1 && env_v == 0) ? "_v0" : "");
+    auto res = ggml_metal_library_get_pipeline(lib, name);
+    return res.pipeline ? res : ggml_metal_library_compile_pipeline(lib, name, name, nullptr);
+}
+
 ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_kq_soa(ggml_metal_library_t lib, enum ggml_type type, int width, int variant) {
     char name[64];
     snprintf(name, sizeof(name), "kernel_mul_mv_%s_soa_w%d_v%d", ggml_type_name(type), width, variant < 1 ? 1 : variant > 2 ? 2 : variant);
@@ -1040,8 +1051,13 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_ext(ggml_
 
     GGML_ASSERT(ne12 <= INT16_MAX && r2 <= INT16_MAX && r3 <= INT16_MAX);
 
+    // stored q4_K tile scale: exact f32 d*sc by default (owner, 2026-09-06: "I want the exact version",
+    // KLD-priced in weight-quant-kld.md); GGML_KQ_SOA_EXACT=0 reproduces upstream's half d/16 quotient
+    static const bool kq_exact = !getenv("GGML_KQ_SOA_EXACT") || atoi(getenv("GGML_KQ_SOA_EXACT")) != 0;
+    const bool kq_exact_here = kq_exact && tsrc0 == GGML_TYPE_Q4_K_SOA;
+
     snprintf(base, 256, "kernel_mul_mv_ext_%s%s_%s%s_r1_%d", ggml_type_name(tsrc0), di ? "_di" : "", ggml_type_name(tsrc1), variant == 2 ? "_ilp2" : variant == 3 ? "_v2" : variant == 4 ? "_hp" : "", r1ptg);
-    snprintf(name, 256, "%s_nsg=%d_nxpsg=%d_nr0=%d_ne12=%d_r2=%d_r3=%d", base, nsg, nxpsg, nr0, ne12, r2, r3);
+    snprintf(name, 256, "%s_nsg=%d_nxpsg=%d_nr0=%d_ne12=%d_r2=%d_r3=%d%s", base, nsg, nxpsg, nr0, ne12, r2, r3, kq_exact_here ? "_exact" : "");
 
     ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
     if (!res.pipeline) {
@@ -1053,6 +1069,9 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_ext(ggml_
         ggml_metal_cv_set_int16(cv, (int16_t) r2,   FC_MUL_MV + 3);
         ggml_metal_cv_set_int16(cv, (int16_t) r3,   FC_MUL_MV + 4);
         ggml_metal_cv_set_int16(cv, (int16_t) nr0,  FC_MUL_MV + 5);
+        if (kq_exact_here) {
+            ggml_metal_cv_set_bool(cv, true, FC_MUL_MM + 7);
+        }
 
         res = ggml_metal_library_compile_pipeline(lib, base, name, cv);
 
@@ -1069,7 +1088,9 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm(ggml_meta
     const ggml_type tsrc0 = op->src[0]->type;
     // tsrc1_override = GGML_TYPE_F16 when the op casts its activations into the f16 scratch (GGML_MM_F16B)
     const ggml_type tsrc1 = tsrc1_override != GGML_TYPE_COUNT ? tsrc1_override : op->src[1]->type;
-    const bool soa = tsrc0 == GGML_TYPE_Q4_0_SOA;
+    // stored SoA rows: the underlying type's tile with FC_mul_mm_soa (dequantize_soa_mm reads the row layout)
+    const bool soa = ggml_metal_is_soa_type(tsrc0);
+    const ggml_type tbase = ggml_metal_soa_base_type(tsrc0);
 
     const bool bc_inp = op->src[0]->ne[0] % 32 != 0;
 
@@ -1095,25 +1116,27 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm(ggml_meta
     // the f32 K-quant tiles, whose dequant tax is larger (GGML_MM_N64_KMAX, default 6144)
     static const int n64_kmax = getenv("GGML_MM_N64_KMAX") ? atoi(getenv("GGML_MM_N64_KMAX")) : 6144;
     // (!bc_out: the f32 tile's bounds-checked store path would need 16 KiB of threadgroup memory)
-        const bool n64_shape = n64_enabled && (tsrc1 == GGML_TYPE_F32 || tsrc1 == GGML_TYPE_F16) && !has_tensor && !bc_inp && !bc_out && !soa &&
+        const bool n64_shape = n64_enabled && (tsrc1 == GGML_TYPE_F32 || tsrc1 == GGML_TYPE_F16) && !has_tensor && !bc_inp && !bc_out && tsrc0 != GGML_TYPE_Q4_0_SOA &&
         op->ne[0] >= 4096 && op->ne[1] == 512 && op->src[0]->ne[0] <= n64_kmax &&
         op->ne[0] % 64 == 0;
     const bool n64 = n64_shape && acc_half && tsrc0 == GGML_TYPE_Q4_0;
     // f32-accumulate 64-column tiles for the UD line's formats (and q4_0 without acch)
     static const bool n64_f32_enabled = !getenv("GGML_MM_N64_F32") || atoi(getenv("GGML_MM_N64_F32")) != 0;  // GGML_MM_N64_F32=0 = A/B off switch
     const bool n64_f32 = n64_f32_enabled && n64_shape && !(acc_half && tsrc0 == GGML_TYPE_Q4_0) &&
-        (tsrc0 == GGML_TYPE_Q4_0 || tsrc0 == GGML_TYPE_Q4_K || tsrc0 == GGML_TYPE_Q5_K ||
-         tsrc0 == GGML_TYPE_Q6_K || tsrc0 == GGML_TYPE_Q3_K || tsrc0 == GGML_TYPE_IQ4_XS ||
-         tsrc0 == GGML_TYPE_IQ3_S || tsrc0 == GGML_TYPE_IQ4_NL);
+        (tbase == GGML_TYPE_Q4_0 || tbase == GGML_TYPE_Q4_K || tbase == GGML_TYPE_Q5_K ||
+         tbase == GGML_TYPE_Q6_K || tbase == GGML_TYPE_Q3_K || tbase == GGML_TYPE_IQ4_XS ||
+         tbase == GGML_TYPE_IQ3_S || tbase == GGML_TYPE_IQ4_NL);
     if (!soa && acc_half && tsrc0 == GGML_TYPE_Q4_0 && (tsrc1 == GGML_TYPE_F32 || tsrc1 == GGML_TYPE_F16) && !has_tensor) {
         snprintf(base, 256, n64 ? "kernel_mul_mm_acch_n64_q4_0_%s" : "kernel_mul_mm_acch_q4_0_%s", ggml_type_name(tsrc1));
         } else if (n64_f32) {
-        snprintf(base, 256, "kernel_mul_mm_n64_%s_%s", ggml_type_name(tsrc0), ggml_type_name(tsrc1));
+        snprintf(base, 256, "kernel_mul_mm_n64_%s_%s", ggml_type_name(tbase), ggml_type_name(tsrc1));
     } else {
-        snprintf(base, 256, "kernel_mul_mm_%s_%s", soa ? "q4_0" : ggml_type_name(tsrc0), ggml_type_name(tsrc1));
+        snprintf(base, 256, "kernel_mul_mm_%s_%s", ggml_type_name(tbase), ggml_type_name(tsrc1));
     }
-    snprintf(name, 256, "%s_bci=%d_bco=%d_ne12=%d_ne13=%d_r2=%d_r3=%d_soa=%d",
-             base, bc_inp, bc_out, ne12, ne13, r2, r3, soa);
+    static const bool kq_exact = !getenv("GGML_KQ_SOA_EXACT") || atoi(getenv("GGML_KQ_SOA_EXACT")) != 0;   // default on (see the ext builder)
+    const bool kq_exact_here = kq_exact && tsrc0 == GGML_TYPE_Q4_K_SOA;
+    snprintf(name, 256, "%s_bci=%d_bco=%d_ne12=%d_ne13=%d_r2=%d_r3=%d_soa=%d%s",
+             base, bc_inp, bc_out, ne12, ne13, r2, r3, soa, kq_exact_here ? "_exact" : "");
 
     ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
     if (!res.pipeline) {
@@ -1126,6 +1149,9 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm(ggml_meta
         ggml_metal_cv_set_int16(cv, r2,    FC_MUL_MM + 4);
         ggml_metal_cv_set_int16(cv, r3,    FC_MUL_MM + 5);
         ggml_metal_cv_set_bool (cv, soa,   FC_MUL_MM + 6);
+        if (kq_exact_here) {
+            ggml_metal_cv_set_bool(cv, true, FC_MUL_MM + 7);
+        }
 
         res = ggml_metal_library_compile_pipeline(lib, base, name, cv);
 

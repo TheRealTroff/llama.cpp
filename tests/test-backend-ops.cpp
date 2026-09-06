@@ -99,9 +99,10 @@ static void init_tensor_uniform(ggml_tensor * tensor, float min = -1.0f, float m
         }
 
         std::vector<uint8_t> dataq(ggml_row_size(tensor->type, nels));
-        if (tensor->type == GGML_TYPE_Q4_0_SOA) {
+        if (tensor->type == GGML_TYPE_Q4_0_SOA || tensor->type == GGML_TYPE_IQ4_XS_SOA ||
+            tensor->type == GGML_TYPE_Q4_K_SOA || tensor->type == GGML_TYPE_Q5_K_SOA) {
             // SoA scale/pack streams restart on every logical row and therefore
-            // cannot be quantized as independent 32-element blocks.
+            // cannot be quantized as independent blocks.
             ggml_quantize_chunk(tensor->type, data.data(), dataq.data(),
                                 0, ggml_nrows(tensor), tensor->ne[0], im);
         } else {
@@ -10233,6 +10234,23 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat(
         GGML_TYPE_Q4_0_SOA, GGML_TYPE_F32, 6144, 1, 5120, {1, 1}, {1, 1}));
 
+    // Stored UD-format SoA readers (IQ4_XS_SOA / Q4_K_SOA / Q5_K_SOA): width 1 (w1 kernel), 2 and
+    // 6..8 (ext SoA), 3..5 on a whitelisted row count (the pick's SoA kernels) and off it (ext SoA),
+    // 32 and 512 (mul_mm, 32-column and 64-column tiles), plus the GDN-style folded batch.
+    for (ggml_type t : {GGML_TYPE_IQ4_XS_SOA, GGML_TYPE_Q4_K_SOA, GGML_TYPE_Q5_K_SOA}) {
+        for (int n : {1, 2, 3, 4, 5, 6, 7, 8, 32, 512}) {
+            test_cases.emplace_back(new test_mul_mat(t, GGML_TYPE_F32, 256, n, 512, {1, 1}, {1, 1}));
+            test_cases.emplace_back(new test_mul_mat(t, GGML_TYPE_F32, 6144, n, 5120, {1, 1}, {1, 1}));
+        }
+        for (int n : {1, 3, 4, 5}) {
+            test_cases.emplace_back(new test_mul_mat(t, GGML_TYPE_F32, 5120, n, 17408, {1, 1}, {1, 1}));
+        }
+        test_cases.emplace_back(new test_mul_mat(t, GGML_TYPE_F32, 1024, 1, 5120, {1, 1}, {1, 1}));
+        test_cases.emplace_back(new test_mul_mat(t, GGML_TYPE_F32, 4096, 512, 5120, {1, 1}, {1, 1}));
+        test_cases.emplace_back(new test_mul_mat(t, GGML_TYPE_F32, 256, 1, 4096, {1, 1}, {3, 1}));
+        test_cases.emplace_back(new test_mul_mat(t, GGML_TYPE_F32, 256, 4, 4096, {1, 1}, {2, 1}));
+    }
+
     return test_cases;
 }
 #ifdef _MSC_VER
@@ -10479,6 +10497,16 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
             test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0_SOA, GGML_TYPE_F32,  6144, bs,  5120, {1, 1}, {1, 1}));
             test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0_SOA, GGML_TYPE_F32, 12288, bs,  5120, {1, 1}, {1, 1}));
             test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0_SOA, GGML_TYPE_F32, 248320, bs, 5120, {1, 1}, {1, 1}));
+        }
+    }
+
+    // Stored UD-format SoA readers: the two FFN orientations across widths (perf/ud-model.md step 12),
+    // plus the K=6144 attn_output shape (stored iq4_xs rows are 64-byte aligned there: step 14)
+    for (ggml_type t : {GGML_TYPE_IQ4_XS_SOA, GGML_TYPE_Q4_K_SOA, GGML_TYPE_Q5_K_SOA, GGML_TYPE_IQ4_XS, GGML_TYPE_Q4_K, GGML_TYPE_Q5_K}) {
+        for (int bs : {1, 2, 3, 4, 5, 6, 7, 8, 512}) {
+            test_cases.emplace_back(new test_mul_mat(t, GGML_TYPE_F32, 17408, bs,  5120, {1, 1}, {1, 1}));
+            test_cases.emplace_back(new test_mul_mat(t, GGML_TYPE_F32,  5120, bs, 17408, {1, 1}, {1, 1}));
+            test_cases.emplace_back(new test_mul_mat(t, GGML_TYPE_F32,  5120, bs,  6144, {1, 1}, {1, 1}));
         }
     }
 
