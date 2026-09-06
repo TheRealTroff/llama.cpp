@@ -277,3 +277,6 @@ Measured on UD at the same 96K prompt: Turbo4 prefill 1375 s vs f16 1102 (+25%),
 181 ms (its 2026-09-02 value) vs f16 135. Porting QT/QR/Q16 to the quantized-K prefill kernel and QR to
 the Turbo4 GQA decode tile is the open item for the Turbo4 line; expect the same -19% / -21% the f16
 kernels showed at 96K.
+BUILT the same night: `ud-model.md` step 16 B (`GGML_FA_TR=3`, branch `turbo4-fa-stack`) - the Turbo4 FA
+kernels at 1.15x (prefill) / 1.37x (decode) the f16 kernel per call from 2.1-2.3x, byte-identical; the
+form is a register-resident dequant, not a port of these f16 forms line by line.

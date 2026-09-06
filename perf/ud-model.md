@@ -1197,3 +1197,28 @@ kernels' native text is byte-identical between prod and this branch at every pro
 (9268 / 11728 / 10638 B, prescreen), and the text sha matches, so the difference is machine state; the
 Turbo4 arm ran right after it in the same state, which is what the pair compares. Re-run the f16 arm cold
 before quoting either absolute.
+
+**Route proof, Q4_0 8K prefill (`-lv 5` + `GGML_METAL_LOG_LEVEL=2`, so the absolutes carry logging overhead;
+compare within the batch):** f16 68.06 s; Turbo4 prod kernel 70.80 / 70.67 s (`-c` 10240 / 102400: the
+allocation is inert here too); Turbo4 TR 68.86 / 68.85 s. Pipelines named in the runs: TR arms
+`kernel_flash_attn_ext_qtl4_turbo4_dk256_dv256` at nsg=4 nwg=1 gqah=1 (prefill) and nwg=8 gqah=6 (decode),
+prod arms `kernel_flash_attn_ext_turbo4_dk256_dv256` at the same shapes, both lines the vec kernel at
+width 1. So the Turbo4 line's 8K prefill sits +1.2% over f16 with the TR form (was +3.9% in the same
+state; the 8-13% in the mints was cross-day machine state). Decode at 8K: 31.2 vs 30.2 t/s with logging,
+31.0/31.1 vs 31.2 without - a wash, as the FA share of an 8K round predicts.
+
+### Where the Turbo4 line stands after the port (2026-09-06 night)
+
+| | f16 | Turbo4, prod kernel | Turbo4, TR (`GGML_FA_TR=3`) |
+|---|--:|--:|--:|
+| Q4_0 96K verify round | 119 ms | 182 ms | **132 ms** (+11% vs f16) |
+| Q4_0 96K prefill ubatch | 17.50 s | 21.2 s (UD-measured ratio) | **17.97 s** (+2.7%) |
+| UD 96K verify round | 135 ms | 181 ms | **151 ms** (+12%) |
+| UD 96K prefill | 1102 s | 1375 s | **1140 s** (+3.4%) |
+| 8K decode / prefill (either file) | - | wash / +4% | wash / +1% |
+| memory at 96K | +4.7 GiB | | |
+
+Every arm byte-identical to the Turbo4 line's recorded texts. **Adoption = owner:** `GGML_FA_TR=3` into
+`TURBO_PICK_ENV` (`GGML_FA_Q16=1` is already in the pick and now routes the Turbo4 16-row prefill tile).
+Follow-ups: the f16 Q4_0 96K arm re-run cold (tonight's 1136 s vs 1015 on record is machine state); the
+per-tile dequant is the remaining 1.3-1.4x on the decode FA call (~13 ms of the 96K round).
