@@ -1263,3 +1263,14 @@ the run.) The remaining gap to f16 is the two loads per tile (byte + table entry
 A wash inside the error bars (mean +4% = a third of one sigma, argmax +0.03 pt, far tail +11%), the same
 shape as the exact-q4_K-tile decision in step 15. Adoption of TRN (numerics) = owner; TR=3 stays the
 byte-identical form.
+
+**Trace of the folded form** (`profiles/turbo4-fa-trn-sep06`): 9.41M dynamic instructions per decode dispatch
+(TR 11.78M, f16 5.25M), 72% issue / 28% stall (66/34, 82/18), 0 spill, 96 registers; the hot tier is the
+536-instruction unrolled chunk body at 56% of issue with 119 device loads, 127 MMA/threadgroup-load class
+and 275 wide-operand ops. What is left per tile is the byte load, the table load and the address arithmetic
+of both, which the format sets: a 2-byte-aligned nibble stream (a 4-byte load per row per tile would need
+the block's qs 4-aligned - a 68-byte block, i.e. a format change) feeding a 256-entry table. A
+lane-cooperative byte load (ushort4 per two tiles, extract per lane) trades 4 loads for ~8 ALU per chunk
+and is the one form not tried. The Turbo4 decode FA call is at 1.10-1.24x f16 with TRN and 1.20-1.4x with
+the byte-identical TR; the kernel-level answer to "the per-tile dequant" is TRN, and it is a numerics
+decision.
