@@ -1847,7 +1847,7 @@ int ggml_metal_flash_attn_ext_tr(const ggml_tensor * op) {
     return 0;
 }
 
-bool ggml_metal_flash_attn_ext_q16(const ggml_tensor * op) {
+bool ggml_metal_flash_attn_ext_q16(const ggml_tensor * op, int32_t gqa_heads) {
     static const bool fa_q16 = getenv("GGML_FA_Q16") != nullptr && atoi(getenv("GGML_FA_Q16")) != 0;
     static const bool fa_qt  = getenv("GGML_FA_QT")  != nullptr && atoi(getenv("GGML_FA_QT"))  != 0;
     static const bool fa_acc_half = getenv("GGML_FA_ACC_HALF") != nullptr; // presence-based, as the FA getter reads it
@@ -1862,8 +1862,16 @@ bool ggml_metal_flash_attn_ext_q16(const ggml_tensor * op) {
     // pays from ~32K cache entries up (-12..-16% at 48K, -21% at 96K), flat at 24K, +7% at 8K: the 16-row
     // tile halves the cache stream per query, which is the bound only at long context
     static const int fa_q16_kvmin = getenv("GGML_FA_Q16_KVMIN") != nullptr ? atoi(getenv("GGML_FA_Q16_KVMIN")) : 32768;
-    return op->src[0]->ne[0] == 256 && op->src[2]->ne[0] == 256 && op->src[0]->ne[1] >= 32 &&
-           op->src[1]->ne[1] > fa_q16_kvmin;
+    if (op->src[0]->ne[0] != 256 || op->src[2]->ne[0] != 256 || op->src[1]->ne[1] <= fa_q16_kvmin) {
+        return false;
+    }
+    if (op->src[0]->ne[1] >= 32) {
+        return true; // prefill-sized query batches
+    }
+    // decode: the Turbo4 TR form packs the GQA rows (ne01 x gqa_heads) into 16-row threadgroups when
+    // GGML_FA_Q16_DEC=1 - each dequantized K/V tile then feeds two query tiles (perf/ud-model.md step 16 B)
+    static const bool fa_q16_dec = getenv("GGML_FA_Q16_DEC") != nullptr && atoi(getenv("GGML_FA_Q16_DEC")) != 0;
+    return fa_q16_dec && tr16 && op->src[0]->ne[1]*gqa_heads >= 16;
 }
 
 ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext(
@@ -1923,18 +1931,19 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext(
     if (fa_qt && !fa_acc_half && op->src[1]->type == GGML_TYPE_F16 && op->src[2]->type == GGML_TYPE_F16 && dk == dv && (dk == 128 || dk == 256)) {
         snprintf(base, 256, "kernel_flash_attn_ext_qt_f16_dk%d_dv%d", dk, dv);
     }
-    if (ggml_metal_flash_attn_ext_q16(op)) {
+    if (ggml_metal_flash_attn_ext_q16(op, gqa_heads)) {
         snprintf(base, 256, "kernel_flash_attn_ext_qt16_f16_dk%d_dv%d", dk, dv);
     }
     // TR form for the Turbo4 cache (perf/ud-model.md step 16): the transposed-Q form with the K/V tiles
     // dequantized into the simdgroup matrices by their owning lanes; "=0" off
     // GGML_FA_TR=1: pair table in constant memory (byte-identical); 2: staged in threadgroup memory (qtl, byte-identical);
-    // 3: qtl with the V loop unrolled 4; 4: half table = the vec kernel's numerics (qth, NOT byte-identical); 5: qth unroll 4; "=0" off
+    // 3: qtl with the V loop unrolled 4; 4: half table = the vec kernel's numerics (qth, NOT byte-identical); 5: qth unroll 4;
+    // 6: TRN - norms folded out of the dequant, applied per key tile to the score tile (qtn, NOT byte-identical, step 16 C); "=0" off
     const int fa_tr = ggml_metal_flash_attn_ext_tr(op);
     if (fa_tr > 0) {
-        const char * form = fa_tr == 2 ? "qtl" : fa_tr == 3 ? "qtl4" : fa_tr == 4 ? "qth" : fa_tr == 5 ? "qth4" : "qt";
-        if (ggml_metal_flash_attn_ext_q16(op)) {
-            form = fa_tr >= 4 ? "qth16" : "qt16"; // the 16-row tile: constant or half table (no scratch for the staged one)
+        const char * form = fa_tr == 2 ? "qtl" : fa_tr == 3 ? "qtl4" : fa_tr == 4 ? "qth" : fa_tr == 5 ? "qth4" : fa_tr == 6 ? "qtn" : "qt";
+        if (ggml_metal_flash_attn_ext_q16(op, gqa_heads)) {
+            form = fa_tr == 6 ? "qtn16" : fa_tr >= 4 ? "qth16" : "qt16"; // the 16-row tile: constant or half table (no scratch for the staged one)
         }
         snprintf(base, 256, "kernel_flash_attn_ext_%s_turbo4_dk%d_dv%d", form, dk, dv);
     }

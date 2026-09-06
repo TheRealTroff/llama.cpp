@@ -1131,6 +1131,19 @@ static inline half2 turbo4_pair_at_h(device const char * row, short d) {
     const half norm = xb->norm;
     return turbo_pairs_4bit_h[xb->qs[(d%QK_TURBO)/2]]*norm;
 }
+// TRN (norm folded out of the dequant, perf/ud-model.md step 16 C): the raw half centroid pair; the block
+// norm is applied once per key tile to the score tile instead. Not byte-identical: KLD-priced option.
+static inline half2 turbo4_pair_raw(device const char * row, short d, threadgroup const half2 * lut) {
+    device const block_turbo4_0 * xb = (device const block_turbo4_0 *) row + d/QK_TURBO;
+    return lut[xb->qs[(d%QK_TURBO)/2]];
+}
+static inline half2 turbo4_pair_raw_c(device const char * row, short d) { // the constant-memory table (the 16-row tile has no scratch)
+    device const block_turbo4_0 * xb = (device const block_turbo4_0 *) row + d/QK_TURBO;
+    return turbo_pairs_4bit_h[xb->qs[(d%QK_TURBO)/2]];
+}
+static inline float turbo4_norm_at(device const char * row, short d) {
+    return (float) ((device const block_turbo4_0 *) row + d/QK_TURBO)->norm;
+}
 // same, with the pair table in threadgroup memory (TR_LUT_TG: the K scratch the TR path leaves unused)
 static inline half2 turbo4_pair_at_tg(device const char * row, short d, threadgroup const float2 * lut) {
     device const block_turbo4_0 * xb = (device const block_turbo4_0 *) row + d/QK_TURBO;
@@ -12344,7 +12357,7 @@ template<
         short GQAH,       // query heads sharing one KV head in this threadgroup grid
     short NSG,        // number of simd groups
     bool  QT = false, // f16 QK form: Q staged transposed, K tiles loaded untransposed, S^T stored transposed (perf/ud-model.md step 9)
-    short TRM = 0,    // TR form (perf/ud-model.md step 16): 0 pair table in constant memory, 1 staged in threadgroup memory, 2 half table (TRH numerics)
+    short TRM = 0,    // TR form (perf/ud-model.md step 16): 0 pair table in constant memory, 1 staged in threadgroup memory, 2 half table (TRH numerics), 3/4 norms folded out (TRN), half table staged / constant
     short VU = 2>     // TR form: V loop unroll
 void kernel_flash_attn_ext_impl(
         constant ggml_metal_kargs_flash_attn_ext & args,
@@ -12810,19 +12823,28 @@ void kernel_flash_attn_ext_impl(
                 const short lr = ((tiisg >> 1) & 3) + 4*(tiisg >> 4);  // this lane's row (key) of an 8x8 tile
                 const short lc = 2*(tiisg & 1) + 4*((tiisg >> 3) & 1); // its first column (dim); it holds lc, lc+1
                 // TRM 1: the pair table staged once per threadgroup into the (unused) K scratch: 256 float2 = 2 KB
-                threadgroup float2 * slut = (threadgroup float2 *) (shmem_f16 + Q*T + Q*TS);
+                // TRM 3: the half pair table there instead (1 KB), norms folded out (see the TRN block below)
+                threadgroup float2 * slut  = (threadgroup float2 *) (shmem_f16 + Q*T + Q*TS);
+                threadgroup half2  * sluth = (threadgroup half2  *) (shmem_f16 + Q*T + Q*TS);
                 if constexpr (TRM == 1) {
                     for (short i = sgitg*NW + tiisg; i < 256; i += NSG*NW) { slut[i] = turbo_pairs_4bit[i]; }
                     threadgroup_barrier(mem_flags::mem_threadgroup);
                 }
-#define TR_PAIR(row, d) (TRM == 1 ? turbo4_pair_at_tg(row, d, slut) : TRM == 2 ? turbo4_pair_at_h(row, d) : turbo4_pair_at(row, d))
+                if constexpr (TRM == 3) {
+                    for (short i = sgitg*NW + tiisg; i < 256; i += NSG*NW) { sluth[i] = turbo_pairs_4bit_h[i]; }
+                    threadgroup_barrier(mem_flags::mem_threadgroup);
+                }
+#define TR_PAIR(row, d) (TRM == 1 ? turbo4_pair_at_tg(row, d, slut) : TRM == 2 ? turbo4_pair_at_h(row, d) : TRM == 3 ? turbo4_pair_raw(row, d, sluth) : TRM == 4 ? turbo4_pair_raw_c(row, d) : turbo4_pair_at(row, d))
 
-                qk8x8_t mqk[NC*NQT];
+                // TRN: one accumulator per 128-dim block (its own norm), scaled and summed per key tile
+                constexpr short NB = TRM >= 3 ? DK/QK_TURBO : 1;
+                static_assert(TRM < 3 || DK % QK_TURBO == 0, "TRN form: whole blocks");
+                qk8x8_t mqk[NC*NQT*NB];
                 device const char * pkr[NC];
 
                 FOR_UNROLL (short ccc = 0; ccc < NC; ++ccc) {
-                    FOR_UNROLL (short qt = 0; qt < NQT; ++qt) {
-                        mqk[ccc*NQT + qt] = make_filled_simdgroup_matrix<qk_t, 8>((qk_t) 0.0f);
+                    FOR_UNROLL (short qt = 0; qt < NQT*NB; ++qt) {
+                        mqk[ccc*NQT*NB + qt] = make_filled_simdgroup_matrix<qk_t, 8>((qk_t) 0.0f);
                     }
                     pkr[ccc] = k + (ic + 8*(ccc*NSG + sgitg) + lr)*args.nb11;
                 }
@@ -12839,14 +12861,17 @@ void kernel_flash_attn_ext_impl(
                         ((thread half2 &) mk[0].thread_elements()) = TR_PAIR(pkr[ccc], 16*tt + 0 + lc);
                         ((thread half2 &) mk[1].thread_elements()) = TR_PAIR(pkr[ccc], 16*tt + 8 + lc);
                         FOR_UNROLL (short qt = 0; qt < NQT; ++qt) {
-                            simdgroup_multiply_accumulate(mqk[ccc*NQT + qt], mk[0], mq[0*NQT + qt], mqk[ccc*NQT + qt]);
-                            simdgroup_multiply_accumulate(mqk[ccc*NQT + qt], mk[1], mq[1*NQT + qt], mqk[ccc*NQT + qt]);
+                            simdgroup_multiply_accumulate(mqk[ccc*NQT*NB + qt*NB], mk[0], mq[0*NQT + qt], mqk[ccc*NQT*NB + qt*NB]);
+                            simdgroup_multiply_accumulate(mqk[ccc*NQT*NB + qt*NB], mk[1], mq[1*NQT + qt], mqk[ccc*NQT*NB + qt*NB]);
                         }
                     }
                 }
-                // dims [64, DK): Q^T from the transposed staging
+                // dims [64, DK): Q^T from the transposed staging. TRN: one runtime chunk loop per block, so the
+                // block accumulator index is a constant (a dynamic register-array index would spill)
+                constexpr short CPB = TRM >= 3 ? QK_TURBO/64 : DK/64; // chunks per accumulator
+                FOR_UNROLL (short bi = 0; bi < NB; ++bi) {
                 #pragma unroll 1
-                for (short ch = 1; ch < DK/64; ++ch) {
+                for (short ch = (bi == 0 ? 1 : bi*CPB); ch < (bi + 1)*CPB; ++ch) {
                     FOR_UNROLL (short tt = 0; tt < 4; ++tt) {
                         q8x8_t mq[2*NQT];
                         FOR_UNROLL (short qt = 0; qt < NQT; ++qt) {
@@ -12858,16 +12883,32 @@ void kernel_flash_attn_ext_impl(
                             ((thread half2 &) mk[0].thread_elements()) = TR_PAIR(pkr[ccc], 64*ch + 16*tt + 0 + lc);
                             ((thread half2 &) mk[1].thread_elements()) = TR_PAIR(pkr[ccc], 64*ch + 16*tt + 8 + lc);
                             FOR_UNROLL (short qt = 0; qt < NQT; ++qt) {
-                                simdgroup_multiply_accumulate(mqk[ccc*NQT + qt], mk[0], mq[0*NQT + qt], mqk[ccc*NQT + qt]);
-                                simdgroup_multiply_accumulate(mqk[ccc*NQT + qt], mk[1], mq[1*NQT + qt], mqk[ccc*NQT + qt]);
+                                simdgroup_multiply_accumulate(mqk[ccc*NQT*NB + qt*NB + bi], mk[0], mq[0*NQT + qt], mqk[ccc*NQT*NB + qt*NB + bi]);
+                                simdgroup_multiply_accumulate(mqk[ccc*NQT*NB + qt*NB + bi], mk[1], mq[1*NQT + qt], mqk[ccc*NQT*NB + qt*NB + bi]);
                             }
                         }
                     }
                 }
+                }
 
                 FOR_UNROLL (short ccc = 0; ccc < NC; ++ccc) {
-                    FOR_UNROLL (short qt = 0; qt < NQT; ++qt) {
-                        simdgroup_store(mqk[ccc*NQT + qt], ss + qt*8*SH + 8*(ccc*NSG + sgitg), SH, 0, true); // S^T tile, transposed store
+                    if constexpr (TRM >= 3) {
+                        // S^T row = this lane's key: sum the block accumulators scaled by that row's block norms
+                        float nb_[NB];
+                        FOR_UNROLL (short bi = 0; bi < NB; ++bi) { nb_[bi] = turbo4_norm_at(pkr[ccc], bi*QK_TURBO); }
+                        FOR_UNROLL (short qt = 0; qt < NQT; ++qt) {
+                            thread float2 & e0 = (thread float2 &) mqk[ccc*NQT*NB + qt*NB + 0].thread_elements();
+                            e0 *= nb_[0];
+                            FOR_UNROLL (short bi = 1; bi < NB; ++bi) {
+                                thread float2 & eb = (thread float2 &) mqk[ccc*NQT*NB + qt*NB + bi].thread_elements();
+                                e0 += nb_[bi]*eb;
+                            }
+                            simdgroup_store(mqk[ccc*NQT*NB + qt*NB + 0], ss + qt*8*SH + 8*(ccc*NSG + sgitg), SH, 0, true);
+                        }
+                    } else {
+                        FOR_UNROLL (short qt = 0; qt < NQT; ++qt) {
+                            simdgroup_store(mqk[ccc*NQT + qt], ss + qt*8*SH + 8*(ccc*NSG + sgitg), SH, 0, true); // S^T tile, transposed store
+                        }
                     }
                 }
             } else {
@@ -13130,7 +13171,9 @@ void kernel_flash_attn_ext_impl(
                     const short lc = 2*(tiisg & 1) + 4*((tiisg >> 3) & 1);
 
                     o8x8_t lo[NQT*NO];
-                    threadgroup const float2 * slut = (threadgroup const float2 *) (shmem_f16 + Q*T + Q*TS);
+                    threadgroup const float2 * slut  = (threadgroup const float2 *) (shmem_f16 + Q*T + Q*TS);
+                    threadgroup const half2  * sluth = (threadgroup const half2  *) (shmem_f16 + Q*T + Q*TS);
+                    static_assert(TRM < 3 || (8*NO) % QK_TURBO == 0 || QK_TURBO % (8*NO) == 0, "TRN form: a simdgroup's dims lie in one block");
 
                     FOR_UNROLL (short qt = 0; qt < NQT; ++qt) {
                         FOR_UNROLL (short ii = 0; ii < NO; ++ii) {
@@ -13146,6 +13189,18 @@ void kernel_flash_attn_ext_impl(
                         }
 
                         device const char * pvr = v + (ic + 8*cc + lr)*args.nb21;
+
+                        if constexpr (TRM >= 3) {
+                            // this lane's two P elements are keys lc, lc+1 of the tile: scale by those rows' norms
+                            // for the block this simdgroup's dims lie in
+                            const short  d0 = 8*NO*sgitg;
+                            const float2 nv = float2(turbo4_norm_at(v + (ic + 8*cc + lc + 0)*args.nb21, d0),
+                                                     turbo4_norm_at(v + (ic + 8*cc + lc + 1)*args.nb21, d0));
+                            FOR_UNROLL (short qt = 0; qt < NQT; ++qt) {
+                                thread float2 & e = (thread float2 &) vs[qt].thread_elements();
+                                e *= nv;
+                            }
+                        }
 
                         FOR_UNROLL (short ii = 0; ii < NO; ++ii) {
                             v8x8_t mv;
@@ -13377,7 +13432,17 @@ kernel void kernel_flash_attn_ext(
             }
             break;
         case 8:
-            kernel_flash_attn_ext_impl<FWD_TMPL, 1, 8, QT, TRM, VU>(FWD_ARGS);
+            if constexpr (QT && is_same<kd4x4_t, block_turbo4_0>::value) {
+                // the Turbo4 TR form runs its 16-row tile at decode too (GGML_FA_Q16_DEC, perf/ud-model.md step 16 B):
+                // two 16-row threadgroups over the GQA-packed rows instead of three 8-row ones
+                switch (FC_flash_attn_ext_gqa_heads) {
+                    case 4: kernel_flash_attn_ext_impl<FWD_TMPL, 4, 8, QT, TRM, VU>(FWD_ARGS); break;
+                    case 6: kernel_flash_attn_ext_impl<FWD_TMPL, 6, 8, QT, TRM, VU>(FWD_ARGS); break;
+                    default: kernel_flash_attn_ext_impl<FWD_TMPL, 1, 8, QT, TRM, VU>(FWD_ARGS); break;
+                }
+            } else {
+                kernel_flash_attn_ext_impl<FWD_TMPL, 1, 8, QT, TRM, VU>(FWD_ARGS);
+            }
             break;
     }
 #undef FWD_TMPL
@@ -13584,6 +13649,9 @@ template [[host_name("kernel_flash_attn_ext_qth_turbo4_dk128_dv128")]] kernel fl
 template [[host_name("kernel_flash_attn_ext_qth_turbo4_dk256_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo4_0, 8, dequantize_turbo4_0, block_turbo4_0, 8, dequantize_turbo4_0, 256, 256, OP_FLASH_ATTN_EXT_NQPSG, OP_FLASH_ATTN_EXT_NCPSG, true, 2, 2>;
 template [[host_name("kernel_flash_attn_ext_qth4_turbo4_dk128_dv128")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo4_0, 8, dequantize_turbo4_0, block_turbo4_0, 8, dequantize_turbo4_0, 128, 128, OP_FLASH_ATTN_EXT_NQPSG, OP_FLASH_ATTN_EXT_NCPSG, true, 2, 4>;
 template [[host_name("kernel_flash_attn_ext_qth4_turbo4_dk256_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo4_0, 8, dequantize_turbo4_0, block_turbo4_0, 8, dequantize_turbo4_0, 256, 256, OP_FLASH_ATTN_EXT_NQPSG, OP_FLASH_ATTN_EXT_NCPSG, true, 2, 4>;
+template [[host_name("kernel_flash_attn_ext_qtn_turbo4_dk128_dv128")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo4_0, 8, dequantize_turbo4_0, block_turbo4_0, 8, dequantize_turbo4_0, 128, 128, OP_FLASH_ATTN_EXT_NQPSG, OP_FLASH_ATTN_EXT_NCPSG, true, 3, 4>;
+template [[host_name("kernel_flash_attn_ext_qtn_turbo4_dk256_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo4_0, 8, dequantize_turbo4_0, block_turbo4_0, 8, dequantize_turbo4_0, 256, 256, OP_FLASH_ATTN_EXT_NQPSG, OP_FLASH_ATTN_EXT_NCPSG, true, 3, 4>;
+template [[host_name("kernel_flash_attn_ext_qtn16_turbo4_dk256_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo4_0, 8, dequantize_turbo4_0, block_turbo4_0, 8, dequantize_turbo4_0, 256, 256, 16, OP_FLASH_ATTN_EXT_NCPSG, true, 4, 2>;
 template [[host_name("kernel_flash_attn_ext_qt16_turbo4_dk256_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo4_0, 8, dequantize_turbo4_0, block_turbo4_0, 8, dequantize_turbo4_0, 256, 256, 16, OP_FLASH_ATTN_EXT_NCPSG, true, 0, 2>;
 template [[host_name("kernel_flash_attn_ext_qth16_turbo4_dk256_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo4_0, 8, dequantize_turbo4_0, block_turbo4_0, 8, dequantize_turbo4_0, 256, 256, 16, OP_FLASH_ATTN_EXT_NCPSG, true, 2, 2>;
 template [[host_name("kernel_flash_attn_ext_kq8_0_vturbo2_dk128_dv128")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_q8_0, 2, dequantize_q8_0, block_turbo2_0, 8, dequantize_turbo2_0, 128, 128>;

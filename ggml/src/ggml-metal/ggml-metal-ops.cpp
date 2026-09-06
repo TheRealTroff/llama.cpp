@@ -4308,7 +4308,7 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
 
     if (!use_vec) {
         // half8x8 kernel
-        const int nqptg = ggml_metal_flash_attn_ext_q16(op) ? 16 : OP_FLASH_ATTN_EXT_NQPSG; // queries per threadgroup
+        const int nqptg = ggml_metal_flash_attn_ext_q16(op, use_gqa_reuse ? gqa_ratio : 1) ? 16 : OP_FLASH_ATTN_EXT_NQPSG; // queries per threadgroup
         const int ncpsg = OP_FLASH_ATTN_EXT_NCPSG; // cache values per simdgroup
 
         GGML_ASSERT(nqptg <= 32);
