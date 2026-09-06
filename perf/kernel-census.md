@@ -85,3 +85,26 @@ in-graph call (0.73 vs 2.64 ms) and the byte/flop model undercounted the same wa
 derives `v_repeat` from the dst row and `work()` uses the value-head count; the perf list carries the
 real shape (plain and the pick's ext form). Ratios (x floor) were unaffected - bytes and time scaled
 together - which is why the flag still ranked correctly.
+
+**Driver trap (2026-09-06 evening):** `kernel-census.sh` defaults `B` to `llama.cpp-ud-soa`; run it from
+another worktree without `B=<that worktree>` and every per-row timing and capture comes from the
+OTHER tree's binary and `kernel-census.py`, while the in-graph column (from the profiled server log)
+is the new build's. The header line prints the commit and branch it timed with - read it. The
+census for the GDN lever ran that way first: in-graph 2.03 -> 1.00 s but the row still named the
+old kernel at 738 us.
+
+### census-ud-nr4-sep06 (2026-09-06 evening, the stack above + `GGML_GDN_NR=4`, diffed against census-ud-sep06)
+
+`kvquant-experiments/census/census-ud-nr4-sep06/` (unchanged rows reuse the sep06 captures; the GDN
+prefill row recaptured because its pipeline name changed - the driver's staleness rule worked once
+`B=` pointed at the right tree). 23 of 24 rows measured, same missing RMS_NORM case.
+
+| row | before | after | what moved |
+|---|---|---|---|
+| prefill GDN `gated_delta_net_f32_4` -> `_nr4` (ext form, K=2 xk=1) | 2.03 s in-graph, 2.64 ms/call; 74/22 issue/stall, 34 regs, 44-instr loop, "10.6x floor" on the 16-head case | **1.00 s in-graph, 1.30 ms/call**; 92/8, 57 regs, 0 spill, 108-instr loop for 4 rows; 8.3x floor on the real 48-head shape | flag #2 halved; still the largest stream-class outlier (the residue is the five per-token pointer advances, `gdn-prefill-scan.md`) |
+| decode GDN (4 tokens) | 1.36x floor | 1.52x floor on the corrected byte model | unchanged kernel (gate at 32 tokens) |
+| every mul_mm, FA, elementwise row | | within noise of sep06 (q5_K gate/up +2.5% timing flag = run-to-run) | |
+
+Ranking after this run: decode FA nwg=8 width 4 (2.18x class-best instructions; the GQA f16 route is
+in the pick env now), prefill FA (2.15x), GDN prefill (8.3x floor, ~1.0 s), q5_K mul_mm (1.33x), SSM_CONV
+(1.8x floor). The mul_mm plane still reads 0.99-1.07x the roof.
