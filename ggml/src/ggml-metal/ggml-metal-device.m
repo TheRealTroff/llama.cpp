@@ -1238,21 +1238,23 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
         }
     }
 
-    bool has_q4_0_soa = op->type == GGML_TYPE_Q4_0_SOA;
+    // stored SoA weights (Q4_0_SOA, and the UD line's IQ4_XS_SOA/Q4_K_SOA/Q5_K_SOA): dense 2D MUL_MAT only
+    bool has_soa = ggml_metal_is_soa_type(op->type);
     for (size_t i = 0; i < 4; ++i) {
-        has_q4_0_soa = has_q4_0_soa || (op->src[i] && op->src[i]->type == GGML_TYPE_Q4_0_SOA);
+        has_soa = has_soa || (op->src[i] && ggml_metal_is_soa_type(op->src[i]->type));
     }
-    if (has_q4_0_soa) {
+    if (has_soa) {
         if (op->op == GGML_OP_NONE || op->op == GGML_OP_RESHAPE ||
             op->op == GGML_OP_VIEW || op->op == GGML_OP_PERMUTE ||
             op->op == GGML_OP_TRANSPOSE) {
             return true;
         }
+        const int64_t kmod = op->src[0] && ggml_metal_is_kq_soa_type(op->src[0]->type) ? 256 : 64;
         return op->op == GGML_OP_MUL_MAT &&
-               op->src[0] && op->src[0]->type == GGML_TYPE_Q4_0_SOA &&
+               op->src[0] && ggml_metal_is_soa_type(op->src[0]->type) &&
                op->src[1] && op->src[1]->type == GGML_TYPE_F32 &&
                op->type == GGML_TYPE_F32 &&
-               op->src[0]->ne[0] % 64 == 0 &&
+               op->src[0]->ne[0] % kmod == 0 &&
                op->src[0]->ne[2] == 1 && op->src[0]->ne[3] == 1;
     }
 

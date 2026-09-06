@@ -437,7 +437,19 @@ extern "C" {
         // [fp16 scale x nblk][nibble-planar uint32 pack8 x 4*nblk].
         // This is an on-disk storage contract, not a different quantization.
         GGML_TYPE_Q4_0_SOA = 46,
-        GGML_TYPE_COUNT   = 47,
+        // Lossless row-planar storage of the UD line's three formats for the Metal SoA
+        // kernels (perf/ud-model.md step 12). Per row of nsb = ne00/256 superblocks:
+        //   IQ4_XS_SOA [half d*(ls-32) x 8nsb][uint32 pack8 x 32nsb][u8 hdr8 x nsb]    152 B/sb
+        //   Q4_K_SOA   [half d*sc x 8nsb][half dmin*m x 8nsb][uint32 pack8 x 32nsb][u8 hdr16 x nsb]  176 B/sb
+        //   Q5_K_SOA   ... as Q4_K_SOA with [u8 hbits x 32nsb] before the header plane   208 B/sb
+        // The first 144/160/192 B per superblock are exactly the runtime side-buffer rows the
+        // width-3/4/5 kernels read; the appended header plane holds the original block header
+        // (d, scales) so widths 1-2 and the prefill tiles dequantize exactly and the file reverses
+        // byte-for-byte. Storage contracts, not new quantizations.
+        GGML_TYPE_IQ4_XS_SOA = 47,
+        GGML_TYPE_Q4_K_SOA   = 48,
+        GGML_TYPE_Q5_K_SOA   = 49,
+        GGML_TYPE_COUNT   = 50,
     };
 
     // precision

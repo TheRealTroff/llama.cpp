@@ -2745,7 +2745,7 @@ int ggml_metal_op_pool_2d(ggml_metal_op_t ctx, int idx) {
 // convert f32 src1 to f16 for the small-batch mul_mv_ext kernels (fewer y load instructions)
 static bool ggml_metal_mul_mat_use_f16_src1_n(const ggml_tensor * op, int64_t ne11) {
     static const int env = getenv("GGML_MV_EXT_F16Y") ? atoi(getenv("GGML_MV_EXT_F16Y")) : 1;
-    if (env == 0 && op->src[0]->type != GGML_TYPE_Q4_0_SOA) {
+    if (env == 0 && !ggml_metal_is_soa_type(op->src[0]->type)) {
         return false;
     }
     if (op->src[1]->type != GGML_TYPE_F32) {
@@ -2774,6 +2774,9 @@ static bool ggml_metal_mul_mat_use_f16_src1_n(const ggml_tensor * op, int64_t ne
         case GGML_TYPE_Q2_K:
         case GGML_TYPE_Q3_K:
         case GGML_TYPE_IQ4_XS:
+        case GGML_TYPE_IQ4_XS_SOA:
+        case GGML_TYPE_Q4_K_SOA:
+        case GGML_TYPE_Q5_K_SOA:
             return true;
         default:
             return false;
@@ -2787,7 +2790,7 @@ static bool ggml_metal_mul_mat_use_f16_src1(const ggml_tensor * op) {
 // stored-SoA weights fold a broadcast [K, T, S] activation into [K, T*S] columns at encode time
 // (ggml_metal_op_mul_mat); every shape-dependent decision here has to see the folded column count
 static bool ggml_metal_mul_mat_soa_folds(const ggml_tensor * op) {
-    return op->src[0]->type == GGML_TYPE_Q4_0_SOA &&
+    return ggml_metal_is_soa_type(op->src[0]->type) &&
            op->src[0]->ne[2] == 1 && op->src[0]->ne[3] == 1 &&
            (op->src[1]->ne[2] > 1 || op->src[1]->ne[3] > 1) &&
            ggml_is_contiguous(op->src[1]) && ggml_is_contiguous(op);
@@ -2824,6 +2827,9 @@ static bool ggml_metal_mul_mat_use_f16_src1_mm(const ggml_tensor * op) {
         case GGML_TYPE_Q6_K:
         case GGML_TYPE_IQ4_XS:
         case GGML_TYPE_IQ3_S:
+        case GGML_TYPE_IQ4_XS_SOA:
+        case GGML_TYPE_Q4_K_SOA:
+        case GGML_TYPE_Q5_K_SOA:
             return true;
         default:
             return false;
@@ -2839,6 +2845,9 @@ size_t ggml_metal_op_mul_mat_extra_src1f16(const ggml_tensor * op) {
     // convert then wrote S*K halves over the next tensor - found by the 2026-09-04 in-place state hunt)
     const int64_t ne11 = ggml_metal_mul_mat_eff_ne11(op);
     if (op->src[0]->type == GGML_TYPE_Q4_0_SOA && (ne11 == 2 || ne11 >= 6)) {
+        return 0;
+    }
+    if (ggml_metal_is_kq_soa_type(op->src[0]->type) && ne11 == 1) {
         return 0;
     }
     if (!ggml_metal_mul_mat_use_f16_src1_n(op, ne11)) {
@@ -3152,6 +3161,45 @@ static int ggml_metal_op_mul_mat_impl(ggml_metal_op_t ctx, int idx, ggml_tensor 
     static const int env_mv_nc       = getenv("GGML_MV_NC")       ? atoi(getenv("GGML_MV_NC"))       : 0;
     static const int env_mv_nc_small = getenv("GGML_MV_NC_SMALL") ? atoi(getenv("GGML_MV_NC_SMALL")) : 0;
 
+    // Stored UD-format SoA rows at width 1: the half-planar 4-row kernel body at NC = 1 with f32
+    // activations (perf/ud-model.md step 12). Widths 2 and 6..8 take the ext SoA readers below
+    // (exact header dequant, bit-identical to the block kernels); 3..5 the pick's SoA kernels.
+    if (ggml_metal_is_kq_soa_type(op->src[0]->type) &&
+        op->src[1]->type == GGML_TYPE_F32 && ne11 == 1 && ne12 == 1 && ne13 == 1 &&
+        !ggml_is_transposed(op->src[0]) && !ggml_is_transposed(op->src[1]) &&
+        ne00 % 256 == 0 && nb10 == sizeof(float)) {
+        auto pipeline = ggml_metal_library_get_pipeline_mul_mv_kq_soa_w1(lib, op->src[0]->type);
+
+        ggml_metal_kargs_mul_mv_ext args = {
+            /*.ne00  =*/ ne00,
+            /*.ne01  =*/ ne01,
+            /*.ne02  =*/ ne02,
+            /*.nb00  =*/ nb00,
+            /*.nb01  =*/ nb01,
+            /*.nb02  =*/ nb02,
+            /*.nb03  =*/ nb03,
+            /*.ne10  =*/ ne10,
+            /*.ne11  =*/ ne11,
+            /*.ne12  =*/ ne12,
+            /*.nb10  =*/ nb10,
+            /*.nb11  =*/ nb11,
+            /*.nb12  =*/ nb12,
+            /*.nb13  =*/ nb13,
+            /*.ne0   =*/ ne0,
+            /*.ne1   =*/ ne1,
+            /*.r2    =*/ r2,
+            /*.r3    =*/ r3,
+        };
+
+        ggml_metal_encoder_set_pipeline(enc, pipeline);
+        ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);
+        ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[0]), 1);
+        ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[1]), 2);
+        ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         3);
+        ggml_metal_encoder_dispatch_threadgroups(enc, (ne01 + 3)/4, 1, 1, 32, 2, 1);
+        return 1;
+    }
+
     // Widths one and two read persistent SoA rows directly. Both reuse a
     // weight-stream pass across four output rows; width two also reuses it
     // across both columns instead of paying for an eight-column skinny tile.
@@ -3332,6 +3380,9 @@ static int ggml_metal_op_mul_mat_impl(ggml_metal_op_t ctx, int idx, ggml_tensor 
            op->src[0]->type == GGML_TYPE_Q2_K ||
            op->src[0]->type == GGML_TYPE_Q3_K ||
            op->src[0]->type == GGML_TYPE_IQ4_XS ||
+           op->src[0]->type == GGML_TYPE_IQ4_XS_SOA ||
+           op->src[0]->type == GGML_TYPE_Q4_K_SOA ||
+           op->src[0]->type == GGML_TYPE_Q5_K_SOA ||
            false) && (ne11 >= ne11_kq_min && ne11 <= ne11_mv_max)
          )
         )
@@ -3367,7 +3418,8 @@ static int ggml_metal_op_mul_mat_impl(ggml_metal_op_t ctx, int idx, ggml_tensor 
             op->src[0]->type != GGML_TYPE_Q6_K &&
             op->src[0]->type != GGML_TYPE_Q2_K &&
             op->src[0]->type != GGML_TYPE_Q3_K &&
-            op->src[0]->type != GGML_TYPE_IQ4_XS;
+            op->src[0]->type != GGML_TYPE_IQ4_XS &&
+            !ggml_metal_is_kq_soa_type(op->src[0]->type);
 
         static const int env_nr0 = getenv("GGML_MV_EXT_NR0") ? atoi(getenv("GGML_MV_EXT_NR0")) : 0;
 
@@ -3378,7 +3430,8 @@ static int ggml_metal_op_mul_mat_impl(ggml_metal_op_t ctx, int idx, ggml_tensor 
 
         // f16 src1 halves the y load instructions; skip small ops where the convert dispatch costs more than it saves
         const bool stored_soa = op->src[0]->type == GGML_TYPE_Q4_0_SOA;
-        const bool use_f16y = stored_soa ||
+        const bool stored_kq  = ggml_metal_is_kq_soa_type(op->src[0]->type);
+        const bool use_f16y = stored_soa || stored_kq ||
                               (ggml_metal_mul_mat_use_f16_src1(op) &&
                                (int64_t) ne00*ne01 >= (is_t4 ? 16 : 8)*1024*1024);
 
@@ -3435,16 +3488,22 @@ static int ggml_metal_op_mul_mat_impl(ggml_metal_op_t ctx, int idx, ggml_tensor 
 
         // iq4_xs width-4 SoA route (UD line): GGML_MV_SOA_IQ4XS=1..6 selects the kernel variant
         static const int env_soa_iq4xs = getenv("GGML_MV_SOA_IQ4XS") ? atoi(getenv("GGML_MV_SOA_IQ4XS")) : 0;
-        const bool use_iq4xs_soa = env_soa_iq4xs && op->src[0]->type == GGML_TYPE_IQ4_XS && ne11 >= 3 && ne11 <= 5 && use_f16y &&
-                                   ne12 == 1 && ne13 == 1 && ne00 % 256 == 0 && ne01 % 4 == 0 &&
-                                   ggml_metal_mul_mat_soa_w4_rows(ne01) &&
-                                   ggml_metal_op_mul_mat_try_repack_iq4_xs(ctx, op, bid_src0, nb01_eff, env_soa_iq4xs >= 5);
+        // stored SoA rows (IQ4_XS_SOA / Q4_K_SOA / Q5_K_SOA, perf/ud-model.md step 12): the same kernels read the
+        // model buffer directly (row prefix = the half-planar side-buffer layout), no env, no repack; shapes off
+        // the row whitelist take the ext SoA readers instead (exact header dequant)
+        const bool kq_soa_shape = ne11 >= 3 && ne11 <= 5 && use_f16y && ne12 == 1 && ne13 == 1 && ne00 % 256 == 0 &&
+                                  ggml_metal_mul_mat_soa_w4_rows(ne01);
+        const bool use_iq4xs_soa = (op->src[0]->type == GGML_TYPE_IQ4_XS_SOA && kq_soa_shape) ||
+                                   (env_soa_iq4xs && op->src[0]->type == GGML_TYPE_IQ4_XS && kq_soa_shape && ne01 % 4 == 0 &&
+                                    ggml_metal_op_mul_mat_try_repack_iq4_xs(ctx, op, bid_src0, nb01_eff, env_soa_iq4xs >= 5));
         // q4_K / q5_K width-4 SoA route: GGML_MV_SOA_KQ=1 (exact scale/min) or 2 (half planar)
         static const int env_soa_kq = getenv("GGML_MV_SOA_KQ") ? atoi(getenv("GGML_MV_SOA_KQ")) : 0;
-        const bool use_kq_soa = env_soa_kq && (op->src[0]->type == GGML_TYPE_Q4_K || op->src[0]->type == GGML_TYPE_Q5_K) &&
-                                ne11 >= 3 && ne11 <= 5 && use_f16y && ne12 == 1 && ne13 == 1 && ne00 % 256 == 0 && ne01 % 4 == 0 &&
-                                ggml_metal_mul_mat_soa_w4_rows(ne01) &&
-                                ggml_metal_op_mul_mat_try_repack_kq(ctx, op, bid_src0, nb01_eff, env_soa_kq >= 2);
+        const bool use_kq_soa = ((op->src[0]->type == GGML_TYPE_Q4_K_SOA || op->src[0]->type == GGML_TYPE_Q5_K_SOA) && kq_soa_shape) ||
+                                (env_soa_kq && (op->src[0]->type == GGML_TYPE_Q4_K || op->src[0]->type == GGML_TYPE_Q5_K) &&
+                                 kq_soa_shape && ne01 % 4 == 0 &&
+                                 ggml_metal_op_mul_mat_try_repack_kq(ctx, op, bid_src0, nb01_eff, env_soa_kq >= 2));
+        const int iq4xs_soa_variant = op->src[0]->type == GGML_TYPE_IQ4_XS_SOA ? 5 : env_soa_iq4xs;
+        const int kq_soa_variant    = stored_kq ? 2 : env_soa_kq;
 
         // optionally convert src1 to f16 into the scratch after dst: one 16B load then covers 8 elements
         ggml_metal_buffer_id bid_src1 = ggml_metal_get_buffer_id(op->src[1]);
@@ -3530,8 +3589,8 @@ static int ggml_metal_op_mul_mat_impl(ggml_metal_op_t ctx, int idx, ggml_tensor 
         static const int env_soa_w5_qw = getenv("GGML_MV_SOA_W5_QW") ? atoi(getenv("GGML_MV_SOA_W5_QW")) : 0;
         const bool use_soa_w5_qw = use_soa_w5 && env_soa_w5_qw && env_soa_w5 == 4 && env_soa_w5_hp && !use_soa_skh;
 
-        auto pipeline = use_iq4xs_soa ? ggml_metal_library_get_pipeline_mul_mv_iq4_xs_soa(lib, ne11, env_soa_iq4xs) :
-                        use_kq_soa ? ggml_metal_library_get_pipeline_mul_mv_kq_soa(lib, op->src[0]->type, ne11, env_soa_kq) :
+        auto pipeline = use_iq4xs_soa ? ggml_metal_library_get_pipeline_mul_mv_iq4_xs_soa(lib, ne11, iq4xs_soa_variant) :
+                        use_kq_soa ? ggml_metal_library_get_pipeline_mul_mv_kq_soa(lib, ggml_metal_soa_base_type(op->src[0]->type), ne11, kq_soa_variant) :
                         use_soa_w3 ? ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w3_r4kp(lib) :
                         use_soa_w7 ? ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w7(lib, env_soa_w7) :
                         use_soa_w6 ? ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w6(lib, env_soa_w6, env_soa_w6_hp != 0) :
