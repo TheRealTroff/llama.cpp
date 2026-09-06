@@ -551,6 +551,11 @@ llama_context::llama_context(
 
     cparams.fused_gdn_ar = true;
     cparams.fused_gdn_ch = true;
+    // LLAMA_GDN_CHUNKED=1: run the chunked delta-net GRAPH (build_delta_net_chunking) at prefill instead
+    // of the fused scan op - a timing probe for perf/gdn-prefill-scan.md; changes the summation order
+    if (getenv("LLAMA_GDN_CHUNKED") && atoi(getenv("LLAMA_GDN_CHUNKED")) != 0) {
+        cparams.fused_gdn_ch = false;
+    }
     cparams.auto_fgdn    = true;
 
     cparams.fused_lid    = true;

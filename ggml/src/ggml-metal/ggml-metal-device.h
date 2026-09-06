@@ -112,6 +112,7 @@ struct ggml_metal_pipeline_with_params ggml_metal_library_compile_pipeline(ggml_
 
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_base              (ggml_metal_library_t lib, enum ggml_op op);
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_cpy               (ggml_metal_library_t lib, enum ggml_type tsrc, enum ggml_type tdst);
+struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_cvt_f32_f16_cont  (ggml_metal_library_t lib);
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_pool_1d           (ggml_metal_library_t lib, const struct ggml_tensor * op, enum ggml_op_pool op_pool);
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_pool_2d           (ggml_metal_library_t lib, const struct ggml_tensor * op, enum ggml_op_pool op_pool);
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_get_rows          (ggml_metal_library_t lib, enum ggml_type tsrc);
@@ -148,6 +149,10 @@ struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_q4
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w4_r2_scalar(ggml_metal_library_t lib);
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w4_r4kp(ggml_metal_library_t lib, int variant);
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w3_r4kp(ggml_metal_library_t lib);
+struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_repack_iq4_xs_soa (ggml_metal_library_t lib, bool halfs);
+struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_iq4_xs_soa(ggml_metal_library_t lib, int width, int variant);
+struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_repack_kq_soa     (ggml_metal_library_t lib, enum ggml_type type, bool halfs);
+struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_kq_soa     (ggml_metal_library_t lib, enum ggml_type type, int width, int variant);
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w7(ggml_metal_library_t lib, int rows);
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w5(ggml_metal_library_t lib, int rows, bool hp);
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w5_qw(ggml_metal_library_t lib, int qw);
@@ -158,7 +163,7 @@ struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm_sk
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm_skinny_soa (ggml_metal_library_t lib, const struct ggml_tensor * op);
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm_skinny_soa_n16(ggml_metal_library_t lib, const struct ggml_tensor * op);
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv            (ggml_metal_library_t lib, const struct ggml_tensor * op, bool di);
-struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm            (ggml_metal_library_t lib, const struct ggml_tensor * op);
+struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm            (ggml_metal_library_t lib, const struct ggml_tensor * op, enum ggml_type tsrc1_override /* GGML_TYPE_COUNT = src1's type */);
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm_id_map0    (ggml_metal_library_t lib, int ne02, int ne20);
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm_id         (ggml_metal_library_t lib, const struct ggml_tensor * op);
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_id         (ggml_metal_library_t lib, const struct ggml_tensor * op);
@@ -205,6 +210,8 @@ struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_att
         const struct ggml_tensor * op,
         int32_t nqptg,
         int32_t ncpsg);
+
+bool ggml_metal_flash_attn_ext_q16(const struct ggml_tensor * op);
 
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext(
         ggml_metal_library_t lib,

@@ -21,6 +21,7 @@ TAG=${TAG:-ud-knobs-$(date +%m%d-%H%M)}
 NPRED=${NPRED:-600}
 DEPTHS=${DEPTHS:-"4 3 2"}
 EXTRA_ENV=${EXTRA_ENV:-}  # plain string, word-split at use (bash 3.2 + set -u rejects an empty array)
+EXTRA_ARGS=${EXTRA_ARGS:-} # extra llama-server args, word-split at use (e.g. "-lv 5" for pipeline-load lines)
 RUN_B1=${RUN_B1:-1}
 MMMINS=${MMMINS:-"8 4 2"}
 TSV=$OUT/$TAG.tsv
@@ -33,7 +34,8 @@ PICK_ENV=(GGML_MV_NC=2 GGML_MM_SKINNY=6 GGML_MM_SKINNY_SOA=1
           GGML_MV_SOA_W5=4 GGML_MV_SOA_W5_HALF=1 GGML_MV_SOA_WL_XL=1
           GGML_METAL_GET_MEMCPY=1
           DFLASH_FUSED_INJECT=1 DFLASH_ASYNC_INJECT=1 LLAMA_DRAFT_WINDOW=1024
-          GGML_MM_ACC_HALF=1 GGML_MM_N64=1 LLAMA_GDN_REPLAY=1 GGML_GDN_NR=4)
+          GGML_MM_ACC_HALF=1 GGML_MM_N64=1 LLAMA_GDN_REPLAY=1 GGML_GDN_NR=4
+          GGML_FA_QT=1 GGML_MM_F16B=1 GGML_FA_GQA_F16=1 GGML_MM_N64_KMAX=20000 GGML_FA_QR=8 GGML_FA_Q16=1)
 printf 'label\tdepth\tmm_min\ttps\taccept_pct\tpredicted_n\tprompt_ms\tsha1\n' > "$TSV"
 echo "=== UD free knobs: $TAG ==="
 echo "commit : $(cd "$B" && git rev-parse --short HEAD) on $(cd "$B" && git rev-parse --abbrev-ref HEAD)"
@@ -48,7 +50,7 @@ run_one() {
   if [ "$depth" = 0 ]; then spec=(--spec-type none); else spec=(-md "$MD" --spec-type draft-dflash --spec-draft-n-max "$depth"); fi
   if lsof -ti :$PORT >/dev/null 2>&1; then echo "[$label] ABORT: port busy"; return 1; fi
   env "${PICK_ENV[@]}" GGML_MM_MIN=$mmmin $EXTRA_ENV "$BIN/llama-server" -m "$M" -c 10240 -fa on -ctk f16 -ctv f16 \
-    "${spec[@]}" --port $PORT >"$slog" 2>&1 &
+    "${spec[@]}" $EXTRA_ARGS --port $PORT >"$slog" 2>&1 &
   local pid=$! ok=0
   for i in $(seq 1 200); do
     curl -sf -o /dev/null "http://127.0.0.1:$PORT/health" && { ok=1; break; }

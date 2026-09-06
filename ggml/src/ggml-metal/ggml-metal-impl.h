@@ -297,6 +297,11 @@ typedef struct {
     uint64_t nb3;
 } ggml_metal_kargs_cpy;
 
+// contiguous f32 -> f16 cast (prefill mul_mm activations, GGML_MM_F16B): n elements, 8 per thread
+typedef struct {
+    int64_t n;
+} ggml_metal_kargs_cvt_cont;
+
 typedef struct {
     int64_t  ne10;
     int64_t  ne11;

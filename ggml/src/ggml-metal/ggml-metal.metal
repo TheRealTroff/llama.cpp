@@ -7085,6 +7085,463 @@ kernel void kernel_mul_mv_q4_0_soa_w3_r4kp_v3(
     }
 }
 
+// ---------------------------------------------------------------------------------------
+// IQ4_XS SoA (UD line, perf/ud-model.md step 6). The q4_0 SoA w4 r4kp_v3 form transplanted
+// to the iq4_xs format. Per row, nsb = ne00/256 superblocks:
+//   layout 0 (exact):  [half d x nsb][int8 (ls-32) x 8*nsb][pad to 16][uint pack8 x 32*nsb]
+//   layout 1 (halfs):  [half d*(ls-32) x 8*nsb][uint pack8 x 32*nsb]   (scale pre-rounded to half)
+// pack p covers k = 8p..8p+7 in k order (4-bit indices into kvalues_iq4nl), so every
+// 32-element sub-block is packs 4b..4b+3 and the activation index matches the q4_0 kernels.
+// ---------------------------------------------------------------------------------------
+constexpr constant static half kvalues_iq4nl_h[16] = {
+    -127.h, -104.h, -83.h, -65.h, -49.h, -35.h, -22.h, -10.h, 1.h, 13.h, 25.h, 38.h, 53.h, 69.h, 89.h, 113.h
+};
+
+template <int SM>
+void kernel_repack_iq4_xs_soa_impl(
+        constant ggml_metal_kargs_repack_q4_0_di & args,
+        device const char * src,
+        device       char * dst,
+        uint3   tgpig,
+        ushort3 tpitg) {
+    const int bx = tgpig.x*32 + tpitg.x;   // superblock
+    const int r  = tgpig.y;                // row
+    if (bx >= args.nblk || r >= args.ne01) {
+        return;
+    }
+    const int nsb = args.nblk;
+    device const uchar * pb = (device const uchar *)src + (uint64_t)r*args.nb01 + 136*bx;
+    device uchar * row = (device uchar *)dst + (uint64_t)r*args.nbd1;
+
+    const half d = *(device const half *)pb;
+    const ushort scales_h = (ushort)pb[2] | ((ushort)pb[3] << 8);
+    const int doff = SM == 0 ? ((10*nsb + 15)/16)*16 : 16*nsb;
+
+    for (short ib = 0; ib < 8; ++ib) {
+        const int ls = ((pb[4 + ib/2] >> (4*(ib%2))) & 0xf) | (((scales_h >> (2*ib)) & 3) << 4);
+        if (SM == 0) {
+            ((device char *)(row + 2*nsb))[8*bx + ib] = (char)(ls - 32);
+        } else {
+            ((device half *)row)[8*bx + ib] = half(float(d)*float(ls - 32));
+        }
+        device uint * packs = (device uint *)(row + doff) + 32*bx + 4*ib;
+        device const uchar * qs = pb + 8 + 16*ib;
+        for (short h = 0; h < 2; ++h) {
+            for (short p = 0; p < 2; ++p) {
+                uint q = 0;
+                for (short i = 0; i < 8; ++i) {
+                    q |= uint((qs[8*p + i] >> (4*h)) & 0xf) << (4*i);
+                }
+                packs[2*h + p] = q;
+            }
+        }
+    }
+    if (SM == 0) {
+        ((device half *)row)[bx] = d;
+    }
+}
+
+kernel void kernel_repack_iq4_xs_soa(
+        constant ggml_metal_kargs_repack_q4_0_di & args,
+        device const char * src,
+        device       char * dst,
+        uint3   tgpig[[threadgroup_position_in_grid]],
+        ushort3 tpitg[[thread_position_in_threadgroup]]) {
+    kernel_repack_iq4_xs_soa_impl<0>(args, src, dst, tgpig, tpitg);
+}
+
+kernel void kernel_repack_iq4_xs_soah(
+        constant ggml_metal_kargs_repack_q4_0_di & args,
+        device const char * src,
+        device       char * dst,
+        uint3   tgpig[[threadgroup_position_in_grid]],
+        ushort3 tpitg[[thread_position_in_threadgroup]]) {
+    kernel_repack_iq4_xs_soa_impl<1>(args, src, dst, tgpig, tpitg);
+}
+
+// SM: scale layout (0 exact d+int8, 1 pre-rounded half); PM: product (0 f32 FMA, 1 half product);
+// LM: lookup (0 constant table, 1 simd_shuffle from a lane-held table).
+template <int SM, int PM, int LM, int NC, int KS>
+void kernel_mul_mv_iq4_xs_soa_impl(
+        constant ggml_metal_kargs_mul_mv_ext & args,
+        device const char * src0,
+        device const half * src1,
+        device float * dst,
+        threadgroup float (&partial)[2][4*NC],
+        uint3 tgpig,
+        ushort tiisg,
+        ushort sgitg) {
+    float acc[4*NC] = {};
+    const int nsb = args.ne00/256;
+    const int npack = args.ne00/8;
+    const int row0 = 4*(int)tgpig.x;
+    const int pstart = KS == 2 ? (int)sgitg*(npack/2) : 0;
+    const int pend = KS == 2 ? pstart + npack/2 : npack;
+    const int doff = SM == 0 ? ((10*nsb + 15)/16)*16 : 16*nsb;
+
+    device const char * r0 = src0 + (uint64_t)(row0 + 0)*args.nb01;
+    device const char * r1 = src0 + (uint64_t)(row0 + 1)*args.nb01;
+    device const char * r2 = src0 + (uint64_t)(row0 + 2)*args.nb01;
+    device const char * r3 = src0 + (uint64_t)(row0 + 3)*args.nb01;
+    device const half * dp0 = (device const half *)r0;
+    device const half * dp1 = (device const half *)r1;
+    device const half * dp2 = (device const half *)r2;
+    device const half * dp3 = (device const half *)r3;
+    device const char * lp0 = r0 + 2*nsb;
+    device const char * lp1 = r1 + 2*nsb;
+    device const char * lp2 = r2 + 2*nsb;
+    device const char * lp3 = r3 + 2*nsb;
+    device const uint * qp0 = (device const uint *)(r0 + doff);
+    device const uint * qp1 = (device const uint *)(r1 + doff);
+    device const uint * qp2 = (device const uint *)(r2 + doff);
+    device const uint * qp3 = (device const uint *)(r3 + doff);
+    using half8 = vec<half, 8>;
+    const device half8 * xv = (const device half8 *)src1;
+    const int K8 = args.ne00/8;
+
+    const half  tbl_h = kvalues_iq4nl_h[tiisg & 15];
+    const float tbl_f = kvalues_iq4nl_f[tiisg & 15];
+
+    for (int p = pstart + (int)tiisg; p < pend; p += 32) {
+        const int blk = p >> 2;
+        const int sb  = p >> 5;
+        const half8 v0 = xv[0*K8 + p];
+        const half8 v1 = xv[1*K8 + p];
+        const half8 v2 = xv[2*K8 + p];
+        const half8 v3 = NC > 3 ? xv[3*K8 + p] : half8(0.h);
+        const half8 v4 = NC > 4 ? xv[4*K8 + p] : half8(0.h);
+        const uint q0 = qp0[p];
+        const uint q1 = qp1[p];
+        const uint q2 = qp2[p];
+        const uint q3 = qp3[p];
+        float sf[4];
+        half  sh[4];
+        if (SM == 0) {
+            sf[0] = float(dp0[sb])*float(lp0[blk]);
+            sf[1] = float(dp1[sb])*float(lp1[blk]);
+            sf[2] = float(dp2[sb])*float(lp2[blk]);
+            sf[3] = float(dp3[sb])*float(lp3[blk]);
+            sh[0] = half(sf[0]); sh[1] = half(sf[1]); sh[2] = half(sf[2]); sh[3] = half(sf[3]);
+        } else {
+            sh[0] = dp0[blk]; sh[1] = dp1[blk]; sh[2] = dp2[blk]; sh[3] = dp3[blk];
+            sf[0] = float(sh[0]); sf[1] = float(sh[1]); sf[2] = float(sh[2]); sf[3] = float(sh[3]);
+        }
+        const uint qs[4] = { q0, q1, q2, q3 };
+#pragma unroll
+        for (int r = 0; r < 4; ++r) {
+            const uint q = qs[r];
+#pragma unroll
+            for (int ki = 0; ki < 8; ++ki) {
+                const ushort idx = (q >> (ki*4)) & 0xFu;
+                if (PM == 1) {
+                    const half kv = LM == 0 ? kvalues_iq4nl_h[idx] : simd_shuffle(tbl_h, idx);
+                    const half wv = kv*sh[r];
+                    acc[r*NC + 0] += float(v0[ki]*wv);
+                    acc[r*NC + 1] += float(v1[ki]*wv);
+                    acc[r*NC + 2] += float(v2[ki]*wv);
+                    if (NC > 3) { acc[r*NC + 3] += float(v3[ki]*wv); }
+                    if (NC > 4) { acc[r*NC + 4] += float(v4[ki]*wv); }
+                } else {
+                    const float kv = LM == 0 ? kvalues_iq4nl_f[idx] : simd_shuffle(tbl_f, idx);
+                    const float wv = kv*sf[r];
+                    acc[r*NC + 0] += float(v0[ki])*wv;
+                    acc[r*NC + 1] += float(v1[ki])*wv;
+                    acc[r*NC + 2] += float(v2[ki])*wv;
+                    if (NC > 3) { acc[r*NC + 3] += float(v3[ki])*wv; }
+                    if (NC > 4) { acc[r*NC + 4] += float(v4[ki])*wv; }
+                }
+            }
+        }
+    }
+
+    for (int i = 0; i < 4*NC; ++i) {
+        acc[i] = simd_sum(acc[i]);
+    }
+    if (KS == 2) {
+        if (tiisg == 0) {
+            for (int i = 0; i < 4*NC; ++i) {
+                partial[sgitg][i] = acc[i];
+            }
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        if (sgitg == 0 && tiisg < 4*NC) {
+            const int r = (int)tiisg/NC;
+            const int c = (int)tiisg%NC;
+            if (row0 + r < args.ne01) {
+                dst[c*args.ne01 + row0 + r] = partial[0][tiisg] + partial[1][tiisg];
+            }
+        }
+    } else {
+        if (tiisg < 4*NC) {
+            const int r = (int)tiisg/NC;
+            const int c = (int)tiisg%NC;
+            if (row0 + r < args.ne01) {
+                dst[c*args.ne01 + row0 + r] = acc[tiisg];
+            }
+        }
+    }
+}
+
+// width 3/4: 4 rows x NC cols, two simdgroups split K; width 5: one simdgroup, full K (the q4_0
+// w5_r4h geometry - 20 accumulators, 5 activation streams)
+#define IQ4XS_SOA_KERNEL(NAME, SM, PM, LM, NC, KS) \
+kernel void NAME( \
+        constant ggml_metal_kargs_mul_mv_ext & args, \
+        device const char * src0, \
+        device const half * src1, \
+        device float * dst, \
+        uint3 tgpig [[threadgroup_position_in_grid]], \
+        ushort tiisg [[thread_index_in_simdgroup]], \
+        ushort sgitg [[simdgroup_index_in_threadgroup]]) { \
+    threadgroup float partial[2][4*NC]; \
+    kernel_mul_mv_iq4_xs_soa_impl<SM, PM, LM, NC, KS>(args, src0, src1, dst, partial, tgpig, tiisg, sgitg); \
+}
+
+IQ4XS_SOA_KERNEL(kernel_mul_mv_iq4_xs_soa_w4_v1, 0, 0, 0, 4, 2)  // exact scale, f32 product, const LUT
+IQ4XS_SOA_KERNEL(kernel_mul_mv_iq4_xs_soa_w4_v2, 0, 1, 0, 4, 2)  // exact scale -> half, half product, const LUT
+IQ4XS_SOA_KERNEL(kernel_mul_mv_iq4_xs_soa_w4_v3, 0, 1, 1, 4, 2)  // exact scale -> half, half product, shuffle LUT
+IQ4XS_SOA_KERNEL(kernel_mul_mv_iq4_xs_soa_w4_v4, 0, 0, 1, 4, 2)  // exact scale, f32 product, shuffle LUT
+IQ4XS_SOA_KERNEL(kernel_mul_mv_iq4_xs_soa_w4_v5, 1, 1, 0, 4, 2)  // half planar scale, half product, const LUT
+IQ4XS_SOA_KERNEL(kernel_mul_mv_iq4_xs_soa_w4_v6, 1, 1, 1, 4, 2)  // half planar scale, half product, shuffle LUT
+IQ4XS_SOA_KERNEL(kernel_mul_mv_iq4_xs_soa_w3_v2, 0, 1, 0, 3, 2)
+IQ4XS_SOA_KERNEL(kernel_mul_mv_iq4_xs_soa_w3_v5, 1, 1, 0, 3, 2)
+IQ4XS_SOA_KERNEL(kernel_mul_mv_iq4_xs_soa_w5_v2, 0, 1, 0, 5, 1)
+IQ4XS_SOA_KERNEL(kernel_mul_mv_iq4_xs_soa_w5_v5, 1, 1, 0, 5, 1)
+
+// ---------------------------------------------------------------------------------------
+// q4_K / q5_K SoA (UD line, perf/ud-model.md step 6). Same body as the iq4_xs kernel with the
+// table lookup replaced by the K-quant scale-and-min form w = s*q - m, the min folded out of
+// the element loop as m * sum8(v). Per row, nsb = ne00/256 superblocks, 8 sub-blocks each:
+//   layout 0 (exact): [half2 (d,dmin) x nsb][u8 sc x 8*nsb][u8 mn x 8*nsb][pad16][uint pack8 x 32*nsb][q5_K: u8 hbits x 32*nsb]
+//   layout 1 (halfs): [half d*sc x 8*nsb][half dmin*mn x 8*nsb][uint pack8 x 32*nsb][q5_K: u8 hbits x 32*nsb]
+// pack p covers k = 8p..8p+7 (low 4 bits); hbits[p] bit i is the 5th bit of element 8p+i.
+// ---------------------------------------------------------------------------------------
+template <int SM, int HB>
+void kernel_repack_kq_soa_impl(
+        constant ggml_metal_kargs_repack_q4_0_di & args,
+        device const char * src,
+        device       char * dst,
+        uint3   tgpig,
+        ushort3 tpitg) {
+    const int bx = tgpig.x*32 + tpitg.x;   // superblock
+    const int r  = tgpig.y;                // row
+    if (bx >= args.nblk || r >= args.ne01) {
+        return;
+    }
+    const int nsb = args.nblk;
+    const int bsz = HB ? 176 : 144;
+    device const uchar * pb = (device const uchar *)src + (uint64_t)r*args.nb01 + bsz*bx;
+    device uchar * row = (device uchar *)dst + (uint64_t)r*args.nbd1;
+
+    const half d    = ((device const half *)pb)[0];
+    const half dmin = ((device const half *)pb)[1];
+    device const uchar * scales = pb + 4;
+    device const uchar * qh = pb + 16;
+    device const uchar * qs = pb + (HB ? 48 : 16);
+    const int doff = SM == 0 ? ((20*nsb + 15)/16)*16 : 32*nsb;
+    const int hoff = doff + 128*nsb;
+
+    if (SM == 0) {
+        ((device half *)row)[2*bx + 0] = d;
+        ((device half *)row)[2*bx + 1] = dmin;
+    }
+    for (short j = 0; j < 8; ++j) {
+        const uchar2 sc = get_scale_min_k4_just2(j, 0, scales);
+        if (SM == 0) {
+            (row + 4*nsb)[8*bx + j] = sc[0];
+            (row + 12*nsb)[8*bx + j] = sc[1];
+        } else {
+            ((device half *)row)[8*bx + j]          = half(float(d)*float(sc[0]));
+            ((device half *)row)[8*nsb + 8*bx + j]  = half(float(dmin)*float(sc[1]));
+        }
+        const short c = j/2;
+        const short h = j%2;
+        device uint * packs = (device uint *)(row + doff) + 32*bx + 4*j;
+        device uchar * hb = row + hoff + 32*bx + 4*j;
+        for (short pp = 0; pp < 4; ++pp) {
+            uint q = 0;
+            uchar hbits = 0;
+            for (short i = 0; i < 8; ++i) {
+                q |= uint((qs[32*c + 8*pp + i] >> (4*h)) & 0xf) << (4*i);
+                if (HB) {
+                    hbits |= uchar((qh[8*pp + i] >> j) & 1) << i;
+                }
+            }
+            packs[pp] = q;
+            if (HB) {
+                hb[pp] = hbits;
+            }
+        }
+    }
+}
+
+#define KQ_SOA_REPACK_KERNEL(NAME, SM, HB) \
+kernel void NAME( \
+        constant ggml_metal_kargs_repack_q4_0_di & args, \
+        device const char * src, \
+        device       char * dst, \
+        uint3   tgpig[[threadgroup_position_in_grid]], \
+        ushort3 tpitg[[thread_position_in_threadgroup]]) { \
+    kernel_repack_kq_soa_impl<SM, HB>(args, src, dst, tgpig, tpitg); \
+}
+KQ_SOA_REPACK_KERNEL(kernel_repack_q4_K_soa,  0, 0)
+KQ_SOA_REPACK_KERNEL(kernel_repack_q4_K_soah, 1, 0)
+KQ_SOA_REPACK_KERNEL(kernel_repack_q5_K_soa,  0, 1)
+KQ_SOA_REPACK_KERNEL(kernel_repack_q5_K_soah, 1, 1)
+
+template <int SM, int HB, int NC, int KS>
+void kernel_mul_mv_kq_soa_impl(
+        constant ggml_metal_kargs_mul_mv_ext & args,
+        device const char * src0,
+        device const half * src1,
+        device float * dst,
+        threadgroup float (&partial)[2][4*NC],
+        uint3 tgpig,
+        ushort tiisg,
+        ushort sgitg) {
+    float acc[4*NC] = {};
+    const int nsb = args.ne00/256;
+    const int npack = args.ne00/8;
+    const int row0 = 4*(int)tgpig.x;
+    const int pstart = KS == 2 ? (int)sgitg*(npack/2) : 0;
+    const int pend = KS == 2 ? pstart + npack/2 : npack;
+    const int doff = SM == 0 ? ((20*nsb + 15)/16)*16 : 32*nsb;
+    const int hoff = doff + 128*nsb;
+
+    device const char * r0 = src0 + (uint64_t)(row0 + 0)*args.nb01;
+    device const char * r1 = src0 + (uint64_t)(row0 + 1)*args.nb01;
+    device const char * r2 = src0 + (uint64_t)(row0 + 2)*args.nb01;
+    device const char * r3 = src0 + (uint64_t)(row0 + 3)*args.nb01;
+    // SM 0: dm[2*sb], sc/mn bytes; SM 1: s/m halves per sub-block
+    device const half * dp0 = (device const half *)r0;
+    device const half * dp1 = (device const half *)r1;
+    device const half * dp2 = (device const half *)r2;
+    device const half * dp3 = (device const half *)r3;
+    device const uchar * sp0 = (device const uchar *)r0 + 4*nsb;
+    device const uchar * sp1 = (device const uchar *)r1 + 4*nsb;
+    device const uchar * sp2 = (device const uchar *)r2 + 4*nsb;
+    device const uchar * sp3 = (device const uchar *)r3 + 4*nsb;
+    device const uint * qp0 = (device const uint *)(r0 + doff);
+    device const uint * qp1 = (device const uint *)(r1 + doff);
+    device const uint * qp2 = (device const uint *)(r2 + doff);
+    device const uint * qp3 = (device const uint *)(r3 + doff);
+    device const uchar * hp0 = (device const uchar *)(r0 + hoff);
+    device const uchar * hp1 = (device const uchar *)(r1 + hoff);
+    device const uchar * hp2 = (device const uchar *)(r2 + hoff);
+    device const uchar * hp3 = (device const uchar *)(r3 + hoff);
+    using half8 = vec<half, 8>;
+    const device half8 * xv = (const device half8 *)src1;
+    const int K8 = args.ne00/8;
+    const int mn_off = 8*nsb;   // SM 0: mn plane after sc plane (bytes); SM 1: m plane after s plane (halves)
+
+    for (int p = pstart + (int)tiisg; p < pend; p += 32) {
+        const int blk = p >> 2;
+        const int sb  = p >> 5;
+        const half8 v0 = xv[0*K8 + p];
+        const half8 v1 = xv[1*K8 + p];
+        const half8 v2 = xv[2*K8 + p];
+        const half8 v3 = NC > 3 ? xv[3*K8 + p] : half8(0.h);
+        const half8 v4 = NC > 4 ? xv[4*K8 + p] : half8(0.h);
+        const uint qs[4] = { qp0[p], qp1[p], qp2[p], qp3[p] };
+        uchar hb[4] = { 0, 0, 0, 0 };
+        if (HB) {
+            hb[0] = hp0[p]; hb[1] = hp1[p]; hb[2] = hp2[p]; hb[3] = hp3[p];
+        }
+        half sh[4];
+        float mf[4];
+        if (SM == 0) {
+            sh[0] = half(float(dp0[2*sb])*float(sp0[blk])); mf[0] = float(dp0[2*sb + 1])*float(sp0[mn_off + blk]);
+            sh[1] = half(float(dp1[2*sb])*float(sp1[blk])); mf[1] = float(dp1[2*sb + 1])*float(sp1[mn_off + blk]);
+            sh[2] = half(float(dp2[2*sb])*float(sp2[blk])); mf[2] = float(dp2[2*sb + 1])*float(sp2[mn_off + blk]);
+            sh[3] = half(float(dp3[2*sb])*float(sp3[blk])); mf[3] = float(dp3[2*sb + 1])*float(sp3[mn_off + blk]);
+        } else {
+            sh[0] = dp0[blk]; mf[0] = float(dp0[mn_off + blk]);
+            sh[1] = dp1[blk]; mf[1] = float(dp1[mn_off + blk]);
+            sh[2] = dp2[blk]; mf[2] = float(dp2[mn_off + blk]);
+            sh[3] = dp3[blk]; mf[3] = float(dp3[mn_off + blk]);
+        }
+        float sv0 = 0.f, sv1 = 0.f, sv2 = 0.f, sv3 = 0.f, sv4 = 0.f;
+#pragma unroll
+        for (int ki = 0; ki < 8; ++ki) {
+            sv0 += float(v0[ki]); sv1 += float(v1[ki]); sv2 += float(v2[ki]);
+            if (NC > 3) { sv3 += float(v3[ki]); }
+            if (NC > 4) { sv4 += float(v4[ki]); }
+        }
+#pragma unroll
+        for (int r = 0; r < 4; ++r) {
+            const uint q = qs[r];
+            const uint h = hb[r];
+#pragma unroll
+            for (int ki = 0; ki < 8; ++ki) {
+                const ushort qi = HB ? (((q >> (ki*4)) & 0xFu) | (((h >> ki) & 1u) << 4)) : ((q >> (ki*4)) & 0xFu);
+                const half wv = half(qi)*sh[r];
+                acc[r*NC + 0] += float(v0[ki]*wv);
+                acc[r*NC + 1] += float(v1[ki]*wv);
+                acc[r*NC + 2] += float(v2[ki]*wv);
+                if (NC > 3) { acc[r*NC + 3] += float(v3[ki]*wv); }
+                if (NC > 4) { acc[r*NC + 4] += float(v4[ki]*wv); }
+            }
+            acc[r*NC + 0] -= mf[r]*sv0;
+            acc[r*NC + 1] -= mf[r]*sv1;
+            acc[r*NC + 2] -= mf[r]*sv2;
+            if (NC > 3) { acc[r*NC + 3] -= mf[r]*sv3; }
+            if (NC > 4) { acc[r*NC + 4] -= mf[r]*sv4; }
+        }
+    }
+
+    for (int i = 0; i < 4*NC; ++i) {
+        acc[i] = simd_sum(acc[i]);
+    }
+    if (KS == 2) {
+        if (tiisg == 0) {
+            for (int i = 0; i < 4*NC; ++i) {
+                partial[sgitg][i] = acc[i];
+            }
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        if (sgitg == 0 && tiisg < 4*NC) {
+            const int r = (int)tiisg/NC;
+            const int c = (int)tiisg%NC;
+            if (row0 + r < args.ne01) {
+                dst[c*args.ne01 + row0 + r] = partial[0][tiisg] + partial[1][tiisg];
+            }
+        }
+    } else {
+        if (tiisg < 4*NC) {
+            const int r = (int)tiisg/NC;
+            const int c = (int)tiisg%NC;
+            if (row0 + r < args.ne01) {
+                dst[c*args.ne01 + row0 + r] = acc[tiisg];
+            }
+        }
+    }
+}
+
+#define KQ_SOA_KERNEL(NAME, SM, HB, NC, KS) \
+kernel void NAME( \
+        constant ggml_metal_kargs_mul_mv_ext & args, \
+        device const char * src0, \
+        device const half * src1, \
+        device float * dst, \
+        uint3 tgpig [[threadgroup_position_in_grid]], \
+        ushort tiisg [[thread_index_in_simdgroup]], \
+        ushort sgitg [[simdgroup_index_in_threadgroup]]) { \
+    threadgroup float partial[2][4*NC]; \
+    kernel_mul_mv_kq_soa_impl<SM, HB, NC, KS>(args, src0, src1, dst, partial, tgpig, tiisg, sgitg); \
+}
+KQ_SOA_KERNEL(kernel_mul_mv_q4_K_soa_w4_v1, 0, 0, 4, 2)  // exact scale/min -> half, half product
+KQ_SOA_KERNEL(kernel_mul_mv_q4_K_soa_w4_v2, 1, 0, 4, 2)  // half planar scale/min, half product
+KQ_SOA_KERNEL(kernel_mul_mv_q5_K_soa_w4_v1, 0, 1, 4, 2)
+KQ_SOA_KERNEL(kernel_mul_mv_q5_K_soa_w4_v2, 1, 1, 4, 2)
+KQ_SOA_KERNEL(kernel_mul_mv_q4_K_soa_w3_v1, 0, 0, 3, 2)
+KQ_SOA_KERNEL(kernel_mul_mv_q4_K_soa_w3_v2, 1, 0, 3, 2)
+KQ_SOA_KERNEL(kernel_mul_mv_q5_K_soa_w3_v1, 0, 1, 3, 2)
+KQ_SOA_KERNEL(kernel_mul_mv_q5_K_soa_w3_v2, 1, 1, 3, 2)
+KQ_SOA_KERNEL(kernel_mul_mv_q4_K_soa_w5_v1, 0, 0, 5, 1)
+KQ_SOA_KERNEL(kernel_mul_mv_q4_K_soa_w5_v2, 1, 0, 5, 1)
+KQ_SOA_KERNEL(kernel_mul_mv_q5_K_soa_w5_v1, 0, 1, 5, 1)
+KQ_SOA_KERNEL(kernel_mul_mv_q5_K_soa_w5_v2, 1, 1, 5, 1)
+
 // v4/v5: the v2 codegen form at the other two tile geometries, to isolate what pays.
 // v4 = 2 rows, full K, one simdgroup (R2's geometry); v5 = 4 rows, full K, one simdgroup.
 kernel void kernel_mul_mv_q4_0_soa_w4_r4kp_v4(
@@ -11430,6 +11887,9 @@ constant int32_t FC_flash_attn_ext_ns20 [[function_constant(FC_FLASH_ATTN_EXT + 
 constant int32_t FC_flash_attn_ext_nsg  [[function_constant(FC_FLASH_ATTN_EXT + 22)]];
 constant int32_t FC_flash_attn_ext_nwg  [[function_constant(FC_FLASH_ATTN_EXT + 23)]];
 constant int32_t FC_flash_attn_ext_gqa_heads [[function_constant(FC_FLASH_ATTN_EXT + 24)]];
+// QT form only: the transposed Q tiles stay in registers across the KV loop instead of being re-read
+// from threadgroup memory for every score tile (GGML_FA_QR=1, perf/fa-long-context.md)
+constant int32_t FC_flash_attn_ext_qr        [[function_constant(FC_FLASH_ATTN_EXT + 25)]]; // Q^T tiles held in registers (0 = off)
 
 // ref: https://arxiv.org/pdf/2307.08691.pdf
 template<
@@ -11460,8 +11920,9 @@ template<
     short DV,         // V head size
     short Q,          // queries per threadgroup
     short C,          // cache items per threadgroup
-    short GQAH,       // query heads sharing one KV head in this threadgroup grid
-    short NSG>        // number of simd groups
+        short GQAH,       // query heads sharing one KV head in this threadgroup grid
+    short NSG,        // number of simd groups
+    bool  QT = false> // f16 QK form: Q staged transposed, K tiles loaded untransposed, S^T stored transposed (perf/ud-model.md step 9)
 void kernel_flash_attn_ext_impl(
         constant ggml_metal_kargs_flash_attn_ext & args,
         device const char * q,
@@ -11595,7 +12056,14 @@ void kernel_flash_attn_ext_impl(
         }
 
         for (short i = tiisg; i < DK4; i += NW) {
-            if (valid) {
+                        if constexpr (QT) {
+                // transposed staging [DK][Q]: the f16 QK path loads Q^T tiles with stride Q, untransposed
+                const q4_t qv = valid ? (q4_t) q4[i] : (q4_t) 0;
+                sq[(4*i + 0)*Q + j] = qv[0];
+                sq[(4*i + 1)*Q + j] = qv[1];
+                sq[(4*i + 2)*Q + j] = qv[2];
+                sq[(4*i + 3)*Q + j] = qv[3];
+            } else if (valid) {
                 sq4[j*DK4 + i] = (q4_t) q4[i];
             } else {
                 sq4[j*DK4 + i] = 0;
@@ -11617,6 +12085,21 @@ void kernel_flash_attn_ext_impl(
     }
 
     threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    // QR: the Q^T tiles of this threadgroup, loaded once (DK8 8x8 tiles = DK8 registers per lane)
+    q8x8_t mqr[QT ? DK8*(Q/8) : 1];
+
+    if constexpr (QT) {
+        if (FC_flash_attn_ext_qr > 0) {
+            FOR_UNROLL (short i = 0; i < DK8; ++i) {
+                if (i < FC_flash_attn_ext_qr) {
+                    FOR_UNROLL (short qt = 0; qt < Q/8; ++qt) {
+                        simdgroup_load(mqr[i*(Q/8) + qt], sq + (8*i)*Q + 8*qt, Q);
+                    }
+                }
+            }
+        }
+    }
 
     float S[NQ] = { [0 ... NQ-1] = 0.0f };
     // note: M has to outlive the loop when NWG > 1 -- the partial results carry it
@@ -11768,10 +12251,70 @@ void kernel_flash_attn_ext_impl(
                 pk += sgitg*(8*NS10);
                 ps += sgitg*(8*1);
 
-                static_assert((C/8) % NSG == 0, "");
+                                static_assert((C/8) % NSG == 0, "");
+                static_assert(!QT || (DK % 16 == 0 && Q % 8 == 0), "QT form assumes 8-row query tiles and DK % 16 == 0");
+                constexpr short NC  = (C/8)/NSG;
+                constexpr short NQT = Q/8; // query tiles per threadgroup (16-row form: perf/fa-long-context.md)
 
-                constexpr short NC = (C/8)/NSG;
+                if (QT && (FC_flash_attn_ext_qr > 0 || NQT > 1) && DK % 16 == 0) {
+                    // QR form (perf/fa-long-context.md): each Q^T tile load feeds all NC score tiles of this
+                    // simdgroup (the baseline reloads Q per score tile), and the first FC_flash_attn_ext_qr
+                    // tiles come from registers loaded once before the KV loop. K tiles untransposed. With
+                    // NQT query tiles each K tile load feeds NQT MMAs as well. Per score tile the products
+                    // accumulate in the same k order as the baseline: byte-identical.
+                    qk8x8_t mqk[NC*NQT];
 
+                    FOR_UNROLL (short t = 0; t < NC*NQT; ++t) {
+                        mqk[t] = make_filled_simdgroup_matrix<qk_t, 8>((qk_t) 0.0f);
+                    }
+
+                    k8x8_t mk[2];
+                    q8x8_t mq[2*NQT];
+
+                    FOR_UNROLL (short i = 0; i < FC_flash_attn_ext_qr/2; ++i) {
+                        FOR_UNROLL (short cc = 0; cc < NC; ++cc) {
+                            simdgroup_barrier(mem_flags::mem_none);
+
+                            simdgroup_load(mk[0], pk + cc*8*(NSG*NS10) + 0*8 + 16*i, NS10, 0, false);
+                            simdgroup_load(mk[1], pk + cc*8*(NSG*NS10) + 1*8 + 16*i, NS10, 0, false);
+
+                            simdgroup_barrier(mem_flags::mem_none);
+
+                            FOR_UNROLL (short qt = 0; qt < NQT; ++qt) {
+                                simdgroup_multiply_accumulate(mqk[cc*NQT + qt], mk[0], mqr[(2*i + 0)*NQT + qt], mqk[cc*NQT + qt]);
+                                simdgroup_multiply_accumulate(mqk[cc*NQT + qt], mk[1], mqr[(2*i + 1)*NQT + qt], mqk[cc*NQT + qt]);
+                            }
+                        }
+                    }
+
+                    #pragma unroll 4
+                    for (short i = FC_flash_attn_ext_qr/2; i < DK8/2; ++i) {
+                        simdgroup_barrier(mem_flags::mem_none);
+
+                        FOR_UNROLL (short qt = 0; qt < NQT; ++qt) {
+                            simdgroup_load(mq[0*NQT + qt], pq + (16*i + 0)*Q + 8*qt, Q);
+                            simdgroup_load(mq[1*NQT + qt], pq + (16*i + 8)*Q + 8*qt, Q);
+                        }
+
+                        FOR_UNROLL (short cc = 0; cc < NC; ++cc) {
+                            simdgroup_load(mk[0], pk + cc*8*(NSG*NS10) + 0*8 + 16*i, NS10, 0, false);
+                            simdgroup_load(mk[1], pk + cc*8*(NSG*NS10) + 1*8 + 16*i, NS10, 0, false);
+
+                            simdgroup_barrier(mem_flags::mem_none);
+
+                            FOR_UNROLL (short qt = 0; qt < NQT; ++qt) {
+                                simdgroup_multiply_accumulate(mqk[cc*NQT + qt], mk[0], mq[0*NQT + qt], mqk[cc*NQT + qt]);
+                                simdgroup_multiply_accumulate(mqk[cc*NQT + qt], mk[1], mq[1*NQT + qt], mqk[cc*NQT + qt]);
+                            }
+                        }
+                    }
+
+                    FOR_UNROLL (short cc = 0; cc < NC; ++cc) {
+                        FOR_UNROLL (short qt = 0; qt < NQT; ++qt) {
+                            simdgroup_store(mqk[cc*NQT + qt], ps + cc*8*NSG + qt*8*SH, SH, 0, QT);
+                        }
+                    }
+                } else {
                 FOR_UNROLL (short cc = 0; cc < NC; ++cc) {
                     qk8x8_t mqk = make_filled_simdgroup_matrix<qk_t, 8>((qk_t) 0.0f);
 
@@ -11794,27 +12337,42 @@ void kernel_flash_attn_ext_impl(
                         q8x8_t mq[2];
 
                         // note: too much unroll can tank the performance for large heads
-                        #pragma unroll 4
+                                                #pragma unroll 4
                         for (short i = 0; i < DK8/2; ++i) {
                             simdgroup_barrier(mem_flags::mem_none);
 
-                            simdgroup_load(mq[0], pq + 0*8 + 16*i, DK);
-                            simdgroup_load(mq[1], pq + 1*8 + 16*i, DK);
+                            if constexpr (QT) {
+                                // S^T = K Q^T: the K tile loads untransposed (no per-lane column addressing)
+                                // and Q^T comes from the transposed staging; same products, same k order
+                                simdgroup_load(mq[0], pq + (16*i + 0)*Q, Q);
+                                simdgroup_load(mq[1], pq + (16*i + 8)*Q, Q);
 
-                            simdgroup_load(mk[0], pk + 0*8 + 16*i, NS10, 0, true);
-                            simdgroup_load(mk[1], pk + 1*8 + 16*i, NS10, 0, true);
+                                simdgroup_load(mk[0], pk + 0*8 + 16*i, NS10, 0, false);
+                                simdgroup_load(mk[1], pk + 1*8 + 16*i, NS10, 0, false);
 
-                            simdgroup_barrier(mem_flags::mem_none);
+                                simdgroup_barrier(mem_flags::mem_none);
 
-                            simdgroup_multiply_accumulate(mqk, mq[0], mk[0], mqk);
-                            simdgroup_multiply_accumulate(mqk, mq[1], mk[1], mqk);
+                                simdgroup_multiply_accumulate(mqk, mk[0], mq[0], mqk);
+                                simdgroup_multiply_accumulate(mqk, mk[1], mq[1], mqk);
+                            } else {
+                                simdgroup_load(mq[0], pq + 0*8 + 16*i, DK);
+                                simdgroup_load(mq[1], pq + 1*8 + 16*i, DK);
+
+                                simdgroup_load(mk[0], pk + 0*8 + 16*i, NS10, 0, true);
+                                simdgroup_load(mk[1], pk + 1*8 + 16*i, NS10, 0, true);
+
+                                simdgroup_barrier(mem_flags::mem_none);
+
+                                simdgroup_multiply_accumulate(mqk, mq[0], mk[0], mqk);
+                                simdgroup_multiply_accumulate(mqk, mq[1], mk[1], mqk);
+                            }
                         }
                     }
 
-                    simdgroup_store(mqk, ps, SH, 0, false);
-
+                                        simdgroup_store(mqk, ps, SH, 0, QT); // QT: mqk holds S^T; the transposed store lands the same [q][key] block
                     pk += 8*(NSG*NS10);
                     ps += 8*(NSG);
+                }
                 }
             } else {
                 // TODO: this is the quantized K cache branch - not optimized yet
@@ -11932,7 +12490,62 @@ void kernel_flash_attn_ext_impl(
             // O = O + (Q*K^T)*V
             {
                 // we can read directly from global memory
-                if (is_same<vd4x4_t, v4x4_t>::value) {
+                if constexpr (is_same<vd4x4_t, v4x4_t>::value && Q > 8) {
+                    // 16-row query tile (perf/fa-long-context.md): the output columns of this simdgroup are
+                    // processed in two halves so the live O tiles stay at 8 (2 query tiles x 4 column tiles);
+                    // each V tile load feeds both query tiles. Same MMA order per output tile as below.
+                    static_assert(PV8 % NSG == 0 && (PV8/NSG) % 4 == 0 && DV > 64, "");
+
+                    constexpr short NQT = Q/8;
+                    constexpr short NO  = PV8/NSG;
+                    constexpr short NOH = NO/2;
+                    constexpr short NCC = (C/8)/2;
+
+                    FOR_UNROLL (short h = 0; h < 2; ++h) {
+                        o8x8_t lo[NQT*NOH];
+
+                        FOR_UNROLL (short qt = 0; qt < NQT; ++qt) {
+                            FOR_UNROLL (short ii = 0; ii < NOH; ++ii) {
+                                simdgroup_load(lo[qt*NOH + ii], so + qt*8*PV + 8*sgitg + 8*NSG*(h*NOH + ii), PV, 0, false);
+                            }
+                        }
+
+                        device const v_t * pv = (device const v_t *) (v + ic*args.nb21) + 8*sgitg + 8*NSG*(h*NOH);
+
+                        FOR_UNROLL (short cc = 0; cc < NCC; ++cc) {
+                            s8x8_t vs[2*NQT];
+
+                            FOR_UNROLL (short qt = 0; qt < NQT; ++qt) {
+                                simdgroup_load(vs[2*qt + 0], ss + qt*8*SH + 16*cc + 0, SH, 0, false);
+                                simdgroup_load(vs[2*qt + 1], ss + qt*8*SH + 16*cc + 8, SH, 0, false);
+                            }
+
+                            FOR_UNROLL (short ii = 0; ii < NOH/2; ++ii) {
+                                v8x8_t mv[4];
+
+                                simdgroup_load(mv[0], pv + 0*NSG + 16*ii*NSG + 0*8*NS20, NS20, 0, false);
+                                simdgroup_load(mv[1], pv + 8*NSG + 16*ii*NSG + 0*8*NS20, NS20, 0, false);
+                                simdgroup_load(mv[2], pv + 0*NSG + 16*ii*NSG + 1*8*NS20, NS20, 0, false);
+                                simdgroup_load(mv[3], pv + 8*NSG + 16*ii*NSG + 1*8*NS20, NS20, 0, false);
+
+                                FOR_UNROLL (short qt = 0; qt < NQT; ++qt) {
+                                    simdgroup_multiply_accumulate(lo[qt*NOH + 2*ii + 0], vs[2*qt + 0], mv[0], lo[qt*NOH + 2*ii + 0]);
+                                    simdgroup_multiply_accumulate(lo[qt*NOH + 2*ii + 1], vs[2*qt + 0], mv[1], lo[qt*NOH + 2*ii + 1]);
+                                    simdgroup_multiply_accumulate(lo[qt*NOH + 2*ii + 0], vs[2*qt + 1], mv[2], lo[qt*NOH + 2*ii + 0]);
+                                    simdgroup_multiply_accumulate(lo[qt*NOH + 2*ii + 1], vs[2*qt + 1], mv[3], lo[qt*NOH + 2*ii + 1]);
+                                }
+                            }
+
+                            pv += 2*8*NS20;
+                        }
+
+                        FOR_UNROLL (short qt = 0; qt < NQT; ++qt) {
+                            FOR_UNROLL (short ii = 0; ii < NOH; ++ii) {
+                                simdgroup_store(lo[qt*NOH + ii], so + qt*8*PV + 8*sgitg + 8*NSG*(h*NOH + ii), PV, 0, false);
+                            }
+                        }
+                    }
+                } else if (is_same<vd4x4_t, v4x4_t>::value) {
                     static_assert(PV8 % NSG == 0, "");
 
                     constexpr short NO = PV8/NSG;
@@ -12191,8 +12804,9 @@ template<
     void (*deq_v)(device const vd4x4_t *, short, thread v4x4_t &),
     short DK,         // K head size
     short DV,         // V head size
-    short Q  = OP_FLASH_ATTN_EXT_NQPSG, // queries per threadgroup
-    short C  = OP_FLASH_ATTN_EXT_NCPSG> // cache items per threadgroup
+        short Q  = OP_FLASH_ATTN_EXT_NQPSG, // queries per threadgroup
+    short C  = OP_FLASH_ATTN_EXT_NCPSG, // cache items per threadgroup
+    bool  QT = false>                   // transposed-Q QK form (f16 K only, perf/ud-model.md step 9)
 kernel void kernel_flash_attn_ext(
         constant ggml_metal_kargs_flash_attn_ext & args,
         device const char * q,
@@ -12215,13 +12829,13 @@ kernel void kernel_flash_attn_ext(
       //case 2: kernel_flash_attn_ext_impl<FWD_TMPL, 2>(FWD_ARGS); break;
         case 4:
             switch (FC_flash_attn_ext_gqa_heads) {
-                case 4: kernel_flash_attn_ext_impl<FWD_TMPL, 4, 4>(FWD_ARGS); break;
-                case 6: kernel_flash_attn_ext_impl<FWD_TMPL, 6, 4>(FWD_ARGS); break;
-                default: kernel_flash_attn_ext_impl<FWD_TMPL, 1, 4>(FWD_ARGS); break;
+                case 4: kernel_flash_attn_ext_impl<FWD_TMPL, 4, 4, QT>(FWD_ARGS); break;
+                case 6: kernel_flash_attn_ext_impl<FWD_TMPL, 6, 4, QT>(FWD_ARGS); break;
+                default: kernel_flash_attn_ext_impl<FWD_TMPL, 1, 4, QT>(FWD_ARGS); break;
             }
             break;
         case 8:
-            kernel_flash_attn_ext_impl<FWD_TMPL, 1, 8>(FWD_ARGS);
+            kernel_flash_attn_ext_impl<FWD_TMPL, 1, 8, QT>(FWD_ARGS);
             break;
     }
 #undef FWD_TMPL
@@ -12307,6 +12921,13 @@ template [[host_name("kernel_flash_attn_ext_f16_dk576_dv512")]]  kernel flash_at
 
 template [[host_name("kernel_flash_attn_ext_acch_f16_dk128_dv128")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES_ACCH, half4x4, 1, dequantize_f16, half4x4, 1, dequantize_f16, 128, 128>;
 template [[host_name("kernel_flash_attn_ext_acch_f16_dk256_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES_ACCH, half4x4, 1, dequantize_f16, half4x4, 1, dequantize_f16, 256, 256>;
+// transposed-Q QK form (GGML_FA_QT=1, perf/ud-model.md step 9): the f16 K tiles load untransposed and the
+// score tile is stored transposed once per key tile; same products in the same order (byte-identical gate).
+template [[host_name("kernel_flash_attn_ext_qt_f16_dk128_dv128")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, half4x4, 1, dequantize_f16, half4x4, 1, dequantize_f16, 128, 128, OP_FLASH_ATTN_EXT_NQPSG, OP_FLASH_ATTN_EXT_NCPSG, true>;
+template [[host_name("kernel_flash_attn_ext_qt_f16_dk256_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, half4x4, 1, dequantize_f16, half4x4, 1, dequantize_f16, 256, 256, OP_FLASH_ATTN_EXT_NQPSG, OP_FLASH_ATTN_EXT_NCPSG, true>;
+// 16-row query tile of the transposed-Q form (GGML_FA_Q16=1, prefill only): each K and V tile load feeds two
+// query tiles; shared memory is exactly the 32 KB threadgroup limit at DK=DV=256 (perf/fa-long-context.md)
+template [[host_name("kernel_flash_attn_ext_qt16_f16_dk256_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, half4x4, 1, dequantize_f16, half4x4, 1, dequantize_f16, 256, 256, 16, OP_FLASH_ATTN_EXT_NCPSG, true>;
 
 #if defined(GGML_METAL_HAS_BF16)
 template [[host_name("kernel_flash_attn_ext_bf16_dk32_dv32"  )]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES_BF, bfloat4x4,  1, dequantize_bf16, bfloat4x4,  1, dequantize_bf16, 32,  32>;
@@ -13197,6 +13818,24 @@ kernel void kernel_cpy_t_t(
         device const T0 * src = (device T0 *)(src0 + i03*args.nb03 + i02*args.nb02 + i01*args.nb01 + i00*args.nb00);
         dst_data[i00] = (T1) src[0];
         break;
+    }
+}
+
+// contiguous f32 -> f16 cast, 8 elements per thread, no per-element index arithmetic (the generic
+// kernel_cpy does four 64-bit divisions per element - at 2.6M elements per prefill mul_mm call that
+// costs more than the f16 tile saves; perf/ud-model.md step 10)
+kernel void kernel_cvt_f32_f16_cont(
+        constant ggml_metal_kargs_cvt_cont & args,
+        device  const float4 * src0,
+        device        half4  * dst,
+        uint tpig[[thread_position_in_grid]]) {
+    const int64_t i = (int64_t) tpig*2;   // float4 index; two float4 per thread
+    const int64_t n4 = args.n/4;
+    if (i + 1 < n4) {
+        dst[i]     = (half4) src0[i];
+        dst[i + 1] = (half4) src0[i + 1];
+    } else if (i < n4) {
+        dst[i]     = (half4) src0[i];
     }
 }
 
@@ -15634,8 +16273,9 @@ kernel void kernel_mul_mm(
 
 // direct device store of the accumulator tiles; the half-accumulate variant never takes
 // this path (its condition is compile-time false), the overload only keeps the code valid
-static inline void mul_mm_store_direct(thread simdgroup_float8x8 (&mc)[8], device float * C, int ne0) {
-    for (short i = 0; i < 8; i++) {
+template<short N>
+static inline void mul_mm_store_direct(thread simdgroup_float8x8 (&mc)[N], device float * C, int ne0) {
+    for (short i = 0; i < N; i++) {
         simdgroup_store(mc[i], C + 8*(i%4) + 8*ne0*(i/4), ne0, 0, false);
     }
 }
@@ -16887,6 +17527,29 @@ template [[host_name("kernel_mul_mm_q4_0_f32")]]    kernel mul_mm_t kernel_mul_m
 // half-accumulate probe (GGML_MM_ACC_HALF=1): does the MMA lowering reach the 2x f16 FMA rate?
 template [[host_name("kernel_mul_mm_acch_q4_0_f32")]] kernel mul_mm_t kernel_mul_mm<half, half4x4,   simdgroup_half8x8,   half,   half2x4,   simdgroup_half8x8,   block_q4_0,    2,     dequantize_q4_0,    float,  float4x4,  float, float2x4, half, simdgroup_half8x8>;
 template [[host_name("kernel_mul_mm_acch_n64_q4_0_f32")]] kernel mul_mm_t kernel_mul_mm<half, half4x4, simdgroup_half8x8, half, half2x4, simdgroup_half8x8, block_q4_0, 2, dequantize_q4_0, float, float4x4, float, float2x4, half, simdgroup_half8x8, 64>;
+// acch tiles with f16 activations (GGML_MM_F16B=1 on the Q4_0 acch pick)
+template [[host_name("kernel_mul_mm_acch_q4_0_f16")]]     kernel mul_mm_t kernel_mul_mm<half, half4x4, simdgroup_half8x8, half, half2x4, simdgroup_half8x8, block_q4_0, 2, dequantize_q4_0, float, float4x4, half, half2x4, half, simdgroup_half8x8>;
+template [[host_name("kernel_mul_mm_acch_n64_q4_0_f16")]] kernel mul_mm_t kernel_mul_mm<half, half4x4, simdgroup_half8x8, half, half2x4, simdgroup_half8x8, block_q4_0, 2, dequantize_q4_0, float, float4x4, half, half2x4, half, simdgroup_half8x8, 64>;
+// f32-accumulate 64-column tiles (UD line prefill, perf/ud-model.md step 8): the A-tile dequant is paid
+// once per 64 output columns instead of 32, which is where the K-quant formats' prefill deficit lives.
+// Same accumulation order as the 32-column kernel. Route: GGML_MM_N64=1 without GGML_MM_ACC_HALF.
+template [[host_name("kernel_mul_mm_n64_q4_0_f32")]]   kernel mul_mm_t kernel_mul_mm<half, half4x4, simdgroup_half8x8, half, half2x4, simdgroup_half8x8, block_q4_0,   2,     dequantize_q4_0,   float, float4x4, float, float2x4, float, simdgroup_float8x8, 64>;
+template [[host_name("kernel_mul_mm_n64_q4_K_f32")]]   kernel mul_mm_t kernel_mul_mm<half, half4x4, simdgroup_half8x8, half, half2x4, simdgroup_half8x8, block_q4_K,   QK_NL, dequantize_q4_K,   float, float4x4, float, float2x4, float, simdgroup_float8x8, 64>;
+template [[host_name("kernel_mul_mm_n64_q5_K_f32")]]   kernel mul_mm_t kernel_mul_mm<half, half4x4, simdgroup_half8x8, half, half2x4, simdgroup_half8x8, block_q5_K,   QK_NL, dequantize_q5_K,   float, float4x4, float, float2x4, float, simdgroup_float8x8, 64>;
+template [[host_name("kernel_mul_mm_n64_q6_K_f32")]]   kernel mul_mm_t kernel_mul_mm<half, half4x4, simdgroup_half8x8, half, half2x4, simdgroup_half8x8, block_q6_K,   QK_NL, dequantize_q6_K,   float, float4x4, float, float2x4, float, simdgroup_float8x8, 64>;
+template [[host_name("kernel_mul_mm_n64_q3_K_f32")]]   kernel mul_mm_t kernel_mul_mm<half, half4x4, simdgroup_half8x8, half, half2x4, simdgroup_half8x8, block_q3_K,   QK_NL, dequantize_q3_K,   float, float4x4, float, float2x4, float, simdgroup_float8x8, 64>;
+template [[host_name("kernel_mul_mm_n64_iq4_xs_f32")]] kernel mul_mm_t kernel_mul_mm<half, half4x4, simdgroup_half8x8, half, half2x4, simdgroup_half8x8, block_iq4_xs, QK_NL, dequantize_iq4_xs, float, float4x4, float, float2x4, float, simdgroup_float8x8, 64>;
+// the same tiles with f16 activations (GGML_MM_F16B=1 casts src1 into the scratch first)
+template [[host_name("kernel_mul_mm_n64_q4_0_f16")]]   kernel mul_mm_t kernel_mul_mm<half, half4x4, simdgroup_half8x8, half, half2x4, simdgroup_half8x8, block_q4_0,   2,     dequantize_q4_0,   float, float4x4, half, half2x4, float, simdgroup_float8x8, 64>;
+template [[host_name("kernel_mul_mm_n64_q4_K_f16")]]   kernel mul_mm_t kernel_mul_mm<half, half4x4, simdgroup_half8x8, half, half2x4, simdgroup_half8x8, block_q4_K,   QK_NL, dequantize_q4_K,   float, float4x4, half, half2x4, float, simdgroup_float8x8, 64>;
+template [[host_name("kernel_mul_mm_n64_q5_K_f16")]]   kernel mul_mm_t kernel_mul_mm<half, half4x4, simdgroup_half8x8, half, half2x4, simdgroup_half8x8, block_q5_K,   QK_NL, dequantize_q5_K,   float, float4x4, half, half2x4, float, simdgroup_float8x8, 64>;
+template [[host_name("kernel_mul_mm_n64_q6_K_f16")]]   kernel mul_mm_t kernel_mul_mm<half, half4x4, simdgroup_half8x8, half, half2x4, simdgroup_half8x8, block_q6_K,   QK_NL, dequantize_q6_K,   float, float4x4, half, half2x4, float, simdgroup_float8x8, 64>;
+template [[host_name("kernel_mul_mm_n64_q3_K_f16")]]   kernel mul_mm_t kernel_mul_mm<half, half4x4, simdgroup_half8x8, half, half2x4, simdgroup_half8x8, block_q3_K,   QK_NL, dequantize_q3_K,   float, float4x4, half, half2x4, float, simdgroup_float8x8, 64>;
+template [[host_name("kernel_mul_mm_n64_iq4_xs_f16")]] kernel mul_mm_t kernel_mul_mm<half, half4x4, simdgroup_half8x8, half, half2x4, simdgroup_half8x8, block_iq4_xs, QK_NL, dequantize_iq4_xs, float, float4x4, half, half2x4, float, simdgroup_float8x8, 64>;
+template [[host_name("kernel_mul_mm_n64_iq3_s_f32")]]  kernel mul_mm_t kernel_mul_mm<half, half4x4, simdgroup_half8x8, half, half2x4, simdgroup_half8x8, block_iq3_s,  QK_NL, dequantize_iq3_s,  float, float4x4, float, float2x4, float, simdgroup_float8x8, 64>;
+template [[host_name("kernel_mul_mm_n64_iq3_s_f16")]]  kernel mul_mm_t kernel_mul_mm<half, half4x4, simdgroup_half8x8, half, half2x4, simdgroup_half8x8, block_iq3_s,  QK_NL, dequantize_iq3_s,  float, float4x4, half, half2x4, float, simdgroup_float8x8, 64>;
+template [[host_name("kernel_mul_mm_n64_iq4_nl_f32")]] kernel mul_mm_t kernel_mul_mm<half, half4x4, simdgroup_half8x8, half, half2x4, simdgroup_half8x8, block_iq4_nl, 2,     dequantize_iq4_nl, float, float4x4, float, float2x4, float, simdgroup_float8x8, 64>;
+template [[host_name("kernel_mul_mm_n64_iq4_nl_f16")]] kernel mul_mm_t kernel_mul_mm<half, half4x4, simdgroup_half8x8, half, half2x4, simdgroup_half8x8, block_iq4_nl, 2,     dequantize_iq4_nl, float, float4x4, half, half2x4, float, simdgroup_float8x8, 64>;
 template [[host_name("kernel_mul_mm_q4_1_f32")]]    kernel mul_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   half,   half2x4,   simdgroup_half8x8,   block_q4_1,    2,     dequantize_q4_1,    float,  float4x4,  float, float2x4>;
 template [[host_name("kernel_mul_mm_q5_0_f32")]]    kernel mul_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   half,   half2x4,   simdgroup_half8x8,   block_q5_0,    2,     dequantize_q5_0,    float,  float4x4,  float, float2x4>;
 template [[host_name("kernel_mul_mm_q5_1_f32")]]    kernel mul_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   half,   half2x4,   simdgroup_half8x8,   block_q5_1,    2,     dequantize_q5_1,    float,  float4x4,  float, float2x4>;

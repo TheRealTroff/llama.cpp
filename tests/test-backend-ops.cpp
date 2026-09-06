@@ -9974,6 +9974,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 5120, n, 17408, {1, 1}, {ns, 1}));
         }
     }
+    // the Q4_0 line's other prefill shapes (attention q/k/v/o, the delta-net projections, the drafter's
+    // head) at the ubatch width, so the census can time every mul_mm row it ranks
+    {
+        for (auto mk : { std::array<int64_t, 2>{10240, 5120}, {5120, 6144}, {6144, 5120}, {12288, 5120}, {1024, 5120}, {48, 5120} }) {
+            test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, mk[0], 512, mk[1], {1, 1}, {1, 1}));
+        }
+    }
 
     // Multi-stream (non-unified KV, one sequence per server slot): nr23[1] = number of
     // sequences in the batch.  Turbo4 with 4+ slots emitted EOS at the first token on
@@ -10185,6 +10192,29 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         for (ggml_type type_K : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_BF16, GGML_TYPE_Q8_0, GGML_TYPE_Q5_1, GGML_TYPE_Q5_0, GGML_TYPE_Q4_1, GGML_TYPE_Q4_0}) {
             test_cases.emplace_back(new test_lightning_indexer(128, 64, kv, 32, 4, 1, type_K));
         }
+    }
+
+    // UD line: iq4_xs SoA width-4 route (GGML_MV_REPACK=2 GGML_MV_SOA_IQ4XS=n) at the UD projection shapes
+    for (int n : {3, 4, 5}) {
+        for (ggml_type t : {GGML_TYPE_Q4_K, GGML_TYPE_Q5_K}) {
+            test_cases.emplace_back(new test_mul_mat(t, GGML_TYPE_F32, 17408, n,  5120, {1, 1}, {1, 1}));
+            test_cases.emplace_back(new test_mul_mat(t, GGML_TYPE_F32,  5120, n, 17408, {1, 1}, {1, 1}));
+            test_cases.emplace_back(new test_mul_mat(t, GGML_TYPE_F32,  6144, n,  5120, {1, 1}, {1, 1}));
+            test_cases.emplace_back(new test_mul_mat(t, GGML_TYPE_F32, 10240, n,  5120, {1, 1}, {1, 1}));
+        }
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_IQ4_XS, GGML_TYPE_F32, 17408, n,  5120, {1, 1}, {1, 1}));
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_IQ4_XS, GGML_TYPE_F32,  5120, n, 17408, {1, 1}, {1, 1}));
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_IQ4_XS, GGML_TYPE_F32, 12288, n,  5120, {1, 1}, {1, 1}));
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_IQ4_XS, GGML_TYPE_F32,  6144, n,  5120, {1, 1}, {1, 1}));
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_IQ4_XS, GGML_TYPE_F32, 10240, n,  5120, {1, 1}, {1, 1}));
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_IQ4_XS, GGML_TYPE_F32,  5120, n,  6144, {1, 1}, {1, 1}));
+    }
+
+    // UD line prefill (perf/ud-model.md step 8): the K-quant mul_mm kernels at the prefill batch
+    // width on the two FFN shapes, for the per-format dequant tax measurement and the SoA-fed tile.
+    for (ggml_type t : {GGML_TYPE_Q4_0, GGML_TYPE_IQ4_XS, GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, GGML_TYPE_Q3_K, GGML_TYPE_Q6_K, GGML_TYPE_IQ3_S, GGML_TYPE_IQ4_NL}) {
+        test_cases.emplace_back(new test_mul_mat(t, GGML_TYPE_F32, 17408, 512,  5120, {1, 1}, {1, 1}));
+        test_cases.emplace_back(new test_mul_mat(t, GGML_TYPE_F32,  5120, 512, 17408, {1, 1}, {1, 1}));
     }
 
     // Q4_0_SOA_V1 direct readers: one compact correctness case per dispatch family.
@@ -10403,15 +10433,30 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     // missing entirely. do not add a shape here without checking it against the model.
     // prefill: the same projections at the n_ubatch width. mm at n=512 runs at ~97% of
     // its own 6.96 TFLOPS roof and sets the 66 s prefill wall - see perf/prefill-decomp.md
+    // (the UD line's formats added 2026-09-05 for the prefill dequant-tax measurement, perf/ud-model.md)
     for (int bs : {512}) {
-        for (ggml_type type_a : {GGML_TYPE_Q4_0, GGML_TYPE_F16}) {
+        for (ggml_type type_a : {GGML_TYPE_Q4_0, GGML_TYPE_F16, GGML_TYPE_IQ4_XS, GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, GGML_TYPE_Q3_K, GGML_TYPE_Q6_K, GGML_TYPE_IQ3_S, GGML_TYPE_IQ4_NL}) {
             test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32, 17408, bs,  5120, {1, 1}, {1, 1}));
             test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32,  5120, bs, 17408, {1, 1}, {1, 1}));
         }
     }
+    // kernel census coverage: the attention-projection shapes at the prefill width for the K-quants
+    for (ggml_type t : {GGML_TYPE_IQ4_XS, GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, GGML_TYPE_Q6_K, GGML_TYPE_Q3_K}) {
+        test_cases.emplace_back(new test_mul_mat(t, GGML_TYPE_F32, 10240, 512, 5120, {1, 1}, {1, 1})); // attn_qkv
+        test_cases.emplace_back(new test_mul_mat(t, GGML_TYPE_F32,  6144, 512, 5120, {1, 1}, {1, 1})); // attn_gate
+        test_cases.emplace_back(new test_mul_mat(t, GGML_TYPE_F32, 12288, 512, 5120, {1, 1}, {1, 1})); // attn_q
+        test_cases.emplace_back(new test_mul_mat(t, GGML_TYPE_F32,  5120, 512, 6144, {1, 1}, {1, 1})); // attn_output / ssm_out
+    }
+
+    // f16 activations into the prefill mul_mm (perf/ud-model.md step 10): the kernel converts its B tile
+    // to half at staging anyway, so an f16 B is byte-identical and skips the convert + half the bytes
+    for (ggml_type type_a : {GGML_TYPE_Q4_0, GGML_TYPE_IQ4_XS, GGML_TYPE_Q4_K, GGML_TYPE_Q5_K}) {
+        test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F16, 17408, 512,  5120, {1, 1}, {1, 1}));
+        test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F16,  5120, 512, 17408, {1, 1}, {1, 1}));
+    }
 
     for (int bs : {1, 2, 3, 4, 5, 6, 7, 8}) {
-        for (ggml_type type_a : {GGML_TYPE_Q4_0}) {
+        for (ggml_type type_a : {GGML_TYPE_Q4_0, GGML_TYPE_IQ4_XS, GGML_TYPE_Q4_K, GGML_TYPE_Q5_K}) {
             test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32, 17408, bs,  5120, {1, 1}, {1, 1})); // ffn_gate + ffn_up   x128
             test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32,  5120, bs, 17408, {1, 1}, {1, 1})); // ffn_down            x64
             test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32,  5120, bs,  6144, {1, 1}, {1, 1})); // attn_output/ssm_out x64
@@ -10515,9 +10560,16 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
 
     // Prefill-shaped f16 batched FA (nwg=1 route, 512 query rows) at the 8K and 16K
     // cache lengths, so the mm FA kernel's prefill form can be timed, not only tested.
-    for (int64_t kv : { 8448, 16384 }) {
+    for (int64_t kv : { 8448, 16384, 24576, 49152, 98304 }) {
         test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {6, 1}, kv, 512, true, false, 0, 0,
                                                         GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
+    }
+    // the decode/verify widths at a 24K and a 96K cache (perf/fa-long-context.md)
+    for (int64_t kv : { 24576, 98304 }) {
+        for (int nb : { 3, 4, 5 }) {
+            test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {6, 1}, kv, nb, true, false, 0, 0,
+                                                            GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
+        }
     }
 
     // Filled 100 Ki-token cache: performance-only coverage for the four GQA-reuse widths.
@@ -10622,6 +10674,20 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
 
     // Examples from granite-4.0-h-1b/ggml-model-Q8_0.gguf
     test_cases.emplace_back(new test_ssm_conv(GGML_TYPE_F32, {515, 3328, 1, 1}, {4, 3328, 1, 1})); // prefill
+    // kernel census coverage (perf/kernel-census.md): the Qwen3.8-27B streaming ops at the prefill
+    // ubatch (512) and verify (4) widths, so the census can time/capture every top row of a profile
+    test_cases.emplace_back(new test_ssm_conv(GGML_TYPE_F32, {515, 10240, 1, 1}, {4, 10240, 1, 1}));
+    test_cases.emplace_back(new test_ssm_conv(GGML_TYPE_F32, {7, 10240, 1, 1}, {4, 10240, 1, 1}));
+    for (int64_t nt : {512, 4}) {
+        test_cases.emplace_back(new test_rms_norm(GGML_TYPE_F32, {5120, nt, 1, 1}, false, 1e-6f));
+        test_cases.emplace_back(new test_bin_bcast(ggml_add, GGML_TYPE_F32, {5120, nt, 1, 1}, {1, 1, 1, 1}));
+        test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 16, 128, nt, 1));
+        // the 27B target's real GDN shape: 16 k-heads, 48 v-heads (v_repeat 3), plain and the pick's
+        // ext form (LLAMA_GDN_REPLAY: 2 slots, the last 4 tokens kept)
+        test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 16, 128, nt, 1, 3));
+        test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 16, 128, nt, 1, 3, false, false, 1, 0, 4));
+    }
+    test_cases.emplace_back(new test_glu(GGML_GLU_OP_SWIGLU, GGML_TYPE_F32, { 2*17408, 4, 1, 1 }, 0, false));
     test_cases.emplace_back(new test_ssm_conv(GGML_TYPE_F32, {937, 8192, 1, 1}, {4, 8192, 1, 1})); // prefill
     test_cases.emplace_back(new test_ssm_conv(GGML_TYPE_F32, {4,   3328, 1, 1}, {4, 3328, 1, 1})); // generate
     test_cases.emplace_back(new test_ssm_conv_bias_silu(GGML_TYPE_F32, {515, 3328, 1, 1}, {4, 3328, 1, 1}, true));  // prefill
