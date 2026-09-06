@@ -346,3 +346,42 @@ more for 2x the state registers. Three things the follow-ups taught:
   (load immediates) plus a token loop unrolled by U, so the pointers advance once per U tokens.
 - **Instructions that do not scale with the row count are per-token overhead** - the NR=1 vs
   NR=4 profile delta separates per-row from per-token cost without any disassembly.
+
+## FA tile forms that paid, and the two that did not (2026-09-06, `perf/fa-long-context.md`)
+
+- **Read the loop nesting before the profile: a tile reloaded per inner iteration is the cheapest
+  win there is.** The transposed-Q FA kernel reloaded all 32 Q^T tiles from threadgroup memory for
+  EVERY score tile (an outer `cc` loop over score tiles, Q loads inside it). Making `cc` the inner
+  loop so one Q load feeds both score tiles (two accumulators, +2 registers) was -3.4% on the kernel
+  with a SMALLER text (9832 vs 10416 B); holding the first 8 tiles in registers on top was -7..-8%
+  prefill / -6..-10% decode. Same MMAs in the same k order per tile: byte-identical, sha-gated.
+- **A register array indexed in a loop needs the loop fully unrolled, and full unroll is what spills**
+  (400 B on this kernel once before, 96 B here). The form that fits is a fully unrolled HEAD over the
+  register-held tiles plus the existing partially unrolled tail (`#pragma unroll 4`) over the rest.
+  Sweep the head length: 8 tiles 16 B spill and -7%, 12 tiles 32 B and slower than 8, 16 tiles 48 B
+  and ~1% better than 8. A 16 B near-threshold spill did not show in the timing; 32 B did.
+- **Register-resident accumulators are not automatically a win**: keeping the FA O tiles in registers
+  across the KV loop (rescale via `thread_elements`) measured flat to -1% - the threadgroup round trip
+  overlapped the MMAs. Refuted and removed; do not rebuild it on trend.
+- `simdgroup_matrix::thread_elements()` lane map on M4 Pro (`simdgroup_float8x8`, measured with
+  `perf/probe-thread-elements.{metal,swift}` in the fork): both elements of a lane share a row,
+  row = ((lane >> 1) & 3) + 4*(lane >> 4), columns 2*(lane & 1) + 4*((lane >> 3) & 1). Measure, do not
+  assume - and pyobjc is not installed here; a 30-line Swift host is the way to run a probe kernel.
+- Timing sweeps run as bash scripts: `env $E cmd` in the zsh tool shell does not word-split `$E`
+  (three silent no-op sweeps in one session, each with plausible numbers and the wrong kernel name).
+- **A form that wins at one problem size can invert at another - time the kernel at the extremes of
+  the shape range before gating it** (2026-09-06): the FA QR form was -7..-10% at 8K-24K caches, -2% at
+  48K and +15..+29% at 96K, where the 8-query threadgroup's full-cache stream makes the kernel
+  K/V-stream-bound (5.5 -> 4.8 TFLOPS with no code change) and a 16-48 B per-chunk spill turns into
+  DRAM traffic. The route is gated by cache length; the two e2e 96K pairs had shown a 2-3% loss that
+  single 20-minute arms could not have separated from noise without the kernel table.
+- **Scaling a tile: add simdgroups before adding registers** (2026-09-06, the FA 16-row query tile):
+  at 4 simdgroups the doubled per-simdgroup work (4 score accumulators, 4 P tiles) spilled 32 B and
+  lost 20-25% everywhere; at 8 simdgroups (one score tile, 4 output tiles per simdgroup) it spilled
+  nothing at any register-head length and was -21% at a 96K cache. The per-simdgroup load-per-MMA
+  ratio did not improve (K loads halve, Q^T loads double) - what the bigger tile buys is half the
+  cache stream per query, so it pays only where that stream is the bound (> ~32K here) and costs 7% at
+  8K. Gate by the size that sets the bound; the sweep across 8K/24K/48K/96K is the whole measurement.
+- The kernel's shared-memory formula is the first thing to evaluate for a bigger tile: at Q = 16 and
+  head 256 it lands on exactly the 32 KB threadgroup limit, which is why the tile was possible at all
+  without moving the accumulator to registers.

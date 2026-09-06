@@ -371,3 +371,12 @@ with the work. Confirm the identity offline with a deletion variant and `agx-dis
 sequences - no mnemonics needed. Also: the census's perf case must match the op's FULL shape;
 the GDN case matched `head_count` but not the value-head repeat and timed a third of the op
 (0.73 vs 2.64 ms) - ratios survived, absolutes did not (`perf/kernel-census.md`).
+
+## Long-context census (2026-09-06, `perf/fa-long-context.md`)
+
+FA rows scale with context (prefill quadratically, decode linearly) while mm/GDN rows do not, so the
+8K census under-ranks them: FA was 4.1% of prefill / 3.7% of the round at 8K and 12.9% / 10.7% at 25K
+(the 96K record has it near 40%). `perf/run-longctx.sh` runs the pick env on any prompt/context and a
+profiled arm feeds `kernel-census.sh`; every ubatch and every round is its own KV length, so the census
+FA filter snaps to the nearest perf case (512/8448/16384/24576, 12%) - an exact-match filter found no
+case for a single FA row at 25K. Pass `B=<worktree>` to the census, always.
