@@ -1222,3 +1222,44 @@ Every arm byte-identical to the Turbo4 line's recorded texts. **Adoption = owner
 `TURBO_PICK_ENV` (`GGML_FA_Q16=1` is already in the pick and now routes the Turbo4 16-row prefill tile).
 Follow-ups: the f16 Q4_0 96K arm re-run cold (tonight's 1136 s vs 1015 on record is machine state); the
 per-tile dequant is the remaining 1.3-1.4x on the decode FA call (~13 ms of the 96K round).
+
+### Step 16 C: the per-tile dequant - the norm folded out (2026-09-06 late, owner: "Anything you can do about the per-tile dequant?")
+
+The TR form's ten instructions per tile are one byte load, one table load, two float multiplies by the
+block norm, two half converts and the pack; byte identity with the scratch kernel pins the multiplies
+(half(centroid x norm) per element). The norm is per cache row and per 128-dim block, so the TRN form
+(`GGML_FA_TR=6`, `kernel_flash_attn_ext_qtn_turbo4_*`, `qtn16` at the 16-row prefill tile) takes it out
+of the dequant: K accumulates S^T against the raw half centroids with one accumulator per block and each
+lane scales its row (= its key) by the two block norms once per key tile (4 multiplies instead of 32);
+V scales the P tile's key columns by the norms of this simdgroup's dim block once per key tile (2 instead
+of 16) and multiplies the raw centroids. The chunk loop runs per block so the accumulator index is a
+constant (a dynamic register-array index spilled 1280 B at the 16-row tile). Prescreen 0 / 16 B (decode /
+prefill), 0 at Q16. 41/41 cases at both tiles. **Not byte-identical**: the norm is applied exactly in float
+instead of rounded into the half operand (the third Turbo4 numerics lineage; UD 8K sha `ef864412dede`).
+
+| shape (us; prefill ms), same run | TR=3 `qtl4` | TR=6 `qtn` | f16 | TRN vs TR | TRN vs f16 |
+|---|--:|--:|--:|--:|--:|
+| 8K width 4 / 5 | 278 / 335 | **247 / 298** | 207 / 271 | -11 / -11% | 1.19x / 1.10x |
+| 8K prefill 512 | 24.3 | **21.5** | 17.4 | -12% | 1.24x |
+| 24K width 4 / 5 | 824 / 972 | **712 / 851** | 575 / 765 | -14 / -12% | 1.24x / 1.11x |
+| 24K prefill 512 | 71.3 | **62.2** | 52.9 | -13% | 1.18x |
+| 96K width 4 / 5 | 3234 / 3825 | **2799 / 3335** | 2273 / 3035 | -13 / -13% | 1.23x / 1.10x |
+| 96K prefill 512 (Q16) | 273.9 | **261.7** | 230.4 | -4.5% | 1.14x |
+
+(This run's `qtl4` numbers sit 3-4% above the earlier table - late-night machine state; compare within
+the run.) The remaining gap to f16 is the two loads per tile (byte + table entry) and the pack.
+
+**KLD, UD stored file + Turbo4 cache, q8_0 reference (the step-15 logits, 24 x 2048):**
+
+| | Turbo4 TR (= prod numerics) | Turbo4 TRN |
+|---|--:|--:|
+| mean KLD | 0.017296 +/- 0.00183 | 0.017963 +/- 0.00189 |
+| median | 0.003973 | 0.003970 |
+| 99.0% / 99.9% / max | 0.1149 / 1.406 / 20.54 | 0.1170 / 1.555 / 20.73 |
+| RMS dp | 3.519% | 3.514% |
+| **Same top p** | **95.833 +/- 0.128%** | **95.862 +/- 0.127%** |
+| PPL | 6.1677 | 6.1736 |
+
+A wash inside the error bars (mean +4% = a third of one sigma, argmax +0.03 pt, far tail +11%), the same
+shape as the exact-q4_K-tile decision in step 15. Adoption of TRN (numerics) = owner; TR=3 stays the
+byte-identical form.
