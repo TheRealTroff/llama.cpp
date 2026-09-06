@@ -14426,7 +14426,7 @@ template<
     typename S1, typename S1_2x4, typename S1_8x8,
     typename block_q, short nl, void (*dequantize_func)(device const block_q *, short, thread S0_4x4 &),
     typename T0, typename T0_4x4, typename T1, typename T1_2x4,
-    typename ACC = float, typename ACC8x8 = simdgroup_float8x8>
+    typename ACC = float, typename ACC8x8 = simdgroup_float8x8, bool A_ROW_MAJOR = false, bool A_VECTOR_STORE = false>
 kernel void kernel_mul_mm(
         constant ggml_metal_kargs_mul_mm & args,
         device const char * src0,
@@ -14498,10 +14498,8 @@ kernel void kernel_mul_mm(
                 const short sx = 2*il0 + i/8;
                 const short sy = (tiitg/NL0)/8;
 
-              //const short lx = i%8;
-              //const short ly = (tiitg/NL0)%8;
-                const short lx = (tiitg/NL0)%8;
-                const short ly = i%8;
+                const short lx = A_ROW_MAJOR ? i%8 : (tiitg/NL0)%8;
+                const short ly = A_ROW_MAJOR ? (tiitg/NL0)%8 : i%8;
 
                 const short ib = 8*sx + sy;
 
@@ -14513,21 +14511,30 @@ kernel void kernel_mul_mm(
 
             threadgroup_barrier(mem_flags::mem_threadgroup);
 
-            FOR_UNROLL (short i = 0; i < 16; i++) {
-                const short sx = 2*il0 + i/8;
-                const short sy = (tiitg/NL0)/8;
+            if (A_VECTOR_STORE) {
+                FOR_UNROLL (short i = 0; i < 4; i++) {
+                    const short sx = 2*il0 + i/2;
+                    const short sy = (tiitg/NL0)/8;
+                    const short ly = (tiitg/NL0)%8;
+                    const short ib = 8*sx + sy;
 
-              //const short lx = i%8;
-              //const short ly = (tiitg/NL0)%8;
-                const short lx = (tiitg/NL0)%8;
-                const short ly = i%8;
+                    *(threadgroup vec<S0, 4> *)(sa + 64*ib + 8*ly + 4*(i%2)) = (vec<S0, 4>) temp_a[i];
+                }
+            } else {
+                FOR_UNROLL (short i = 0; i < 16; i++) {
+                    const short sx = 2*il0 + i/8;
+                    const short sy = (tiitg/NL0)/8;
 
-                const short ib = 8*sx + sy;
+                    const short lx = A_ROW_MAJOR ? i%8 : (tiitg/NL0)%8;
+                    const short ly = A_ROW_MAJOR ? (tiitg/NL0)%8 : i%8;
 
-                // NOTE: this is massively slower.. WTF?
-                //sa[64*ib + 8*ly + lx] = temp_a[i/4][i%4];
+                    const short ib = 8*sx + sy;
 
-                *(sa + 64*ib + 8*ly + lx) = temp_a[i/4][i%4];
+                    // NOTE: this is massively slower.. WTF?
+                    //sa[64*ib + 8*ly + lx] = temp_a[i/4][i%4];
+
+                    *(sa + 64*ib + 8*ly + lx) = temp_a[i/4][i%4];
+                }
             }
         }
 
@@ -14574,7 +14581,7 @@ kernel void kernel_mul_mm(
             simdgroup_barrier(mem_flags::mem_none);
 
             FOR_UNROLL (short i = 0; i < 4; i++) {
-                simdgroup_load(ma[i], lsma + 64*i, 8, 0, false);
+                simdgroup_load(ma[i], lsma + 64*i, 8, 0, A_ROW_MAJOR);
             }
 
             simdgroup_barrier(mem_flags::mem_none);
@@ -15336,6 +15343,8 @@ template [[host_name("kernel_mul_mm_q2_0_f32")]]    kernel mul_mm_t kernel_mul_m
 template [[host_name("kernel_mul_mm_q4_0_f32")]]    kernel mul_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   half,   half2x4,   simdgroup_half8x8,   block_q4_0,    2,     dequantize_q4_0,    float,  float4x4,  float, float2x4>;
 // half-accumulate probe (GGML_MM_ACC_HALF=1): does the MMA lowering reach the 2x f16 FMA rate?
 template [[host_name("kernel_mul_mm_acch_q4_0_f32")]] kernel mul_mm_t kernel_mul_mm<half, half4x4,   simdgroup_half8x8,   half,   half2x4,   simdgroup_half8x8,   block_q4_0,    2,     dequantize_q4_0,    float,  float4x4,  float, float2x4, half, simdgroup_half8x8>;
+template [[host_name("kernel_mul_mm_acch_arow_q4_0_f32")]] kernel mul_mm_t kernel_mul_mm<half, half4x4, simdgroup_half8x8, half, half2x4, simdgroup_half8x8, block_q4_0, 2, dequantize_q4_0, float, float4x4, float, float2x4, half, simdgroup_half8x8, true>;
+template [[host_name("kernel_mul_mm_acch_arowv_q4_0_f32")]] kernel mul_mm_t kernel_mul_mm<half, half4x4, simdgroup_half8x8, half, half2x4, simdgroup_half8x8, block_q4_0, 2, dequantize_q4_0, float, float4x4, float, float2x4, half, simdgroup_half8x8, true, true>;
 template [[host_name("kernel_mul_mm_q4_1_f32")]]    kernel mul_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   half,   half2x4,   simdgroup_half8x8,   block_q4_1,    2,     dequantize_q4_1,    float,  float4x4,  float, float2x4>;
 template [[host_name("kernel_mul_mm_q5_0_f32")]]    kernel mul_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   half,   half2x4,   simdgroup_half8x8,   block_q5_0,    2,     dequantize_q5_0,    float,  float4x4,  float, float2x4>;
 template [[host_name("kernel_mul_mm_q5_1_f32")]]    kernel mul_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   half,   half2x4,   simdgroup_half8x8,   block_q5_1,    2,     dequantize_q5_1,    float,  float4x4,  float, float2x4>;

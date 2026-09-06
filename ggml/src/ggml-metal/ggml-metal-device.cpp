@@ -941,8 +941,9 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm(ggml_meta
     const int16_t r3   = (int16_t) (ne13 / op->src[0]->ne[3]);
 
     static const bool acc_half = getenv("GGML_MM_ACC_HALF") != nullptr;
+    static const int a_row = getenv("GGML_MM_A_ROW") ? atoi(getenv("GGML_MM_A_ROW")) : 0;
     if (acc_half && tsrc0 == GGML_TYPE_Q4_0 && tsrc1 == GGML_TYPE_F32 && !has_tensor) {
-        snprintf(base, 256, "kernel_mul_mm_acch_q4_0_f32");
+        snprintf(base, 256, a_row == 2 ? "kernel_mul_mm_acch_arowv_q4_0_f32" : a_row == 1 ? "kernel_mul_mm_acch_arow_q4_0_f32" : "kernel_mul_mm_acch_q4_0_f32");
     } else {
         snprintf(base, 256, "kernel_mul_mm_%s_%s", ggml_type_name(tsrc0), ggml_type_name(tsrc1));
     }
