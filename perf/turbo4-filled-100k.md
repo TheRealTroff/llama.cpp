@@ -1,5 +1,12 @@
 # Filled 96K context, end to end: Turbo4 is 2x f16 at width 4, and f16's width-4 route is the reason
 
+> **Superseded 2026-09-06 (`ud-model.md` step 16).** The f16 width-4 round below (360 ms) was the
+> vector-route constant; with `GGML_FA_VEC_MAX=3`, `GGML_FA_GQA_F16=1` and the QT/QR/Q16 forms the f16
+> width-4 round at a filled 96K is 135 ms (measured on UD) and its prefill is 20% faster than Turbo4's.
+> Turbo4's own numbers below still hold (182 ms/round reproduced to the millisecond) - none of those
+> forms exist for the Turbo4 kernels yet. Read this file for the routing analysis and the GQA-reuse
+> projection, not for the f16-vs-Turbo4 verdict.
+
 Measured 2026-09-02 on M4 Pro, prod `710979fc6`, `RUN_TURBO4_100K_DEPTH.sh` with a
 95,562-token prompt (`kvquant-experiments/data/longprompt-96k.txt`: wikitext-2 test,
 instruction first, benchmark-prompt form; a raw-text-then-instruction form made the model

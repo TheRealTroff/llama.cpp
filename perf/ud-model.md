@@ -1004,3 +1004,83 @@ earlier `8eeaac5af33a` move was the exact tile ON TOP of the q5_K half-division 
 byte of the 600 tokens). KLD row: mean 0.013508, same-top 96.579%. +23.1 / +19.1 GiB over idle.
 UD stored lineage for cross-checks from here: `5e76afaba36c` at 600, b1 anchor 12.58, depth-3
 acceptance 60.9%.
+
+## Step 16: Turbo4 KV on UD (2026-09-06 night, owner: "time to check how turbo4 interacts with the UD model")
+
+Item 3 of the step-6 open list. The Turbo4 cache line (`-ctk/-ctv turbo4`, draft KV f16, the
+`TURBO_PICK_ENV` flags of `run-prod-pick.sh`) on the stored UD file under the full pick env, fresh
+process per arm, mirrored order. Harness `run-ud-turbo4-ab.sh` (arms `label:kv:depth:ctx`, TAG
+`ud-turbo4-sep06`); 96K arms via `run-longctx.sh` (now `B=` prod by default, `EXTRA_ARGS=` for
+`-ctkd/-ctvd`, and it waits for the previous server's socket); KLD via `run-quant-kld.sh KV=turbo4`
+on the step-15 q8_0 logits (`kld-ud-soa-sep06-*-pick-turbo4.log`). Turbo4 moves the text (quantized
+cache), so its shas are their own lineage; the f16 arms reproduce the step-15 mint to the digit.
+
+### 8K (benchprompt, 600 tokens, `-c 10240` unless noted)
+
+| arm | t/s | acc | prompt | sha | footprint | wired+anon over idle |
+|---|--:|--:|--:|---|--:|--:|
+| f16 depth 3 (x2) | 24.691 / 24.637 | 60.9% | 65.6 s | `5e76afaba36c` | 3616 / 3551 MB | +23.03 / +23.05 GiB |
+| Turbo4 depth 3 (x2) | 24.569 / 24.804 | 66.9% | 68.2 / 68.1 s | `2802eb28cd29` | 3190 / 3128 MB | +22.71 / +22.56 GiB |
+| Turbo4 depth 2 | 21.592 | 72.4% | 68.1 s | `96699845ba87` | | |
+| Turbo4 depth 4 | 21.929 | 56.1% | 68.1 s | `3424fe94aefc` | | |
+| Turbo4 depth 3, `-c 102400` | 24.726 | 66.9% | 68.1 s | `2802eb28cd29` | 4622 MB | +24.17 GiB |
+| f16 no-spec (b1) | 12.554 | | 64.8 s | `5e76afaba36c` | 1804 MB | +19.13 GiB |
+| Turbo4 no-spec (b1) | 12.071 | | 67.5 s | `7bed6d0457f8` | 1349 MB | +18.31 GiB |
+
+At width 4 Turbo4 is a wash on decode (-0.5% / +0.7%, inside the pair spread), depth 3 stays the
+operating point under it (2 and 4 both ~12% behind, the f16 curve's shape), batch-1 pays 3.9%
+(the Turbo4 width-1 vector kernel), and prefill pays 4% at 8K (68.1 vs 65.6 s: the prefill FA
+kernel reads a quantized cache, and see the 96K row for what else it lacks). The 100K allocation
+costs +1.6 GiB over the 10K one with the same 8,887 tokens in use - allocation, not use: the cache
+buffer is cleared at startup, so the whole reservation is resident (0.16 GiB per 10K tokens; an f16
+reservation is ~4x that). The routing is entirely in the FA op and keys on the cache types
+(`ggml-metal-ops.cpp` `is_turbo4_kv` / `use_gqa_reuse`); nothing in it reads the weight format, as
+the step-6 note said.
+
+### Filled 96K (`longprompt-96k.txt`, 95,508 tokens, `-c 102400`, depth 3, 600 tokens)
+
+| arm | prefill | prefill t/s | decode t/s | acc | verify round (`dec_syn_tg`) | prefill ubatch (2048) | sha |
+|---|--:|--:|--:|--:|--:|--:|---|
+| f16 | 1102.1 s | 86.7 | 15.974 | 48.2% | 134.9 ms | 16.96 s | `0f1e46f3edbf` |
+| Turbo4 | 1375.3 s (+24.8%) | 69.4 | 13.003 (-18.6%) | 52.6% | 181.2 ms (+34%) | 21.16 s | `3b4127a77a1d` |
+
+For reference the Q4_0 line's f16 arm at the same point is 1015.4 s / 94.1 t/s prefill, 15.08 decode
+(`fa-long-context.md`): UD is +8.6% on prefill at 96K, the same ratio as at 8K.
+
+**Turbo4 did not regress - f16 moved.** Turbo4's 181 ms verify round is the 2026-09-02 record
+(`turbo4-filled-100k.md`: 182.1 ms) to the millisecond, and its +7.6%-over-f16 prefill of that day is
+the same kernel that is now +24.8%. The f16 width-4 round went 360 -> 135 ms in the four days between
+(`GGML_FA_VEC_MAX=3`, `GGML_FA_GQA_F16=1`, `GGML_FA_QT=1`, `GGML_FA_QR=8`, `GGML_FA_Q16=1`), and every one
+of those forms is an instantiation of the f16 K/V kernels: the Turbo4 batched/GQA decode tile and the
+Turbo4 prefill kernel are separate kernels that received none of them. So the sentence in the README's
+Turbo4 paragraph ("Turbo4 at width 4 matches f16 at width 5 on round time") is stale: at a filled 96K
+the f16 line at width 4 is now 26% faster per round and 20% faster on prefill than Turbo4, on UD, and
+by the round-time arithmetic on the Q4_0 line too (not re-measured there today).
+
+### Quality: UD + Turbo4 cache against the q8_0 reference (24 x 2048 wikitext, the step-15 logits)
+
+| | UD, f16 cache (step 15) | UD, Turbo4 cache | delta |
+|---|--:|--:|--:|
+| mean KLD | 0.013508 +/- 0.00175 | 0.017296 +/- 0.00183 | +28% (cache ~0.0038) |
+| median KLD | 0.002654 | 0.003973 | |
+| 99.0% / 99.9% / max KLD | 0.0965 / 0.853 / 23.0 | 0.1149 / 1.406 / 20.5 | tails +19% / +65% |
+| RMS dp | 3.146% | 3.519% | |
+| **Same top p** | **96.579 +/- 0.116%** | **95.833 +/- 0.128%** | **-0.75 pt** |
+| PPL | 6.1283 | 6.1677 | +0.64% |
+
+The cache costs UD about a quarter of what the weights cost it (0.0038 on top of 0.0135), against
+about a seventh on the Q4_0 line (0.0075 on 0.054, `turbo4-quality.md`, a different denominator:
+that number was cache-only against f16-cache logits). The cleaner the weights, the larger the cache's
+share; same lesson as the acch pricing in step 4.
+
+### Where this leaves it
+
+Turbo4 on UD buys memory only: ~0.4 GiB at 8K, and at a filled 96K the ~4.7 GiB that an f16 cache
+costs above Turbo4's ~1.5. The stored UD file at f16 is ~23 GiB over idle plus ~6 GiB of f16 cache at
+96K, which fits this 48 GB machine, so on this box the trade is -19% decode / -20% prefill at long
+context and -0.75 pt same-top for memory that is not needed. **UD line stays f16.** Nothing here is a
+kernel defect to fix on the UD side. **Open stub, Turbo4 line (both models): port the f16 FA stack to
+the Turbo4 kernels - the transposed-Q / QR register-tile forms and the Q=16 prefill tile for the
+quantized-K prefill kernel, and QR for the GQA decode tile - and re-measure the Turbo4 line at 96K
+before quoting the 2026-09-02 comparison again.** Until then the Turbo4 pick is a memory pick, not a
+speed pick, at any context. Reference logits kept at `kvquant-experiments/logits/` (26 GB).

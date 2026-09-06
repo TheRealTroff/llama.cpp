@@ -6,7 +6,7 @@
 #   PROMPT=... CTX=40960 NPRED=300 DEPTH=3 TAG=... EXTRA_ENV="..." perf/run-longctx.sh
 set -u
 if [ -z "${CAFFEINATED:-}" ]; then exec env CAFFEINATED=1 caffeinate -dimsu "$0" "$@"; fi
-B=${B:-/Users/troff/play/llama.cpp-gdn-scan}
+B=${B:-/Users/troff/play/llama.cpp-prod}
 BIN=$B/build/bin
 M=${M:-/Users/troff/play/Qwen3.8-27B-uniform-Q4_0-SOA-V1.gguf}
 MD=${MD:-/Users/troff/play/Qwen3.8-27B-DFlash2-pureQ4_0-SOA-V1.gguf}
@@ -20,6 +20,7 @@ LV=${LV:-}
 OUT=/Users/troff/play/kvquant-experiments/results
 TAG=${TAG:-longctx-$(date +%m%d-%H%M)}
 EXTRA_ENV=${EXTRA_ENV:-}
+EXTRA_ARGS=${EXTRA_ARGS:-} # extra llama-server args, word-split (e.g. "-ctkd f16 -ctvd f16" for a Turbo4 arm)
 PICK_ENV=(GGML_MV_NC=2 GGML_MM_SKINNY=6 GGML_MM_SKINNY_SOA=1
           GGML_FA_VEC_MAX=3 GGML_FA_MM_NWG=8 GGML_GDN_FUSE_WB=1
           GGML_MV_REPACK=1 GGML_MV_SOA_PIN=1 GGML_MV_SOA_W3=1
@@ -33,10 +34,11 @@ FA_ENV=(GGML_FA_QT=1 GGML_MM_F16B=1 GGML_FA_GQA_F16=1 GGML_MM_N64_KMAX=20000)
 slog="$OUT/$TAG.server.log"
 echo "=== longctx $TAG: ctx $CTX, prompt $(wc -c < "$PROMPT" | tr -d ' ') bytes, depth $DEPTH, kv $KV, n_predict $NPRED"
 echo "commit : $(cd "$B" && git rev-parse --short HEAD) on $(cd "$B" && git rev-parse --abbrev-ref HEAD); extra: $EXTRA_ENV"
+for i in $(seq 1 90); do lsof -ti :$PORT >/dev/null 2>&1 || break; sleep 2; done  # a previous server's socket outlives kill -TERM by its in-flight work
 if lsof -ti :$PORT >/dev/null 2>&1; then echo "ABORT: port $PORT busy"; exit 1; fi
 if [ "$DEPTH" = 0 ]; then spec=(--spec-type none); else spec=(-md "$MD" --spec-type draft-dflash --spec-draft-n-max "$DEPTH"); fi
 env "${PICK_ENV[@]}" "${FA_ENV[@]}" $EXTRA_ENV "$BIN/llama-server" -m "$M" -c "$CTX" -fa on -ctk $KV -ctv $KV \
-  "${spec[@]}" ${LV:+-lv "$LV"} --port $PORT >"$slog" 2>&1 &
+  "${spec[@]}" $EXTRA_ARGS ${LV:+-lv "$LV"} --port $PORT >"$slog" 2>&1 &
 pid=$!; ok=0
 for i in $(seq 1 300); do
   curl -sf -o /dev/null "http://127.0.0.1:$PORT/health" && { ok=1; break; }

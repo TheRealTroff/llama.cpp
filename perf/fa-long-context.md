@@ -269,3 +269,11 @@ decode route; Q = 16 is prefill-only). Against the 2026-09-02 record of 1302-130
 wall-clock gain exceeds the kernel's -21% times FA's share because at 96K the base FA is stream-bound
 and the ubatches above 32K are most of the prompt; the per-ubatch prefill rate at 96K went from ~73 to
 ~95 t/s. Adoption = owner (both flags byte-identical on every sha gate: 8K canonical, 25K, 96K).
+
+## The Turbo4 kernels are outside this stack (2026-09-06 night, `ud-model.md` step 16)
+
+Every form in this file (QT, QR, Q16, the f16 GQA route) is an instantiation of the f16 K/V kernels.
+Measured on UD at the same 96K prompt: Turbo4 prefill 1375 s vs f16 1102 (+25%), Turbo4 verify round
+181 ms (its 2026-09-02 value) vs f16 135. Porting QT/QR/Q16 to the quantized-K prefill kernel and QR to
+the Turbo4 GQA decode tile is the open item for the Turbo4 line; expect the same -19% / -21% the f16
+kernels showed at 96K.
