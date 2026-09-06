@@ -19,7 +19,7 @@ tokens** (wikitext is ~4 chars/token; the file name says 32K, the token count is
 |---|--:|--:|--:|--:|--:|---|---|
 | 8K (benchprompt, pick mint) | 8288 | 63.0 s | 131.5 | 27.6 | 51.4% | 95eb7e65977e | prodpick-sep06-gdnnr |
 | 25K, -c 40960 | 24840 | 202.6 s | 122.6 | 24.9 | 50.6% | f9e3a81f2908 | longctx-32k-sep06-base |
-| 96K, -c 102400 | pending | | | | | | |
+| 96K, -c 102400, `GGML_FA_QR=8` | 95508 | 1288.8 s | 74.1 | 15.08 | 49.9% | e9c5beb4a7d5 | longctx-96k-sep06-qr8 |
 
 Arithmetic check on the 25K point: the 8K prefill is ~60 s of mm+GDN (linear, so ~180 s at 25K) plus
 2.7 s of FA (quadratic, so ~24 s at 25K) = ~204 s expected, 202.6 measured. FA is ~10% of the 25K
@@ -82,8 +82,21 @@ Timing (`test-backend-ops perf`, 2 interleaved reps, names read from the runs, a
 | decode width 4, kv 24576, us (gqah 6, nwg 8) | 609 / 609 | 590 / 589 (-3.2%) | 576 / 572 (**-5.8%**) |
 | decode width 5, kv 24576, us | 856 / 858 | 812 / 808 (-5.3%) | 773 / 769 (**-9.9%**) |
 
-The 16 B spill at QR=8 does not show in the timing. QR=12/16 timing and the e2e sha gate: below.
-Same products in the same k order per score tile: byte-identical by construction, to be sha-gated.
+The 16 B spill at QR=8 does not show in the timing. QR=12/16 timing: below.
+
+**E2e sha gate (`run-longctx.sh`, base vs `GGML_FA_QR=8`, same env otherwise):**
+
+| context | base | QR=8 |
+|---|---|---|
+| 8K (benchprompt) | 62.2 s, 133.1 t/s, sha `95eb7e65977e` (the canonical pick sha) | 61.8 s, 134.0 t/s, sha `95eb7e65977e` |
+| 25K | 202.6 s, 122.6 t/s, sha `f9e3a81f2908` | 200.6 s, 123.8 t/s, sha `f9e3a81f2908` |
+| 96K | prefill 1210.3 s (78.9 t/s), then the decode died: `kIOGPUCommandBufferCallbackErrorOutOfMemory` on a command buffer (no sha) | 1288.8 s, 74.1 t/s, sha `e9c5beb4a7d5` |
+
+Byte-identical at 8K and 25K; prefill -0.6% at 8K and -1.0% at 25K, in line with FA's 4% / 13% share
+times the kernel's -7%. (Single arms: decode t/s are not read from these.) Note the 8K base here
+runs the branch's FA/mm levers (QT, F16B, GQA f16, N64_KMAX) on the Q4_0 line and reproduces the
+canonical sha at 62.2 s against the pick mint's 63.0 - those levers are byte-identical on this line
+too and worth 1.3% of prefill on their own.
 
 A method note: `env $E cmd` inside the zsh tool shell does not word-split `$E` - one timing pass ran
 every "arm" on the vector kernel with plausible numbers (2.07 ms at width 4 where the batched route is
@@ -158,3 +171,12 @@ The FA filter snaps the cache length to the nearest perf case (512 / 8448 / 1638
 instead of demanding an exact match - at long context every ubatch and every round is a different
 length. The Q4_0 line's other prefill matmul shapes (m = 10240, 6144, 12288, 1024, 48 at n = 512) now
 have perf cases, so the acch rows the 25K census could not time will time next run.
+
+## 96K: the first pair is not a measurement
+
+The base arm prefilled in 1210 s and then lost its command buffer to a GPU out-of-memory during
+decode; the QR=8 arm that ran right after it took 1289 s and finished. A 6% prefill gap in the wrong
+direction between single arms at this size is noise or memory pressure (the 2026-09-02 f16 arms
+took 1302-1308 s with the vector width-4 route, 1296 at width 5), not the kernel. A second
+base / QR=8 pair is queued (`longctx-96k-sep06-base2` / `-qr8b`); the runner should also record RSS
+at this size, which `RUN_TURBO4_100K_DEPTH.sh` did and this one does not yet.
