@@ -19,7 +19,8 @@ tokens** (wikitext is ~4 chars/token; the file name says 32K, the token count is
 |---|--:|--:|--:|--:|--:|---|---|
 | 8K (benchprompt, pick mint) | 8288 | 63.0 s | 131.5 | 27.6 | 51.4% | 95eb7e65977e | prodpick-sep06-gdnnr |
 | 25K, -c 40960 | 24840 | 202.6 s | 122.6 | 24.9 | 50.6% | f9e3a81f2908 | longctx-32k-sep06-base |
-| 96K, -c 102400, `GGML_FA_QR=8` | 95508 | 1288.8 s | 74.1 | 15.08 | 49.9% | e9c5beb4a7d5 | longctx-96k-sep06-qr8 |
+| 96K, -c 102400 | 95508 | 1254.2 s (a first base arm: 1210 s prefill, then GPU OOM in decode) | 76.2 | 13.47 | 49.9% | e9c5beb4a7d5 | longctx-96k-sep06-base2 |
+| 96K, `GGML_FA_QR=8` ungated (two arms) | 95508 | 1288.8 / 1276.2 s | 74.1 / 74.8 | 15.08 / 15.14 | 49.9% | e9c5beb4a7d5 | longctx-96k-sep06-qr8 / qr8b |
 
 Arithmetic check on the 25K point: the 8K prefill is ~60 s of mm+GDN (linear, so ~180 s at 25K) plus
 2.7 s of FA (quadratic, so ~24 s at 25K) = ~204 s expected, 202.6 measured. FA is ~10% of the 25K
@@ -180,3 +181,36 @@ direction between single arms at this size is noise or memory pressure (the 2026
 took 1302-1308 s with the vector width-4 route, 1296 at width 5), not the kernel. A second
 base / QR=8 pair is queued (`longctx-96k-sep06-base2` / `-qr8b`); the runner should also record RSS
 at this size, which `RUN_TURBO4_100K_DEPTH.sh` did and this one does not yet.
+
+## 96K, second pair, and the kernel at a 96K cache: the prefill form inverts
+
+The second pair reproduced the first: base 1254 s, QR=8 1276 s, both sha `e9c5beb4a7d5` (byte-identical
+holds at 96K too), decode 13.5 vs 15.1 t/s. QR=8 was 2-3% SLOWER on the 96K prefill in both pairs, against
+-7% on the kernel at a 24K cache. The kernel timed directly at a 96K cache says why:
+
+| prefill 512 rows, ms/call | QR=0 | QR=2 | QR=4 | QR=8 | QR=16 |
+|---|--:|--:|--:|--:|--:|
+| kv 16384 | 37.7 / 37.9 | 36.0 / 36.2 | 37.5 / 37.2 | 34.3 / 34.1 (**-9.5%**) | 33.9 / 33.7 (-10.7%) |
+| kv 24576 | 57.7 / 57.9 | 55.4 / 55.8 | 57.7 / 57.1 | 54.1 / 53.0 (**-7.4%**) | 54.2 / 56.2 |
+| kv 49152 | 122.5 / 123.1 | 121.1 / 120.9 | | 118.9 / 121.1 (-2.3%) | |
+| kv 98304 | 255 / 258 | 256 / 257 | 255 / 252 | 295 / 294 (**+15%**) | 325 / 337 (+29%) |
+| decode width 4, us, kv 98304 | 2413 / 2415 | | | 2280 / 2284 (**-5.5%**) | |
+| decode width 5, us, kv 98304 | 3368 / 3419 | | | 3071 / 3093 (**-9%**) | |
+
+Above ~50K cache entries the prefill kernel is no longer issue-bound: an 8-query threadgroup streams
+the whole cache, 64 threadgroups per head do it concurrently, and at 96K that stream (100 MB per head)
+saturates the cache hierarchy - the achieved rate falls from 5.5 to 4.8 TFLOPS with nothing changed in
+the kernel. There the shared-Q load is worth nothing (QR=2 flat) and the register head's 16-48 B spill,
+which the loop pays per chunk through a stack slot now competing with the K/V stream, costs 15-29%.
+Decode (nwg 8, gqah 6) does not hit the wall: it splits the cache across workgroups and still gains
+5.5-9% at 96K.
+
+**Gate:** the prefill route (nwg 1) takes QR only up to `GGML_FA_QR_KVMAX` cache entries (default 65536,
+between the -2.3% at 48K and the +15% at 96K); decode takes it at every length. Verified from the
+pipeline names: 24K prefill `_qr=8`, 96K prefill plain QT (261 ms), 96K decode `_qr=8` (2285 us).
+
+**What this says about the long-context prefill lever.** Past ~50K the FA prefill kernel is bound by
+how many times it streams the cache, which is once per 8 queries. The Q = 16 query tile halves that
+stream per query as well as the loads per MMA - it is the lever on both sides of the wall, and at 96K
+it is the only one. The numbers above are the baseline it has to beat: 255 ms per 512-row call at 96K,
+~48 such calls per ubatch x 16 attention layers ... = the ~400 s of a 1254 s prefill that FA is at 96K.

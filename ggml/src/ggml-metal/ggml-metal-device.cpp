@@ -1866,7 +1866,12 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext(
     }
     // QT form only: Q^T tiles held in registers across the KV loop (perf/fa-long-context.md); "=0" off
     static const int fa_qr = getenv("GGML_FA_QR") != nullptr ? atoi(getenv("GGML_FA_QR")) : 0; // Q^T tiles in registers
-    const int qr = (fa_qr > 0 && strstr(base, "_qt_") != nullptr) ? std::min(fa_qr, dk/8) : 0;
+    // the prefill route (nwg 1) turns K/V-stream-bound above ~64K cache entries and the register head's
+    // spill then costs more than the shared loads save (+15% at 96K, -7% at 24K); decode (nwg > 1) gains at
+    // every length (perf/fa-long-context.md). GGML_FA_QR_KVMAX overrides the prefill cutoff.
+    static const int fa_qr_kvmax = getenv("GGML_FA_QR_KVMAX") != nullptr ? atoi(getenv("GGML_FA_QR_KVMAX")) : 65536;
+    const bool qr_len_ok = nwg > 1 || op->src[1]->ne[1] <= fa_qr_kvmax;
+    const int qr = (fa_qr > 0 && qr_len_ok && strstr(base, "_qt_") != nullptr) ? std::min(fa_qr, dk/8) : 0;
 
     snprintf(name, 256, "%s_mask=%d_sinks=%d_bias=%d_scap=%d_kvpad=%d_bcm=%d_ns10=%d_ns20=%d_nsg=%d_nwg=%d_gqah=%d%s%s",
             base,

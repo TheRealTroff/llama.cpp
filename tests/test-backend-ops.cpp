@@ -10560,14 +10560,16 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
 
     // Prefill-shaped f16 batched FA (nwg=1 route, 512 query rows) at the 8K and 16K
     // cache lengths, so the mm FA kernel's prefill form can be timed, not only tested.
-    for (int64_t kv : { 8448, 16384, 24576 }) {
+    for (int64_t kv : { 8448, 16384, 24576, 49152, 98304 }) {
         test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {6, 1}, kv, 512, true, false, 0, 0,
                                                         GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
     }
-    // the decode/verify widths at a 24K cache (perf/fa-long-context.md)
-    for (int nb : { 3, 4, 5 }) {
-        test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {6, 1}, 24576, nb, true, false, 0, 0,
-                                                        GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
+    // the decode/verify widths at a 24K and a 96K cache (perf/fa-long-context.md)
+    for (int64_t kv : { 24576, 98304 }) {
+        for (int nb : { 3, 4, 5 }) {
+            test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {6, 1}, kv, nb, true, false, 0, 0,
+                                                            GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
+        }
     }
 
     // Filled 100 Ki-token cache: performance-only coverage for the four GQA-reuse widths.
