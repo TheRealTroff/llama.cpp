@@ -976,3 +976,20 @@ widths 3-5. Memory unchanged (+23.0 / +19.1 GiB over idle).
 **Open:** the iq4_xs row alignment (160 B/superblock padded layout, ~0.5% e2e ceiling, a format
 change); the exact-`d*sc` q4_K tile as a KLD-priced numerics option; a q5_K in-place form (its
 readers are ahead already, the high bit needs a two-term fold).
+
+## Step 15: the stored file priced by KLD - and the reader it caught (2026-09-06)
+
+Full table in `weight-quant-kld.md`. The stored SoA file under the full pick env scores **identical
+to the plain UD file on every KLD statistic** (mean 0.013653, same-top 96.562%, the 2026-08-23
+numbers to the digit). It did not at first: the shared stored-row tile reader divided the high-nibble
+scale by 16 in half for q5_K as well as q4_K - upstream does that only for q4_K (`/ 16.h`) and uses
+float for q5_K (`/ 16.f`) - and the stored file scored +8% mean KLD / -0.18 pt same-top while every
+600-token sha check (steps 13-14) passed. The plain-file arm on the same logits caught it; the plain
+file was regenerated from the stored one in 18 s (`--reverse`, sha256 = upstream's LFS hash) and
+deleted again after. The exact-scale q4_K tile (`GGML_KQ_SOA_EXACT=1`, step 14's option) is a wash
+on KLD and stays off.
+E2e with the corrected tile (TAG `ud-soa-gguf-sep06-final3`, stored file, two arms each): depth 3
+24.541 / 24.463 t/s at **60.5% acceptance - the plain file's acceptance again** (steps 13-14 had
+60.9 and 60.1: the drafter was reading the slightly-off q5_K activations); no-spec 12.603 / 12.577 vs
+plain 12.666 / 12.659; sha `5e76afaba36c`; +23.0 / +19.1 GiB over idle. The stored file is the plain
+file: same text, same KLD, same acceptance, 10.9 GiB less memory, every width at or ahead of plain.

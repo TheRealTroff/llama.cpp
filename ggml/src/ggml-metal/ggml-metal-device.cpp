@@ -1051,8 +1051,12 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_ext(ggml_
 
     GGML_ASSERT(ne12 <= INT16_MAX && r2 <= INT16_MAX && r3 <= INT16_MAX);
 
+    // GGML_KQ_SOA_EXACT=1: exact-scale stored q4_K tile (ud-model.md step 14 numerics option)
+    static const bool kq_exact = getenv("GGML_KQ_SOA_EXACT") && atoi(getenv("GGML_KQ_SOA_EXACT")) != 0;
+    const bool kq_exact_here = kq_exact && tsrc0 == GGML_TYPE_Q4_K_SOA;
+
     snprintf(base, 256, "kernel_mul_mv_ext_%s%s_%s%s_r1_%d", ggml_type_name(tsrc0), di ? "_di" : "", ggml_type_name(tsrc1), variant == 2 ? "_ilp2" : variant == 3 ? "_v2" : variant == 4 ? "_hp" : "", r1ptg);
-    snprintf(name, 256, "%s_nsg=%d_nxpsg=%d_nr0=%d_ne12=%d_r2=%d_r3=%d", base, nsg, nxpsg, nr0, ne12, r2, r3);
+    snprintf(name, 256, "%s_nsg=%d_nxpsg=%d_nr0=%d_ne12=%d_r2=%d_r3=%d%s", base, nsg, nxpsg, nr0, ne12, r2, r3, kq_exact_here ? "_exact" : "");
 
     ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
     if (!res.pipeline) {
@@ -1064,6 +1068,9 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_ext(ggml_
         ggml_metal_cv_set_int16(cv, (int16_t) r2,   FC_MUL_MV + 3);
         ggml_metal_cv_set_int16(cv, (int16_t) r3,   FC_MUL_MV + 4);
         ggml_metal_cv_set_int16(cv, (int16_t) nr0,  FC_MUL_MV + 5);
+        if (kq_exact_here) {
+            ggml_metal_cv_set_bool(cv, true, FC_MUL_MM + 7);
+        }
 
         res = ggml_metal_library_compile_pipeline(lib, base, name, cv);
 
@@ -1125,8 +1132,10 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm(ggml_meta
     } else {
         snprintf(base, 256, "kernel_mul_mm_%s_%s", ggml_type_name(tbase), ggml_type_name(tsrc1));
     }
-    snprintf(name, 256, "%s_bci=%d_bco=%d_ne12=%d_ne13=%d_r2=%d_r3=%d_soa=%d",
-             base, bc_inp, bc_out, ne12, ne13, r2, r3, soa);
+    static const bool kq_exact = getenv("GGML_KQ_SOA_EXACT") && atoi(getenv("GGML_KQ_SOA_EXACT")) != 0;
+    const bool kq_exact_here = kq_exact && tsrc0 == GGML_TYPE_Q4_K_SOA;
+    snprintf(name, 256, "%s_bci=%d_bco=%d_ne12=%d_ne13=%d_r2=%d_r3=%d_soa=%d%s",
+             base, bc_inp, bc_out, ne12, ne13, r2, r3, soa, kq_exact_here ? "_exact" : "");
 
     ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
     if (!res.pipeline) {
@@ -1139,6 +1148,9 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm(ggml_meta
         ggml_metal_cv_set_int16(cv, r2,    FC_MUL_MM + 4);
         ggml_metal_cv_set_int16(cv, r3,    FC_MUL_MM + 5);
         ggml_metal_cv_set_bool (cv, soa,   FC_MUL_MM + 6);
+        if (kq_exact_here) {
+            ggml_metal_cv_set_bool(cv, true, FC_MUL_MM + 7);
+        }
 
         res = ggml_metal_library_compile_pipeline(lib, base, name, cv);
 

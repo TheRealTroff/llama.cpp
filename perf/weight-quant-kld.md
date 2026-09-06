@@ -533,3 +533,35 @@ for any cross-model speed claim**, or accept that many more rounds are needed.
   is why the ratio is quoted from the paired estimate rather than from two separate PPLs.
 - Not measured: any downstream task. If a task-level number is wanted, that is a different
   harness.
+
+## The stored SoA UD file, priced (2026-09-06, owner: "run the KLD, that is after all the whole point of this UD model")
+
+`run-quant-kld.sh` (now `B=` overridable; `LABEL=` re-scores one file under another env), q8_0
+reference logits regenerated today (24 chunks, ctx 2048; `kvquant-experiments/logits/kld-base-kld-ud-soa-sep06.dat`,
+26 GB, kept), TAG `kld-ud-soa-sep06`. The plain UD file was regenerated from the stored one with
+`llama-gguf-repack --reverse` (18 s; sha256 `322e194ff79741c7...` = the Hugging Face LFS hash of the
+upstream file, 16,464,440,224 bytes) and scored in the same run, then deleted again.
+
+| arm | mean KLD | median | 99.0% | 99.9% | max | same-top |
+|---|--:|--:|--:|--:|--:|--:|
+| plain UD file (= the 2026-08-23 record to every digit) | 0.013653 | 0.002674 | 0.09257 | 0.8231 | 21.674 | 96.562 ± 0.116% |
+| stored SoA file, first readers | 0.014761 | 0.002780 | 0.09666 | 0.9641 | 21.789 | 96.379 ± 0.119% |
+| stored SoA file, pick env, q5_K tile fixed | **0.013653** | **0.002674** | **0.09257** | **0.8231** | **21.674** | **96.562 ± 0.116%** |
+| same + exact-scale q4_K tile (`GGML_KQ_SOA_EXACT=1`) | 0.013508 | 0.002654 | 0.09648 | 0.8530 | 23.018 | 96.579 ± 0.116% |
+
+Three things this run settled:
+
+- **The harness is deterministic across dates.** Today's reference logits and today's plain-file
+  arm reproduce the 2026-08-23 numbers to the last digit, so the rows above are on one scale.
+- **The stored file's first readers were NOT the plain file's numerics (+8% mean KLD, -0.18 pt
+  same-top), and every sha check had passed anyway.** Cause: upstream's `dequantize_q4_K` divides
+  the high-nibble tile scale by 16 in HALF (`xb->d / 16.h`) while `dequantize_q5_K` divides in FLOAT
+  (`/ 16.f`); the shared stored-row reader used the half division for both, which rounds or flushes
+  small q5_K scales - ~29% of the model's bytes. One expression; the fixed stored file under the full
+  pick env is **identical to the plain file on every statistic**, so this row is also the KLD proof
+  that the pick's prefill stack (n64 tiles, f16 activations, soa tiles) is byte-identical. A
+  600-token greedy sha did not see a 0.18-pt same-top move; the plain-file arm in the same run did.
+  Rule: price a storage type against its plain twin on the same logits, never against a sha alone.
+- **The exact-scale q4_K tile is a wash**: mean/median a hair better, 99.0/99.9%/max a hair worse,
+  same-top +0.017 pt inside +-0.116. Upstream's half quotient is a rounding quirk, not a bias worth
+  changing the lineage for. Stays an option, off.

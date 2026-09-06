@@ -16431,6 +16431,11 @@ constant short FC_mul_mm_ne13  [[function_constant(FC_MUL_MM + 3)]];
 constant short FC_mul_mm_r2    [[function_constant(FC_MUL_MM + 4)]];
 constant short FC_mul_mm_r3    [[function_constant(FC_MUL_MM + 5)]];
 constant bool  FC_mul_mm_soa   [[function_constant(FC_MUL_MM + 6)]];
+// GGML_KQ_SOA_EXACT=1 (ud-model.md step 14, a numerics option): the stored q4_K tile scales its
+// high-nibble tiles by the exact f32 d*sc instead of reproducing the block reader's half d/16
+constant bool  FC_kq_soa_exact [[function_constant(FC_MUL_MM + 7)]];
+constant bool  FC_kq_soa_exact_set = is_function_constant_defined(FC_kq_soa_exact);
+constant bool  FC_kq_soa_exact_v   = FC_kq_soa_exact_set ? FC_kq_soa_exact : false;
 
 template <typename type4x4>
 inline void dequantize_q4_0_soa_mm(
@@ -16500,8 +16505,10 @@ inline void dequantize_kq_soa_mm(
     const half dminh = ((device const half *) hdr)[1];
     const uchar2 sc = get_scale_min_k4_just2(il/2, 0, hdr + 4);
     const short ilm = il & 3;
-    // the same expressions as dequantize_q4_K/q5_K: high-nibble tiles scale d by 1/16 and keep the nibble shifted
-    const float d   = ilm < 2 ? dh : dh / 16.h;
+    // the same expressions as dequantize_q4_K/q5_K: high-nibble tiles scale d by 1/16 and keep the nibble
+    // shifted - and upstream divides in HALF for q4_K (rounds/flushes small d) but in FLOAT for q5_K;
+    // reproducing the wrong one cost the stored file +8% mean KLD before the plain-file arm caught it
+    const float d   = ilm < 2 ? dh : (HB ? dh / 16.f : dh / 16.h);
     const float min = dminh;
     const float dl = d * sc[0];
     const float ml = min * sc[1];
@@ -16515,7 +16522,7 @@ inline void dequantize_kq_soa_mm(
         // deriving the tile scale from the same half quotient keeps every product exact and the
         // result bit-identical to the block reader (the plain file's text). The exact d*sc form is
         // the more accurate one and a numerics option (ud-model.md step 14), not the default.
-        const float dl4 = (ilm < 2 ? (float) dh : (float) (dh / 16.h) * 16.f) * sc[0];
+        const float dl4 = (ilm < 2 || FC_kq_soa_exact_v ? (float) dh : (float) (dh / 16.h) * 16.f) * sc[0];
         const float4 dlo = dl4 * float4(1.f, 1.f/16.f, 1.f/256.f, 1.f/4096.f);
         const float4 dhi = dlo * (1.f/65536.f);
         const uint4 mlo = uint4(0x0000000Fu, 0x000000F0u, 0x00000F00u, 0x0000F000u);
