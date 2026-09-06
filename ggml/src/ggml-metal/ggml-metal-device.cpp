@@ -1835,6 +1835,18 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext_b
 
 // GGML_FA_Q16=1: the 16-row query tile of the transposed-Q f16 kernel for prefill-sized query batches
 // (perf/fa-long-context.md); "=0" off
+// GGML_FA_TR: the TR form of the Turbo4 batched FA kernel (perf/ud-model.md step 16); 0 = off
+int ggml_metal_flash_attn_ext_tr(const ggml_tensor * op) {
+    static const int fa_tr = getenv("GGML_FA_TR") != nullptr ? atoi(getenv("GGML_FA_TR")) : 0;
+    static const bool fa_acc_half = getenv("GGML_FA_ACC_HALF") != nullptr;
+    const int32_t dk = (int32_t) op->src[1]->ne[0];
+    const int32_t dv = (int32_t) op->src[2]->ne[0];
+    if (fa_tr > 0 && !fa_acc_half && op->src[1]->type == GGML_TYPE_TURBO4_0 && op->src[2]->type == GGML_TYPE_TURBO4_0 && dk == dv && (dk == 128 || dk == 256)) {
+        return fa_tr;
+    }
+    return 0;
+}
+
 bool ggml_metal_flash_attn_ext_q16(const ggml_tensor * op) {
     static const bool fa_q16 = getenv("GGML_FA_Q16") != nullptr && atoi(getenv("GGML_FA_Q16")) != 0;
     static const bool fa_qt  = getenv("GGML_FA_QT")  != nullptr && atoi(getenv("GGML_FA_QT"))  != 0;
@@ -1842,11 +1854,15 @@ bool ggml_metal_flash_attn_ext_q16(const ggml_tensor * op) {
     if (!fa_q16 || !fa_qt || fa_acc_half) {
         return false;
     }
+    // the Turbo4 TR form has the same 16-row tile (perf/ud-model.md step 16)
+    const bool tr16 = ggml_metal_flash_attn_ext_tr(op) > 0 && op->src[1]->type == GGML_TYPE_TURBO4_0;
+    if (!tr16 && !(op->src[1]->type == GGML_TYPE_F16 && op->src[2]->type == GGML_TYPE_F16)) {
+        return false;
+    }
     // pays from ~32K cache entries up (-12..-16% at 48K, -21% at 96K), flat at 24K, +7% at 8K: the 16-row
     // tile halves the cache stream per query, which is the bound only at long context
     static const int fa_q16_kvmin = getenv("GGML_FA_Q16_KVMIN") != nullptr ? atoi(getenv("GGML_FA_Q16_KVMIN")) : 32768;
-    return op->src[1]->type == GGML_TYPE_F16 && op->src[2]->type == GGML_TYPE_F16 &&
-           op->src[0]->ne[0] == 256 && op->src[2]->ne[0] == 256 && op->src[0]->ne[1] >= 32 &&
+    return op->src[0]->ne[0] == 256 && op->src[2]->ne[0] == 256 && op->src[0]->ne[1] >= 32 &&
            op->src[1]->ne[1] > fa_q16_kvmin;
 }
 
@@ -1912,10 +1928,15 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext(
     }
     // TR form for the Turbo4 cache (perf/ud-model.md step 16): the transposed-Q form with the K/V tiles
     // dequantized into the simdgroup matrices by their owning lanes; "=0" off
-    // GGML_FA_TR=1: pair table in constant memory; =2: staged in threadgroup memory (qtl); "=0" off
-    static const int fa_tr = getenv("GGML_FA_TR") != nullptr ? atoi(getenv("GGML_FA_TR")) : 0;
-    if (fa_tr > 0 && !fa_acc_half && op->src[1]->type == GGML_TYPE_TURBO4_0 && op->src[2]->type == GGML_TYPE_TURBO4_0 && dk == dv && (dk == 128 || dk == 256)) {
-        snprintf(base, 256, "kernel_flash_attn_ext_%s_turbo4_dk%d_dv%d", fa_tr == 2 ? "qtl" : "qt", dk, dv);
+    // GGML_FA_TR=1: pair table in constant memory (byte-identical); 2: staged in threadgroup memory (qtl, byte-identical);
+    // 3: qtl with the V loop unrolled 4; 4: half table = the vec kernel's numerics (qth, NOT byte-identical); 5: qth unroll 4; "=0" off
+    const int fa_tr = ggml_metal_flash_attn_ext_tr(op);
+    if (fa_tr > 0) {
+        const char * form = fa_tr == 2 ? "qtl" : fa_tr == 3 ? "qtl4" : fa_tr == 4 ? "qth" : fa_tr == 5 ? "qth4" : "qt";
+        if (ggml_metal_flash_attn_ext_q16(op)) {
+            form = fa_tr >= 4 ? "qth16" : "qt16"; // the 16-row tile: constant or half table (no scratch for the staged one)
+        }
+        snprintf(base, 256, "kernel_flash_attn_ext_%s_turbo4_dk%d_dv%d", form, dk, dv);
     }
     // QT form only: Q^T tiles held in registers across the KV loop (perf/fa-long-context.md); "=0" off
     static const int fa_qr = getenv("GGML_FA_QR") != nullptr ? atoi(getenv("GGML_FA_QR")) : 0; // Q^T tiles in registers
@@ -1924,7 +1945,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext(
     // every length (perf/fa-long-context.md). GGML_FA_QR_KVMAX overrides the prefill cutoff.
     static const int fa_qr_kvmax = getenv("GGML_FA_QR_KVMAX") != nullptr ? atoi(getenv("GGML_FA_QR_KVMAX")) : 65536;
     const bool qr_len_ok = nwg > 1 || op->src[1]->ne[1] <= fa_qr_kvmax;
-    const int qr = (fa_qr > 0 && qr_len_ok && (strstr(base, "_qt_") != nullptr || strstr(base, "_qtl_") != nullptr)) ? std::min(fa_qr, dk/8) : 0;
+    const int qr = (fa_qr > 0 && qr_len_ok && strstr(base, "_qt") != nullptr) ? std::min(fa_qr, dk/8) : 0;
 
     snprintf(name, 256, "%s_mask=%d_sinks=%d_bias=%d_scap=%d_kvpad=%d_bcm=%d_ns10=%d_ns20=%d_nsg=%d_nwg=%d_gqah=%d%s%s",
             base,

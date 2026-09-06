@@ -1040,9 +1040,75 @@ void dequantize_turbo4_0(device const block_turbo4_0 * xb, short il, thread type
 #endif
 }
 
-#ifndef TR_V_UNROLL
-#define TR_V_UNROLL 1 // prescreen 2026-09-06: 1 = 0 spill at every head length; 2 spills 16-32 B, 4+ spills 96-128 B
-#endif
+// pairs of the half centroids indexed by a Turbo4 byte (low nibble first): the TRH form of the batched FA
+// kernel (perf/ud-model.md step 16) multiplies these by the half norm, the vec kernel's arithmetic
+constant half2 turbo_pairs_4bit_h[256] = {
+    half2(-0.241529h, -0.241529h), half2(-0.182877h, -0.241529h), half2(-0.143016h, -0.241529h), half2(-0.111036h, -0.241529h),
+    half2(-0.083292h, -0.241529h), half2(-0.058050h, -0.241529h), half2(-0.034299h, -0.241529h), half2(-0.011349h, -0.241529h),
+    half2(0.011349h, -0.241529h), half2(0.034299h, -0.241529h), half2(0.058050h, -0.241529h), half2(0.083292h, -0.241529h),
+    half2(0.111036h, -0.241529h), half2(0.143016h, -0.241529h), half2(0.182877h, -0.241529h), half2(0.241529h, -0.241529h),
+    half2(-0.241529h, -0.182877h), half2(-0.182877h, -0.182877h), half2(-0.143016h, -0.182877h), half2(-0.111036h, -0.182877h),
+    half2(-0.083292h, -0.182877h), half2(-0.058050h, -0.182877h), half2(-0.034299h, -0.182877h), half2(-0.011349h, -0.182877h),
+    half2(0.011349h, -0.182877h), half2(0.034299h, -0.182877h), half2(0.058050h, -0.182877h), half2(0.083292h, -0.182877h),
+    half2(0.111036h, -0.182877h), half2(0.143016h, -0.182877h), half2(0.182877h, -0.182877h), half2(0.241529h, -0.182877h),
+    half2(-0.241529h, -0.143016h), half2(-0.182877h, -0.143016h), half2(-0.143016h, -0.143016h), half2(-0.111036h, -0.143016h),
+    half2(-0.083292h, -0.143016h), half2(-0.058050h, -0.143016h), half2(-0.034299h, -0.143016h), half2(-0.011349h, -0.143016h),
+    half2(0.011349h, -0.143016h), half2(0.034299h, -0.143016h), half2(0.058050h, -0.143016h), half2(0.083292h, -0.143016h),
+    half2(0.111036h, -0.143016h), half2(0.143016h, -0.143016h), half2(0.182877h, -0.143016h), half2(0.241529h, -0.143016h),
+    half2(-0.241529h, -0.111036h), half2(-0.182877h, -0.111036h), half2(-0.143016h, -0.111036h), half2(-0.111036h, -0.111036h),
+    half2(-0.083292h, -0.111036h), half2(-0.058050h, -0.111036h), half2(-0.034299h, -0.111036h), half2(-0.011349h, -0.111036h),
+    half2(0.011349h, -0.111036h), half2(0.034299h, -0.111036h), half2(0.058050h, -0.111036h), half2(0.083292h, -0.111036h),
+    half2(0.111036h, -0.111036h), half2(0.143016h, -0.111036h), half2(0.182877h, -0.111036h), half2(0.241529h, -0.111036h),
+    half2(-0.241529h, -0.083292h), half2(-0.182877h, -0.083292h), half2(-0.143016h, -0.083292h), half2(-0.111036h, -0.083292h),
+    half2(-0.083292h, -0.083292h), half2(-0.058050h, -0.083292h), half2(-0.034299h, -0.083292h), half2(-0.011349h, -0.083292h),
+    half2(0.011349h, -0.083292h), half2(0.034299h, -0.083292h), half2(0.058050h, -0.083292h), half2(0.083292h, -0.083292h),
+    half2(0.111036h, -0.083292h), half2(0.143016h, -0.083292h), half2(0.182877h, -0.083292h), half2(0.241529h, -0.083292h),
+    half2(-0.241529h, -0.058050h), half2(-0.182877h, -0.058050h), half2(-0.143016h, -0.058050h), half2(-0.111036h, -0.058050h),
+    half2(-0.083292h, -0.058050h), half2(-0.058050h, -0.058050h), half2(-0.034299h, -0.058050h), half2(-0.011349h, -0.058050h),
+    half2(0.011349h, -0.058050h), half2(0.034299h, -0.058050h), half2(0.058050h, -0.058050h), half2(0.083292h, -0.058050h),
+    half2(0.111036h, -0.058050h), half2(0.143016h, -0.058050h), half2(0.182877h, -0.058050h), half2(0.241529h, -0.058050h),
+    half2(-0.241529h, -0.034299h), half2(-0.182877h, -0.034299h), half2(-0.143016h, -0.034299h), half2(-0.111036h, -0.034299h),
+    half2(-0.083292h, -0.034299h), half2(-0.058050h, -0.034299h), half2(-0.034299h, -0.034299h), half2(-0.011349h, -0.034299h),
+    half2(0.011349h, -0.034299h), half2(0.034299h, -0.034299h), half2(0.058050h, -0.034299h), half2(0.083292h, -0.034299h),
+    half2(0.111036h, -0.034299h), half2(0.143016h, -0.034299h), half2(0.182877h, -0.034299h), half2(0.241529h, -0.034299h),
+    half2(-0.241529h, -0.011349h), half2(-0.182877h, -0.011349h), half2(-0.143016h, -0.011349h), half2(-0.111036h, -0.011349h),
+    half2(-0.083292h, -0.011349h), half2(-0.058050h, -0.011349h), half2(-0.034299h, -0.011349h), half2(-0.011349h, -0.011349h),
+    half2(0.011349h, -0.011349h), half2(0.034299h, -0.011349h), half2(0.058050h, -0.011349h), half2(0.083292h, -0.011349h),
+    half2(0.111036h, -0.011349h), half2(0.143016h, -0.011349h), half2(0.182877h, -0.011349h), half2(0.241529h, -0.011349h),
+    half2(-0.241529h, 0.011349h), half2(-0.182877h, 0.011349h), half2(-0.143016h, 0.011349h), half2(-0.111036h, 0.011349h),
+    half2(-0.083292h, 0.011349h), half2(-0.058050h, 0.011349h), half2(-0.034299h, 0.011349h), half2(-0.011349h, 0.011349h),
+    half2(0.011349h, 0.011349h), half2(0.034299h, 0.011349h), half2(0.058050h, 0.011349h), half2(0.083292h, 0.011349h),
+    half2(0.111036h, 0.011349h), half2(0.143016h, 0.011349h), half2(0.182877h, 0.011349h), half2(0.241529h, 0.011349h),
+    half2(-0.241529h, 0.034299h), half2(-0.182877h, 0.034299h), half2(-0.143016h, 0.034299h), half2(-0.111036h, 0.034299h),
+    half2(-0.083292h, 0.034299h), half2(-0.058050h, 0.034299h), half2(-0.034299h, 0.034299h), half2(-0.011349h, 0.034299h),
+    half2(0.011349h, 0.034299h), half2(0.034299h, 0.034299h), half2(0.058050h, 0.034299h), half2(0.083292h, 0.034299h),
+    half2(0.111036h, 0.034299h), half2(0.143016h, 0.034299h), half2(0.182877h, 0.034299h), half2(0.241529h, 0.034299h),
+    half2(-0.241529h, 0.058050h), half2(-0.182877h, 0.058050h), half2(-0.143016h, 0.058050h), half2(-0.111036h, 0.058050h),
+    half2(-0.083292h, 0.058050h), half2(-0.058050h, 0.058050h), half2(-0.034299h, 0.058050h), half2(-0.011349h, 0.058050h),
+    half2(0.011349h, 0.058050h), half2(0.034299h, 0.058050h), half2(0.058050h, 0.058050h), half2(0.083292h, 0.058050h),
+    half2(0.111036h, 0.058050h), half2(0.143016h, 0.058050h), half2(0.182877h, 0.058050h), half2(0.241529h, 0.058050h),
+    half2(-0.241529h, 0.083292h), half2(-0.182877h, 0.083292h), half2(-0.143016h, 0.083292h), half2(-0.111036h, 0.083292h),
+    half2(-0.083292h, 0.083292h), half2(-0.058050h, 0.083292h), half2(-0.034299h, 0.083292h), half2(-0.011349h, 0.083292h),
+    half2(0.011349h, 0.083292h), half2(0.034299h, 0.083292h), half2(0.058050h, 0.083292h), half2(0.083292h, 0.083292h),
+    half2(0.111036h, 0.083292h), half2(0.143016h, 0.083292h), half2(0.182877h, 0.083292h), half2(0.241529h, 0.083292h),
+    half2(-0.241529h, 0.111036h), half2(-0.182877h, 0.111036h), half2(-0.143016h, 0.111036h), half2(-0.111036h, 0.111036h),
+    half2(-0.083292h, 0.111036h), half2(-0.058050h, 0.111036h), half2(-0.034299h, 0.111036h), half2(-0.011349h, 0.111036h),
+    half2(0.011349h, 0.111036h), half2(0.034299h, 0.111036h), half2(0.058050h, 0.111036h), half2(0.083292h, 0.111036h),
+    half2(0.111036h, 0.111036h), half2(0.143016h, 0.111036h), half2(0.182877h, 0.111036h), half2(0.241529h, 0.111036h),
+    half2(-0.241529h, 0.143016h), half2(-0.182877h, 0.143016h), half2(-0.143016h, 0.143016h), half2(-0.111036h, 0.143016h),
+    half2(-0.083292h, 0.143016h), half2(-0.058050h, 0.143016h), half2(-0.034299h, 0.143016h), half2(-0.011349h, 0.143016h),
+    half2(0.011349h, 0.143016h), half2(0.034299h, 0.143016h), half2(0.058050h, 0.143016h), half2(0.083292h, 0.143016h),
+    half2(0.111036h, 0.143016h), half2(0.143016h, 0.143016h), half2(0.182877h, 0.143016h), half2(0.241529h, 0.143016h),
+    half2(-0.241529h, 0.182877h), half2(-0.182877h, 0.182877h), half2(-0.143016h, 0.182877h), half2(-0.111036h, 0.182877h),
+    half2(-0.083292h, 0.182877h), half2(-0.058050h, 0.182877h), half2(-0.034299h, 0.182877h), half2(-0.011349h, 0.182877h),
+    half2(0.011349h, 0.182877h), half2(0.034299h, 0.182877h), half2(0.058050h, 0.182877h), half2(0.083292h, 0.182877h),
+    half2(0.111036h, 0.182877h), half2(0.143016h, 0.182877h), half2(0.182877h, 0.182877h), half2(0.241529h, 0.182877h),
+    half2(-0.241529h, 0.241529h), half2(-0.182877h, 0.241529h), half2(-0.143016h, 0.241529h), half2(-0.111036h, 0.241529h),
+    half2(-0.083292h, 0.241529h), half2(-0.058050h, 0.241529h), half2(-0.034299h, 0.241529h), half2(-0.011349h, 0.241529h),
+    half2(0.011349h, 0.241529h), half2(0.034299h, 0.241529h), half2(0.058050h, 0.241529h), half2(0.083292h, 0.241529h),
+    half2(0.111036h, 0.241529h), half2(0.143016h, 0.241529h), half2(0.182877h, 0.241529h), half2(0.241529h, 0.241529h)
+};
+
 // TR form of the batched FA kernel (perf/ud-model.md step 16): one lane's two adjacent elements
 // (dims d, d+1 of one cache row, d even) of an 8x8 simdgroup tile, dequantized straight into the
 // matrix registers. Same arithmetic as dequantize_turbo4_0 (float centroid x float norm, then the
@@ -1057,6 +1123,13 @@ static inline half2 turbo4_pair_at(device const char * row, short d) {
     const float2 p = float2(turbo_centroids_4bit[q & 0xF], turbo_centroids_4bit[q >> 4])*norm;
 #endif
     return half2(p);
+}
+// TRH: the vec kernel's arithmetic (half centroid x half norm, one packed multiply) - NOT byte-identical to
+// the scratch path (its float product rounds differently); a KLD-priced option (perf/ud-model.md step 16)
+static inline half2 turbo4_pair_at_h(device const char * row, short d) {
+    device const block_turbo4_0 * xb = (device const block_turbo4_0 *) row + d/QK_TURBO;
+    const half norm = xb->norm;
+    return turbo_pairs_4bit_h[xb->qs[(d%QK_TURBO)/2]]*norm;
 }
 // same, with the pair table in threadgroup memory (TR_LUT_TG: the K scratch the TR path leaves unused)
 static inline half2 turbo4_pair_at_tg(device const char * row, short d, threadgroup const float2 * lut) {
@@ -12271,7 +12344,8 @@ template<
         short GQAH,       // query heads sharing one KV head in this threadgroup grid
     short NSG,        // number of simd groups
     bool  QT = false, // f16 QK form: Q staged transposed, K tiles loaded untransposed, S^T stored transposed (perf/ud-model.md step 9)
-    bool  TRL = false> // TR form: the Turbo4 pair table staged in threadgroup memory (perf/ud-model.md step 16)
+    short TRM = 0,    // TR form (perf/ud-model.md step 16): 0 pair table in constant memory, 1 staged in threadgroup memory, 2 half table (TRH numerics)
+    short VU = 2>     // TR form: V loop unroll
 void kernel_flash_attn_ext_impl(
         constant ggml_metal_kargs_flash_attn_ext & args,
         device const char * q,
@@ -12728,60 +12802,73 @@ void kernel_flash_attn_ext_impl(
                 // owning lanes straight into the simdgroup matrix (lane map: perf/probe-thread-elements-half.*),
                 // so the quantized branch has no threadgroup scratch, no barriers and no transposed loads;
                 // Q^T tiles come from the register head (qr) for the first 64 dims and the transposed
-                // staging after. Per score tile the products accumulate in the same k order as the scratch
-                // branch below: byte-identical.
-                static_assert(DK % 64 == 0 && Q == 8, "TR form: 64-dim chunks, one query tile");
-                constexpr short NC = (C/8)/NSG;
-                // TRL: the pair table staged once per threadgroup into the (unused) K scratch: 256 float2 = 2 KB
+                // staging after. With NQT query tiles (the 16-row tile) each K tile feeds NQT MMAs. Per score
+                // tile the products accumulate in the same k order as the scratch branch below: byte-identical.
+                static_assert(DK % 64 == 0, "TR form: 64-dim chunks");
+                constexpr short NC  = (C/8)/NSG;
+                constexpr short NQT = Q/8;
+                const short lr = ((tiisg >> 1) & 3) + 4*(tiisg >> 4);  // this lane's row (key) of an 8x8 tile
+                const short lc = 2*(tiisg & 1) + 4*((tiisg >> 3) & 1); // its first column (dim); it holds lc, lc+1
+                // TRM 1: the pair table staged once per threadgroup into the (unused) K scratch: 256 float2 = 2 KB
                 threadgroup float2 * slut = (threadgroup float2 *) (shmem_f16 + Q*T + Q*TS);
-                if constexpr (TRL) {
+                if constexpr (TRM == 1) {
                     for (short i = sgitg*NW + tiisg; i < 256; i += NSG*NW) { slut[i] = turbo_pairs_4bit[i]; }
                     threadgroup_barrier(mem_flags::mem_threadgroup);
                 }
-#define TR_PAIR(row, d) (TRL ? turbo4_pair_at_tg(row, d, slut) : turbo4_pair_at(row, d))
-                const short lr = ((tiisg >> 1) & 3) + 4*(tiisg >> 4);  // this lane's row (key) of an 8x8 tile
-                const short lc = 2*(tiisg & 1) + 4*((tiisg >> 3) & 1); // its first column (dim); it holds lc, lc+1
+#define TR_PAIR(row, d) (TRM == 1 ? turbo4_pair_at_tg(row, d, slut) : TRM == 2 ? turbo4_pair_at_h(row, d) : turbo4_pair_at(row, d))
 
-                qk8x8_t mqk[NC];
+                qk8x8_t mqk[NC*NQT];
                 device const char * pkr[NC];
 
                 FOR_UNROLL (short ccc = 0; ccc < NC; ++ccc) {
-                    mqk[ccc] = make_filled_simdgroup_matrix<qk_t, 8>((qk_t) 0.0f);
+                    FOR_UNROLL (short qt = 0; qt < NQT; ++qt) {
+                        mqk[ccc*NQT + qt] = make_filled_simdgroup_matrix<qk_t, 8>((qk_t) 0.0f);
+                    }
                     pkr[ccc] = k + (ic + 8*(ccc*NSG + sgitg) + lr)*args.nb11;
                 }
 
                 // dims [0, 64): the register head holds the first qr Q^T tiles (qr <= 8 on this path)
                 FOR_UNROLL (short tt = 0; tt < 4; ++tt) {
-                    q8x8_t mq[2];
-                    if (2*tt + 0 < FC_flash_attn_ext_qr) { mq[0] = mqr[2*tt + 0]; } else { simdgroup_load(mq[0], sq + (16*tt + 0)*Q, Q); }
-                    if (2*tt + 1 < FC_flash_attn_ext_qr) { mq[1] = mqr[2*tt + 1]; } else { simdgroup_load(mq[1], sq + (16*tt + 8)*Q, Q); }
+                    q8x8_t mq[2*NQT];
+                    FOR_UNROLL (short qt = 0; qt < NQT; ++qt) {
+                        if (2*tt + 0 < FC_flash_attn_ext_qr) { mq[0*NQT + qt] = mqr[(2*tt + 0)*NQT + qt]; } else { simdgroup_load(mq[0*NQT + qt], sq + (16*tt + 0)*Q + 8*qt, Q); }
+                        if (2*tt + 1 < FC_flash_attn_ext_qr) { mq[1*NQT + qt] = mqr[(2*tt + 1)*NQT + qt]; } else { simdgroup_load(mq[1*NQT + qt], sq + (16*tt + 8)*Q + 8*qt, Q); }
+                    }
                     FOR_UNROLL (short ccc = 0; ccc < NC; ++ccc) {
                         k8x8_t mk[2];
                         ((thread half2 &) mk[0].thread_elements()) = TR_PAIR(pkr[ccc], 16*tt + 0 + lc);
                         ((thread half2 &) mk[1].thread_elements()) = TR_PAIR(pkr[ccc], 16*tt + 8 + lc);
-                        simdgroup_multiply_accumulate(mqk[ccc], mk[0], mq[0], mqk[ccc]);
-                        simdgroup_multiply_accumulate(mqk[ccc], mk[1], mq[1], mqk[ccc]);
+                        FOR_UNROLL (short qt = 0; qt < NQT; ++qt) {
+                            simdgroup_multiply_accumulate(mqk[ccc*NQT + qt], mk[0], mq[0*NQT + qt], mqk[ccc*NQT + qt]);
+                            simdgroup_multiply_accumulate(mqk[ccc*NQT + qt], mk[1], mq[1*NQT + qt], mqk[ccc*NQT + qt]);
+                        }
                     }
                 }
                 // dims [64, DK): Q^T from the transposed staging
                 #pragma unroll 1
                 for (short ch = 1; ch < DK/64; ++ch) {
                     FOR_UNROLL (short tt = 0; tt < 4; ++tt) {
-                        q8x8_t mq[2];
-                        simdgroup_load(mq[0], sq + (64*ch + 16*tt + 0)*Q, Q);
-                        simdgroup_load(mq[1], sq + (64*ch + 16*tt + 8)*Q, Q);
+                        q8x8_t mq[2*NQT];
+                        FOR_UNROLL (short qt = 0; qt < NQT; ++qt) {
+                            simdgroup_load(mq[0*NQT + qt], sq + (64*ch + 16*tt + 0)*Q + 8*qt, Q);
+                            simdgroup_load(mq[1*NQT + qt], sq + (64*ch + 16*tt + 8)*Q + 8*qt, Q);
+                        }
                         FOR_UNROLL (short ccc = 0; ccc < NC; ++ccc) {
                             k8x8_t mk[2];
                             ((thread half2 &) mk[0].thread_elements()) = TR_PAIR(pkr[ccc], 64*ch + 16*tt + 0 + lc);
                             ((thread half2 &) mk[1].thread_elements()) = TR_PAIR(pkr[ccc], 64*ch + 16*tt + 8 + lc);
-                            simdgroup_multiply_accumulate(mqk[ccc], mk[0], mq[0], mqk[ccc]);
-                            simdgroup_multiply_accumulate(mqk[ccc], mk[1], mq[1], mqk[ccc]);
+                            FOR_UNROLL (short qt = 0; qt < NQT; ++qt) {
+                                simdgroup_multiply_accumulate(mqk[ccc*NQT + qt], mk[0], mq[0*NQT + qt], mqk[ccc*NQT + qt]);
+                                simdgroup_multiply_accumulate(mqk[ccc*NQT + qt], mk[1], mq[1*NQT + qt], mqk[ccc*NQT + qt]);
+                            }
                         }
                     }
                 }
 
                 FOR_UNROLL (short ccc = 0; ccc < NC; ++ccc) {
-                    simdgroup_store(mqk[ccc], ss + 8*(ccc*NSG + sgitg), SH, 0, true); // S^T tile, transposed store
+                    FOR_UNROLL (short qt = 0; qt < NQT; ++qt) {
+                        simdgroup_store(mqk[ccc*NQT + qt], ss + qt*8*SH + 8*(ccc*NSG + sgitg), SH, 0, true); // S^T tile, transposed store
+                    }
                 }
             } else {
                 // TODO: this is the quantized K cache branch - not optimized yet
@@ -13032,38 +13119,47 @@ void kernel_flash_attn_ext_impl(
                     }
                 } else if constexpr (QT && is_same<vd4x4_t, block_turbo4_0>::value) {
                     // TR form (perf/ud-model.md step 16): this simdgroup owns the contiguous dims
-                    // [8*NO*sgitg, 8*NO*(sgitg + 1)) of O, its NO tiles stay in registers across the key tiles
-                    // (the scratch branch below reloads and stores them per key tile), and each V tile is
-                    // dequantized by its owning lanes into the matrix registers. Key tiles in the same order:
-                    // byte-identical.
-                    static_assert(PV8 % NSG == 0 && DV == PV && Q == 8, "TR form: contiguous dims per simdgroup, one query tile");
-                    constexpr short NO = PV8/NSG;
+                    // [8*NO*sgitg, 8*NO*(sgitg + 1)) of O for every query tile, those NQT*NO tiles stay in
+                    // registers across the key tiles (the scratch branch below reloads and stores them per key
+                    // tile), and each V tile is dequantized by its owning lanes into the matrix registers and
+                    // feeds NQT MMAs. Key tiles in the same order: byte-identical.
+                    static_assert(PV8 % NSG == 0 && DV == PV, "TR form: contiguous dims per simdgroup");
+                    constexpr short NO  = PV8/NSG;
+                    constexpr short NQT = Q/8;
                     const short lr = ((tiisg >> 1) & 3) + 4*(tiisg >> 4);
                     const short lc = 2*(tiisg & 1) + 4*((tiisg >> 3) & 1);
 
-                    o8x8_t lo[NO];
+                    o8x8_t lo[NQT*NO];
                     threadgroup const float2 * slut = (threadgroup const float2 *) (shmem_f16 + Q*T + Q*TS);
 
-                    FOR_UNROLL (short ii = 0; ii < NO; ++ii) {
-                        simdgroup_load(lo[ii], so + 8*NO*sgitg + 8*ii, PV, 0, false);
+                    FOR_UNROLL (short qt = 0; qt < NQT; ++qt) {
+                        FOR_UNROLL (short ii = 0; ii < NO; ++ii) {
+                            simdgroup_load(lo[qt*NO + ii], so + qt*8*PV + 8*NO*sgitg + 8*ii, PV, 0, false);
+                        }
                     }
 
-                    #pragma unroll TR_V_UNROLL
+                    #pragma clang loop unroll_count(VU)
                     for (short cc = 0; cc < C/8; ++cc) {
-                        s8x8_t vs;
-                        simdgroup_load(vs, ss + 8*cc, SH, 0, false);
+                        s8x8_t vs[NQT];
+                        FOR_UNROLL (short qt = 0; qt < NQT; ++qt) {
+                            simdgroup_load(vs[qt], ss + qt*8*SH + 8*cc, SH, 0, false);
+                        }
 
                         device const char * pvr = v + (ic + 8*cc + lr)*args.nb21;
 
                         FOR_UNROLL (short ii = 0; ii < NO; ++ii) {
                             v8x8_t mv;
                             ((thread half2 &) mv.thread_elements()) = TR_PAIR(pvr, 8*NO*sgitg + 8*ii + lc);
-                            simdgroup_multiply_accumulate(lo[ii], vs, mv, lo[ii]);
+                            FOR_UNROLL (short qt = 0; qt < NQT; ++qt) {
+                                simdgroup_multiply_accumulate(lo[qt*NO + ii], vs[qt], mv, lo[qt*NO + ii]);
+                            }
                         }
                     }
 
-                    FOR_UNROLL (short ii = 0; ii < NO; ++ii) {
-                        simdgroup_store(lo[ii], so + 8*NO*sgitg + 8*ii, PV, 0, false);
+                    FOR_UNROLL (short qt = 0; qt < NQT; ++qt) {
+                        FOR_UNROLL (short ii = 0; ii < NO; ++ii) {
+                            simdgroup_store(lo[qt*NO + ii], so + qt*8*PV + 8*NO*sgitg + 8*ii, PV, 0, false);
+                        }
                     }
                 } else {
                     // TODO: this is the quantized V cache branch - not optimized yet
@@ -13251,7 +13347,8 @@ template<
         short Q  = OP_FLASH_ATTN_EXT_NQPSG, // queries per threadgroup
     short C  = OP_FLASH_ATTN_EXT_NCPSG, // cache items per threadgroup
     bool  QT = false,                   // transposed-Q QK form (f16 K, and the Turbo4 TR form: perf/ud-model.md steps 9, 16)
-    bool  TRL = false>                  // TR form with the pair table in threadgroup memory
+    short TRM = 0,                      // TR form: pair table mode (0 constant, 1 threadgroup, 2 half/TRH numerics)
+    short VU = 2>                       // TR form: V loop unroll
 kernel void kernel_flash_attn_ext(
         constant ggml_metal_kargs_flash_attn_ext & args,
         device const char * q,
@@ -13274,13 +13371,13 @@ kernel void kernel_flash_attn_ext(
       //case 2: kernel_flash_attn_ext_impl<FWD_TMPL, 2>(FWD_ARGS); break;
         case 4:
             switch (FC_flash_attn_ext_gqa_heads) {
-                case 4: kernel_flash_attn_ext_impl<FWD_TMPL, 4, 4, QT, TRL>(FWD_ARGS); break;
-                case 6: kernel_flash_attn_ext_impl<FWD_TMPL, 6, 4, QT, TRL>(FWD_ARGS); break;
-                default: kernel_flash_attn_ext_impl<FWD_TMPL, 1, 4, QT, TRL>(FWD_ARGS); break;
+                case 4: kernel_flash_attn_ext_impl<FWD_TMPL, 4, 4, QT, TRM, VU>(FWD_ARGS); break;
+                case 6: kernel_flash_attn_ext_impl<FWD_TMPL, 6, 4, QT, TRM, VU>(FWD_ARGS); break;
+                default: kernel_flash_attn_ext_impl<FWD_TMPL, 1, 4, QT, TRM, VU>(FWD_ARGS); break;
             }
             break;
         case 8:
-            kernel_flash_attn_ext_impl<FWD_TMPL, 1, 8, QT, TRL>(FWD_ARGS);
+            kernel_flash_attn_ext_impl<FWD_TMPL, 1, 8, QT, TRM, VU>(FWD_ARGS);
             break;
     }
 #undef FWD_TMPL
@@ -13477,10 +13574,18 @@ template [[host_name("kernel_flash_attn_ext_turbo2_dk256_dv256")]] kernel flash_
 template [[host_name("kernel_flash_attn_ext_turbo3_dk256_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo3_0, 8, dequantize_turbo3_0, block_turbo3_0, 8, dequantize_turbo3_0, 256, 256>;
 template [[host_name("kernel_flash_attn_ext_turbo4_dk256_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo4_0, 8, dequantize_turbo4_0, block_turbo4_0, 8, dequantize_turbo4_0, 256, 256>;
 // TR form (GGML_FA_TR=1, perf/ud-model.md step 16): the Turbo4 kernels with the transposed-Q form and register-resident dequant
-template [[host_name("kernel_flash_attn_ext_qt_turbo4_dk128_dv128")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo4_0, 8, dequantize_turbo4_0, block_turbo4_0, 8, dequantize_turbo4_0, 128, 128, OP_FLASH_ATTN_EXT_NQPSG, OP_FLASH_ATTN_EXT_NCPSG, true>;
-template [[host_name("kernel_flash_attn_ext_qt_turbo4_dk256_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo4_0, 8, dequantize_turbo4_0, block_turbo4_0, 8, dequantize_turbo4_0, 256, 256, OP_FLASH_ATTN_EXT_NQPSG, OP_FLASH_ATTN_EXT_NCPSG, true>;
-template [[host_name("kernel_flash_attn_ext_qtl_turbo4_dk128_dv128")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo4_0, 8, dequantize_turbo4_0, block_turbo4_0, 8, dequantize_turbo4_0, 128, 128, OP_FLASH_ATTN_EXT_NQPSG, OP_FLASH_ATTN_EXT_NCPSG, true, true>;
-template [[host_name("kernel_flash_attn_ext_qtl_turbo4_dk256_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo4_0, 8, dequantize_turbo4_0, block_turbo4_0, 8, dequantize_turbo4_0, 256, 256, OP_FLASH_ATTN_EXT_NQPSG, OP_FLASH_ATTN_EXT_NCPSG, true, true>;
+template [[host_name("kernel_flash_attn_ext_qt_turbo4_dk128_dv128")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo4_0, 8, dequantize_turbo4_0, block_turbo4_0, 8, dequantize_turbo4_0, 128, 128, OP_FLASH_ATTN_EXT_NQPSG, OP_FLASH_ATTN_EXT_NCPSG, true, 0, 2>;
+template [[host_name("kernel_flash_attn_ext_qt_turbo4_dk256_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo4_0, 8, dequantize_turbo4_0, block_turbo4_0, 8, dequantize_turbo4_0, 256, 256, OP_FLASH_ATTN_EXT_NQPSG, OP_FLASH_ATTN_EXT_NCPSG, true, 0, 2>;
+template [[host_name("kernel_flash_attn_ext_qtl_turbo4_dk128_dv128")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo4_0, 8, dequantize_turbo4_0, block_turbo4_0, 8, dequantize_turbo4_0, 128, 128, OP_FLASH_ATTN_EXT_NQPSG, OP_FLASH_ATTN_EXT_NCPSG, true, 1, 2>;
+template [[host_name("kernel_flash_attn_ext_qtl_turbo4_dk256_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo4_0, 8, dequantize_turbo4_0, block_turbo4_0, 8, dequantize_turbo4_0, 256, 256, OP_FLASH_ATTN_EXT_NQPSG, OP_FLASH_ATTN_EXT_NCPSG, true, 1, 2>;
+template [[host_name("kernel_flash_attn_ext_qtl4_turbo4_dk128_dv128")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo4_0, 8, dequantize_turbo4_0, block_turbo4_0, 8, dequantize_turbo4_0, 128, 128, OP_FLASH_ATTN_EXT_NQPSG, OP_FLASH_ATTN_EXT_NCPSG, true, 1, 4>;
+template [[host_name("kernel_flash_attn_ext_qtl4_turbo4_dk256_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo4_0, 8, dequantize_turbo4_0, block_turbo4_0, 8, dequantize_turbo4_0, 256, 256, OP_FLASH_ATTN_EXT_NQPSG, OP_FLASH_ATTN_EXT_NCPSG, true, 1, 4>;
+template [[host_name("kernel_flash_attn_ext_qth_turbo4_dk128_dv128")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo4_0, 8, dequantize_turbo4_0, block_turbo4_0, 8, dequantize_turbo4_0, 128, 128, OP_FLASH_ATTN_EXT_NQPSG, OP_FLASH_ATTN_EXT_NCPSG, true, 2, 2>;
+template [[host_name("kernel_flash_attn_ext_qth_turbo4_dk256_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo4_0, 8, dequantize_turbo4_0, block_turbo4_0, 8, dequantize_turbo4_0, 256, 256, OP_FLASH_ATTN_EXT_NQPSG, OP_FLASH_ATTN_EXT_NCPSG, true, 2, 2>;
+template [[host_name("kernel_flash_attn_ext_qth4_turbo4_dk128_dv128")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo4_0, 8, dequantize_turbo4_0, block_turbo4_0, 8, dequantize_turbo4_0, 128, 128, OP_FLASH_ATTN_EXT_NQPSG, OP_FLASH_ATTN_EXT_NCPSG, true, 2, 4>;
+template [[host_name("kernel_flash_attn_ext_qth4_turbo4_dk256_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo4_0, 8, dequantize_turbo4_0, block_turbo4_0, 8, dequantize_turbo4_0, 256, 256, OP_FLASH_ATTN_EXT_NQPSG, OP_FLASH_ATTN_EXT_NCPSG, true, 2, 4>;
+template [[host_name("kernel_flash_attn_ext_qt16_turbo4_dk256_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo4_0, 8, dequantize_turbo4_0, block_turbo4_0, 8, dequantize_turbo4_0, 256, 256, 16, OP_FLASH_ATTN_EXT_NCPSG, true, 0, 2>;
+template [[host_name("kernel_flash_attn_ext_qth16_turbo4_dk256_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo4_0, 8, dequantize_turbo4_0, block_turbo4_0, 8, dequantize_turbo4_0, 256, 256, 16, OP_FLASH_ATTN_EXT_NCPSG, true, 2, 2>;
 template [[host_name("kernel_flash_attn_ext_kq8_0_vturbo2_dk128_dv128")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_q8_0, 2, dequantize_q8_0, block_turbo2_0, 8, dequantize_turbo2_0, 128, 128>;
 template [[host_name("kernel_flash_attn_ext_kq8_0_vturbo3_dk128_dv128")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_q8_0, 2, dequantize_q8_0, block_turbo3_0, 8, dequantize_turbo3_0, 128, 128>;
 template [[host_name("kernel_flash_attn_ext_kq8_0_vturbo4_dk128_dv128")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_q8_0, 2, dequantize_q8_0, block_turbo4_0, 8, dequantize_turbo4_0, 128, 128>;

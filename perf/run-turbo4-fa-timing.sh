@@ -11,5 +11,7 @@ FILT='hsk=256,hsv=256,nh=4,nr23=\[6,1\],kv=(8448|24576|98304),nb=(4|5|512),mask=
 for rep in 1 2; do for arm in $ARMS; do
     IFS=: read -r label type envs <<<"$arm"; envs=${envs//,/ }
     (cd "$B" && env $COMMON $envs "$BIN" perf -o FLASH_ATTN_EXT -b MTL0 -p "${FILT/TYPE/$type}" 2>&1) | sed -E 's/\x1b\[[0-9;]*m//g' \
-      | grep -E "us/run|loaded kernel_flash_attn_ext_(qt|turbo)" | sed -E "s/.*kv=([0-9]+),nb=([0-9]+).*- +([0-9.]+) us\/run.*/$label rep$rep kv=\1 nb=\2 \3 us/; s/^.*loaded (kernel_flash_attn_ext_[a-z0-9_]+_dk256_dv256)_[^ ]*(nwg=[0-9]+)[^ ]*.*/  $label pipeline \1 \2/" | sort -u
+      | awk -v L="$label rep$rep" '/FLASH_ATTN_EXT\(/ { match($0, /kv=[0-9]+,nb=[0-9]+/); c = substr($0, RSTART, RLENGTH); sub(/,/, " ", c) }
+                                  /us\/run/ { match($0, /[0-9.]+ us\/run/); print L, c, substr($0, RSTART, RLENGTH - 7), "us" }
+                                  /loaded kernel_flash_attn_ext_(qt|turbo)/ { match($0, /kernel_flash_attn_ext_[a-z0-9_]+_dk256_dv256/); print "  " L, "pipeline", substr($0, RSTART, RLENGTH) }' | sort -u
 done; done

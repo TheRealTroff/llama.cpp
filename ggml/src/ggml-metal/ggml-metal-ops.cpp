@@ -4393,7 +4393,9 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
             ggml_metal_op_concurrency_reset(ctx);
         }
 
-        const int is_q = ggml_is_quantized(op->src[1]->type) ? 1 : 0;
+        // the Turbo4 TR form dequantizes into registers and needs no K scratch; at the 16-row tile the
+        // rest of the layout is exactly the 32 KB threadgroup budget (perf/ud-model.md step 16)
+        const int is_q = ggml_is_quantized(op->src[1]->type) && !(nqptg == 16 && ggml_metal_flash_attn_ext_tr(op) > 0) ? 1 : 0;
 
         // 2*(2*ncpsg)
         // ncpsg soft_max values + ncpsg mask values
