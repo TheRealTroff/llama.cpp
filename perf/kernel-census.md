@@ -60,3 +60,14 @@ the uncaptured runs only.
 Two things the first pass of the tool taught: `-p` is a std::regex (array brackets must be escaped -
 the reason the earlier FA filter "did not match"), and each replay leaves ~1.7 GB in
 `/tmp/com.apple.gputools.profiling` - the driver now deletes it per row after two passes filled the disk.
+
+**First lever produced by the census (same day): the f16 GQA-reuse FA route.** Flag #1 named the
+decode FA tile at width 4 (4.5x class-best instructions per useful GFLOP: a half-empty 8-query tile
+and K/V streamed per 4 rows). The kernel already had the fix - the gqah=6 instantiation packs the six
+query heads sharing a KV head into full 8-row tiles and streams each K/V chunk once per 24 rows - but the
+route was gated to Turbo4 KV since it was built. `GGML_FA_GQA_F16=1` opens it to f16 KV (`ud-model.md`
+step 11): kv 8448 per call width 3 380 -> 214 us (-44%), width 4 386 -> 219 (-43%), width 5 388 -> 307
+(-21%), width 6 391 -> 328 (-16%); 2452/2452 f16 FA cases; e2e UD depth 3 @300 interleaved
+base/gqa/gqa/base decode 24.38/25.04/25.06/24.38 t/s (**+2.8%**), sha `73ea53bbe98f` on every arm,
+prefill unchanged. Nobody had opened that kernel at width 4 because its per-call time looked ordinary;
+the per-work normalization is what made it the top of the table.

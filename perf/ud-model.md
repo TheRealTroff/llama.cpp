@@ -743,3 +743,28 @@ body (the transposed score store), plus the transposed Q staging in the prologue
 weights those levels 3.9 : 1 : 0.003 per chunk. Text size is a bad proxy exactly when a form change
 swaps instruction classes at equal byte size or moves work between loop levels; it ranks
 register-pressure and unrolling changes, not this.
+
+## Step 11: the census's first lever - GQA-reuse FA for f16 KV at decode (2026-09-06)
+
+`perf/kernel-census.md` ranked the width-4 decode FA (`flash_attn_ext_qt_f16` nwg=8) as the table's
+largest per-work outlier: 16.9 instructions per useful GFLOP against the mul_mm's 3.8, 4x the loads,
+2.2 TFLOPS. The cause is structural: an 8-query tile carrying 4 real queries (2x MMA padding) and
+K/V re-streamed once per 4 rows. The gqah=6 GQA-reuse instantiation (six query heads per KV head
+flattened into full 8-row tiles, each K/V chunk streamed once per 24 rows) already existed for the
+Turbo4 line and was only ever routed for Turbo4 KV. `GGML_FA_GQA_F16=1` ("=0" off) routes it for
+f16 KV too, widths 3-6, same conditions as the Turbo4 route.
+
+| kv 8448, us/call (2 interleaved reps) | QT | QT + GQA f16 |
+|---|--:|--:|
+| width 3 | 379 | 214 (-44%) |
+| width 4 | 385 | 219 (-43%) |
+| width 5 | 388 | 307 (-21%) |
+| width 6 | 391 | 328 (-16%) |
+
+2452/2452 f16 `FLASH_ATTN_EXT` cases against the CPU reference with the gqah=6 pipelines engaged.
+**E2e UD depth 3 @300, interleaved base / gqa / gqa / base: decode 24.38 / 25.04 / 25.06 / 24.38 t/s
+(+2.8%), sha `73ea53bbe98f` on every arm, prefill unchanged (65.6 s all arms).** Same math per
+(query, head) row in the same order, so byte-identical as expected. Recommended for both lines (the
+Q4_0 pick verifies at width 5: -21% per FA call; gate below). The remaining width-5/6 gap to the
+width-3/4 number is the second tile being half-empty (24 rows -> 3 full tiles at width 4, 30 rows ->
+4 tiles with 2 empty rows at width 5).

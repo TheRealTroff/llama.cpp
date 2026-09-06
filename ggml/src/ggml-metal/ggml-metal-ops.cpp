@@ -2822,6 +2822,7 @@ static bool ggml_metal_mul_mat_use_f16_src1_mm(const ggml_tensor * op) {
         case GGML_TYPE_Q5_K:
         case GGML_TYPE_Q6_K:
         case GGML_TYPE_IQ4_XS:
+        case GGML_TYPE_IQ3_S:
             return true;
         default:
             return false;
@@ -4213,7 +4214,12 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
     const int32_t gqa_ratio = ne12 > 0 && ne02 % ne12 == 0 ? ne02/ne12 : 1;
     const bool gqa_ratio_enabled = env_fa_gqa_heads ? ggml_metal_env_has_i32(env_fa_gqa_heads, gqa_ratio) :
                                                      (!props_dev->has_tensor && gqa_ratio == 6);
-    const bool use_gqa_reuse = gqa_ratio_enabled && is_turbo4_kv &&
+    // kernel census 2026-09-06 (perf/kernel-census.md): the f16 decode FA at width 4 was the table's largest
+    // per-work outlier (4.5x the class-best instructions per useful GFLOP: a half-empty 8-query tile plus
+    // K/V streamed once per 4 rows). The GQA-reuse tile fixes both and was only ever routed for Turbo4 KV.
+    static const bool env_fa_gqa_f16 = getenv("GGML_FA_GQA_F16") != nullptr && atoi(getenv("GGML_FA_GQA_F16")) != 0;
+    const bool is_f16_kv = op->src[1]->type == GGML_TYPE_F16 && op->src[2]->type == GGML_TYPE_F16;
+    const bool use_gqa_reuse = gqa_ratio_enabled && (is_turbo4_kv || (env_fa_gqa_f16 && is_f16_kv)) &&
                                ne01 >= 3 && ne01 <= 6 && (gqa_ratio == 4 || gqa_ratio == 6) &&
                                !has_sinks && !has_bias &&
                                ne11 % OP_FLASH_ATTN_EXT_NCPSG == 0;
