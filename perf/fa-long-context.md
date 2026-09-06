@@ -25,9 +25,24 @@ Arithmetic check on the 25K point: the 8K prefill is ~60 s of mm+GDN (linear, so
 2.7 s of FA (quadratic, so ~24 s at 25K) = ~204 s expected, 202.6 measured. FA is ~10% of the 25K
 prefill and would be ~35-45% of a 96K one.
 
-## Census at 25K
+## Census at 25K (`census-longctx25k-sep06`, profiled run `longctx-32k-sep06-prof`, Q4_0 line)
 
-Pending (`longctx-32k-sep06-prof` is the profiled run; census TAG `census-longctx25k-sep06`).
+FA's share from the profiled log, 8K vs 25K:
+
+| | 8K (`ud-stack-prof-nr4-sep06`) | 25K |
+|---|--:|--:|
+| prefill FA | 2.7 s of 65.9 s (4.1%) | **26.4 s of 203.9 s (12.9%)** |
+| decode FA per round | 4.4 ms of 118.7 ms (3.7%) | **11.6 ms of 108.9 ms (10.7%)** |
+| prefill by op | mm 59.8, FA 2.7, GDN 1.0 | mm 167.7, FA 26.4, GDN 3.1 |
+
+(The 25K round is shorter than the 8K one because the Q4_0 line is faster than the UD line the 8K
+profile ran on; the FA ms are comparable.) The census table's FA rows are one shape per ubatch (each
+of the 49 ubatches sees a different KV length), so the top rows are the last ubatches at 1.0-1.1 s
+each and the driver found no perf case for them; the perf list now carries kv 24576 at 512 rows and
+widths 3-5, which is what the kernel work below is timed on. Two more census gaps surfaced: the Q4_0
+line's `acch` mul_mm shapes (m=10240/6144/12288/1024/48) have no perf case either, and the FA filter
+should round the KV length to the nearest perf case instead of requiring an exact match. The rows
+it did measure are unchanged from the 8K run (mm at 0.94-0.97x roof, GDN nr4 8.3x floor, SoA mv 1.2-1.3x).
 
 ## Levers
 
@@ -74,3 +89,41 @@ A method note: `env $E cmd` inside the zsh tool shell does not word-split `$E` -
 every "arm" on the vector kernel with plausible numbers (2.07 ms at width 4 where the batched route is
 0.6). Timing sweeps run as bash scripts; pipeline names are read from every line
 ([[zsh-env-does-not-word-split]], third time this session).
+
+QR=12/16 timed against QR=8 (same harness): 12 is worse (17.74 ms prefill, 816-821 us decode w5:
+the 32 B spill lands in the loop), 16 is ~1% better than 8 (17.21-17.34 ms, 753-758 us) for a 48 B
+spill. QR=8 stays the candidate; 16 is the knob if the e2e wants the last percent.
+
+### OR: the O accumulator resident in registers (`GGML_FA_OR=1`)
+
+The per-chunk body loads this simdgroup's 8 O tiles from threadgroup memory, accumulates PV into
+them and stores them back (16 tile moves per chunk per simdgroup), and the online-softmax rescale
+touches the same rows through the lanes first. The tiles can stay in registers across the KV loop
+(8 float 8x8 tiles = 16 registers) if the per-row rescale can be applied to a `simdgroup_matrix`:
+`thread_elements()` exposes each lane's two elements, and the lane-to-row map is not documented, so
+it was measured with a probe kernel (`scratch/probe_te.metal` + a Swift host, 32 lanes reading an
+8x8 loaded with row*8+col): **both elements of a lane share a row, row = ((lane >> 1) & 3) +
+4*(lane >> 4)**, columns 2*(lane & 1) + 4*((lane >> 3) & 1). The eight per-row factors go through
+the K-dequant scratch in threadgroup memory (unused on the f16 path) between the softmax block and
+the PV block, across the barrier that is already there; the multiply is the same float multiply the
+threadgroup-memory form does, so byte-identical by construction. The tiles land in `so` once after
+the loop for the unchanged epilogue.
+
+Prescreen (same specializations): OR alone 10442 B / 0 spill; QR=2 + OR **9864 / 0** at prefill and
+10970 / 0 at decode; QR=8 + OR 48 B / 64 B.
+
+**REFUTED, and removed from the tree** (the probe kernel and its Swift host stay in `perf/` as
+`probe-thread-elements.*` - the lane map is a measured fact worth keeping). Two reasons:
+
+| shape | QR=8 | QR=2 + OR | QR=8 + OR |
+|---|--:|--:|--:|
+| prefill 512 rows, kv 8448, ms | 17.46 / 17.49 | 17.86 / 17.93 | 16.99 / 17.24 |
+| prefill 512 rows, kv 24576, ms | 53.1 / 53.6 | 54.8 / 54.4 | 54.4 / 53.5 |
+| decode width 4, kv 24576, us | 575 / 576 | 580 / 584 | 575 / 574 |
+| decode width 5, kv 24576, us | 766 / 771 | 802 / 792 | 772 / 767 |
+
+Flat to slightly negative: the O tile round trip through threadgroup memory was not a cost the kernel
+was paying for (the loads/stores overlap the MMAs), and the shared-Q form alone (QR=2) with OR is
+slower than QR=8 without it. And the route as written failed 881 of the 4869 f16 cases - all on the
+plain (non-QT) kernels it also engaged on, at head sizes 40-576 with 75-row query batches, so a
+scratch-aliasing or tile-count bug in a form that was not going to pay anyway. Not debugged.
