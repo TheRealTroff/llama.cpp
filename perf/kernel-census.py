@@ -34,11 +34,14 @@ def case_filter(r):
     if op == 'FLASH_ATTN_EXT':
         kv = s1[1]
         # the cache length differs per ubatch/round; snap to the nearest perf-case length (within 12%)
-        for case_kv in (512, 8448, 16384, 24576):
+        for case_kv in (512, 8448, 16384, 24576, 49152, 98304, 102400):
             if abs(kv - case_kv) <= 0.12*case_kv:
                 kv = case_kv
                 break
-        return f"kv={kv},nb={s0[1]},mask=1,sinks=0,max_bias=0.000000,logit_softcap=0.000000,prec=f32,type_K=f16,type_V=f16,", 'mma'
+        # the cache type is a property of the run, not of the profile row (the K/V types are not in the
+        # log line): CENSUS_KV=turbo4 for the Turbo4 line (perf/ud-model.md step 16)
+        kvt = os.environ.get('CENSUS_KV', 'f16')
+        return f"kv={kv},nb={s0[1]},mask=1,sinks=0,max_bias=0.000000,logit_softcap=0.000000,prec=f32,type_K={kvt},type_V={kvt},", 'mma'
     # NOTE: -p is a std::regex - array brackets must be escaped or they become a character class
     if op == 'SWIGLU':
         return f"type=f32,ne_a=\\[{2*s0[0]},{s0[1]},1,1\\],", 'stream'

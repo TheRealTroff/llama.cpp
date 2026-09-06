@@ -1084,3 +1084,76 @@ the Turbo4 kernels - the transposed-Q / QR register-tile forms and the Q=16 pref
 quantized-K prefill kernel, and QR for the GQA decode tile - and re-measure the Turbo4 line at 96K
 before quoting the 2026-09-02 comparison again.** Until then the Turbo4 pick is a memory pick, not a
 speed pick, at any context. Reference logits kept at `kvquant-experiments/logits/` (26 GB).
+
+### Step 16 B: the Turbo4 FA port, built (2026-09-06 night, owner: "use all of our tools to make it fast"), branch `turbo4-fa-stack`
+
+Tools in the order used: the per-call timing table (`run-turbo4-fa-timing.sh`), the GPU trace of the
+Turbo4 kernel beside its f16 twin (`run-turbo4-fa-profile.sh`, `profiles/turbo4-fa-sep06`), a half8x8
+lane-map probe (`probe-thread-elements-half.*`), the spill prescreen over every candidate form, then the
+e2e sha gates. Perf cases added: Turbo4 at kv 24576/98304 widths 3-5 and prefill 512 rows at 8448/24576/98304;
+`kernel-census.py` FA filter takes `CENSUS_KV=turbo4` and snaps to the long cases.
+
+**What the trace said.** The Turbo4 batched kernel (`kernel_flash_attn_ext_turbo4_dk256_dv256`) has the same
+static size as the f16 QT kernel (992 vs 1067 instructions, 60 vs 96 registers, 0 spill) but executes
+**3.2x the dynamic instructions per decode dispatch (17.1M vs 5.3M) at 50% issue / 50% stall** (f16: 82/18);
+prefill 2.4x (2091M vs 861M) at 62/38. Its quantized branch - the source says "not optimized yet" -
+dequantizes 4x4 blocks into a threadgroup scratch, barriers, loads the tiles back TRANSPOSED (3 load
+instructions each, the same tax the f16 QT form removed), reloads the Q tiles per key tile, and on the V
+side round-trips the O accumulators through threadgroup memory per key tile (8x per chunk where f16 does it
+once). Hot loop 308 instructions with 75 device loads.
+
+**The TR form.** The measured lane map of an 8x8 simdgroup tile (both elements of a lane share a row;
+row = ((lane >> 1) & 3) + 4*(lane >> 4), first column 2*(lane & 1) + 4*((lane >> 3) & 1) - re-measured for
+`simdgroup_half8x8` in both directions, load and store round-trip exact) means each lane owns two ADJACENT
+elements of one cache row, and a Turbo4 byte holds exactly two adjacent nibbles. So every K and V tile is
+dequantized by its owning lanes straight into the matrix registers through `thread_elements()`: one byte
+load, one pair-table lookup, two float multiplies, one half2 conversion per tile per lane; no scratch, no
+barrier, no transposed load. QK runs the f16 kernel's S^T = K Q^T form with the register head (qr) and the
+transposed Q staging; the V side keeps this simdgroup's contiguous 64 output dims in registers across the
+key tiles. Same arithmetic as `dequantize_turbo4_0` (float centroid x float norm, then the half conversion
+the half4x4 store did) and the same k order per tile: **byte-identical to the scratch kernel - UD 8K Turbo4
+sha `2802eb28cd29` reproduced, 25.11 t/s (24.57/24.80 before), prefill 67.0 s (68.1).** Instantiations
+`kernel_flash_attn_ext_qt_turbo4_dk{128,256}` and variants; routed by `GGML_FA_TR` ("=0" off):
+
+| `GGML_FA_TR` | form | numerics |
+|---|---|---|
+| 1 | `qt`: pair table in constant memory, V loop unroll 2 | byte-identical |
+| 2 | `qtl`: pair table staged once per threadgroup into the K scratch the TR path leaves unused (2 KB), unroll 2 | byte-identical |
+| **3** | `qtl4`: as 2, V loop unroll 4 | byte-identical |
+| 4 / 5 | `qth` / `qth4`: half pair table x half norm, one packed multiply = the vec kernel's arithmetic | NOT byte-identical (KLD-priced option) |
+| + `GGML_FA_Q16=1` | `qt16` / `qth16`: the 16-row query tile (8 simdgroups) for prefill caches > 32K; each dequantized tile feeds two query tiles; no K scratch, the layout is exactly 32 KB | as the base form |
+
+Prescreen (`agx-spill-probe.py`, decode nsg 4 gqah 6 qr 8 / prefill): `qt` 32 / 16 B, `qtl` 0 / 0, `qtl4`
+16 / 0, `qth` 0 / 0, `qth4` 48 / 32, `qt16`/`qth16` 0 at nsg 8; V unroll 1 is 0 spill everywhere and
+5-10% SLOWER than unroll 2 (the 32 B spill was free, the unroll was not); unroll 8 spills 64-112 B. All
+Turbo4 FA cases pass against the CPU reference for every form (41/41, Q16 forced with `GGML_FA_Q16_KVMIN=0`).
+
+**Per call (us; prefill ms), `test-backend-ops perf`, 2 interleaved reps, gqah 6 nwg 8 at decode:**
+
+| shape | scratch (prod) | TR=1 `qt` | TR=3 `qtl4` | TR=5 `qth4` | f16 (QT+QR, Q16 > 32K) | TR=3 vs scratch | TR=3 vs f16 |
+|---|--:|--:|--:|--:|--:|--:|--:|
+| 8K, width 4 | 430 | 290 | **268** | 271 | 206 | -38% | 1.30x |
+| 8K, width 5 | 486 | 358 | **324** | 329 | 271 | -33% | 1.20x |
+| 8K, prefill 512 | 40.2 | 29.5 | **23.6** | 24.2 | 17.4 | -41% | 1.36x |
+| 24K, width 4 | 1298 | 875 | **797** | 813 | 573 | -39% | 1.39x |
+| 24K, width 5 | 1434 | 1050 | **944** | 961 | 764 | -34% | 1.24x |
+| 24K, prefill 512 | 117.2 | 85.7 | **68.4** | | 53.5 | -42% | 1.28x |
+| 96K, width 4 | 5112 | 3443 | **3120** | 3173 | 2272 | -39% | 1.37x |
+| 96K, width 5 | 5638 | 4144 | **3717** | | 3040 | -34% | 1.22x |
+| 96K, prefill 512, Q=8 | 475.7 | 320.5 | 288.5 | | | -39% | |
+| 96K, prefill 512, Q=16 | | | **264.0** | 255.0 | 230.0 | **-45%** | 1.15x |
+
+Reading: the threadgroup-staged table is the bigger of the two table levers on prefill (-15% at 8K: the
+constant-memory lookups were the stall), the V unroll 4 another 3-5%; the half-numerics forms buy only
+1-4% more and change the text - **refuted as a lever**, the byte-identical form wins on merit. The 16-row
+tile pays -8.4% at the 96K prefill for Turbo4 (each dequantized tile now feeds two query tiles). The
+register head at the 96K prefill (`GGML_FA_QR_KVMAX=200000`) is -1.5% for Turbo4 (f16 inverted there);
+left at the f16 gate. Per-instruction trace of the TR decode kernel: 11.8M dynamic instructions per
+dispatch (2.2x f16), 66% issue / 34% stall, the QK chunk loop 285 instructions per 64 dims (16 tiles, 16
+MMAs) and the V loop 83 per key tile (8 tiles) - about ten instructions per dequantized tile against the
+f16 path's one load, which is the whole remaining gap.
+
+**Open on the kernel:** the Q=16 tile at decode (gqah 6 packs 24 rows at width 4: two 16-row threadgroups
+instead of three 8-row ones would amortize the dequant 1.5x; needs `case 8` GQAH instantiations); a
+cheaper per-tile dequant (the four lanes of a row read the same 4-byte word and the same table entry -
+a lane-cooperative form would trade loads for shuffles, which lost on the iq4_xs kernel).
