@@ -1274,3 +1274,18 @@ lane-cooperative byte load (ushort4 per two tiles, extract per lane) trades 4 lo
 and is the one form not tried. The Turbo4 decode FA call is at 1.10-1.24x f16 with TRN and 1.20-1.4x with
 the byte-identical TR; the kernel-level answer to "the per-tile dequant" is TRN, and it is a numerics
 decision.
+
+**E2e, filled 96K, `GGML_FA_TR=6` (new lineage: UD `8c3d88cd6289`, Q4_0 `9f95c806e262`, both 600 tokens):**
+
+| 96K, width 4, depth 3 | f16 | Turbo4 prod (morning) | Turbo4 TR=3 | Turbo4 TRN (TR=6) |
+|---|--:|--:|--:|--:|
+| UD verify round | 134.9 ms | 181.2 | 151.4 | **141.7 (+5% vs f16)** |
+| UD prefill | 1102 s | 1375 | 1140 | **1125 (+2.1%)** |
+| Q4_0 verify round (hot state) | 119.1 ms | 182 (2026-09-02) | 132.3 | **126.9 (+6.5%)** |
+| Q4_0 prefill (hot state) | 1136 s | | 1167 | **1155 (+1.6%)** |
+
+**Where the Turbo4 line stands at the end of the night:** the FA port takes the 96K round from +34..+50% over
+f16 to +11..+12% byte-identical (TR=3) or +5..+7% with the folded norm (TR=6, KLD a wash), prefill within
+2% of f16 either way, 4.7 GiB less memory at 96K. Adoption of TR=3 into `TURBO_PICK_ENV` = owner (no text
+change); TR=6 on top = the owner's numerics call (same category as the exact q4_K tile, and the vec kernel
+at widths 1-2 already runs its own half arithmetic).
