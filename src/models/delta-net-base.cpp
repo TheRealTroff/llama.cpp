@@ -1,4 +1,5 @@
 #include "models.h"
+#include <cstdlib>
 
 #include "llama-impl.h"
 #include "llama-memory-recurrent.h"
@@ -12,6 +13,10 @@ static ggml_tensor * get_slice_2d(ggml_context * ctx0, ggml_tensor * t, int64_t 
 }
 
 llm_build_delta_net_base::llm_build_delta_net_base(const llm_graph_params & params) : llm_graph_context(params) {}
+
+// LLAMA_GDN_CHUNKED=1 (perf/gdn-prefill-scan.md probe): no kept tokens and the chunked delta-net graph
+// at prefill instead of the fused scan - a timing probe, changes the summation order
+static const bool chunked_probe = getenv("LLAMA_GDN_CHUNKED") && atoi(getenv("LLAMA_GDN_CHUNKED")) != 0;
 
 std::pair<ggml_tensor *, ggml_tensor *> llm_build_delta_net_base::build_delta_net_chunking(
         ggml_tensor * q,
@@ -439,7 +444,7 @@ std::pair<ggml_tensor *, ggml_tensor *> llm_build_delta_net_base::build_delta_ne
         return build_delta_net_autoregressive(q, k, v, g, b, s, il);
     }
 
-    if (cparams.fused_gdn_ch) {
+    if (cparams.fused_gdn_ch && !chunked_probe) {
         return build_delta_net_fused(q, k, v, g, b, s, il);
     }
 
@@ -543,7 +548,7 @@ ggml_tensor * llm_build_delta_net_base::build_recurrent_attn(
     const int64_t n_seqs       = s->ne[3];
     const int64_t n_seq_tokens = q->ne[2];
 
-    const bool keep = cparams.n_rs_seq > 0;
+    const bool keep = cparams.n_rs_seq > 0 && !chunked_probe; // LLAMA_GDN_CHUNKED probe: no kept tokens
 
     if (!keep) {
         auto attn_out = build_delta_net(q, k, v, g, b, s, il);

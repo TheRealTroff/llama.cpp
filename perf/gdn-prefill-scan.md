@@ -131,3 +131,41 @@ us vs 28.5 / 29.1 (-7.5%) - 48 calls x 2 us = ~0.1 ms of a ~100 ms round, and 47
 kernel, same saving as the UD line: recommend on both lines, adoption = owner. (Branch is off
 `ud-soa-iq4xs` because the census tooling and the perf-list rows live there; the kernel/routing diff
 itself touches nothing SoA-specific and rebases onto `prod` cleanly.)
+
+## The chunked delta-rule GRAPH, priced (2026-09-06 late, owner: "how optimal are the kernels for those ops?")
+
+llama.cpp already has the chunked form as a backend-agnostic graph (`build_delta_net_chunking`, 64-token
+chunks: pad, cumsum-based decay mask via `tri`/`exp`, intra-chunk `mul_mat`s, `solve_tri`, inter-chunk
+state carry); Metal has a kernel for every op in it, but the fused scan wins the context's fused-op probe
+so it never runs. `LLAMA_GDN_CHUNKED=1` (this branch only) forces it: it also has to disable the fork's
+kept-token path (`build_recurrent_attn_replay` asserts on the chunked graph's shapes), so both arms ran
+with `LLAMA_GDN_REPLAY=0`. CUDA's fused kernel, for the record, is the same per-token scan as Metal's
+(one warp per state column, two warp reductions per token) - not chunked.
+
+**Timing (UD depth 3 @300, `run-ud-knobs.sh`, replay off in both arms):** fused `GGML_GDN_NR=4` prefill
+**65.57 s**, chunked graph **71.19 s (+5.6 s)**; the fused scan is ~1.0 s of the 65.6, so the graph costs
+~6.6 s for the same work - 6.6x. Not byte-identical (sha `2e59bbbd6fb5` vs `73ea53bbe98f`), as expected.
+(Decode numbers of the chunked arm are meaningless: with the kept-token path off the drafter's rollback
+is gone.)
+
+**Per op, from a profiled chunked run** (`GGML_METAL_PROFILE=1`; that run's e2e degenerated - acceptance 0,
+7 t/s - so only its per-op costs are used; 384,663 chunk-graph ops serialized 11.2 s, ~500 ops per
+layer-ubatch where the fused scan is one):
+
+| op | shape | us/call | what bounds it |
+|---|---|--:|---|
+| CONT (transpose) f32 | [64,128] | 77 | a 32 KB copy: byte floor ~0.2 us - launch/latency, not the kernel |
+| CONT f32 | [64,128,8] | 635 | 256 KB - same |
+| SOLVE_TRI f32 | 64x64, batch 1 / 8 | 116 / 842 | `kernel_solve_tri_f32`: a 64x64 triangular solve per threadgroup, serial in the row dimension |
+| MUL_MAT f32 | 64x128x64 and 128x128x64 | 19-30 | ~1 MFLOP per call: 0.03-0.05 TFLOPS achieved against a 7 TFLOPS mul_mm roof |
+| SET / PAD / TRI / SUB / MUL / REPEAT / EXP f32 | 64x64 .. 128x128 | 13-73 | all launch-bound elementwise on KB-sized tensors |
+
+So the answer to the caveat: **the kernels are the generic ones and at these sizes no kernel is the
+problem - the graph is.** Every op is a 10-100 us launch over a few KB, hundreds of them per layer per
+ubatch; the matmuls run at <1% of the MMA roof because a 64-token chunk of one head is ~1 MFLOP. The
+chunked form only pays as ONE fused kernel per (layer, ubatch) that keeps the chunk's Q/K/V/decay in
+threadgroup memory and does the intra-chunk matmuls and the triangular solve in registers/simdgroup
+matrices - the FLA `chunk_gated_delta_rule` shape. That kernel's ceiling: the scan's 1.0 s (already 92%
+issue-bound after NR=4) against an MMA-rate intra-chunk cost of ~0.1-0.2 s plus the serial inter-chunk
+state carry - a ~0.8 s (1.2%) prefill lever at best, several days, and a KLD-priced numerics change.
+The graph as it stands is not a cheaper route to it.
