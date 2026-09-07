@@ -380,3 +380,11 @@ FA rows scale with context (prefill quadratically, decode linearly) while mm/GDN
 profiled arm feeds `kernel-census.sh`; every ubatch and every round is its own KV length, so the census
 FA filter snaps to the nearest perf case (512/8448/16384/24576, 12%) - an exact-match filter found no
 case for a single FA row at 25K. Pass `B=<worktree>` to the census, always.
+
+## Same static size, 3x the dynamic count (2026-09-06, `perf/ud-model.md` step 16 B)
+
+The Turbo4 batched FA kernel profiled at 992 static instructions against the f16 kernel's 1067, 0 spill,
+fewer registers - and 17.1M dynamic instructions per decode dispatch against 5.3M at 50% issue / 50% stall.
+Static stats cannot see a loop that is not unrolled, a scratch round trip or a transposed load (3 load
+instructions per tile): read `exec/disp` and the tier view first, then the hot loop's 14 B count against the
+loads the source needs. Fixed by the register-resident dequant form (`metal-kernel-prescreen` skill).

@@ -385,3 +385,37 @@ more for 2x the state registers. Three things the follow-ups taught:
 - The kernel's shared-memory formula is the first thing to evaluate for a bigger tile: at Q = 16 and
   head 256 it lands on exactly the 32 KB threadgroup limit, which is why the tile was possible at all
   without moving the accumulator to registers.
+
+## Quantized K/V tiles dequantized straight into the simdgroup matrix (2026-09-06, `perf/ud-model.md` step 16 B)
+
+- **The lane map holds for `simdgroup_half8x8` too, in both directions** (`perf/probe-thread-elements-half.*`
+  in the fork: load -> `thread_elements()` matches the f32 map; write via `thread_elements()` -> `simdgroup_store`
+  round-trips exactly). Each lane owns two ADJACENT columns of one row, so any format whose byte holds two
+  adjacent values (Turbo4 nibble pairs) dequantizes into the matrix registers with one byte load + one table
+  lookup + the arithmetic per tile per lane - no threadgroup scratch, no barrier, no transposed load. The
+  "quantized K/V branch, not optimized yet" of the batched FA kernel was doing scratch + barrier + transposed
+  loads + an O round trip per key tile: same static size as the f16 kernel, 3.2x its dynamic instructions.
+  The register form is -38..-45% per call and byte-identical (same arithmetic, same k order).
+- **A 32 B spill can be free and an unroll not**: the register-resident V loop at unroll 2 spilled 32 B and
+  beat the zero-spill unroll 1 by 5-10%; unroll 4 (16 B) another 3-5%; unroll 8 (64-112 B) not tried on the
+  GPU. Prescreen ranks the spill, the timing pair decides - always time the unroll pair around the threshold.
+- **A constant-memory table indexed by a runtime byte is a device load per lookup; staging it in threadgroup
+  memory once per threadgroup** (2 KB for a 256-entry float2 table, in scratch the kernel no longer used) was
+  -15% on the prefill form and -2..-4% at decode. A half table with one packed multiply saved only 1-4% more
+  and changed the numerics - refuted; check the table's values are half-exact before assuming a half form is
+  free (the Turbo4 centroids are not).
+- `#pragma clang loop unroll_count(N)` accepts a template parameter, so unroll factors can be routed as
+  kernel variants (one metallib, A/B by pipeline name) instead of rebuilt.
+- **Fold a per-row scale out of a per-element dequant into the accumulator** (2026-09-06, `perf/ud-model.md`
+  step 16 C): the Turbo4 block norm multiplied every dequantized element (2 FMUL + 2 cvt per tile per lane);
+  applying it once per key tile to the score tile instead (one accumulator per block on the K side, the P
+  tile's key columns on the V side) was another -11..-14% per call. It changes the rounding (the scale lands
+  in float instead of in the half operand) - a numerics decision, KLD-priced a wash. Loop per block so the
+  accumulator index is a compile-time constant: the dynamic register-array index spilled 1280 B.
+- **Fewer, wider loads beat lane-cooperative shuffles for a per-lane byte stream** (2026-09-07, `perf/ud-model.md`
+  step 16 D): replacing 8 single-byte loads per chunk with four 2-byte-aligned 8-byte loads (`packed_ushort4`)
+  plus a shift/mask per byte was -6..-9% per call; loading one slice per lane and fetching each byte from
+  its holder by `simd_shuffle` was +15..+25%. The offline text size ranked them the same way (14.4 KB vs
+  19.8 KB against a 16.0 KB base) - a shuffle-heavy form ballooning the text is the tell, as with the
+  iq4_xs table. Vector loads need their natural alignment in device memory (`ushort4` = 8, `uint4` = 16);
+  the `packed_` types are how a 2-byte-aligned stream takes a wide load.
