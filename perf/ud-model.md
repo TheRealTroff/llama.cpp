@@ -1289,3 +1289,30 @@ f16 to +11..+12% byte-identical (TR=3) or +5..+7% with the folded norm (TR=6, KL
 2% of f16 either way, 4.7 GiB less memory at 96K. Adoption of TR=3 into `TURBO_PICK_ENV` = owner (no text
 change); TR=6 on top = the owner's numerics call (same category as the exact q4_K tile, and the vec kernel
 at widths 1-2 already runs its own half arithmetic).
+
+### Step 16 D: the byte loads (2026-09-07, owner: "let's try it")
+
+Per lane per 64-dim chunk of one cache row the TR forms issued 8 single-byte loads (one per tile: the lane's
+byte for tile t is chunk byte 4t + lc/2) and 8 table loads. Two forms, orthogonal to the arithmetic
+(template `LD`): **wide** (LD 1) - one 2-byte-aligned 8-byte load (`packed_ushort4`) per two tiles, the byte
+extracted by a per-lane shift and mask (4 loads + ~8 ALU per chunk instead of 8 loads); **shuffle** (LD 2) -
+the row's four lanes load one 8-byte slice each and every tile's byte comes from the lane holding it by
+`simd_shuffle` (1 load + 8 shuffles + 16 ALU). A 16-byte load would need the nibble stream 4-byte aligned
+(a 68-byte block: format change). Prescreen ranked them before the GPU did: wide 14.4 KB (smaller than the
+16.0 KB base), shuffle 19.8 KB - the same signature the iq4_xs shuffle table showed before it lost.
+
+| same run, us (prefill ms) | folded `qtn` (TR=6) | + wide `qtnw` (TR=7) | + shuffle `qtns` (TR=8) | byte-identical `qtl4` (TR=3) | + wide `qtl4w` (TR=9) | f16 |
+|---|--:|--:|--:|--:|--:|--:|
+| 8K width 4 / 5 | 248 / 298 | **242 / 287** | 286 / 364 | 278 / 335 | **261 / 310** | 207 / 271 |
+| 8K prefill 512 | 21.5 | **20.3** | 26.5 | 24.3 | **22.3** | 17.4 |
+| 24K width 4 / 5 | 714 / 847 | **703 / 816** | 806 / 1029 | 821 / 973 | **755 / 885** | 577 / 771 |
+| 24K prefill 512 | 62.4 | **59.2** | 77.0 | 70.9 | **65.2** | 53.5 |
+| 96K width 4 / 5 | 2794 / 3331 | **2757 / 3194** | 3145 / 4032 | 3232 / 3830 | **2958 / 3469** | 2297 / 3056 |
+| 96K prefill 512 (16-row tile) | 262 | **254** (`qtnw16`) | | 274 | **258** (`qt16w`) | 231 |
+
+Fewer loads won, more shuffles lost. The wide loads pay more on the byte-identical form (-6..-9%) than on the
+folded one (-1.5..-5%): its per-tile float multiply and convert are still there to overlap the extraction.
+Shas hold: TR=9 reproduces the Turbo4 text (`2802eb28cd29`, 25.48 t/s at UD 8K), TR=7 the folded lineage
+(`ef864412dede`). 41/41 cases at both tiles for every form. **Best byte-identical form: `GGML_FA_TR=9`
+(1.29x f16 at the 96K decode call, 1.11x at the 96K prefill); best overall: `GGML_FA_TR=7` (1.20x / 1.10x),
+the folded numerics.** The kernel's remaining cost is the table load per tile and the format's addressing.
