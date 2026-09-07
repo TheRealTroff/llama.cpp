@@ -19,8 +19,8 @@ fi
 
 B=${B:-/Users/troff/play/llama.cpp-prod}
 BIN=${BIN:-$B/build/bin}
-M=${M:-/Users/troff/play/Qwen3.8-27B-uniform-Q4_0-SOA-V1.gguf}
-MD=${MD:-/Users/troff/play/Qwen3.8-27B-DFlash2-pureQ4_0-SOA-V1.gguf}
+M=${M:-}
+MD=${MD:-}
 PORT=${PORT:-8098}
 OUT=${OUT:-/Users/troff/play/kvquant-experiments/results}
 KV=${KV:-turbo4}
@@ -29,21 +29,16 @@ LV=${LV:-5}
 NPRED=${NPRED:-300}
 REPS=${REPS:-1}
 COOL=${COOL:-3}
-TAG=${TAG:-depthcorpus-$KV-lv$LV-$(date +%m%d-%H%M)}
+TAG=${TAG:-depthcorpus-$LINE-$KV-lv$LV-$(date +%m%d-%H%M)}
 TSV=$OUT/$TAG.tsv
 mkdir -p "$OUT"
 
-# pick env: the two arrays from run-prod-pick.sh, verbatim
-eval "$(sed -n '/^PICK_ENV=(/,/)/p' "$B/perf/run-prod-pick.sh")"
-eval "$(sed -n '/^TURBO_PICK_ENV=(/,/)/p' "$B/perf/run-prod-pick.sh")"
-
-if [ "$KV" = turbo4 ]; then
-    ENVV=("${TURBO_PICK_ENV[@]}")
-    KVARGS=(-c 102400 -ctk turbo4 -ctv turbo4 -ctkd f16 -ctvd f16)
-else
-    ENVV=("${PICK_ENV[@]}")
-    KVARGS=(-c 10240 -ctk f16 -ctv f16)
-fi
+# pick env and args from the manifest (perf/pick.sh): LINE=q4|ud, KV=turbo4|f16
+LINE=${LINE:-q4}
+source "$B/perf/pick.sh"
+pick_check "$LINE" || exit 1
+pick_env  "$LINE" "$KV"; ENVV=("${PICK_ENV[@]}")
+pick_args "$LINE" "$KV"; M=${M:-$PICK_MODEL}; KVARGS=("${PICK_ARGS[@]}"); MD=${MD:-$PICK_DRAFTER}
 
 PROMPTS=${PROMPTS:-"benchprompt 01-code-explain 02-prose-creative 03-chat-support 04-math-derivation 05-json-boilerplate 06-algorithms 07-shell-script 08-story"}
 prompt_path() {
@@ -54,7 +49,7 @@ prompt_path() {
 }
 
 echo "=== depth corpus sweep: $TAG ==="
-echo "kv=$KV depths=[$DEPTHS] lv=$LV npred=$NPRED reps=$REPS"
+echo "line=$LINE kv=$KV depths=[$DEPTHS] lv=$LV npred=$NPRED reps=$REPS model=$M"
 echo "commit : $(cd "$B" && git rev-parse --short HEAD) on $(cd "$B" && git rev-parse --abbrev-ref HEAD) ($(cd "$B" && git status --porcelain | wc -l | tr -d ' ') dirty)"
 echo "env    : ${ENVV[*]}"
 echo
@@ -67,7 +62,7 @@ run_one() {
     local slog="$OUT/$TAG-$label.server.log"
     local prompt; prompt=$(prompt_path "$pname")
     if lsof -ti :$PORT >/dev/null 2>&1; then echo "[$label] ABORT: port $PORT busy"; return 1; fi
-    env "${ENVV[@]}" "$BIN/llama-server" -m "$M" -fa on "${KVARGS[@]}" -lv "$LV" \
+    env "${ENVV[@]}" "$BIN/llama-server" -m "$M" "${KVARGS[@]}" -lv "$LV" \
         -md "$MD" --spec-type draft-dflash --spec-draft-n-max "$depth" --port $PORT >"$slog" 2>&1 &
     local pid=$!
     local ok=0

@@ -35,6 +35,10 @@ PICK_ENV=(GGML_MV_NC=2 GGML_MM_SKINNY=6 GGML_MM_SKINNY_SOA=1
           GGML_MM_ACC_HALF=1 GGML_MM_N64=1 LLAMA_GDN_REPLAY=1 GGML_GDN_NR=4
           GGML_FA_QT=1 GGML_MM_F16B=1 GGML_FA_GQA_F16=1 GGML_MM_N64_KMAX=20000 GGML_FA_QR=8 GGML_FA_Q16=1
           GGML_MV_SOA_IQ4XS=5 GGML_MV_SOA_KQ=2)
+# 2026-09-07: the manifest (perf/pick.sh) overrides the copied arrays above - LINE=ud
+source "$B/perf/pick.sh"
+pick_check ud || exit 1
+pick_env ud f16; PICK_ENV=("${PICK_ENV[@]}")
 # NO_UD_SOA=1 drops the two UD SoA routes (the Q4_0 line's pick env exactly)
 [ "${NO_UD_SOA:-0}" = 1 ] && PICK_ENV=("${PICK_ENV[@]:0:${#PICK_ENV[@]}-2}")
 # keep in sync with run-prod-pick.sh TURBO_PICK_ENV

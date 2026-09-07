@@ -171,6 +171,38 @@ GGML_FA_QT=1 GGML_MM_F16B=1 GGML_FA_GQA_F16=1 GGML_MM_N64_KMAX=20000 GGML_FA_QR=
     -md Qwen3.8-27B-DFlash2-pureQ4_0.gguf --spec-type draft-dflash --spec-draft-n-max 4
 ```
 
+**THE PICK IS NOW TWO LINES WITH ONE MANIFEST (2026-09-07, owner: "do the split").** `perf/pick.sh`
+is the single source of every pick env and argument; harnesses source it (`pick_env <q4|ud> [f16]`,
+`pick_args`, `pick_check`, `pick_print`) and must never copy the arrays. Every flag carries a
+fidelity class - what it CAN change, not how fast it is:
+
+| class | changes | priced by | q4 line | ud line |
+|---|---|---|---|---|
+| BI | nothing in the logits (byte-identical vs the kernel it replaced) | sha | yes | yes |
+| SPEC | which columns are verified; never the greedy argmax chain (forks shas = new lineage) | acceptance / e2e | yes | yes |
+| NUM-PP | prefill numerics (half-accumulate, tile forms) | the KLD line (`run-quant-kld.sh`) | within the record | only with a UD-specific wash |
+| NUM-TG | decode numerics (half products, accumulation order) | the agreement / same-top harness on own text, or sha only - the KLD line does NOT see them | within the record | only with a UD-specific wash |
+| KV | cache quantization (Turbo4) | both harnesses | on | **on** (owner: the context it buys is worth it; that spend is part of the UD budget) |
+
+- **q4** = uniform Q4_0 SOA-V1, Turbo4 cache, DFlash depth 3, half-accumulate prefill in (KLD +11.8%
+  mean / -0.86 pt same-top, `kldacch-aug28`). 300-token benchprompt sha `608c5004c897`, 27.9 t/s.
+- **ud** = UD-Q4_K_M SOA-V1, Turbo4 cache, DFlash depth 3, the K-quant SoA routes, the exact q4_K
+  tile, NO half-accumulate (it costs UD -2.51 pt same-top, `ud-model.md` step 4 - `pick_check ud`
+  refuses it). 300-token benchprompt sha `9128633c6cfa`, 25.0 t/s (the first UD+Turbo4 lineage
+  pointer; a mint at 600 is still due).
+- `pick_check` refuses a NUM/KV-class flag outside the line's manifest and every refused form
+  (`GGML_FA_TR=6`, `GGML_KQ_SOA_EXACT=0`, `GGML_MM_SKINNY_NR0_XL`); experiment flags pass with a
+  note, `PICK_ALLOW_EXTRA=1` overrides. Proposed-but-unadopted flags (`GGML_MM_SKINNY_BSPLIT=2`,
+  `LLAMA_SPEC_EV=1`) join with `PICK_PROPOSED=1`.
+- **OPEN, both lines: the half-product width-4/5 scalar kernels (`GGML_MV_SOA_W4_R4KP=3`,
+  `GGML_MV_SOA_W5_HALF=1`) are class NUM-TG and were only ever sha-gated** - the KLD line scores
+  prefill-shaped logits and never saw them; an agreement/same-top run of the pick against its
+  f32-product arms is the missing row, and the UD line should have it first.
+- The 22 older `perf/run-*.sh` harnesses still carry copies of the env of their day; they are
+  records of their experiments, not picks. The live ones (`run-prod-pick.sh` with `LINE=q4|ud`,
+  `run-depth-corpus.sh`, `run-spec-ev-ab.sh`, `run-corpus-acceptance.sh PICK=1`, the two UD A/Bs)
+  read the manifest.
+
 **Second product line, 2026-09-01: the Turbo4 KV pick.** Same flags plus the Turbo4 FA
 GQA tile-reuse stack, `-ctk turbo4 -ctv turbo4`, a 100K allocation and DFlash depth 3
 (verify width 4, Turbo4's best width). It trades nothing for memory any more: 4.65 GiB

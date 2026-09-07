@@ -68,37 +68,26 @@ mkdir -p "$OUT"
 # fix (0.59x at width 4 on 8K, 0.26x at 100K); the vector kernel still wins at widths 1-2
 # for f16 at <=8K and for Turbo4 everywhere. Inert at this depth-4 pick (verify width 5),
 # -4.7% round at depth 3, where the output REJOINS the canonical sha. turbo4-filled-100k.md.
-PICK_ENV=(GGML_MV_NC=2 GGML_MM_SKINNY=6 GGML_MM_SKINNY_SOA=1
-          GGML_FA_VEC_MAX=3 GGML_FA_MM_NWG=8 GGML_GDN_FUSE_WB=1
-          GGML_MV_REPACK=1 GGML_MV_SOA_PIN=1 GGML_MV_SOA_W3=1
-          GGML_MV_SOA_W4=1 GGML_MV_SOA_W4_R4KP=3
-          GGML_MV_SOA_W5=4 GGML_MV_SOA_W5_HALF=1 GGML_MV_SOA_WL_XL=1
-          GGML_METAL_GET_MEMCPY=1
-          DFLASH_FUSED_INJECT=1 DFLASH_ASYNC_INJECT=1 LLAMA_DRAFT_WINDOW=1024
-          GGML_MM_ACC_HALF=1 GGML_MM_N64=1 LLAMA_GDN_REPLAY=1 GGML_GDN_NR=4
-          GGML_FA_QT=1 GGML_MM_F16B=1 GGML_FA_GQA_F16=1 GGML_MM_N64_KMAX=20000 GGML_FA_QR=8 GGML_FA_Q16=1)
-# The Turbo4 KV line (2026-09-01, perf/turbo4-fa-gqa-reuse.md): the same flags plus the
-# Turbo4 FA GQA tile-reuse stack. GQA_HEADS is auto-on for GQA6 on pre-M5 hardware, but
-# the pick names it so the measurement never depends on a default. GQA4_NWG=6 and
-# W3_NWG=13 are the measured KV splits for the drafter and width-3 routes. Runs at a
-# 100K allocation on the SOA-V1 GGUFs with DFlash depth 3 (verify width 4, Turbo4's best
-# width: 2.1% faster per round than f16 at the same width, 4.65 GiB less RSS). Opt in
-# with TURBO=1; the f16 arms above are unaffected.
-TURBO_PICK_ENV=("${PICK_ENV[@]}" TURBO_AUTO_ASYMMETRIC=0
-                GGML_FA_GQA_HEADS=4,6 GGML_FA_GQA4_NWG=6 GGML_FA_GQA_W3_NWG=13
-                GGML_FA_TR=9)  # the register-resident Turbo4 FA form, byte-identical (owner 2026-09-07; ud-model.md step 16 B-D)
+# 2026-09-07: the envs come from the manifest (perf/pick.sh, LINE=q4|ud). PICK_ENV is the line's f16-cache
+# form (the reference arm), TURBO_PICK_ENV the Turbo4 form (the pick). Never copy the arrays here.
+LINE=${LINE:-q4}
+source "$B/perf/pick.sh"
+pick_check "$LINE" || exit 1
+pick_env "$LINE" f16;    PICK_ENV=("${PICK_ENV[@]}")
+pick_env "$LINE" turbo4; TURBO_PICK_ENV=("${PICK_ENV[@]}")
+pick_args "$LINE" f16;   M=$PICK_MODEL; MD=$PICK_DRAFTER
 TURBO=${TURBO:-0}
 # LV=5 (with GGML_METAL_LOG_LEVEL=2 in the environment) makes the server log name every
 # compiled pipeline, which is how a route is proved; default verbosity hides it.
 LV=${LV:-}
 TURBO_CTX=${TURBO_CTX:-102400}
-M_TURBO=${M_TURBO:-/Users/troff/play/Qwen3.8-27B-uniform-Q4_0-SOA-V1.gguf}
-MD_TURBO=${MD_TURBO:-/Users/troff/play/Qwen3.8-27B-DFlash2-pureQ4_0-SOA-V1.gguf}
+M_TURBO=${M_TURBO:-$PICK_MODEL}
+MD_TURBO=${MD_TURBO:-$PICK_DRAFTER}
 # What the older harnesses set, kept to show the delta is the missing flags.
 PART_ENV=(GGML_MV_NC=2 GGML_MM_SKINNY=5)
 
 PICK_SPEC=(-md "$MD" --spec-type draft-dflash --spec-draft-n-max 4)
-TURBO_SPEC=(-md "$MD_TURBO" --spec-type draft-dflash --spec-draft-n-max 3)
+TURBO_SPEC=(-md "$MD_TURBO" --spec-type draft-dflash --spec-draft-n-max "$PICK_DEPTH")
 MTP_SPEC=(--spec-type draft-mtp --spec-draft-n-max 1)
 BASE_SPEC=(--spec-type none)
 
