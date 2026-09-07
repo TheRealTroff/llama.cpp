@@ -272,6 +272,29 @@ per-position bins):
   request at block 5 and needs a fully accepted deep round to escalate (math -5 t/s vs hybrid r1).
   Hybrid + per-position bins + a lighter seed is the recommended default.
 
+**A/B round 3 (TAG `specev-ab3-sep07`): hybrid, per-position bins, seed 10, AND
+`GGML_MM_SKINNY_BSPLIT=2` on both arms (section 8; inert on the fixed-3 arm: same shas and t/s
+as rounds 1-2). The deep-block tax under the skinny fix: forced (block 8, verify 3) 98.8 vs
+fixed-3 94.4 ms = 4.4 ms (was 5.4-6.5).**
+
+| prompt | fixed n3 | ev hybrid | vs n3 | sha |
+|---|--:|--:|--:|---|
+| benchprompt | 27.93 | 28.72 | +2.8% | forks |
+| 01-code-explain | 28.32 | 27.42 | -3.2% | same |
+| 02-prose-creative | 28.89 | 30.01 | +3.9% | forks |
+| 03-chat-support | 26.21 | 26.65 | +1.7% | forks |
+| 04-math-derivation | 40.61 | 53.45 | +31.6% | same |
+| 05-json-boilerplate | 41.11 | 58.67 | +42.7% | same |
+| 06-algorithms | 28.92 | 32.52 | +12.5% | forks |
+| 08-story | 25.89 | 26.04 | +0.6% | forks |
+| **mean** | 30.98 | **35.43** | **+14.4%** | |
+
+The replay's original +14% (section 6) is what the build delivers with both fixes. Deep rounds
+on math/JSON now run at 116-121 ms (were 124-127). Code-explain is the one same-sha free-form
+loss that survives every fix (-2.9 / -2.4 / -3.2%): its picks land on (block 8, verify 3) rounds
+with few deep wins, so it pays the 4.4 ms tax net. Story is flat; the rest are positive, with
+the forked-sha caveat.
+
 ### 8. The width-8 hunt, first find: the skinny B stage (`GGML_MM_SKINNY_BSPLIT`, byte-identical)
 
 Profile of the drafter at block 4 vs 8 (`drafterprof-sep07`, serialized GPU ms/round): per-layer
@@ -303,16 +326,18 @@ on the SoA body it is ~5%. Adoption = owner (changes every skinny call; byte-ide
 
 ## Open
 
-- **Build the EV(p) controller?** Owner's call. Priced at +14% mean over this corpus
-  (+34/+41% saturated, -1..+4% free-form) with the honest deep-block cost; every number above
-  is replay arithmetic, the e2e A/B is the proof.
-- Drafter tax of the block-8 draft (4 ms/round) - the free-form half of the win.
-- Width 7-8 GQA-reuse tile: target-side prerequisite for the deep end on Turbo4
-  (`turbo4-fa-gqa-reuse.md` open item 4). Not a drafter lever (the pick's draft KV is f16,
-  the window caps the drafter's KV at ~1088).
-- Calibration accuracy in the 0.5-0.9 bins (~65%): a second feature (position index, the
-  previous round's outcome) may lift EV(p) toward the oracle. 300-token runs, one rep each,
-  8 prompts - no error bars; math/JSON have 39-41 rounds.
-- Long context: every number here is 8K or shorter. At a filled 96K the width curve flattens
-  (batched FA amortizes the KV stream over the query tile) and the optimum should move deeper;
-  unmeasured.
+- **Adoption (owner):** `LLAMA_SPEC_EV=1` (+14.4% corpus mean, math/JSON +32/+43%, free-form
+  -3..+4% with code-explain the same-sha loss) and `GGML_MM_SKINNY_BSPLIT=2` (byte-identical,
+  -5% per width-8 round, inert at the pick's width). Both on branch `spec-verify-narrow`,
+  unmerged. The controller forks shas across widths - adopting it means a KLD price against the
+  fixed-depth text and a new lineage mint; the skinny flag can go in on its own.
+- The remaining free-form deficit is the block-8 drafter tax (4.4 ms) on rounds the pick verifies
+  narrow. Width-8 items still open: the vocab head at width 8 (1.52x floor on skinny vs 1.16x at
+  width 4 on the XL SoA kernel, ~0.7 ms real), TOP_K at width 8 (doubles to 1.7 ms serialized;
+  owner's hold), the skinny kernel's remaining 2x-floor gap (issue-bound, `skinny-stall-attribution.md`).
+- Not measured: 2- and 4-slot points under `LLAMA_SPEC_SLOT_BUDGET` with the controller, long
+  context (the cost curve flattens at 96K and the optimum should move deeper), temperature > 0
+  (conf = the sampled dist's max prob, untested), the f16 line.
+- Trajectory noise: free-form per-prompt cells fork sha and swing +/-10%; a corpus-level number
+  needs more prompts or longer completions to tighten below the ~3% the mean carries now.
+- 07-shell-script emits EOS first on raw `/completion` at temperature 0; excluded throughout.
