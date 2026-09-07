@@ -1335,3 +1335,33 @@ ubatch (12.25 s vs 10.9 s in both record runs), where attention is negligible - 
 f16 FA kernels are byte-identical between prod and this branch (prescreen), so the suspect is the
 ud-soa-gguf merge (d7f456d4f, that evening; it touched the stored-SoA mul_mm dispatch the Q4_0_SOA file
 goes through). A/B of prod HEAD vs the pre-merge commit 0623a06a5 at the 8K prefill: below.
+
+### Step 16 E: what the KLD reference can and cannot resolve (2026-09-07, owner's question)
+
+The reference for every KLD table is the q8_0 conversion with an f16 cache, scored through
+`llama-perplexity`'s logits file: per position two floats (scale, min log-prob) and one uint16 per vocab
+entry, the logits quantized uniformly inside a 16-nat window below the argmax (below it everything is the
+floor); the test side is scored in float. Between us and the model as trained in the deep tail: q8_0's own
+weight error, that window, the 16-bit step, the reference/test asymmetry, the statistic (the 99.9th
+percentile is the worst ~25 of 24K positions), and the test weights' own quantization. **Mean, median and
+same-top are decision-grade; the tail columns are not** - the +11% on the 99.9% tail of the folded form
+(step 16 C) is unattributable, and the owner's intuition (dithered rounding is closer to a wash on average
+than a systematic per-centroid bias) is tested by the pairwise run below, not by the reference.
+
+Calibration attempt on the only model whose F16 fits (VibeThinker-3B, F16 and Q8_0 conversions of the same
+weights, 24 x 2048 on Metal; 4 chunks on the CPU backend):
+
+| | mean KLD | median | 99.9% | same-top | note |
+|---|--:|--:|--:|--:|---|
+| Q8_0 vs F16, Metal | 0.0237 | 0.0116 | 0.51 | 91.8% | wikitext PPL 496: an RL-tuned coder, nearly flat on prose |
+| Q8_0 vs F16, CPU backend | 0.0901 | 0.0452 | 1.77 | 84.3% | the CPU q8_0 path quantizes the activations to int8 too |
+| F16 Metal vs F16 CPU | **0.00009** | 0.00005 | 0.0019 | 99.6% | the backend-arithmetic floor |
+
+**Unusable as a q8_0 calibration** (out-of-domain model: any perturbation flips near-uniform
+distributions), but two facts came out: the Metal half-operand path against float is ~1e-4 mean KLD, a
+hundred times below anything compared in this file, and the 27B reference runs the cleaner of the two q8_0
+paths. A real calibration needs a same-family model in its domain (none on disk). **The owner's plan: rent
+an 80 GB GPU and generate the reference from the bf16 model as trained** (llama.cpp with a bf16 GGUF, or
+transformers writing the same file format), with the 16-nat window widened (a constant in
+`tools/perplexity/perplexity.cpp`) and the same tokenizer and wikitext chunks; until then, decide on
+mean/median/same-top and quote tail columns with this caveat.
