@@ -194,7 +194,10 @@ the UD line stays f16. The port was BUILT the same night (`ud-model.md` step 16 
 119 in the same state, prefill within 3% of f16, byte-identical; the Turbo4 pick is then a memory pick
 that costs ~8-9% of the 96K round, not 50%. ADOPTED 2026-09-07 (owner: "the byte-identical one is the one I
 want"): `GGML_FA_TR=9` in `TURBO_PICK_ENV`, merged to prod with the stored-file routing fix (step 16 F);
-the Turbo4 line's stored-file lineage is `baf08e7fa7ed` at 600 (8K prefill 62.2 s, 28.03 t/s).**
+the Turbo4 line's stored-file lineage is `baf08e7fa7ed` at 600. **Mint on prod `4ca3aa693` (TAG
+`prodpick-sep07-tr9`, the pick harness, stored files): f16 pick 28.41 at 300 (`822ce37ce2e5`) / 30.47 at 600
+(`5f32a6b9d371`), prompt 59.9 s; Turbo4 line 28.77 / 28.89 at 600 (`baf08e7fa7ed`), prompt 60.4 s - the
+Turbo4 line's 8K prefill is within 1% of f16 for the first time.**
 
 ```
 <the f16 pick env above> TURBO_AUTO_ASYMMETRIC=0 GGML_FA_GQA_HEADS=4,6 GGML_FA_GQA4_NWG=6 GGML_FA_GQA_W3_NWG=13 GGML_FA_TR=9 \

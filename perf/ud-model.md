@@ -1444,3 +1444,9 @@ trajectory's luck):
 The f16 pick is back at its minted prefill on the file it actually runs; the Turbo4 line's 8K prefill is
 within 1% of f16 with TR=9. Adoption of the routing fix, TR=9 and the new canonical shas = owner (the fix
 changes the pick's text on the stored file, from the acch-dropped lineage back to the acch lineage).
+
+**Mint on prod after the merge (`4ca3aa693`, TAG `prodpick-sep07-tr9`, the pick harness):** f16 pick 28.41 t/s at
+300 (`822ce37ce2e5`, prompt 59.9 s) / 30.47 at 600 (`5f32a6b9d371`, 59.8 s); Turbo4 line (`GGML_FA_TR=9`) 28.77 /
+28.89 at 600 (`baf08e7fa7ed`, prompt 60.4 s). Both adopted 2026-09-07: the stored-file routing fix (owner: acch
+"goes in") and TR=9 (owner: "the byte-identical one is the one I want"). New canonical lineages on the stored
+files from here; the 95eb7e65977e / 6678b0507d41 / 12c3dc6bb2dd shas gate the deleted plain file only.
