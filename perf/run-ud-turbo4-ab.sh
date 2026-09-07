@@ -40,7 +40,9 @@ source "$B/perf/pick.sh"
 pick_check ud || exit 1
 pick_env ud f16; PICK_ENV=("${PICK_ENV[@]}")
 # NO_UD_SOA=1 drops the two UD SoA routes (the Q4_0 line's pick env exactly)
-[ "${NO_UD_SOA:-0}" = 1 ] && PICK_ENV=("${PICK_ENV[@]:0:${#PICK_ENV[@]}-2}")
+if [ "${NO_UD_SOA:-0}" = 1 ]; then  # drop the UD SoA routes by name (the manifest order is not positional)
+  _e=(); for _f in "${PICK_ENV[@]}"; do case "$_f" in GGML_MV_SOA_IQ4XS=*|GGML_MV_SOA_KQ=*) ;; *) _e+=("$_f") ;; esac; done; PICK_ENV=("${_e[@]}")
+fi
 # keep in sync with run-prod-pick.sh TURBO_PICK_ENV
 TURBO_ENV=(TURBO_AUTO_ASYMMETRIC=0 GGML_FA_GQA_HEADS=4,6 GGML_FA_GQA4_NWG=6 GGML_FA_GQA_W3_NWG=13 GGML_FA_TR=9)
 printf 'label\tkv\tdepth\tctx\ttps\taccept_pct\tpredicted_n\tprompt_ms\tsha1\tfootprint\twired_anon_gib\n' > "$TSV"
