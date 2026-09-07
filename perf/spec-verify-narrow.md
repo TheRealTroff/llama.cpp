@@ -324,6 +324,31 @@ the controller's deep rounds, the drafter's block-8 draft, and the 2-4-slot skin
 `parallel-streams.md`. The Aug-24 e2e was +1.0..1.6% at n6 on the pre-SoA kernel; at width 8
 on the SoA body it is ~5%. Adoption = owner (changes every skinny call; byte-identical).
 
+### 9. The vocab head at width 8 (owner: "take a look at the vocab head") - no head-specific lever
+
+Per call at width 8 with the B-split (profiled JSON run, `headprof-bsp2` / `headnr0-*`): target
+head 3.73-3.94 ms, drafter head 3.73-3.84 ms, byte floor 2.62 ms (715 MB at 273 GB/s) = **1.43-1.50x
+floor**; at widths 1-3 the head runs 2.84-2.87 ms (1.09x), at width 4 on the XL SoA kernel 3.03
+(1.16x). So a deep round pays ~2 x 0.8 ms on the heads, and the drafter's block-8 tax carries ~0.8
+of its 4.4 ms there.
+
+Hypothesis tested: the 32-row skinny tile makes every one of the head's 7760 threadgroups re-read
+the full 160 KB activation block (1.2 GB of B traffic against 0.7 GB of weights, twice width 4's).
+`GGML_MM_SKINNY_NR0_XL=64|128` (function constant `FC_MUL_MM+9`, rows per threadgroup for weights
+with >= 65536 rows; nsg = NR0/16, 2*NR0 threads, the B stage split over all of them) - **refuted,
+byte-identical**: head per call 3734/3760 us at 32, 3922/3964 at 64 (+5%), 4304/4377 at 128
+(+15%); e2e 48.4 -> 48.2 -> 47.9 t/s. Same sign the ffn shapes gave the Aug-23 NR0 sweep
+(`skinny-nr0-refuted.md`): the kernel is issue-bound and the taller tile only trades threadgroup
+memory for nothing. The knob stays, default 32.
+
+What is left is not head-specific: at 1.50x floor the head is the skinny family's BEST shape
+(ffn gate 308 us vs a 183 us floor = 1.68x), so its gap to the width-4 kernel is the family's
+instruction economy (`skinny-stall-attribution.md`: 77% issue, dequant+staging = MMA share). The
+scalar route is not an escape: the w6 scalar lost 9-14% to skinny and the family curve is -50% at
+w7. The larger head-side item at width 8 is now `TOP_K` on the drafter: 1.79 ms serialized per
+deep round on [248320, 8] (0.45 / 0.65 at widths 2 / 3, linear in width) - the streaming
+two-dispatch design the owner put on hold at width 4 (1.09 ms then).
+
 ## Open
 
 - **Adoption (owner):** `LLAMA_SPEC_EV=1` (+14.4% corpus mean, math/JSON +32/+43%, free-form
@@ -332,9 +357,9 @@ on the SoA body it is ~5%. Adoption = owner (changes every skinny call; byte-ide
   unmerged. The controller forks shas across widths - adopting it means a KLD price against the
   fixed-depth text and a new lineage mint; the skinny flag can go in on its own.
 - The remaining free-form deficit is the block-8 drafter tax (4.4 ms) on rounds the pick verifies
-  narrow. Width-8 items still open: the vocab head at width 8 (1.52x floor on skinny vs 1.16x at
-  width 4 on the XL SoA kernel, ~0.7 ms real), TOP_K at width 8 (doubles to 1.7 ms serialized;
-  owner's hold), the skinny kernel's remaining 2x-floor gap (issue-bound, `skinny-stall-attribution.md`).
+  narrow. Width-8 items still open: TOP_K at width 8 (1.8 ms serialized per deep round, linear in
+  width; owner's hold), the skinny family's instruction economy (1.5-1.7x floor at width 8, issue-
+  bound; the head is its best shape, section 9 - NR0 refuted there too).
 - Not measured: 2- and 4-slot points under `LLAMA_SPEC_SLOT_BUDGET` with the controller, long
   context (the cost curve flattens at 96K and the optimum should move deeper), temperature > 0
   (conf = the sampled dist's max prob, untested), the f16 line.
