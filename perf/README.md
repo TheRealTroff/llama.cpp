@@ -489,6 +489,11 @@ must be a separate checkout. Two arms that agree to the microsecond are a routin
 
 ## Methodology rules, learned the hard way
 
+- **The f16 pick was never re-minted on the stored Q4_0_SOA file (found 2026-09-07):** the 2026-09-06 noon mint
+  (60.5 s prefill, canonical shas `95eb7e65977e` / `6678b0507d41`) ran the PLAIN Q4_0 file; on the stored
+  file the same env prefills in 68.4 s (+13%, the stored-type mul_mm branch, not the acch n64 route) and the
+  text is `4927c240e4bc` / `9ed7fbd54c19`. A file swap is a lineage change and a routing change: re-mint after
+  one. `ud-model.md` step 16 F.
 - **The plain (non-SoA) model files are gone (owner, 2026-09-06):** `Qwen3.8-27B-uniform-Q4_0.gguf`,
   `Qwen3.8-27B-DFlash2-pureQ4_0.gguf` and `Qwen3.8-27B-UD-Q4_K_M.gguf` were deleted for disk; the
   `-SOA-V1` twins are the files, and every `perf/*.sh` default now names them. A/Bs against the

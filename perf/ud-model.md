@@ -1383,3 +1383,19 @@ reference cannot say which direction is toward the trained model. **Recommendati
 evidence: `GGML_FA_TR=9`, byte-identical, 3% of a 96K round behind the folded form.** The self-check also
 puts the logits file's quantization floor at 6e-5 max KLD - the 16-bit step is not among the tail
 confounders that matter.
+
+### Step 16 F: the f16 pick's prefill and text moved with the file swap (2026-09-07 morning)
+
+The "1015 s does not reproduce" thread above resolved: the 2026-09-06 noon mint (`prodpick-sep06-fa`,
+60.5 s at 8K, canonical shas `95eb7e65977e` / `6678b0507d41`) loaded **the plain `Qwen3.8-27B-uniform-Q4_0.gguf`
+and the plain drafter** (its server log says so). Those files were deleted that evening and every harness
+default was repointed to the `-SOA-V1` stored files - and nobody minted the f16 pick on the stored file.
+Measured today on prod HEAD, the same env: the pick harness's own arm on the stored file prefills in
+**68.4 s (first 2048-token ubatch 12.15 s vs 10.71 s at the mint) and produces sha `4927c240e4bc` at 300 /
+`9ed7fbd54c19` at 600** - a different text; the pre-merge build gives the same numbers, and dropping the UD
+SoA env vars changes nothing. So on prod today the f16 Q4_0 pick is ~13% slower on prefill than its mint
+and on a different lineage, purely from the file: the stored Q4_0_SOA file's prefill takes the stored-type
+mul_mm branch, not the plain file's acch n64 route. This also explains the 96K f16 arm (1136-1140 s vs the
+1015 s record, which was the plain file). Route proof plain vs stored with `-lv 5`: below. The Turbo4 line's
+comparisons in this step are all stored-file vs stored-file and stand; the f16 pick's mint needs redoing on
+the stored file, or the stored Q4_0 prefill route needs the acch tiles - the owner's call.
