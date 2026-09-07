@@ -105,3 +105,55 @@ correct program summary).
   temperatures above 1.0, `LLAMA_SPEC_EV=1` heated (bins now aligned), multi-slot heated.
 - KLD at heat is the same instrument as at greedy (logits are sampler-independent); nothing
   new to build, only the reading changes: full mean, not same-top.
+
+## KLD on greedy vs heated trajectories (same evening; owner: "Sure. It'll be interesting.")
+
+**Question.** Teacher forcing pins the trajectory, so a heated sampler cannot move a KLD run;
+what it moves is *which contexts get scored*. Does the pick's numerics price change on the
+contexts a heated trajectory visits? And what is the heated analog of `Same top p`?
+
+**Instrument.** `llama-perplexity` now prints the distribution overlap sum_i min(p_base_i, p_i)
+= 1 - total variation next to `Same top p`: the probability a rejection sampler (the heated
+speculative path) accepts the test model's sample against the base at that position, i.e. the
+per-token drift rate of a heated trajectory under the lever. Also after min_p 0.05 on both
+sides (the default chain's floor). `run-agreement-heated.sh` writes a greedy and a heated
+(0.7, default chain, seed 1) corpus from the pick on the same 8 prompts; `run-kld-heated.sh`
+scores both against q8_0 (f16 cache) with three arms of the q4 file. Corpora: greedy 5 chunks
+(10K tokens; shell-script dies on token 1, chat 285), heated 7 chunks (14K; every prompt ran,
+shell-script the full 2048). Reference PPL on its own text 1.347 / 1.336.
+
+| arm | corpus | mean KLD | median | 99.9% | max | same top | **overlap** | overlap, min_p 0.05 |
+|---|---|---|---|---|---|---|---|---|
+| Q4_0, f16 cache | greedy | 0.0316 | 0.00062 | 1.03 | 2.37 | 96.11 | **95.96** | 95.94 |
+| Q4_0, f16 cache | heated | 0.0309 | 0.00338 | 0.71 | 1.95 | 94.79 | **95.20** | 95.22 |
+| + Turbo4 cache | greedy | 0.0341 | 0.00067 | 1.15 | 4.80 | 95.82 | **95.83** | 95.82 |
+| + Turbo4 cache | heated | 0.0325 | 0.00259 | 0.74 | 2.11 | 94.86 | **95.05** | 95.05 |
+| + acch (f16 cache) | greedy | 0.0337 | 0.00069 | 1.35 | 4.20 | 95.86 | **95.77** | 95.74 |
+| + acch (f16 cache) | heated | 0.0348 | 0.00353 | 0.82 | 1.94 | 94.64 | **94.86** | 94.87 |
+
+(+/- on the means: KLD 0.0009-0.0017, overlap 0.10-0.12, same top 0.26-0.28.)
+
+**Readings.**
+1. **The weights' price does not move at heat: mean KLD 0.0316 vs 0.0309.** The heated contexts
+   are flatter (median KLD 5x higher, same-top -1.3 points) but the tail is thinner (99.9% 1.03
+   -> 0.71, max 2.4 -> 1.9): the greedy corpus's tail lives at the near-ties greedy forces
+   through, which sampling steps around.
+2. **Heated drift per token: ~4.8% of the pick's samples would be rejected by q8_0** (overlap
+   95.2). Turbo4 adds 0.16 points, acch 0.34 points, both together untested here. At greedy
+   the same levers cost 0.13 and 0.20 points.
+3. **acch is the one lever whose cost grows at heat**: +6.6% relative mean KLD on the greedy
+   corpus, +12.5% on the heated one, which is the +11.8% the wikitext run priced on 2026-08-28.
+   So the wikitext number was already the heated price and the greedy self-text understates
+   NUM-lever costs by about half. Rule: price a NUM lever on wikitext or on heated self-text,
+   not on greedy self-text.
+4. **min_p truncation does not change the overlap between q8_0 and Q4_0 (95.96 vs 95.94).** The
+   two models disagree about which of the top few tokens, not about the tail, so the default
+   chain neither hides nor exposes the numerics. This is the opposite of the drafter-vs-target
+   overlap in the speed sweep, which the chain rescued: the drafter's disagreement IS in the
+   spread of the distribution.
+5. On peaky greedy text overlap = same top (95.96 vs 96.11); on heated text overlap > same top
+   (95.20 vs 94.79): an argmax flip at a near-tie costs little overlap. `Same top p` is the
+   greedy acceptance; overlap is the heated one; read the one that matches the sampler.
+
+Logs `kvquant-experiments/results/kldh-agreeh-sep07-{t0,t07}-*.log`; base logits kept at
+`kvquant-experiments/logits/kld-base-kldh-agreeh-sep07-{t0,t07}.dat` (5 + 7 GB, delete when done).
