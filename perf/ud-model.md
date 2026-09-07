@@ -1429,3 +1429,18 @@ stored file able to go either way by env). The exact-vs-flush reader difference 
 precision (both rows are the acch lineage's numbers). **New canonical texts on the stored file with the
 fix: the re-mint below.** Rule added to the README: a file swap is a routing change - prove the routes
 and re-mint.
+
+**Re-mint on the stored Q4_0 file with the fixed routing** (`remint-sep07-*`, branch build, 8K benchprompt,
+no logging; t/s across lineages do not compare - the old Turbo4 lineage's 70.7% acceptance was that
+trajectory's luck):
+
+| arm | prefill | decode t/s | acc | sha |
+|---|--:|--:|--:|---|
+| f16 pick depth 4 @600 | **61.6 s** (mint on the plain file: 60.5; stored before the fix: 68.4) | 29.55 | 56.5% | **`5f32a6b9d371`** (new canonical at 600) |
+| f16 pick depth 4 @300 | **59.8 s** | 28.34 (mint 28.45 at 51.4%) | 51.3% | **`822ce37ce2e5`** (new canonical at 300) |
+| Turbo4 depth 3 @600 `-c 102400`, prod FA kernel | 64.3 s (was 68.8) | 27.11 | 60.4% | **`baf08e7fa7ed`** (new Turbo4 lineage) |
+| Turbo4 depth 3 @600, `GGML_FA_TR=9` | **62.2 s** | **28.03 (+3.4% on the same text)** | 60.4% | `baf08e7fa7ed` |
+
+The f16 pick is back at its minted prefill on the file it actually runs; the Turbo4 line's 8K prefill is
+within 1% of f16 with TR=9. Adoption of the routing fix, TR=9 and the new canonical shas = owner (the fix
+changes the pick's text on the stored file, from the acch-dropped lineage back to the acch lineage).

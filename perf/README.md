@@ -496,7 +496,9 @@ must be a separate checkout. Two arms that agree to the microsecond are a routin
   quality (KLD 0.054 / 90.7% = the plain pre-acch record) and on another text. Fixed on branch
   `turbo4-fa-stack` (`605190cf6`, `GGML_MM_SOA_ACCH=0` = old routing): 61.9 s with logging, KLD 0.060 / 89.9%
   = the acch lineage, text `5f32a6b9d371` (the SoA reader is exact where the plain reader flushes small
-  scales). `ud-model.md` step 16 F.
+  scales). Re-minted with the fix: f16 pick 61.6 s / `5f32a6b9d371` at 600, 59.8 s / `822ce37ce2e5` at 300;
+  Turbo4 line `baf08e7fa7ed`, 64.3 s (62.2 with `GGML_FA_TR=9`). These are the stored file's canonical
+  lineages once the owner adopts the fix. `ud-model.md` step 16 F.
 - **The plain (non-SoA) model files are gone (owner, 2026-09-06):** `Qwen3.8-27B-uniform-Q4_0.gguf`,
   `Qwen3.8-27B-DFlash2-pureQ4_0.gguf` and `Qwen3.8-27B-UD-Q4_K_M.gguf` were deleted for disk; the
   `-SOA-V1` twins are the files, and every `perf/*.sh` default now names them. A/Bs against the
