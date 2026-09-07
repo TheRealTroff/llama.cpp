@@ -1316,3 +1316,22 @@ Shas hold: TR=9 reproduces the Turbo4 text (`2802eb28cd29`, 25.48 t/s at UD 8K),
 (`ef864412dede`). 41/41 cases at both tiles for every form. **Best byte-identical form: `GGML_FA_TR=9`
 (1.29x f16 at the 96K decode call, 1.11x at the 96K prefill); best overall: `GGML_FA_TR=7` (1.20x / 1.10x),
 the folded numerics.** The kernel's remaining cost is the table load per tile and the format's addressing.
+
+**E2e, filled 96K, the final forms (2026-09-07 morning, all arms in one chain, same machine state):**
+
+| 96K, width 4, depth 3 | f16 | Turbo4 before the port | TR=9 (byte-identical + wide loads) | TR=7 (folded + wide loads) |
+|---|--:|--:|--:|--:|
+| UD verify round | 134.9 ms (2026-09-06) | 181.2 | **145.5 (+7.9%)** | **142.0 (+5.3%)** |
+| UD prefill | 1102 s | 1375 | 1123 (+1.9%) | 1114 (+1.1%) |
+| Q4_0 verify round | 119.2 ms | 182 | **130.2 (+9.2%)** | **126.4 (+6.0%)** |
+| Q4_0 prefill | 1140 s (re-run; the 1015 on record does not reproduce, see below) | | 1154 (+1.3%) | 1142 (+0.2%) |
+| sha | UD `0f1e46f3edbf` / Q4_0 `94e3851bd506` | | UD `3b4127a77a1d` / Q4_0 `de52f2778bc1` (the recorded Turbo4 texts) | UD `8c3d88cd6289` / Q4_0 `9f95c806e262` |
+
+The Turbo4 line at 96K: round +5..+9% over f16 (was +34..+50%), prefill +0..+2% (was +25%), 4.7 GiB less
+memory, every arm on its recorded text. **The f16 Q4_0 96K prefill reproduces at 1136-1140 s across three
+runs on two days**, not the 1015 s in `fa-long-context.md`: today's run is slower from the FIRST 2048-token
+ubatch (12.25 s vs 10.9 s in both record runs), where attention is negligible - the prefill mul_mm plane is
+~12% slower on the Q4_0 file than on 2026-09-06 noon, while UD's 8K prefill still matches its record. The
+f16 FA kernels are byte-identical between prod and this branch (prescreen), so the suspect is the
+ud-soa-gguf merge (d7f456d4f, that evening; it touched the stored-SoA mul_mm dispatch the Q4_0_SOA file
+goes through). A/B of prod HEAD vs the pre-merge commit 0623a06a5 at the 8K prefill: below.
