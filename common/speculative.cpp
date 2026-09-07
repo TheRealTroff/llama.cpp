@@ -1436,10 +1436,28 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
                     selector_reset[seq_id] = false;
                 }
 
+                // DFLASH_CONF_LOG=1 (perf/spec-verify-narrow.md): per-position drafter confidence on the
+                // greedy path - softmax top-1 over the selector's top-k scores and the top-2 margin - so a
+                // per-round verify-depth signal can be priced against the server's accepted a/n line
+                static const bool conf_log = getenv("DFLASH_CONF_LOG") && atoi(getenv("DFLASH_CONF_LOG"));
+                std::string conf;
+
                 int32_t predecessor = 0;
                 for (int32_t i = 1; i < n_block_tokens; ++i) {
                     const float * row = lattice + (size_t) (beg + i) * n_embd_dec;
                     const float * scores = row + selector_top_k + (size_t) predecessor * selector_top_k;
+
+                    if (conf_log) {
+                        float s1 = -INFINITY, s2 = -INFINITY;
+                        for (int32_t k = 0; k < selector_top_k; ++k) {
+                            if (scores[k] > s1) { s2 = s1; s1 = scores[k]; } else if (scores[k] > s2) { s2 = scores[k]; }
+                        }
+                        float sum = 0.0f;
+                        for (int32_t k = 0; k < selector_top_k; ++k) {
+                            sum += std::exp(scores[k] - s1);
+                        }
+                        conf += string_format("%s%.4f/%.3f", conf.empty() ? "" : " ", 1.0f / sum, s1 - s2);
+                    }
 
                     if (dp.temperature > 0.0f) {
                         common_speculative_token_dist dist;
@@ -1464,6 +1482,10 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
                                 std::max_element(scores, scores + selector_top_k));
                         result.push_back((llama_token) row[predecessor]);
                     }
+                }
+
+                if (conf_log) {
+                    LOG_INF("dflash-conf seq=%d n=%d %s\n", (int) seq_id, (int) result.size(), conf.c_str());
                 }
 
                 if (result.size() < (size_t) params.n_min) {
