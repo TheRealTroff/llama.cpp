@@ -30,9 +30,11 @@ The boundaries are now unusually clean:
 
 ## Decode ideas this ranks
 
-1. A real adaptive policy should preserve a deep DFlash draft and truncate only
+1. ~~A real adaptive policy should preserve a deep DFlash draft and truncate only
    the verify batch. The existing adaptive control shortens the draft itself and
-   changes its conditioning. Until width 3 is fixed, restrict the controller to
+   changes its conditioning.~~ **Refuted 2026-09-07 (`spec-verify-narrow.md`): block depth
+   does not change the prefix acceptance on today's stack; the deep block only costs the
+   drafter. The adaptive lever is the drafter's per-position confidence, per round.** Until width 3 is fixed, restrict the controller to
    the measured efficient widths (2, 4, 5, and 8); width 3 is dominated by 4.
 2. If a continuous width curve matters, build a width-3 sibling of r4kp v3:
    signed indexing, hoisted planar pointers, three live output columns. Prescreen

@@ -16805,6 +16805,10 @@ constant bool FC_mul_mm_bc_out [[function_constant(FC_MUL_MM + 1)]];
 constant short FC_mul_mm_ne12  [[function_constant(FC_MUL_MM + 2)]];
 constant short FC_mul_mm_ne13  [[function_constant(FC_MUL_MM + 3)]];
 constant short FC_mul_mm_r2    [[function_constant(FC_MUL_MM + 4)]];
+// GGML_MM_SKINNY_BSPLIT (perf/skinny-tpr-bsplit.md, ported to the SoA skinny body 2026-09-07):
+// 1 = B stage over all 64 threads (8 per column, 8 activations each) instead of 32 (4 per column,
+// 16 each); 2 = the same with two float4 loads per thread instead of 8 scalars
+constant short FC_mul_mm_sk_bsp [[function_constant(FC_MUL_MM + 8)]];
 constant short FC_mul_mm_r3    [[function_constant(FC_MUL_MM + 5)]];
 constant bool  FC_mul_mm_soa   [[function_constant(FC_MUL_MM + 6)]];
 // stored q4_K tile scale (ud-model.md step 15): exact f32 d*sc by default (the owner's pick, KLD-priced);
@@ -17677,14 +17681,18 @@ kernel void kernel_mul_mm_skinny_q4_0_soa_f32(
     uint ib = il0;
     device const uint * packs = (device const uint *)(row0 + 2*nblk);
 
-    const short bcol = (short)(tiitg/4) < nr1 ? (short)(tiitg/4) : nr1 - 1;
-    const short bsx  = tiitg%4;
+    // B stage: BPC threads per column, BVL = NK/BPC activations each (GGML_MM_SKINNY_BSPLIT)
+    const short BPC = FC_mul_mm_sk_bsp ? 8 : 4;
+    const short BVL = NK/BPC;
+
+    const short bcol = (short)(tiitg/BPC) < nr1 ? (short)(tiitg/BPC) : nr1 - 1;
+    const short bsx  = tiitg%BPC;
 
     device const float * y = (device const float *)(src1
         + args.nb13*i13
         + args.nb12*i12
         + args.nb11*(r1 + bcol)
-        + args.nb10*(16*bsx));
+        + args.nb10*(BVL*bsx));
 
     simdgroup_half8x8 ma[2];
     simdgroup_half8x8 mb;
@@ -17727,7 +17735,19 @@ kernel void kernel_mul_mm_skinny_q4_0_soa_f32(
         pa[6] = ta1[2];
         pa[7] = ta1[3];
 
-        if (tiitg < 4*NR1) {
+        if (FC_mul_mm_sk_bsp == 2) {
+            // split B stage, two float4 loads per thread (BVL = 8)
+            device const float4 * y4 = (device const float4 *) y;
+            const float4 v0 = y4[0];
+            const float4 v1 = y4[1];
+            threadgroup half * sbp = sb + (8*bsx)*NR1 + tiitg/8;
+            sbp[0*NR1] = (half) v0.x; sbp[1*NR1] = (half) v0.y; sbp[2*NR1] = (half) v0.z; sbp[3*NR1] = (half) v0.w;
+            sbp[4*NR1] = (half) v1.x; sbp[5*NR1] = (half) v1.y; sbp[6*NR1] = (half) v1.z; sbp[7*NR1] = (half) v1.w;
+        } else if (FC_mul_mm_sk_bsp == 1) {
+            FOR_UNROLL (short j = 0; j < 8; ++j) {
+                sb[(8*bsx + j)*NR1 + tiitg/8] = (half) y[j];
+            }
+        } else if (tiitg < 4*NR1) {
             FOR_UNROLL (short j = 0; j < 16; ++j) {
                 sb[(16*bsx + j)*NR1 + tiitg/4] = (half) y[j];
             }

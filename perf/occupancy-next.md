@@ -204,6 +204,13 @@ was the prefix-gating story. **Conservation, not a dead column.**
 
 ### Decouple draft depth from verify width (UNIMPLEMENTED, best idea on this board)
 
+> **Superseded 2026-09-07 (`spec-verify-narrow.md`).** On today's stack the block depth does not
+> change the prefix acceptance (matched-sha prompts within +/-2%, position 1 flat across depths
+> 1-7), so decoupling buys nothing and costs the drafter 4 ms/round. The per-round lever that IS
+> real is the drafter's own confidence (EV(p) policy, +14% mean over the corpus). The
+> "monotonic with block depth" curves below were measured before the draft window and the
+> per-seq depth fix; the discrepancy is recorded there, not explained.
+
 Measured 2026-08-23, `perf/run-accpos-trace.sh`, logs `results/accpos-narrow-dflash-n{3,4,5}`,
 all sha1 `9ad7e023c6ab`:
 

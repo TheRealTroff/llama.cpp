@@ -1411,6 +1411,9 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
             if (dp.dists) {
                 dp.dists->clear();
             }
+            if (dp.conf) {
+                dp.conf->clear();
+            }
 
             if (is_dflash2) {
                 GGML_ASSERT(dp.temperature <= 0.0f || dp.dists);
@@ -1436,10 +1439,33 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
                     selector_reset[seq_id] = false;
                 }
 
+                // DFLASH_CONF_LOG=1 (perf/spec-verify-narrow.md): per-position drafter confidence on the
+                // greedy path - softmax top-1 over the selector's top-k scores and the top-2 margin - so a
+                // per-round verify-depth signal can be priced against the server's accepted a/n line
+                static const bool conf_log = getenv("DFLASH_CONF_LOG") && atoi(getenv("DFLASH_CONF_LOG"));
+                std::string conf;
+
                 int32_t predecessor = 0;
                 for (int32_t i = 1; i < n_block_tokens; ++i) {
                     const float * row = lattice + (size_t) (beg + i) * n_embd_dec;
                     const float * scores = row + selector_top_k + (size_t) predecessor * selector_top_k;
+
+                    if (conf_log || dp.conf) {
+                        float s1 = -INFINITY, s2 = -INFINITY;
+                        for (int32_t k = 0; k < selector_top_k; ++k) {
+                            if (scores[k] > s1) { s2 = s1; s1 = scores[k]; } else if (scores[k] > s2) { s2 = scores[k]; }
+                        }
+                        float sum = 0.0f;
+                        for (int32_t k = 0; k < selector_top_k; ++k) {
+                            sum += std::exp(scores[k] - s1);
+                        }
+                        if (dp.conf) {
+                            dp.conf->push_back(1.0f / sum);
+                        }
+                        if (conf_log) {
+                            conf += string_format("%s%.4f/%.3f", conf.empty() ? "" : " ", 1.0f / sum, s1 - s2);
+                        }
+                    }
 
                     if (dp.temperature > 0.0f) {
                         common_speculative_token_dist dist;
@@ -1458,6 +1484,9 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
                         std::discrete_distribution<int32_t> sample(dist.probs.begin(), dist.probs.end());
                         predecessor = sample(selector_rng[seq_id]);
                         result.push_back(dist.ids[predecessor]);
+                        if (dp.conf) {
+                            dp.conf->push_back(*std::max_element(dist.probs.begin(), dist.probs.end()));
+                        }
                         dp.dists->push_back(std::move(dist));
                     } else {
                         predecessor = (int32_t) std::distance(scores,
@@ -1466,8 +1495,15 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
                     }
                 }
 
+                if (conf_log) {
+                    LOG_INF("dflash-conf seq=%d n=%d %s\n", (int) seq_id, (int) result.size(), conf.c_str());
+                }
+
                 if (result.size() < (size_t) params.n_min) {
                     result.clear();
+                    if (dp.conf) {
+                        dp.conf->clear();
+                    }
                     if (dp.dists) {
                         dp.dists->clear();
                     }

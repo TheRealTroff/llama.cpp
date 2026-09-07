@@ -42,6 +42,12 @@ if [ "$PICK" = 1 ]; then
            GGML_MM_ACC_HALF=1 GGML_MM_N64=1 LLAMA_GDN_REPLAY=1)
 fi
 
+[ "$PICK" = 1 ] && {
+# 2026-09-07: the manifest (perf/pick.sh) overrides the copied arrays above - LINE=${LINE:-q4}
+source "$B/perf/pick.sh"
+pick_check "${LINE:-q4}" || exit 1
+pick_env "${LINE:-q4}" f16; PICK_ENV=("${PICK_ENV[@]}")
+}
 PROMPTS=(
   /Users/troff/play/benchprompt.txt
   "$B"/perf/prompts/01-code-explain.txt

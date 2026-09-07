@@ -69,6 +69,11 @@ struct common_speculative_draft_params {
     // optional sparse proposal distributions, one per draft token
     std::vector<common_speculative_token_dist> * dists = nullptr;
 
+    // optional per-draft-token confidence of the drafter (DFlash2: softmax top-1 over the selector's
+    // top-k lattice scores), one entry per token in `result`; the server's LLAMA_SPEC_EV controller
+    // picks the verify depth from it (perf/spec-verify-narrow.md)
+    std::vector<float> * conf = nullptr;
+
     float temperature = 0.0f;
     uint32_t seed = LLAMA_DEFAULT_SEED;
 };

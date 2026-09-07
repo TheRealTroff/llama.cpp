@@ -171,6 +171,38 @@ GGML_FA_QT=1 GGML_MM_F16B=1 GGML_FA_GQA_F16=1 GGML_MM_N64_KMAX=20000 GGML_FA_QR=
     -md Qwen3.8-27B-DFlash2-pureQ4_0.gguf --spec-type draft-dflash --spec-draft-n-max 4
 ```
 
+**THE PICK IS NOW TWO LINES WITH ONE MANIFEST (2026-09-07, owner: "do the split").** `perf/pick.sh`
+is the single source of every pick env and argument; harnesses source it (`pick_env <q4|ud> [f16]`,
+`pick_args`, `pick_check`, `pick_print`) and must never copy the arrays. Every flag carries a
+fidelity class - what it CAN change, not how fast it is:
+
+| class | changes | priced by | q4 line | ud line |
+|---|---|---|---|---|
+| BI | nothing in the logits (byte-identical vs the kernel it replaced) | sha | yes | yes |
+| SPEC | which columns are verified; never the greedy argmax chain (forks shas = new lineage) | acceptance / e2e | yes | yes |
+| NUM-PP | prefill numerics (half-accumulate, tile forms) | the KLD line (`run-quant-kld.sh`) | within the record | only with a UD-specific wash |
+| NUM-TG | decode numerics (half products, accumulation order) | the agreement / same-top harness on own text, or sha only - the KLD line does NOT see them | within the record | only with a UD-specific wash |
+| KV | cache quantization (Turbo4) | both harnesses | on | **on** (owner: the context it buys is worth it; that spend is part of the UD budget) |
+
+- **q4** = uniform Q4_0 SOA-V1, Turbo4 cache, DFlash depth 3, half-accumulate prefill in (KLD +11.8%
+  mean / -0.86 pt same-top, `kldacch-aug28`). 300-token benchprompt sha `608c5004c897`, 27.9 t/s.
+- **ud** = UD-Q4_K_M SOA-V1, Turbo4 cache, DFlash depth 3, the K-quant SoA routes, the exact q4_K
+  tile, NO half-accumulate (it costs UD -2.51 pt same-top, `ud-model.md` step 4 - `pick_check ud`
+  refuses it). 300-token benchprompt sha `9128633c6cfa`, 25.0 t/s (the first UD+Turbo4 lineage
+  pointer; a mint at 600 is still due).
+- `pick_check` refuses a NUM/KV-class flag outside the line's manifest and every refused form
+  (`GGML_FA_TR=6`, `GGML_KQ_SOA_EXACT=0`, `GGML_MM_SKINNY_NR0_XL`); experiment flags pass with a
+  note, `PICK_ALLOW_EXTRA=1` overrides. Proposed-but-unadopted flags (`GGML_MM_SKINNY_BSPLIT=2`,
+  `LLAMA_SPEC_EV=1`) join with `PICK_PROPOSED=1`.
+- **OPEN, both lines: the half-product width-4/5 scalar kernels (`GGML_MV_SOA_W4_R4KP=3`,
+  `GGML_MV_SOA_W5_HALF=1`) are class NUM-TG and were only ever sha-gated** - the KLD line scores
+  prefill-shaped logits and never saw them; an agreement/same-top run of the pick against its
+  f32-product arms is the missing row, and the UD line should have it first.
+- The 22 older `perf/run-*.sh` harnesses still carry copies of the env of their day; they are
+  records of their experiments, not picks. The live ones (`run-prod-pick.sh` with `LINE=q4|ud`,
+  `run-depth-corpus.sh`, `run-spec-ev-ab.sh`, `run-corpus-acceptance.sh PICK=1`, the two UD A/Bs)
+  read the manifest.
+
 **Second product line, 2026-09-01: the Turbo4 KV pick.** Same flags plus the Turbo4 FA
 GQA tile-reuse stack, `-ctk turbo4 -ctv turbo4`, a 100K allocation and DFlash depth 3
 (verify width 4, Turbo4's best width). It trades nothing for memory any more: 4.65 GiB
@@ -251,6 +283,10 @@ routing flag in this table is value-based.
 | `GGML_FA_QR=8` | off | QT-form FA: one Q^T load per chunk feeds both score tiles and the first 8 tiles stay in registers; prefill FA kernel -7..-8%, decode width 4/5 at 24K -6/-10% per call, e2e prefill -0.6% (8K) / -1.0% (25K), byte-identical (sha gates at 8K canonical, 25K, 96K); prefill route gated to caches <= `GGML_FA_QR_KVMAX` (65536: above ~50K the prefill kernel is K/V-stream-bound and the register head's spill costs +15% at 96K), decode at every length (-5.5/-9% at 96K); requires `GGML_FA_QT=1` (2026-09-06, branch `gdn-prefill-scan`, **in the pick since 2026-09-06** (owner: "Ship it!")) | fa-long-context.md |
 | `GGML_FA_TR=9` | off (**in the Turbo4 pick since 2026-09-07**) | **TR form of the Turbo4 batched FA kernel** (2026-09-06 night, branch `turbo4-fa-stack`, merged 2026-09-07; =9 = the byte-identical form with the wide loads, owner: "the byte-identical one is the one I want"): K/V tiles dequantized by their owning lanes straight into the simdgroup matrices (measured half8x8 lane map), S^T = K Q^T with the register head, O tiles register-resident across key tiles, pair table staged in threadgroup memory, V loop unroll 4; the scratch branch it replaces ran 3.2x the f16 kernel's dynamic instructions. Per call vs prod: decode width 4 -38..-39% (8K-96K), prefill -41..-45% (with the 16-row tile via `GGML_FA_Q16=1`, now routed for Turbo4 too). **Byte-identical** on every recorded Turbo4 text. **E2e 96K: Q4_0 round 182 -> 132 ms (f16 119 in the same state), prefill ubatch +2.7% over f16; UD round 181 -> 151 ms, prefill 1375 -> 1140 s (f16 1102).** 8K a wash. =1/2 slower byte-identical forms; =4/5 a half-numerics option (+1-4%, refuted); `GGML_FA_Q16_DEC=1` the 16-row tile at decode (refuted, +27%). **`GGML_FA_TR=6` (step 16 C): the block norms folded out of the per-tile dequant, applied per key tile to the score tile - another -11..-14% per decode call (1.10-1.24x f16), 96K round UD 142 ms (f16 135) / Q4_0 127 (f16 119), prefill within 2%; NOT byte-identical, KLD vs q8_0 a wash inside the error bars (same-top 95.86 vs 95.83); adoption = the owner's numerics call.** **Step 16 D (2026-09-07): 8-byte loads per two tiles (`=9` on the byte-identical form: -6..-9% per call, `=7` on the folded one: -1.5..-7%), shuffle form refuted; the 16-row tile carries them (`qt16w`/`qtnw16`). Best byte-identical `GGML_FA_TR=9` (1.29x f16 at the 96K decode call), best overall `=7` (1.20x).** ud-model.md step 16 B/C/D | ud-model.md step 16 B/C/D |
 | `GGML_FA_Q16=1` | off | 16-row query tile for the QT f16 FA kernel (8 simdgroups, prefill only, caches > `GGML_FA_Q16_KVMIN`=32768): halves the cache stream per query; FA kernel -21% at a 96K cache, -12..-16% at 48K, flat at 24K; **96K prefill 1254 -> 1015 s (-19%), byte-identical** (2026-09-06, branch `gdn-prefill-scan`, **in the pick since 2026-09-06** (owner: "Ship it!"); requires `GGML_FA_QT=1`) | fa-long-context.md |
+| `DFLASH_CONF_LOG=1` | off | logs the DFlash2 selector's per-position top-1 softmax and top-2 margin per draft (`dflash-conf seq= n= p/m ...`), greedy path only; the per-round verify-depth signal priced in spec-verify-narrow.md section 6 | spec-verify-narrow.md |
+| `LLAMA_SPEC_EV=1` | off (on prod, NOT in a pick) | **expected-value verify depth from the drafter's confidence** (2026-09-07): per round the block rule (`LLAMA_SPEC_EV_BLOCK=hybrid` default / `full` / `tiered`) sets the draft block, the server verifies k = argmax (1 + sum survival)/cost[k] with survival from calibration bins (position group x confidence, seeded, learned online per slot, `LLAMA_SPEC_EV_CALIB_N=10`) and cost[k] an online EMA seeded from the Turbo4 sweep; `LLAMA_SPEC_EV_WIDTHS`, `LLAMA_SPEC_EV_DBG=1`. Composes with the slot budget. **NEEDS KLD + agreement work before any pick (owner 2026-09-07): its rounds verify at widths 1-8, so its text carries the union of the width families' decode numerics** - merged to prod as the branch point for further experiments, `proposed` in the manifest. **Three A/B rounds on the 8-prompt corpus: +10.3% (r1), +12.8% (r2), +14.4% (r3, with the skinny B-split and seed 10); math/JSON +32/+43% in r3, free-form -3..+4% with code-explain the one same-sha loss (the block-8 drafter tax, 4.4 ms/round)**; forked-sha free-form cells are trajectory noise. spec-verify-narrow.md section 7 | spec-verify-narrow.md |
+| `GGML_MM_SKINNY_BSPLIT=2` | off (on prod, adoption = owner) | the Aug-24 skinny B-stage split + float4 loads (`skinny-tpr-bsplit.md`, never merged) ported to the SoA skinny body: **-4.7..-5.1% per width-8 round, +4.8..5.4% t/s at fixed depth 7, byte-identical**; inert at width 4-5. Pays on every width-6..8 verify: the controller's deep rounds, the drafter's block-8 draft, multi-slot skinny points. spec-verify-narrow.md section 8 | spec-verify-narrow.md |
+| ~~`GGML_MM_SKINNY_NR0_XL=64\|128`~~ | (code removed) | rows per threadgroup of the SoA skinny kernel for >= 65536-row weights (the vocab head). **Refuted 2026-09-07, byte-identical: head per call +5% at 64, +15% at 128; the code was stripped before the merge (owner), the record stays** - activation re-read is not the head's wall (same as the ffn NR0 sweep); the head at 1.50x floor is the skinny family's best shape. spec-verify-narrow.md section 9 | spec-verify-narrow.md |
 | `GGML_FA_QT=1` | off | transposed-Q QK form of the f16 batched FA kernel (K tiles load untransposed, Q staged transposed): -7..-8% per FA call, byte-identical; the QR and Q16 routes require it. **In the pick since 2026-09-06** | ud-model.md step 9 |
 | `GGML_FA_GQA_F16=1` | off | the gqah=6 GQA-reuse batched FA tile for f16 KV at decode widths 3-6 (was Turbo4-only): -43% per FA call at width 4, decode +2.8% UD, byte-identical. **In the pick since 2026-09-06** | ud-model.md step 11 |
 | `GGML_MM_F16B=1` | off | f16 activations into the prefill mul_mm (one contiguous cast, the `_f16` tiles): -2.9% UD prefill, inert on the acch q4_0 route, byte-identical. **In the pick since 2026-09-06** | ud-model.md step 10 |
@@ -1058,6 +1094,23 @@ Refuted - do not reopen without new information:
 Superseded, kept for history - do not quote numbers from these:
 
 - `results.md` - carries an inline SUPERSEDED banner.
+- **`spec-verify-narrow.md` - variable speculation depth PRICED 2026-09-07 (branch `spec-verify-narrow`,
+  unmerged, owner: "let's see what we can uncover").** 7-depth Turbo4 sweep over the 9-prompt
+  corpus with per-round acceptance (`run-depth-corpus.sh`): the block depth does NOT change the
+  prefix acceptance (matched-sha prompts within +/-2%), so draft-deep/verify-narrow is dead
+  (`occupancy-next.md`'s "best idea" struck) and shortening the block is free; fixed depth 3 is
+  optimal on every free-form prompt, depth 7 is +33/+37% on math/JSON; no workload-tracking
+  rule (the existing `LLAMA_SPEC_ADAPTIVE` EMA, AIMD) reaches best-fixed in 300 tokens, but
+  the **drafter's per-position confidence (`DFLASH_CONF_LOG=1`, softmax top-1 over the selector
+  scores) chosen per round by expected value = +14% mean over the corpus at the honest
+  deep-block cost (+34/+41% saturated, -1..+4% free-form), beating a workload-oracle fixed
+  depth without knowing the workload**; per-round oracle +27%. Replay arithmetic on measured
+  rounds (`depth-corpus-sim.py`, `depth-policy-sim.py`, `depth-conf-sim.py`); the build and its
+  e2e A/B are the open item. Verbose-arm timing validated against a quiet arm (21/21 within 1.3%).
+  **BUILT same day (owner: "build it"): `LLAMA_SPEC_EV=1`, three A/B rounds +10.3 / +12.8 / +14.4% mean
+  over the corpus (r3 math/JSON +32/+43%, free-form -3..+4% = the block-8 drafter tax); and the
+  width-8 hunt's first find, `GGML_MM_SKINNY_BSPLIT=2` (the unmerged Aug-24 B-stage split + float4
+  ported to the SoA skinny body): -5% per width-8 round, byte-identical. Sections 7-8.**
 - `head-to-head-cooled.md` - superseded by `head-to-head-aug22.md`; its llama.cpp
   number (20.39) and gap (1.45x) are dead, though its dflash side reproduced.
 - `round-decomp-post-fa-split.md` - superseded by `round-decomp-fused.md`.
