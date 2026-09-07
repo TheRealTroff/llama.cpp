@@ -1459,7 +1459,9 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
                         for (int32_t k = 0; k < selector_top_k; ++k) {
                             sum += std::exp(scores[k] - s1);
                         }
-                        if (dp.conf) {
+                        // on the sampled path the confidence is the heated dist's max prob (pushed below):
+                        // pushing both here doubled conf per position and misaligned spec_ev_t::pick
+                        if (dp.conf && dp.temperature <= 0.0f) {
                             dp.conf->push_back(1.0f / sum);
                         }
                         if (conf_log) {
