@@ -3296,7 +3296,7 @@ private:
                             /* .prompt   = */ &slot.spec_prompt,
                             /* .result   = */ &slot.spec_draft,
                             /* .dists    = */ &slot.spec_dists,
-                            /* .conf     = */ &slot.spec_conf,
+                            /* .conf     = */ env_spec_ev ? &slot.spec_conf : nullptr,
                             /* .temperature = */ slot.task->params.sampling.temp,
                             /* .seed     = */ common_sampler_get_seed(slot.smpl.get()),
                         };
