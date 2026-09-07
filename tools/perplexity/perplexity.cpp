@@ -185,6 +185,13 @@ struct kl_divergence_result {
     double sum_p_diff4      = 0.0;
     float  max_p_diff       = 0.0f;
     size_t n_same_top       = 0.0;
+    // distribution overlap sum_i min(p_base_i, p_i) = 1 - total variation: the probability a
+    // rejection sampler (the heated speculative path) would accept the test model's sample
+    // against the base at this position; the heated analog of 'same top' (perf/spec-heated.md)
+    double sum_ov           = 0.0;
+    double sum_ov2          = 0.0;
+    double sum_ovt          = 0.0;   // same, after min_p 0.05 truncation on both sides (the server's default chain floor)
+    double sum_ovt2         = 0.0;
     size_t count            = 0.0;
 };
 
@@ -197,6 +204,7 @@ static std::pair<double, float> log_softmax(int n_vocab, const float * logits, c
             imax = i;
         }
     }
+    const float max_logit_raw = max_logit;
     double sum_exp = 0.0;
     for (int i = 0; i < n_vocab; ++i) {
         sum_exp += expf(logits[i] - max_logit);
@@ -219,6 +227,7 @@ static std::pair<double, float> log_softmax(int n_vocab, const float * logits, c
 
     max_logit += log_sum_exp;
     double sum = 0;
+    double ov  = 0;
     int imax_base = -1;
     float p_log_base_max = 0;
     for (int i = 0; i < n_vocab; ++i) {
@@ -230,10 +239,33 @@ static std::pair<double, float> log_softmax(int n_vocab, const float * logits, c
         if (p_log_base > -16.f) {
             const float p_base = expf(p_log_base);
             sum += p_base * (p_log_base - logits[i] + max_logit);
+            ov  += std::min((double) p_base, (double) expf(logits[i] - max_logit));
         }
     }
     kld.sum_kld  += sum;
     kld.sum_kld2 += sum*sum;
+    kld.sum_ov   += ov;
+    kld.sum_ov2  += ov*ov;
+    {
+        // overlap after min_p 0.05 on both sides: two passes, normalizers then the min-sum
+        const float lq_thr = max_logit_raw   + logf(0.05f);
+        const float lb_thr = p_log_base_max  + logf(0.05f);
+        double zq = 0.0, zb = 0.0;
+        for (int i = 0; i < n_vocab; ++i) {
+            if (logits[i] >= lq_thr) zq += expf(logits[i] - max_logit_raw);
+            const float lb = scale*base_log_prob[i] + min_log_prob;
+            if (lb >= lb_thr) zb += expf(lb - p_log_base_max);
+        }
+        double ovt = 0.0;
+        for (int i = 0; i < n_vocab; ++i) {
+            const double q = logits[i] >= lq_thr ? expf(logits[i] - max_logit_raw) / zq : 0.0;
+            const float lb = scale*base_log_prob[i] + min_log_prob;
+            const double b = lb >= lb_thr ? expf(lb - p_log_base_max) / zb : 0.0;
+            ovt += std::min(q, b);
+        }
+        kld.sum_ovt  += ovt;
+        kld.sum_ovt2 += ovt*ovt;
+    }
     ++kld.count;
     if (imax == imax_base) {
         ++kld.n_same_top;
@@ -274,6 +306,10 @@ static void process_logits(int n_vocab, const float * logits, const int * tokens
                 kld.sum_p_diff2      += local_kld.sum_p_diff2;
                 kld.sum_p_diff4      += local_kld.sum_p_diff4;
                 kld.n_same_top       += local_kld.n_same_top;
+                kld.sum_ov           += local_kld.sum_ov;
+                kld.sum_ov2          += local_kld.sum_ov2;
+                kld.sum_ovt          += local_kld.sum_ovt;
+                kld.sum_ovt2         += local_kld.sum_ovt2;
                 kld.max_p_diff        = std::max(kld.max_p_diff, local_kld.max_p_diff);
                 kld.count            += local_kld.count;
                 break;
@@ -2003,6 +2039,13 @@ static void kl_divergence(llama_context * ctx, const common_params & params) {
 
     const double same_top_p = 1.0*kld.n_same_top/kld.count;
     LOG("Same top p: %6.3lf ± %5.3lf %%\n", 100.0*same_top_p, 100.0*sqrt(same_top_p*(1.0 - same_top_p)/(kld.count - 1)));
+    {
+        const double n = kld.count;
+        const double m1 = kld.sum_ov / n,  s1 = sqrt(std::max(0.0, kld.sum_ov2 / n  - m1*m1) / (n - 1));
+        const double m2 = kld.sum_ovt / n, s2 = sqrt(std::max(0.0, kld.sum_ovt2 / n - m2*m2) / (n - 1));
+        LOG("Mean overlap (1-TV): %6.3lf ± %5.3lf %%   (rejection-sampler acceptance of the test model's samples against the base)\n", 100.0*m1, 100.0*s1);
+        LOG("Mean overlap, min_p 0.05 both sides: %6.3lf ± %5.3lf %%\n", 100.0*m2, 100.0*s2);
+    }
 }
 
 // satisfies -Wmissing-declarations
