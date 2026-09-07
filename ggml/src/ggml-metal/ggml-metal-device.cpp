@@ -1116,17 +1116,23 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm(ggml_meta
     // the f32 K-quant tiles, whose dequant tax is larger (GGML_MM_N64_KMAX, default 6144)
     static const int n64_kmax = getenv("GGML_MM_N64_KMAX") ? atoi(getenv("GGML_MM_N64_KMAX")) : 6144;
     // (!bc_out: the f32 tile's bounds-checked store path would need 16 KiB of threadgroup memory)
-        const bool n64_shape = n64_enabled && (tsrc1 == GGML_TYPE_F32 || tsrc1 == GGML_TYPE_F16) && !has_tensor && !bc_inp && !bc_out && tsrc0 != GGML_TYPE_Q4_0_SOA &&
+    // the stored Q4_0_SOA file takes the same acch / n64 / f16-B tiles as the plain file: the tile body's
+    // SoA reader (FC_mul_mm_soa) is dispatched on the block type, which these instantiations share
+    // (perf/ud-model.md step 16 F: without this the stored file prefilled +13% on another lineage).
+    // GGML_MM_SOA_ACCH=0 restores the old routing for an A/B.
+    static const bool soa_acch = !getenv("GGML_MM_SOA_ACCH") || atoi(getenv("GGML_MM_SOA_ACCH")) != 0;
+    const bool q40_like = tsrc0 == GGML_TYPE_Q4_0 || (soa_acch && tsrc0 == GGML_TYPE_Q4_0_SOA);
+    const bool n64_shape = n64_enabled && (tsrc1 == GGML_TYPE_F32 || tsrc1 == GGML_TYPE_F16) && !has_tensor && !bc_inp && !bc_out && (tsrc0 != GGML_TYPE_Q4_0_SOA || soa_acch) &&
         op->ne[0] >= 4096 && op->ne[1] == 512 && op->src[0]->ne[0] <= n64_kmax &&
         op->ne[0] % 64 == 0;
-    const bool n64 = n64_shape && acc_half && tsrc0 == GGML_TYPE_Q4_0;
+    const bool n64 = n64_shape && acc_half && q40_like;
     // f32-accumulate 64-column tiles for the UD line's formats (and q4_0 without acch)
     static const bool n64_f32_enabled = !getenv("GGML_MM_N64_F32") || atoi(getenv("GGML_MM_N64_F32")) != 0;  // GGML_MM_N64_F32=0 = A/B off switch
-    const bool n64_f32 = n64_f32_enabled && n64_shape && !(acc_half && tsrc0 == GGML_TYPE_Q4_0) &&
+    const bool n64_f32 = n64_f32_enabled && n64_shape && !(acc_half && q40_like) &&
         (tbase == GGML_TYPE_Q4_0 || tbase == GGML_TYPE_Q4_K || tbase == GGML_TYPE_Q5_K ||
          tbase == GGML_TYPE_Q6_K || tbase == GGML_TYPE_Q3_K || tbase == GGML_TYPE_IQ4_XS ||
          tbase == GGML_TYPE_IQ3_S || tbase == GGML_TYPE_IQ4_NL);
-    if (!soa && acc_half && tsrc0 == GGML_TYPE_Q4_0 && (tsrc1 == GGML_TYPE_F32 || tsrc1 == GGML_TYPE_F16) && !has_tensor) {
+    if ((!soa || q40_like) && acc_half && q40_like && (tsrc1 == GGML_TYPE_F32 || tsrc1 == GGML_TYPE_F16) && !has_tensor) {
         snprintf(base, 256, n64 ? "kernel_mul_mm_acch_n64_q4_0_%s" : "kernel_mul_mm_acch_q4_0_%s", ggml_type_name(tsrc1));
         } else if (n64_f32) {
         snprintf(base, 256, "kernel_mul_mm_n64_%s_%s", ggml_type_name(tbase), ggml_type_name(tsrc1));
