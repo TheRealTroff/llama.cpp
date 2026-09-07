@@ -62,7 +62,7 @@ PICK_MANIFEST=(
   "GGML_MM_ACC_HALF=1|NUM-PP|q4|pick|kldacch-aug28: mean KLD 0.054->0.060 (+11.8%), same-top -0.86 pt; ON UD -2.51 pt (ud-model.md step 4) - q4 only"
   # --- speculation side ---
   "LLAMA_DRAFT_WINDOW=1024|SPEC|both|pick|draft-sink-window.md (acceptance improves; sha canonical)"
-  "LLAMA_SPEC_EV=1|SPEC|both|proposed|spec-verify-narrow.md section 7 (+14.4% corpus mean; forks shas -> new lineage)"
+  "LLAMA_SPEC_EV=1|SPEC|both|proposed|spec-verify-narrow.md section 7 (+14.4% corpus mean). OWNER: KLD + agreement of its text vs the fixed-depth pick BEFORE any pick - its rounds verify at widths 1-8 and carry the union of the width families' decode numerics; then a new lineage"
   # --- Turbo4 cache line (KV) + its byte-identical FA forms ---
   "TURBO_AUTO_ASYMMETRIC=0|KV|both|pick|turbo4-fa-gqa-reuse.md (symmetric pick)"
   "GGML_FA_GQA_HEADS=4,6|BI|both|pick|turbo4-fa-gqa-reuse.md (Turbo4 GQA tile; hash moved at widths 3-4 = a lineage, not a numerics call)"
@@ -71,7 +71,6 @@ PICK_MANIFEST=(
   "GGML_FA_TR=9|BI|both|pick|ud-model.md step 16 D (the byte-identical Turbo4 FA form; owner 2026-09-07)"
   # --- refused / declined, listed so pick_check knows them ---
   "GGML_FA_TR=6|NUM-TG|none|refused|ud-model.md step 16 C (folded norm, KLD a wash; owner took =9)"
-  "GGML_MM_SKINNY_NR0_XL=64|BI|none|refused|spec-verify-narrow.md section 9 (+5..15% slower on the head)"
   "GGML_KQ_SOA_EXACT=0|NUM-PP|none|refused|ud-model.md step 15 (=0 is the upstream half-division tile; the exact tile is the default, owner)"
 )
 # The Turbo4 cache itself (KV class), priced: q4 same-top 98.3% own text / KLD 0.006-0.008 (turbo4-quality.md);

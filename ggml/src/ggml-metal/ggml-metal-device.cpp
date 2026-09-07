@@ -780,12 +780,9 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm_skinny_so
     const char * src0_name = op->src[0]->type == GGML_TYPE_Q4_0_SOA ? "q4_0" : ggml_type_name(op->src[0]->type);
     // GGML_MM_SKINNY_BSPLIT=1|2: B stage over all 64 threads (2 = float4 loads); perf/skinny-tpr-bsplit.md
     static const int env_bsplit = getenv("GGML_MM_SKINNY_BSPLIT") ? atoi(getenv("GGML_MM_SKINNY_BSPLIT")) : 0;
-    // GGML_MM_SKINNY_NR0_XL=64|128: rows per threadgroup for weights with >= 65536 rows (the vocab head)
-    static const int env_nr0_xl = getenv("GGML_MM_SKINNY_NR0_XL") ? atoi(getenv("GGML_MM_SKINNY_NR0_XL")) : 0;
-    const int nr0 = (env_nr0_xl >= 16 && op->src[0]->ne[1] >= 65536) ? env_nr0_xl : 32;
 
     snprintf(base, 256, "kernel_mul_mm_skinny_%s_soa_%s", src0_name, ggml_type_name(op->src[1]->type));
-    snprintf(name, 256, "%s_ne12=%d_r2=%d_r3=%d_bsp=%d_nr0=%d", base, ne12, r2, r3, env_bsplit, nr0);
+    snprintf(name, 256, "%s_ne12=%d_r2=%d_r3=%d_bsp=%d", base, ne12, r2, r3, env_bsplit);
 
     ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
     if (!res.pipeline) {
@@ -796,16 +793,15 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm_skinny_so
         ggml_metal_cv_set_int16(cv, (int16_t) r2,   FC_MUL_MM + 4);
         ggml_metal_cv_set_int16(cv, (int16_t) r3,   FC_MUL_MM + 5);
         ggml_metal_cv_set_int16(cv, (int16_t) env_bsplit, FC_MUL_MM + 8);
-        ggml_metal_cv_set_int16(cv, (int16_t) nr0,        FC_MUL_MM + 9);
 
         res = ggml_metal_library_compile_pipeline(lib, base, name, cv);
         ggml_metal_cv_free(cv);
     }
 
-    res.nr0  = nr0;
+    res.nr0  = 32;
     res.nr1  = 8;
-    res.nsg  = nr0/16;
-    res.smem = nr0*64*2 + 64*8*2;
+    res.nsg  = 2;
+    res.smem = 4096 + 1024;
 
     return res;
 }

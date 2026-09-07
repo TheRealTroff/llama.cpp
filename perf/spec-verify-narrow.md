@@ -351,11 +351,17 @@ two-dispatch design the owner put on hold at width 4 (1.09 ms then).
 
 ## Open
 
-- **Adoption (owner):** `LLAMA_SPEC_EV=1` (+14.4% corpus mean, math/JSON +32/+43%, free-form
-  -3..+4% with code-explain the same-sha loss) and `GGML_MM_SKINNY_BSPLIT=2` (byte-identical,
-  -5% per width-8 round, inert at the pick's width). Both on branch `spec-verify-narrow`,
-  unmerged. The controller forks shas across widths - adopting it means a KLD price against the
-  fixed-depth text and a new lineage mint; the skinny flag can go in on its own.
+- **Merged to prod 2026-09-07 as the common branch point for further controller experiments
+  (owner: "the rest are fine"); NOT adopted into either pick.** `GGML_MM_SKINNY_BSPLIT=2` is
+  byte-identical and can go into a pick on its own. **`LLAMA_SPEC_EV=1` NEEDS KLD WORK BEFORE
+  ANY PICK (owner's condition):** it verifies at widths 1-8 per round, i.e. every round's logits
+  come from whichever width kernel family the pick landed on (vector / GQA tile / plain Q8 FA,
+  SoA w3/w4/w5 / skinny matmul), so its distribution is the union of those families' numerics. The
+  price is a KLD (and an agreement/same-top run, since those are decode-path numerics the KLD line
+  cannot see) of the controller's text against the fixed-depth pick's, per line, plus a new lineage
+  mint. Until that row exists the manifest keeps it `proposed`.
+- The refuted NR0 knob (section 9) was stripped from the tree before the merge (owner: "leave out
+  the losing experiment code"); the record stays here and in the README flag table.
 - The remaining free-form deficit is the block-8 drafter tax (4.4 ms) on rounds the pick verifies
   narrow. Width-8 items still open: TOP_K at width 8 (1.8 ms serialized per deep round, linear in
   width; owner's hold), the skinny family's instruction economy (1.5-1.7x floor at width 8, issue-

@@ -3349,7 +3349,7 @@ static int ggml_metal_op_mul_mat_impl(ggml_metal_op_t ctx, int idx, ggml_tensor 
 
         ggml_metal_encoder_set_threadgroup_memory_size(enc, pipeline.smem, 0);
 
-        ggml_metal_encoder_dispatch_threadgroups(enc, ((ne11 + pipeline.nr1 - 1)/pipeline.nr1), ((ne01 + pipeline.nr0 - 1)/pipeline.nr0), ne12*ne13, 32, pipeline.nsg, 1);
+        ggml_metal_encoder_dispatch_threadgroups(enc, ((ne11 + pipeline.nr1 - 1)/pipeline.nr1), ((ne01 + 31)/32), ne12*ne13, 32, 2, 1);
 
         return 1;
     }
