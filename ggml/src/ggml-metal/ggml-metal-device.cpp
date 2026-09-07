@@ -1939,12 +1939,13 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext(
     // GGML_FA_TR=1: pair table in constant memory (byte-identical); 2: staged in threadgroup memory (qtl, byte-identical);
     // 3: qtl with the V loop unrolled 4; 4: half table = the vec kernel's numerics (qth, NOT byte-identical); 5: qth unroll 4;
     // 6: TRN - norms folded out of the dequant, applied per key tile to the score tile (qtn, NOT byte-identical, step 16 C);
-    // 7: TRN + 8-byte loads per two tiles (qtnw); 8: TRN + one load per chunk and shuffles (qtns) (step 16 D); "=0" off
+    // 7: TRN + 8-byte loads per two tiles (qtnw, qtnw16 at Q16); 8: TRN + one load per chunk and shuffles (qtns, refuted);
+    // 9: the byte-identical qtl4 with the 8-byte loads (qtl4w) (step 16 D); "=0" off
     const int fa_tr = ggml_metal_flash_attn_ext_tr(op);
     if (fa_tr > 0) {
-        const char * form = fa_tr == 2 ? "qtl" : fa_tr == 3 ? "qtl4" : fa_tr == 4 ? "qth" : fa_tr == 5 ? "qth4" : fa_tr == 6 ? "qtn" : fa_tr == 7 ? "qtnw" : fa_tr == 8 ? "qtns" : "qt";
+        const char * form = fa_tr == 2 ? "qtl" : fa_tr == 3 ? "qtl4" : fa_tr == 4 ? "qth" : fa_tr == 5 ? "qth4" : fa_tr == 6 ? "qtn" : fa_tr == 7 ? "qtnw" : fa_tr == 8 ? "qtns" : fa_tr == 9 ? "qtl4w" : "qt";
         if (ggml_metal_flash_attn_ext_q16(op, gqa_heads)) {
-            form = fa_tr >= 6 ? "qtn16" : fa_tr >= 4 ? "qth16" : "qt16"; // the 16-row tile: constant or half table (no scratch for the staged one)
+            form = fa_tr == 7 ? "qtnw16" : (fa_tr == 6 || fa_tr == 8) ? "qtn16" : (fa_tr == 4 || fa_tr == 5) ? "qth16" : fa_tr == 9 ? "qt16w" : "qt16"; // the 16-row tile: constant or half table (no scratch for the staged one)
         }
         snprintf(base, 256, "kernel_flash_attn_ext_%s_turbo4_dk%d_dv%d", form, dk, dv);
     }

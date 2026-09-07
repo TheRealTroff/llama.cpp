@@ -12869,9 +12869,9 @@ void kernel_flash_attn_ext_impl(
                 }
 #define TR_PAIR(row, d) (TRM == 1 ? turbo4_pair_at_tg(row, d, slut) : TRM == 2 ? turbo4_pair_at_h(row, d) : TRM == 3 ? turbo4_pair_raw(row, d, sluth) : TRM == 4 ? turbo4_pair_raw_c(row, d) : turbo4_pair_at(row, d))
                 // LD forms: the chunk's 8 bytes per lane first, then the table by byte (TRN arithmetic: TRM 3/4)
-                static_assert(LD == 0 || TRM >= 3, "LD forms are built on the TRN arithmetic");
+                static_assert(LD == 0 || TRM != 2, "LD forms: the float table (constant or staged, byte-identical) or the TRN arithmetic");
 #define TR_BYTES(row, d0, b) { if (LD == 1) turbo4_chunk_bytes_w(row, d0, lc, b); else turbo4_chunk_bytes_s(row, d0, lc, tiisg, b); }
-#define TR_PAIR_B(byte) (TRM == 3 ? sluth[byte] : turbo_pairs_4bit_h[byte])
+#define TR_PAIR_B(byte, nrm) (TRM == 3 ? sluth[byte] : TRM == 4 ? turbo_pairs_4bit_h[byte] : TRM == 1 ? half2(slut[byte]*(nrm)) : half2(turbo_pairs_4bit[byte]*(nrm)))
 
                 // TRN: one accumulator per 128-dim block (its own norm), scaled and summed per key tile
                 constexpr short NB = TRM >= 3 ? DK/QK_TURBO : 1;
@@ -12888,8 +12888,9 @@ void kernel_flash_attn_ext_impl(
 
                 // dims [0, 64): the register head holds the first qr Q^T tiles (qr <= 8 on this path)
                 uchar kb[NC][8];
+                float kn[NC];
                 if constexpr (LD > 0) {
-                    FOR_UNROLL (short ccc = 0; ccc < NC; ++ccc) { TR_BYTES(pkr[ccc], 0, kb[ccc]); }
+                    FOR_UNROLL (short ccc = 0; ccc < NC; ++ccc) { TR_BYTES(pkr[ccc], 0, kb[ccc]); kn[ccc] = TRM <= 1 ? turbo4_norm_at(pkr[ccc], 0) : 1.0f; }
                 }
                 FOR_UNROLL (short tt = 0; tt < 4; ++tt) {
                     q8x8_t mq[2*NQT];
@@ -12900,8 +12901,8 @@ void kernel_flash_attn_ext_impl(
                     FOR_UNROLL (short ccc = 0; ccc < NC; ++ccc) {
                         k8x8_t mk[2];
                         if constexpr (LD > 0) {
-                            ((thread half2 &) mk[0].thread_elements()) = TR_PAIR_B(kb[ccc][2*tt + 0]);
-                            ((thread half2 &) mk[1].thread_elements()) = TR_PAIR_B(kb[ccc][2*tt + 1]);
+                            ((thread half2 &) mk[0].thread_elements()) = TR_PAIR_B(kb[ccc][2*tt + 0], kn[ccc]);
+                            ((thread half2 &) mk[1].thread_elements()) = TR_PAIR_B(kb[ccc][2*tt + 1], kn[ccc]);
                         } else {
                             ((thread half2 &) mk[0].thread_elements()) = TR_PAIR(pkr[ccc], 16*tt + 0 + lc);
                             ((thread half2 &) mk[1].thread_elements()) = TR_PAIR(pkr[ccc], 16*tt + 8 + lc);
@@ -12919,7 +12920,7 @@ void kernel_flash_attn_ext_impl(
                 #pragma unroll 1
                 for (short ch = (bi == 0 ? 1 : bi*CPB); ch < (bi + 1)*CPB; ++ch) {
                     if constexpr (LD > 0) {
-                        FOR_UNROLL (short ccc = 0; ccc < NC; ++ccc) { TR_BYTES(pkr[ccc], 64*ch, kb[ccc]); }
+                        FOR_UNROLL (short ccc = 0; ccc < NC; ++ccc) { TR_BYTES(pkr[ccc], 64*ch, kb[ccc]); kn[ccc] = TRM <= 1 ? turbo4_norm_at(pkr[ccc], 64*ch) : 1.0f; }
                     }
                     FOR_UNROLL (short tt = 0; tt < 4; ++tt) {
                         q8x8_t mq[2*NQT];
@@ -12930,8 +12931,8 @@ void kernel_flash_attn_ext_impl(
                         FOR_UNROLL (short ccc = 0; ccc < NC; ++ccc) {
                             k8x8_t mk[2];
                             if constexpr (LD > 0) {
-                                ((thread half2 &) mk[0].thread_elements()) = TR_PAIR_B(kb[ccc][2*tt + 0]);
-                                ((thread half2 &) mk[1].thread_elements()) = TR_PAIR_B(kb[ccc][2*tt + 1]);
+                                ((thread half2 &) mk[0].thread_elements()) = TR_PAIR_B(kb[ccc][2*tt + 0], kn[ccc]);
+                                ((thread half2 &) mk[1].thread_elements()) = TR_PAIR_B(kb[ccc][2*tt + 1], kn[ccc]);
                             } else {
                                 ((thread half2 &) mk[0].thread_elements()) = TR_PAIR(pkr[ccc], 64*ch + 16*tt + 0 + lc);
                                 ((thread half2 &) mk[1].thread_elements()) = TR_PAIR(pkr[ccc], 64*ch + 16*tt + 8 + lc);
@@ -13258,13 +13259,15 @@ void kernel_flash_attn_ext_impl(
 
                         // the LD forms fetch a 64-dim chunk: only where this simdgroup owns exactly one (NO == 8)
                         uchar vb[8];
+                        float vn = 1.0f;
                         if constexpr (LD > 0 && NO == 8) {
                             TR_BYTES(pvr, 8*NO*sgitg, vb);
+                            if constexpr (TRM <= 1) { vn = turbo4_norm_at(pvr, 8*NO*sgitg); }
                         }
                         FOR_UNROLL (short ii = 0; ii < NO; ++ii) {
                             v8x8_t mv;
                             if constexpr (LD > 0 && NO == 8) {
-                                ((thread half2 &) mv.thread_elements()) = TR_PAIR_B(vb[ii]);
+                                ((thread half2 &) mv.thread_elements()) = TR_PAIR_B(vb[ii], vn);
                             } else {
                                 ((thread half2 &) mv.thread_elements()) = TR_PAIR(pvr, 8*NO*sgitg + 8*ii + lc);
                             }
@@ -13719,6 +13722,10 @@ template [[host_name("kernel_flash_attn_ext_qtnw_turbo4_dk128_dv128")]] kernel f
 template [[host_name("kernel_flash_attn_ext_qtnw_turbo4_dk256_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo4_0, 8, dequantize_turbo4_0, block_turbo4_0, 8, dequantize_turbo4_0, 256, 256, OP_FLASH_ATTN_EXT_NQPSG, OP_FLASH_ATTN_EXT_NCPSG, true, 3, 4, 1>;
 template [[host_name("kernel_flash_attn_ext_qtns_turbo4_dk128_dv128")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo4_0, 8, dequantize_turbo4_0, block_turbo4_0, 8, dequantize_turbo4_0, 128, 128, OP_FLASH_ATTN_EXT_NQPSG, OP_FLASH_ATTN_EXT_NCPSG, true, 3, 4, 2>;
 template [[host_name("kernel_flash_attn_ext_qtns_turbo4_dk256_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo4_0, 8, dequantize_turbo4_0, block_turbo4_0, 8, dequantize_turbo4_0, 256, 256, OP_FLASH_ATTN_EXT_NQPSG, OP_FLASH_ATTN_EXT_NCPSG, true, 3, 4, 2>;
+template [[host_name("kernel_flash_attn_ext_qtl4w_turbo4_dk128_dv128")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo4_0, 8, dequantize_turbo4_0, block_turbo4_0, 8, dequantize_turbo4_0, 128, 128, OP_FLASH_ATTN_EXT_NQPSG, OP_FLASH_ATTN_EXT_NCPSG, true, 1, 4, 1>;
+template [[host_name("kernel_flash_attn_ext_qtl4w_turbo4_dk256_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo4_0, 8, dequantize_turbo4_0, block_turbo4_0, 8, dequantize_turbo4_0, 256, 256, OP_FLASH_ATTN_EXT_NQPSG, OP_FLASH_ATTN_EXT_NCPSG, true, 1, 4, 1>;
+template [[host_name("kernel_flash_attn_ext_qtnw16_turbo4_dk256_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo4_0, 8, dequantize_turbo4_0, block_turbo4_0, 8, dequantize_turbo4_0, 256, 256, 16, OP_FLASH_ATTN_EXT_NCPSG, true, 4, 2, 1>;
+template [[host_name("kernel_flash_attn_ext_qt16w_turbo4_dk256_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo4_0, 8, dequantize_turbo4_0, block_turbo4_0, 8, dequantize_turbo4_0, 256, 256, 16, OP_FLASH_ATTN_EXT_NCPSG, true, 0, 2, 1>;
 template [[host_name("kernel_flash_attn_ext_qtn16_turbo4_dk256_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo4_0, 8, dequantize_turbo4_0, block_turbo4_0, 8, dequantize_turbo4_0, 256, 256, 16, OP_FLASH_ATTN_EXT_NCPSG, true, 4, 2>;
 template [[host_name("kernel_flash_attn_ext_qt16_turbo4_dk256_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo4_0, 8, dequantize_turbo4_0, block_turbo4_0, 8, dequantize_turbo4_0, 256, 256, 16, OP_FLASH_ATTN_EXT_NCPSG, true, 0, 2>;
 template [[host_name("kernel_flash_attn_ext_qth16_turbo4_dk256_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo4_0, 8, dequantize_turbo4_0, block_turbo4_0, 8, dequantize_turbo4_0, 256, 256, 16, OP_FLASH_ATTN_EXT_NCPSG, true, 2, 2>;
