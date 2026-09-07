@@ -55,6 +55,10 @@ be narrow. There is no single correct width across this set.
 Note this does NOT rehabilitate `LLAMA_SPEC_ADAPTIVE` as written: it shortens `n_draft_max`
 (`server-context.cpp:3031-3037`), and per `accept-per-pos-curves` shortening the *draft*
 walks the drafter out of distribution. The lever is still draft-deep / verify-narrow.
+**Both halves superseded 2026-09-07 (`spec-verify-narrow.md`): the 7-depth Turbo4 sweep shows
+the block depth does NOT change the prefix acceptance (matched-sha prompts within +/-2%), so
+shortening the draft is free and draft-deep/verify-narrow only pays the drafter tax; the
+per-round lever is the drafter's own confidence (EV(p), +14% mean over the corpus).**
 
 ## Confounds and what is missing
 

@@ -128,14 +128,69 @@ skinny); a depth controller cannot be sha-gated, its price is a KLD against the 
 ### 5. Verbose-arm timing
 
 Quiet arm (`LV=0`) on benchprompt/01/05: depth-1 rounds 94.85 / 84.98 / 84.72 ms vs verbose
-94.97 / 84.84 / 84.03 - the `-lv 5` distortion is within noise at 300 tokens. (Points that
-overlapped the worktree build are re-run below.)
+94.97 / 84.84 / 84.03 - the `-lv 5` distortion is within noise at 300 tokens. The three points outside 2% (depth-2 benchprompt/01, which overlapped the
+worktree build, and depth-4 05) re-ran at 94.61 / 90.81 / 103.10 vs verbose 95.80 / 90.96 /
+103.21 (TAGs `depthcorpus-turbo4-lv0-rerun-sep07-*`): 21/21 points within 1.3%, the verbose
+arm's timing stands.
+
+### 6. The drafter's confidence IS the per-round signal (`depth-conf-sim.py`, TAG `depthconf-turbo4-n7-sep07`)
+
+`DFLASH_CONF_LOG=1` (this branch) logs, per drafted position on the greedy path, the softmax
+top-1 over the selector's top-k lattice scores (p) and the top-2 margin (m). Block 7 on the 8
+prompts, same shas and survival curves as the sweep (the worktree build reproduces prod).
+
+Calibration, observed positions only, all prompts: p in [0.9,1) accepts 93.7% (n=1378), [0.8,0.9)
+65%, [0.7,0.8) 60%, [0.5,0.7) ~47%, [0.3,0.5) ~35%, below 0.3 ~20%. Monotone; the signal is real.
+
+Policies, priced per round on the recorded block-7 sequences with the sweep's cost table
+(arithmetic on measured components, LOPO = calibration bins fitted on the other 7 prompts):
+
+| policy | mean t/s | vs fixed 3 | free-form (6 prompts) | math / json |
+|---|--:|--:|---|---|
+| fixed 3 (pick) | 31.05 | 0 | 0 | 0 |
+| best fixed per prompt (knows the workload) | 34.90 | +12.4% | 0 | +33 / +41% |
+| leading-run threshold p >= 0.6 | 34.85 | +12.2% | -1..+4% | +31 / +41% |
+| **EV(p), coupled cost** (k = argmax (1+sum survival)/cost, survival from calibrated p) | **36.25** | **+16.7%** | **+2.6..+10%** | +34 / +42% |
+| EV(p), honest decoupled cost (block 7 every round, +4 ms drafter) | **35.39** | **+14.0%** | **-1.0..+4.3%** | +34 / +41% |
+| EV(p), hybrid block = max(4, k_prev+2) | 35.01 | +12.8% | -0.6..+2.7% | +30 / +41% |
+| per-round oracle | 39.33 | +26.7% | +13..+22% | +5 / +2% |
+
+Reading: **a per-round verify depth chosen from the drafter's own confidence beats a
+workload-oracle fixed depth without knowing the workload** (35.4 vs 34.9 mean). On saturated
+text it takes the whole fixed-7 win; on free-form text the confidence gain (+2.6..+10% at
+coupled cost) is halved by the deep block's drafter tax (+4 ms/round, block 8 vs 4), net
+-1..+4%. The per-round oracle says +13..22% is there on free-form text; EV(p) captures ~40% of
+it, the rest is the calibration's ~65% accuracy in the 0.5-0.9 bins. The margin m carries the
+same information (EV(m) 36.25).
+
+What a build would need (not started - owner's call):
+1. `common/speculative.cpp`: a block-depth field separate from the verify cap (the block from
+   `params.n_max`, the truncation at `:2922` from the per-round pick) - ~10 lines.
+2. Expose the per-position p to the server (a vector on the draft params, filled on the greedy
+   path; temperature > 0 already has `dists`).
+3. Server: replace `spec_adaptive_t`'s per-position EMA with a 10-bin acceptance-by-p table
+   (seeded from this file, updated online from the verify result) and the per-width cost EMA
+   seeded from the sweep; per round k = argmax over the efficient widths {1,2,3,4,7} of
+   (1 + sum survival)/cost. Candidate widths 5-6 are dominated on Turbo4 (+3 ms for 7).
+4. Recover the drafter tax: the block-8 draft runs the drafter's projections on the skinny
+   family (14.1 ms vs 10.2 at block 4); a drafter-side width-8 SoA kernel or the hybrid block
+   rule is worth up to +4% on free-form text.
+5. Gate: KLD vs the fixed-depth text (the widths cross three kernel families, section 4), then
+   an interleaved e2e A/B on the corpus against fixed depth 3, per prompt, plus the 2- and
+   4-slot points under `LLAMA_SPEC_SLOT_BUDGET` and a mixed stream.
 
 ## Open
 
-- Everything above until the sweep lands.
-- If the premise holds and the ceiling pays: build the split (block field + verify cap), then
-  the controller on the verify cap with a seeded online cost EMA; KLD-price the width
-  families the controller crosses (the shas will not hold across them).
+- **Build the EV(p) controller?** Owner's call. Priced at +14% mean over this corpus
+  (+34/+41% saturated, -1..+4% free-form) with the honest deep-block cost; every number above
+  is replay arithmetic, the e2e A/B is the proof.
+- Drafter tax of the block-8 draft (4 ms/round) - the free-form half of the win.
 - Width 7-8 GQA-reuse tile: target-side prerequisite for the deep end on Turbo4
-  (`turbo4-fa-gqa-reuse.md` open item 4). Not a drafter lever.
+  (`turbo4-fa-gqa-reuse.md` open item 4). Not a drafter lever (the pick's draft KV is f16,
+  the window caps the drafter's KV at ~1088).
+- Calibration accuracy in the 0.5-0.9 bins (~65%): a second feature (position index, the
+  previous round's outcome) may lift EV(p) toward the oracle. 300-token runs, one rep each,
+  8 prompts - no error bars; math/JSON have 39-41 rounds.
+- Long context: every number here is 8K or shorter. At a filled 96K the width curve flattens
+  (batched FA amortizes the KV stream over the query tile) and the optimum should move deeper;
+  unmeasured.
