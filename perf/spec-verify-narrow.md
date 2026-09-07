@@ -353,7 +353,7 @@ two-dispatch design the owner put on hold at width 4 (1.09 ms then).
 
 - **Merged to prod 2026-09-07 as the common branch point for further controller experiments
   (owner: "the rest are fine"); NOT adopted into either pick.** `GGML_MM_SKINNY_BSPLIT=2` is
-  byte-identical and can go into a pick on its own. **`LLAMA_SPEC_EV=1` NEEDS KLD WORK BEFORE
+  byte-identical and IS in both picks (owner 2026-09-07: "I thought it was in the safe category" - it is). **`LLAMA_SPEC_EV=1` NEEDS KLD WORK BEFORE
   ANY PICK (owner's condition):** it verifies at widths 1-8 per round, i.e. every round's logits
   come from whichever width kernel family the pick landed on (vector / GQA tile / plain Q8 FA,
   SoA w3/w4/w5 / skinny matmul), so its distribution is the union of those families' numerics. The

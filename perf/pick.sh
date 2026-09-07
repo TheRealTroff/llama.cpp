@@ -48,7 +48,7 @@ PICK_MANIFEST=(
   "LLAMA_GDN_REPLAY=1|BI|both|pick|gdn-replay-rollback.md (sha-identical, activation-traced)"
   "DFLASH_FUSED_INJECT=1|BI|both|pick|drafter-graph-count.md"
   "DFLASH_ASYNC_INJECT=1|BI|both|pick|drafter-graph-count.md"
-  "GGML_MM_SKINNY_BSPLIT=2|BI|both|proposed|spec-verify-narrow.md section 8 (-5% per width-8 round, byte-identical)"
+  "GGML_MM_SKINNY_BSPLIT=2|BI|both|pick|spec-verify-narrow.md section 8 (-5% per width-8 round, byte-identical; inert at width 4-5; in both picks since 2026-09-07)"
   # --- UD SoA routes for the K-quant formats, byte-identical vs the block kernels; the stored file
   #     scored identical to the plain file on every KLD statistic under this env (ud-model.md step 15)
   "GGML_MV_SOA_IQ4XS=5|BI|ud|pick|ud-model.md step 6/13"
