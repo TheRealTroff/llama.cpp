@@ -367,8 +367,10 @@ two-dispatch design the owner put on hold at width 4 (1.09 ms then).
   width; owner's hold), the skinny family's instruction economy (1.5-1.7x floor at width 8, issue-
   bound; the head is its best shape, section 9 - NR0 refuted there too).
 - Not measured: 2- and 4-slot points under `LLAMA_SPEC_SLOT_BUDGET` with the controller, long
-  context (the cost curve flattens at 96K and the optimum should move deeper), temperature > 0
-  (conf = the sampled dist's max prob, untested), the f16 line.
+  context (the cost curve flattens at 96K and the optimum should move deeper), ~~temperature > 0
+  (conf = the sampled dist's max prob, untested)~~ (2026-09-07: the sampled path pushed conf
+  TWICE per position, fixed on `spec-heated`; heated acceptance at the pick measured in
+  `spec-heated.md` - the controller itself still unrun heated), the f16 line.
 - Trajectory noise: free-form per-prompt cells fork sha and swing +/-10%; a corpus-level number
   needs more prompts or longer completions to tighten below the ~3% the mean carries now.
 - 07-shell-script emits EOS first on raw `/completion` at temperature 0; excluded throughout.

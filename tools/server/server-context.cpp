@@ -472,6 +472,7 @@ struct server_slot {
         }
     } spec_ev;
     std::vector<float> spec_conf;
+    int spec_accept_route = 0; // 0 unknown, 1 greedy match, 2 residual sampling (logged on change)
 
     // TODO: move members that belong to the task (such as `generated_text`, `has_new_line`) to task_results_state
     //       see https://github.com/ggml-org/llama.cpp/pull/18283#issuecomment-3710175837
@@ -601,6 +602,7 @@ struct server_slot {
             spec_ckpt.clear();
             spec_adaptive.inited = false;
             spec_conf.clear();
+            spec_accept_route = 0;
             if (spec_ev.inited) {
                 spec_ev.begin_request();
             }
@@ -4201,8 +4203,18 @@ private:
                 const bool can_rollback =
                     ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_PART ||
                     (ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_RS && n_draft <= llama_n_rs_seq(ctx_tgt));
-                auto accepted = can_rollback && slot.task->params.sampling.temp > 0.0f &&
-                                slot.spec_dists.size() == slot.spec_draft.size()
+                const bool use_residual = can_rollback && slot.task->params.sampling.temp > 0.0f &&
+                                slot.spec_dists.size() == slot.spec_draft.size();
+                // prove the route once per slot per task (perf/spec-heated.md): a heated request that silently
+                // fell to the greedy-match path would report acceptance collapse as a drafter property
+                if (slot.spec_accept_route != (use_residual ? 2 : 1)) {
+                    slot.spec_accept_route = use_residual ? 2 : 1;
+                    SLT_INF(slot, "spec-accept route: %s (temp=%.2f, can_rollback=%d, dists=%zu/%zu)\n",
+                            use_residual ? "residual sampling" : "greedy match",
+                            (double) slot.task->params.sampling.temp, (int) can_rollback,
+                            slot.spec_dists.size(), slot.spec_draft.size());
+                }
+                auto accepted = use_residual
                     ? common_sampler_sample_and_accept_n(slot.smpl.get(), slot.ctx_tgt, slot.spec_i_batch, slot.spec_draft, slot.spec_dists)
                     : common_sampler_sample_and_accept_n(slot.smpl.get(), slot.ctx_tgt, slot.spec_i_batch, slot.spec_draft);
                 slot.spec_i_batch.clear();
