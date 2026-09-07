@@ -2819,6 +2819,7 @@ static bool ggml_metal_mul_mat_use_f16_src1_mm(const ggml_tensor * op) {
     }
     switch (op->src[0]->type) {
         case GGML_TYPE_Q4_0: (void) acc_half; return true; // acch tiles have f16-B instantiations too
+        case GGML_TYPE_Q4_0_SOA: return true;              // the stored file, same tiles (ud-model.md step 16 F)
         case GGML_TYPE_Q8_0:
         case GGML_TYPE_IQ4_NL:
         case GGML_TYPE_Q3_K:
@@ -4308,7 +4309,7 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
 
     if (!use_vec) {
         // half8x8 kernel
-        const int nqptg = ggml_metal_flash_attn_ext_q16(op) ? 16 : OP_FLASH_ATTN_EXT_NQPSG; // queries per threadgroup
+        const int nqptg = ggml_metal_flash_attn_ext_q16(op, use_gqa_reuse ? gqa_ratio : 1) ? 16 : OP_FLASH_ATTN_EXT_NQPSG; // queries per threadgroup
         const int ncpsg = OP_FLASH_ATTN_EXT_NCPSG; // cache values per simdgroup
 
         GGML_ASSERT(nqptg <= 32);
@@ -4393,7 +4394,9 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
             ggml_metal_op_concurrency_reset(ctx);
         }
 
-        const int is_q = ggml_is_quantized(op->src[1]->type) ? 1 : 0;
+        // the Turbo4 TR form dequantizes into registers and needs no K scratch; at the 16-row tile the
+        // rest of the layout is exactly the 32 KB threadgroup budget (perf/ud-model.md step 16)
+        const int is_q = ggml_is_quantized(op->src[1]->type) && !(nqptg == 16 && ggml_metal_flash_attn_ext_tr(op) > 0) ? 1 : 0;
 
         // 2*(2*ncpsg)
         // ncpsg soft_max values + ncpsg mask values

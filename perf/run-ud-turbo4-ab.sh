@@ -38,7 +38,7 @@ PICK_ENV=(GGML_MV_NC=2 GGML_MM_SKINNY=6 GGML_MM_SKINNY_SOA=1
 # NO_UD_SOA=1 drops the two UD SoA routes (the Q4_0 line's pick env exactly)
 [ "${NO_UD_SOA:-0}" = 1 ] && PICK_ENV=("${PICK_ENV[@]:0:${#PICK_ENV[@]}-2}")
 # keep in sync with run-prod-pick.sh TURBO_PICK_ENV
-TURBO_ENV=(TURBO_AUTO_ASYMMETRIC=0 GGML_FA_GQA_HEADS=4,6 GGML_FA_GQA4_NWG=6 GGML_FA_GQA_W3_NWG=13)
+TURBO_ENV=(TURBO_AUTO_ASYMMETRIC=0 GGML_FA_GQA_HEADS=4,6 GGML_FA_GQA4_NWG=6 GGML_FA_GQA_W3_NWG=13 GGML_FA_TR=9)
 printf 'label\tkv\tdepth\tctx\ttps\taccept_pct\tpredicted_n\tprompt_ms\tsha1\tfootprint\twired_anon_gib\n' > "$TSV"
 echo "=== UD x Turbo4 KV A/B: $TAG ==="
 echo "commit : $(cd "$B" && git rev-parse --short HEAD) on $(cd "$B" && git rev-parse --abbrev-ref HEAD)"

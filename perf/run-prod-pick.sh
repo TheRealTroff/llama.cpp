@@ -85,7 +85,8 @@ PICK_ENV=(GGML_MV_NC=2 GGML_MM_SKINNY=6 GGML_MM_SKINNY_SOA=1
 # width: 2.1% faster per round than f16 at the same width, 4.65 GiB less RSS). Opt in
 # with TURBO=1; the f16 arms above are unaffected.
 TURBO_PICK_ENV=("${PICK_ENV[@]}" TURBO_AUTO_ASYMMETRIC=0
-                GGML_FA_GQA_HEADS=4,6 GGML_FA_GQA4_NWG=6 GGML_FA_GQA_W3_NWG=13)
+                GGML_FA_GQA_HEADS=4,6 GGML_FA_GQA4_NWG=6 GGML_FA_GQA_W3_NWG=13
+                GGML_FA_TR=9)  # the register-resident Turbo4 FA form, byte-identical (owner 2026-09-07; ud-model.md step 16 B-D)
 TURBO=${TURBO:-0}
 # LV=5 (with GGML_METAL_LOG_LEVEL=2 in the environment) makes the server log name every
 # compiled pipeline, which is how a route is proved; default verbosity hides it.

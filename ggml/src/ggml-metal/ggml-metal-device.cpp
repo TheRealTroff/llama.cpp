@@ -1116,17 +1116,23 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm(ggml_meta
     // the f32 K-quant tiles, whose dequant tax is larger (GGML_MM_N64_KMAX, default 6144)
     static const int n64_kmax = getenv("GGML_MM_N64_KMAX") ? atoi(getenv("GGML_MM_N64_KMAX")) : 6144;
     // (!bc_out: the f32 tile's bounds-checked store path would need 16 KiB of threadgroup memory)
-        const bool n64_shape = n64_enabled && (tsrc1 == GGML_TYPE_F32 || tsrc1 == GGML_TYPE_F16) && !has_tensor && !bc_inp && !bc_out && tsrc0 != GGML_TYPE_Q4_0_SOA &&
+    // the stored Q4_0_SOA file takes the same acch / n64 / f16-B tiles as the plain file: the tile body's
+    // SoA reader (FC_mul_mm_soa) is dispatched on the block type, which these instantiations share
+    // (perf/ud-model.md step 16 F: without this the stored file prefilled +13% on another lineage).
+    // GGML_MM_SOA_ACCH=0 restores the old routing for an A/B.
+    static const bool soa_acch = !getenv("GGML_MM_SOA_ACCH") || atoi(getenv("GGML_MM_SOA_ACCH")) != 0;
+    const bool q40_like = tsrc0 == GGML_TYPE_Q4_0 || (soa_acch && tsrc0 == GGML_TYPE_Q4_0_SOA);
+    const bool n64_shape = n64_enabled && (tsrc1 == GGML_TYPE_F32 || tsrc1 == GGML_TYPE_F16) && !has_tensor && !bc_inp && !bc_out && (tsrc0 != GGML_TYPE_Q4_0_SOA || soa_acch) &&
         op->ne[0] >= 4096 && op->ne[1] == 512 && op->src[0]->ne[0] <= n64_kmax &&
         op->ne[0] % 64 == 0;
-    const bool n64 = n64_shape && acc_half && tsrc0 == GGML_TYPE_Q4_0;
+    const bool n64 = n64_shape && acc_half && q40_like;
     // f32-accumulate 64-column tiles for the UD line's formats (and q4_0 without acch)
     static const bool n64_f32_enabled = !getenv("GGML_MM_N64_F32") || atoi(getenv("GGML_MM_N64_F32")) != 0;  // GGML_MM_N64_F32=0 = A/B off switch
-    const bool n64_f32 = n64_f32_enabled && n64_shape && !(acc_half && tsrc0 == GGML_TYPE_Q4_0) &&
+    const bool n64_f32 = n64_f32_enabled && n64_shape && !(acc_half && q40_like) &&
         (tbase == GGML_TYPE_Q4_0 || tbase == GGML_TYPE_Q4_K || tbase == GGML_TYPE_Q5_K ||
          tbase == GGML_TYPE_Q6_K || tbase == GGML_TYPE_Q3_K || tbase == GGML_TYPE_IQ4_XS ||
          tbase == GGML_TYPE_IQ3_S || tbase == GGML_TYPE_IQ4_NL);
-    if (!soa && acc_half && tsrc0 == GGML_TYPE_Q4_0 && (tsrc1 == GGML_TYPE_F32 || tsrc1 == GGML_TYPE_F16) && !has_tensor) {
+    if ((!soa || q40_like) && acc_half && q40_like && (tsrc1 == GGML_TYPE_F32 || tsrc1 == GGML_TYPE_F16) && !has_tensor) {
         snprintf(base, 256, n64 ? "kernel_mul_mm_acch_n64_q4_0_%s" : "kernel_mul_mm_acch_q4_0_%s", ggml_type_name(tsrc1));
         } else if (n64_f32) {
         snprintf(base, 256, "kernel_mul_mm_n64_%s_%s", ggml_type_name(tbase), ggml_type_name(tsrc1));
@@ -1835,19 +1841,43 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext_b
 
 // GGML_FA_Q16=1: the 16-row query tile of the transposed-Q f16 kernel for prefill-sized query batches
 // (perf/fa-long-context.md); "=0" off
-bool ggml_metal_flash_attn_ext_q16(const ggml_tensor * op) {
+// GGML_FA_TR: the TR form of the Turbo4 batched FA kernel (perf/ud-model.md step 16); 0 = off
+int ggml_metal_flash_attn_ext_tr(const ggml_tensor * op) {
+    static const int fa_tr = getenv("GGML_FA_TR") != nullptr ? atoi(getenv("GGML_FA_TR")) : 0;
+    static const bool fa_acc_half = getenv("GGML_FA_ACC_HALF") != nullptr;
+    const int32_t dk = (int32_t) op->src[1]->ne[0];
+    const int32_t dv = (int32_t) op->src[2]->ne[0];
+    if (fa_tr > 0 && !fa_acc_half && op->src[1]->type == GGML_TYPE_TURBO4_0 && op->src[2]->type == GGML_TYPE_TURBO4_0 && dk == dv && (dk == 128 || dk == 256)) {
+        return fa_tr;
+    }
+    return 0;
+}
+
+bool ggml_metal_flash_attn_ext_q16(const ggml_tensor * op, int32_t gqa_heads) {
     static const bool fa_q16 = getenv("GGML_FA_Q16") != nullptr && atoi(getenv("GGML_FA_Q16")) != 0;
     static const bool fa_qt  = getenv("GGML_FA_QT")  != nullptr && atoi(getenv("GGML_FA_QT"))  != 0;
     static const bool fa_acc_half = getenv("GGML_FA_ACC_HALF") != nullptr; // presence-based, as the FA getter reads it
     if (!fa_q16 || !fa_qt || fa_acc_half) {
         return false;
     }
+    // the Turbo4 TR form has the same 16-row tile (perf/ud-model.md step 16)
+    const bool tr16 = ggml_metal_flash_attn_ext_tr(op) > 0 && op->src[1]->type == GGML_TYPE_TURBO4_0;
+    if (!tr16 && !(op->src[1]->type == GGML_TYPE_F16 && op->src[2]->type == GGML_TYPE_F16)) {
+        return false;
+    }
     // pays from ~32K cache entries up (-12..-16% at 48K, -21% at 96K), flat at 24K, +7% at 8K: the 16-row
     // tile halves the cache stream per query, which is the bound only at long context
     static const int fa_q16_kvmin = getenv("GGML_FA_Q16_KVMIN") != nullptr ? atoi(getenv("GGML_FA_Q16_KVMIN")) : 32768;
-    return op->src[1]->type == GGML_TYPE_F16 && op->src[2]->type == GGML_TYPE_F16 &&
-           op->src[0]->ne[0] == 256 && op->src[2]->ne[0] == 256 && op->src[0]->ne[1] >= 32 &&
-           op->src[1]->ne[1] > fa_q16_kvmin;
+    if (op->src[0]->ne[0] != 256 || op->src[2]->ne[0] != 256 || op->src[1]->ne[1] <= fa_q16_kvmin) {
+        return false;
+    }
+    if (op->src[0]->ne[1] >= 32) {
+        return true; // prefill-sized query batches
+    }
+    // decode: the Turbo4 TR form packs the GQA rows (ne01 x gqa_heads) into 16-row threadgroups when
+    // GGML_FA_Q16_DEC=1 - each dequantized K/V tile then feeds two query tiles (perf/ud-model.md step 16 B)
+    static const bool fa_q16_dec = getenv("GGML_FA_Q16_DEC") != nullptr && atoi(getenv("GGML_FA_Q16_DEC")) != 0;
+    return fa_q16_dec && tr16 && op->src[0]->ne[1]*gqa_heads >= 16;
 }
 
 ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext(
@@ -1907,8 +1937,23 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext(
     if (fa_qt && !fa_acc_half && op->src[1]->type == GGML_TYPE_F16 && op->src[2]->type == GGML_TYPE_F16 && dk == dv && (dk == 128 || dk == 256)) {
         snprintf(base, 256, "kernel_flash_attn_ext_qt_f16_dk%d_dv%d", dk, dv);
     }
-    if (ggml_metal_flash_attn_ext_q16(op)) {
+    if (ggml_metal_flash_attn_ext_q16(op, gqa_heads)) {
         snprintf(base, 256, "kernel_flash_attn_ext_qt16_f16_dk%d_dv%d", dk, dv);
+    }
+    // TR form for the Turbo4 cache (perf/ud-model.md step 16): the transposed-Q form with the K/V tiles
+    // dequantized into the simdgroup matrices by their owning lanes; "=0" off
+    // GGML_FA_TR=1: pair table in constant memory (byte-identical); 2: staged in threadgroup memory (qtl, byte-identical);
+    // 3: qtl with the V loop unrolled 4; 4: half table = the vec kernel's numerics (qth, NOT byte-identical); 5: qth unroll 4;
+    // 6: TRN - norms folded out of the dequant, applied per key tile to the score tile (qtn, NOT byte-identical, step 16 C);
+    // 7: TRN + 8-byte loads per two tiles (qtnw, qtnw16 at Q16); 8: TRN + one load per chunk and shuffles (qtns, refuted);
+    // 9: the byte-identical qtl4 with the 8-byte loads (qtl4w) (step 16 D); "=0" off
+    const int fa_tr = ggml_metal_flash_attn_ext_tr(op);
+    if (fa_tr > 0) {
+        const char * form = fa_tr == 2 ? "qtl" : fa_tr == 3 ? "qtl4" : fa_tr == 4 ? "qth" : fa_tr == 5 ? "qth4" : fa_tr == 6 ? "qtn" : fa_tr == 7 ? "qtnw" : fa_tr == 8 ? "qtns" : fa_tr == 9 ? "qtl4w" : "qt";
+        if (ggml_metal_flash_attn_ext_q16(op, gqa_heads)) {
+            form = fa_tr == 7 ? "qtnw16" : (fa_tr == 6 || fa_tr == 8) ? "qtn16" : (fa_tr == 4 || fa_tr == 5) ? "qth16" : fa_tr == 9 ? "qt16w" : "qt16"; // the 16-row tile: constant or half table (no scratch for the staged one)
+        }
+        snprintf(base, 256, "kernel_flash_attn_ext_%s_turbo4_dk%d_dv%d", form, dk, dv);
     }
     // QT form only: Q^T tiles held in registers across the KV loop (perf/fa-long-context.md); "=0" off
     static const int fa_qr = getenv("GGML_FA_QR") != nullptr ? atoi(getenv("GGML_FA_QR")) : 0; // Q^T tiles in registers
@@ -1917,7 +1962,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext(
     // every length (perf/fa-long-context.md). GGML_FA_QR_KVMAX overrides the prefill cutoff.
     static const int fa_qr_kvmax = getenv("GGML_FA_QR_KVMAX") != nullptr ? atoi(getenv("GGML_FA_QR_KVMAX")) : 65536;
     const bool qr_len_ok = nwg > 1 || op->src[1]->ne[1] <= fa_qr_kvmax;
-    const int qr = (fa_qr > 0 && qr_len_ok && strstr(base, "_qt_") != nullptr) ? std::min(fa_qr, dk/8) : 0;
+    const int qr = (fa_qr > 0 && qr_len_ok && strstr(base, "_qt") != nullptr) ? std::min(fa_qr, dk/8) : 0;
 
     snprintf(name, 256, "%s_mask=%d_sinks=%d_bias=%d_scap=%d_kvpad=%d_bcm=%d_ns10=%d_ns20=%d_nsg=%d_nwg=%d_gqah=%d%s%s",
             base,

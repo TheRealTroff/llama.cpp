@@ -10592,12 +10592,19 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
         test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {6, 1}, kv, 512, true, false, 0, 0,
                                                         GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
     }
-    // the decode/verify widths at a 24K and a 96K cache (perf/fa-long-context.md)
-    for (int64_t kv : { 24576, 98304 }) {
-        for (int nb : { 3, 4, 5 }) {
-            test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {6, 1}, kv, nb, true, false, 0, 0,
-                                                            GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
+    // the decode/verify widths at a 24K and a 96K cache (perf/fa-long-context.md); the Turbo4 line's
+    // kernels at the same shapes, prefill included (perf/ud-model.md step 16: the Turbo4 FA port)
+    for (ggml_type type_KV : { GGML_TYPE_F16, GGML_TYPE_TURBO4_0 }) {
+        for (int64_t kv : { 24576, 98304 }) {
+            for (int nb : { 3, 4, 5 }) {
+                test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {6, 1}, kv, nb, true, false, 0, 0,
+                                                                GGML_PREC_F32, type_KV, type_KV));
+            }
         }
+    }
+    for (int64_t kv : { 8448, 24576, 98304 }) {
+        test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {6, 1}, kv, 512, true, false, 0, 0,
+                                                        GGML_PREC_F32, GGML_TYPE_TURBO4_0, GGML_TYPE_TURBO4_0));
     }
 
     // Filled 100 Ki-token cache: performance-only coverage for the four GQA-reuse widths.

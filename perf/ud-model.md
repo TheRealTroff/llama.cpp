@@ -1084,3 +1084,363 @@ the Turbo4 kernels - the transposed-Q / QR register-tile forms and the Q=16 pref
 quantized-K prefill kernel, and QR for the GQA decode tile - and re-measure the Turbo4 line at 96K
 before quoting the 2026-09-02 comparison again.** Until then the Turbo4 pick is a memory pick, not a
 speed pick, at any context. Reference logits kept at `kvquant-experiments/logits/` (26 GB).
+
+### Step 16 B: the Turbo4 FA port, built (2026-09-06 night, owner: "use all of our tools to make it fast"), branch `turbo4-fa-stack`
+
+Tools in the order used: the per-call timing table (`run-turbo4-fa-timing.sh`), the GPU trace of the
+Turbo4 kernel beside its f16 twin (`run-turbo4-fa-profile.sh`, `profiles/turbo4-fa-sep06`), a half8x8
+lane-map probe (`probe-thread-elements-half.*`), the spill prescreen over every candidate form, then the
+e2e sha gates. Perf cases added: Turbo4 at kv 24576/98304 widths 3-5 and prefill 512 rows at 8448/24576/98304;
+`kernel-census.py` FA filter takes `CENSUS_KV=turbo4` and snaps to the long cases.
+
+**What the trace said.** The Turbo4 batched kernel (`kernel_flash_attn_ext_turbo4_dk256_dv256`) has the same
+static size as the f16 QT kernel (992 vs 1067 instructions, 60 vs 96 registers, 0 spill) but executes
+**3.2x the dynamic instructions per decode dispatch (17.1M vs 5.3M) at 50% issue / 50% stall** (f16: 82/18);
+prefill 2.4x (2091M vs 861M) at 62/38. Its quantized branch - the source says "not optimized yet" -
+dequantizes 4x4 blocks into a threadgroup scratch, barriers, loads the tiles back TRANSPOSED (3 load
+instructions each, the same tax the f16 QT form removed), reloads the Q tiles per key tile, and on the V
+side round-trips the O accumulators through threadgroup memory per key tile (8x per chunk where f16 does it
+once). Hot loop 308 instructions with 75 device loads.
+
+**The TR form.** The measured lane map of an 8x8 simdgroup tile (both elements of a lane share a row;
+row = ((lane >> 1) & 3) + 4*(lane >> 4), first column 2*(lane & 1) + 4*((lane >> 3) & 1) - re-measured for
+`simdgroup_half8x8` in both directions, load and store round-trip exact) means each lane owns two ADJACENT
+elements of one cache row, and a Turbo4 byte holds exactly two adjacent nibbles. So every K and V tile is
+dequantized by its owning lanes straight into the matrix registers through `thread_elements()`: one byte
+load, one pair-table lookup, two float multiplies, one half2 conversion per tile per lane; no scratch, no
+barrier, no transposed load. QK runs the f16 kernel's S^T = K Q^T form with the register head (qr) and the
+transposed Q staging; the V side keeps this simdgroup's contiguous 64 output dims in registers across the
+key tiles. Same arithmetic as `dequantize_turbo4_0` (float centroid x float norm, then the half conversion
+the half4x4 store did) and the same k order per tile: **byte-identical to the scratch kernel - UD 8K Turbo4
+sha `2802eb28cd29` reproduced, 25.11 t/s (24.57/24.80 before), prefill 67.0 s (68.1).** Instantiations
+`kernel_flash_attn_ext_qt_turbo4_dk{128,256}` and variants; routed by `GGML_FA_TR` ("=0" off):
+
+| `GGML_FA_TR` | form | numerics |
+|---|---|---|
+| 1 | `qt`: pair table in constant memory, V loop unroll 2 | byte-identical |
+| 2 | `qtl`: pair table staged once per threadgroup into the K scratch the TR path leaves unused (2 KB), unroll 2 | byte-identical |
+| **3** | `qtl4`: as 2, V loop unroll 4 | byte-identical |
+| 4 / 5 | `qth` / `qth4`: half pair table x half norm, one packed multiply = the vec kernel's arithmetic | NOT byte-identical (KLD-priced option) |
+| + `GGML_FA_Q16=1` | `qt16` / `qth16`: the 16-row query tile (8 simdgroups) for prefill caches > 32K; each dequantized tile feeds two query tiles; no K scratch, the layout is exactly 32 KB | as the base form |
+
+Prescreen (`agx-spill-probe.py`, decode nsg 4 gqah 6 qr 8 / prefill): `qt` 32 / 16 B, `qtl` 0 / 0, `qtl4`
+16 / 0, `qth` 0 / 0, `qth4` 48 / 32, `qt16`/`qth16` 0 at nsg 8; V unroll 1 is 0 spill everywhere and
+5-10% SLOWER than unroll 2 (the 32 B spill was free, the unroll was not); unroll 8 spills 64-112 B. All
+Turbo4 FA cases pass against the CPU reference for every form (41/41, Q16 forced with `GGML_FA_Q16_KVMIN=0`).
+
+**Per call (us; prefill ms), `test-backend-ops perf`, 2 interleaved reps, gqah 6 nwg 8 at decode:**
+
+| shape | scratch (prod) | TR=1 `qt` | TR=3 `qtl4` | TR=5 `qth4` | f16 (QT+QR, Q16 > 32K) | TR=3 vs scratch | TR=3 vs f16 |
+|---|--:|--:|--:|--:|--:|--:|--:|
+| 8K, width 4 | 430 | 290 | **268** | 271 | 206 | -38% | 1.30x |
+| 8K, width 5 | 486 | 358 | **324** | 329 | 271 | -33% | 1.20x |
+| 8K, prefill 512 | 40.2 | 29.5 | **23.6** | 24.2 | 17.4 | -41% | 1.36x |
+| 24K, width 4 | 1298 | 875 | **797** | 813 | 573 | -39% | 1.39x |
+| 24K, width 5 | 1434 | 1050 | **944** | 961 | 764 | -34% | 1.24x |
+| 24K, prefill 512 | 117.2 | 85.7 | **68.4** | | 53.5 | -42% | 1.28x |
+| 96K, width 4 | 5112 | 3443 | **3120** | 3173 | 2272 | -39% | 1.37x |
+| 96K, width 5 | 5638 | 4144 | **3717** | | 3040 | -34% | 1.22x |
+| 96K, prefill 512, Q=8 | 475.7 | 320.5 | 288.5 | | | -39% | |
+| 96K, prefill 512, Q=16 | | | **264.0** | 255.0 | 230.0 | **-45%** | 1.15x |
+
+Reading: the threadgroup-staged table is the bigger of the two table levers on prefill (-15% at 8K: the
+constant-memory lookups were the stall), the V unroll 4 another 3-5%; the half-numerics forms buy only
+1-4% more and change the text - **refuted as a lever**, the byte-identical form wins on merit. The 16-row
+tile pays -8.4% at the 96K prefill for Turbo4 (each dequantized tile now feeds two query tiles). The
+register head at the 96K prefill (`GGML_FA_QR_KVMAX=200000`) is -1.5% for Turbo4 (f16 inverted there);
+left at the f16 gate. Per-instruction trace of the TR decode kernel: 11.8M dynamic instructions per
+dispatch (2.2x f16), 66% issue / 34% stall, the QK chunk loop 285 instructions per 64 dims (16 tiles, 16
+MMAs) and the V loop 83 per key tile (8 tiles) - about ten instructions per dequantized tile against the
+f16 path's one load, which is the whole remaining gap.
+
+**The Q=16 tile at decode: REFUTED** (built anyway - `GGML_FA_Q16_DEC=1`, `case 8` GQAH 4/6 instantiations,
+41/41 cases, 0 spill - on the argument that the per-row dequant halves; the owner pointed out the f16
+record had refuted it ahead of time: the tile buys half the cache stream per query and pays only where the
+stream is the bound, and decode at width 4 is instruction-bound at every length). At 96K width 4: 3990 us vs
+3130 for the 8-row TR form (+27%), width 5 3993 vs 3714; unchanged below 32K (gate). The dequant count
+was not what mattered: the 24 GQA rows leave the second 16-row threadgroup two-thirds empty and the tile
+gives up the threadgroup-staged table. Off by default; do not retry on the amortization hunch.
+**Open on the kernel:** a cheaper per-tile dequant (the four lanes of a row read the same 4-byte word and
+the same table entry - a lane-cooperative form would trade loads for shuffles, which lost on the iq4_xs
+kernel); the Q4_0-line 8K prefill route question (below).
+
+**E2e, UD (stored file, pick env + Turbo4 flags, `GGML_FA_TR=3`, branch build):**
+
+| arm | prefill | decode t/s | acc | verify round | prefill ubatch | sha |
+|---|--:|--:|--:|--:|--:|---|
+| 8K Turbo4 depth 3, prod kernel (morning) | 68.1 s | 24.57 / 24.80 | 66.9% | | | `2802eb28cd29` |
+| 8K Turbo4 depth 3, TR (x2, f16 control 24.53 in the same run) | 66.3 / 66.5 s | **25.37 / 25.47** | 66.9% | | | `2802eb28cd29` |
+| 96K f16 depth 3 (morning) | 1102.1 s | 15.97 | 48.2% | 134.9 ms | 16.96 s | `0f1e46f3edbf` |
+| 96K Turbo4 depth 3, prod kernel (morning) | 1375.3 s | 13.00 | 52.6% | 181.2 ms | 21.16 s | `3b4127a77a1d` |
+| 96K Turbo4 depth 3, TR | **1139.7 s (-17%)** | **14.41 (+11%)** | 52.6% | **151.4 ms (-16%)** | 17.54 s | `3b4127a77a1d` |
+
+Byte-identical at both lengths. At 96K the Turbo4 prefill is now +3.4% over f16 (was +25%) and the round
++12% (was +34%); the round's remaining gap is the decode FA kernel at 1.37x f16 per call (~50 vs 36 ms of
+the round across the 16 attention layers). The 8K t/s lead over f16 is the trajectory's acceptance (66.9
+vs 60.9% on this prompt), not the kernel - compare round times, not t/s, across cache types.
+
+**E2e, Q4_0 line (the Turbo4 pick's own file, `-c 102400`, pick env + Turbo4 flags, `GGML_FA_TR=3`):**
+
+| arm | prefill | decode t/s | acc | verify round | prefill ubatch | sha |
+|---|--:|--:|--:|--:|--:|---|
+| 8K Turbo4 depth 3 @600: prod kernel / TR / TR | 68.8 / 69.0 / 68.8 s | 31.18 / 30.99 / 31.06 | 70.7% | | | `12c3dc6bb2dd` (canonical) |
+| 96K f16 depth 3 @600 (hot machine, see below) | 1136.4 s | 19.05 | 51.7% | 119.1 ms | 17.50 s | `94e3851bd506` (= the 2026-09-02 f16 text) |
+| 96K Turbo4 depth 3 @600, TR (same state) | 1166.5 s (+2.7%) | 17.39 | 52.0% | **132.3 ms (+11%)** | 17.97 s | `de52f2778bc1` (= the 2026-09-02 Turbo4 text) |
+
+Both shas are the 2026-09-02 filled-100k texts to the byte. Turbo4's 96K round on the Q4_0 file:
+**182 ms (2026-09-02 and this morning's kernel) -> 132 ms**, f16's 119. At 8K on Q4_0 the TR form is a
+wash (the FA share of an 8K round is small and the prefill did not move: the 8K prefill on this line has
+been 8-13% behind the f16 line since its first mint - 71.5 s vs 63.0 on 2026-09-04, 68.8 vs 60.5 tonight -
+route proof with `-lv 5` is the next batch). **Hot-machine caveat:** the f16 96K arm ran third in a row of
+20-minute GPU runs and prefilled in 1136 s against the 1015 s on record (`fa-long-context.md`) - the f16
+kernels' native text is byte-identical between prod and this branch at every production specialization
+(9268 / 11728 / 10638 B, prescreen), and the text sha matches, so the difference is machine state; the
+Turbo4 arm ran right after it in the same state, which is what the pair compares. Re-run the f16 arm cold
+before quoting either absolute.
+
+**Route proof, Q4_0 8K prefill (`-lv 5` + `GGML_METAL_LOG_LEVEL=2`, so the absolutes carry logging overhead;
+compare within the batch):** f16 68.06 s; Turbo4 prod kernel 70.80 / 70.67 s (`-c` 10240 / 102400: the
+allocation is inert here too); Turbo4 TR 68.86 / 68.85 s. Pipelines named in the runs: TR arms
+`kernel_flash_attn_ext_qtl4_turbo4_dk256_dv256` at nsg=4 nwg=1 gqah=1 (prefill) and nwg=8 gqah=6 (decode),
+prod arms `kernel_flash_attn_ext_turbo4_dk256_dv256` at the same shapes, both lines the vec kernel at
+width 1. So the Turbo4 line's 8K prefill sits +1.2% over f16 with the TR form (was +3.9% in the same
+state; the 8-13% in the mints was cross-day machine state). Decode at 8K: 31.2 vs 30.2 t/s with logging,
+31.0/31.1 vs 31.2 without - a wash, as the FA share of an 8K round predicts.
+
+### Where the Turbo4 line stands after the port (2026-09-06 night)
+
+| | f16 | Turbo4, prod kernel | Turbo4, TR (`GGML_FA_TR=3`) |
+|---|--:|--:|--:|
+| Q4_0 96K verify round | 119 ms | 182 ms | **132 ms** (+11% vs f16) |
+| Q4_0 96K prefill ubatch | 17.50 s | 21.2 s (UD-measured ratio) | **17.97 s** (+2.7%) |
+| UD 96K verify round | 135 ms | 181 ms | **151 ms** (+12%) |
+| UD 96K prefill | 1102 s | 1375 s | **1140 s** (+3.4%) |
+| 8K decode / prefill (either file) | - | wash / +4% | wash / +1% |
+| memory at 96K | +4.7 GiB | | |
+
+Every arm byte-identical to the Turbo4 line's recorded texts. **Adoption = owner:** `GGML_FA_TR=3` into
+`TURBO_PICK_ENV` (`GGML_FA_Q16=1` is already in the pick and now routes the Turbo4 16-row prefill tile).
+Follow-ups: the f16 Q4_0 96K arm re-run cold (tonight's 1136 s vs 1015 on record is machine state); the
+per-tile dequant is the remaining 1.3-1.4x on the decode FA call (~13 ms of the 96K round).
+
+### Step 16 C: the per-tile dequant - the norm folded out (2026-09-06 late, owner: "Anything you can do about the per-tile dequant?")
+
+The TR form's ten instructions per tile are one byte load, one table load, two float multiplies by the
+block norm, two half converts and the pack; byte identity with the scratch kernel pins the multiplies
+(half(centroid x norm) per element). The norm is per cache row and per 128-dim block, so the TRN form
+(`GGML_FA_TR=6`, `kernel_flash_attn_ext_qtn_turbo4_*`, `qtn16` at the 16-row prefill tile) takes it out
+of the dequant: K accumulates S^T against the raw half centroids with one accumulator per block and each
+lane scales its row (= its key) by the two block norms once per key tile (4 multiplies instead of 32);
+V scales the P tile's key columns by the norms of this simdgroup's dim block once per key tile (2 instead
+of 16) and multiplies the raw centroids. The chunk loop runs per block so the accumulator index is a
+constant (a dynamic register-array index spilled 1280 B at the 16-row tile). Prescreen 0 / 16 B (decode /
+prefill), 0 at Q16. 41/41 cases at both tiles. **Not byte-identical**: the norm is applied exactly in float
+instead of rounded into the half operand (the third Turbo4 numerics lineage; UD 8K sha `ef864412dede`).
+
+| shape (us; prefill ms), same run | TR=3 `qtl4` | TR=6 `qtn` | f16 | TRN vs TR | TRN vs f16 |
+|---|--:|--:|--:|--:|--:|
+| 8K width 4 / 5 | 278 / 335 | **247 / 298** | 207 / 271 | -11 / -11% | 1.19x / 1.10x |
+| 8K prefill 512 | 24.3 | **21.5** | 17.4 | -12% | 1.24x |
+| 24K width 4 / 5 | 824 / 972 | **712 / 851** | 575 / 765 | -14 / -12% | 1.24x / 1.11x |
+| 24K prefill 512 | 71.3 | **62.2** | 52.9 | -13% | 1.18x |
+| 96K width 4 / 5 | 3234 / 3825 | **2799 / 3335** | 2273 / 3035 | -13 / -13% | 1.23x / 1.10x |
+| 96K prefill 512 (Q16) | 273.9 | **261.7** | 230.4 | -4.5% | 1.14x |
+
+(This run's `qtl4` numbers sit 3-4% above the earlier table - late-night machine state; compare within
+the run.) The remaining gap to f16 is the two loads per tile (byte + table entry) and the pack.
+
+**KLD, UD stored file + Turbo4 cache, q8_0 reference (the step-15 logits, 24 x 2048):**
+
+| | Turbo4 TR (= prod numerics) | Turbo4 TRN |
+|---|--:|--:|
+| mean KLD | 0.017296 +/- 0.00183 | 0.017963 +/- 0.00189 |
+| median | 0.003973 | 0.003970 |
+| 99.0% / 99.9% / max | 0.1149 / 1.406 / 20.54 | 0.1170 / 1.555 / 20.73 |
+| RMS dp | 3.519% | 3.514% |
+| **Same top p** | **95.833 +/- 0.128%** | **95.862 +/- 0.127%** |
+| PPL | 6.1677 | 6.1736 |
+
+A wash inside the error bars (mean +4% = a third of one sigma, argmax +0.03 pt, far tail +11%), the same
+shape as the exact-q4_K-tile decision in step 15. Adoption of TRN (numerics) = owner; TR=3 stays the
+byte-identical form.
+
+**Trace of the folded form** (`profiles/turbo4-fa-trn-sep06`): 9.41M dynamic instructions per decode dispatch
+(TR 11.78M, f16 5.25M), 72% issue / 28% stall (66/34, 82/18), 0 spill, 96 registers; the hot tier is the
+536-instruction unrolled chunk body at 56% of issue with 119 device loads, 127 MMA/threadgroup-load class
+and 275 wide-operand ops. What is left per tile is the byte load, the table load and the address arithmetic
+of both, which the format sets: a 2-byte-aligned nibble stream (a 4-byte load per row per tile would need
+the block's qs 4-aligned - a 68-byte block, i.e. a format change) feeding a 256-entry table. A
+lane-cooperative byte load (ushort4 per two tiles, extract per lane) trades 4 loads for ~8 ALU per chunk
+and is the one form not tried. The Turbo4 decode FA call is at 1.10-1.24x f16 with TRN and 1.20-1.4x with
+the byte-identical TR; the kernel-level answer to "the per-tile dequant" is TRN, and it is a numerics
+decision.
+
+**E2e, filled 96K, `GGML_FA_TR=6` (new lineage: UD `8c3d88cd6289`, Q4_0 `9f95c806e262`, both 600 tokens):**
+
+| 96K, width 4, depth 3 | f16 | Turbo4 prod (morning) | Turbo4 TR=3 | Turbo4 TRN (TR=6) |
+|---|--:|--:|--:|--:|
+| UD verify round | 134.9 ms | 181.2 | 151.4 | **141.7 (+5% vs f16)** |
+| UD prefill | 1102 s | 1375 | 1140 | **1125 (+2.1%)** |
+| Q4_0 verify round (hot state) | 119.1 ms | 182 (2026-09-02) | 132.3 | **126.9 (+6.5%)** |
+| Q4_0 prefill (hot state) | 1136 s | | 1167 | **1155 (+1.6%)** |
+
+**Where the Turbo4 line stands at the end of the night:** the FA port takes the 96K round from +34..+50% over
+f16 to +11..+12% byte-identical (TR=3) or +5..+7% with the folded norm (TR=6, KLD a wash), prefill within
+2% of f16 either way, 4.7 GiB less memory at 96K. Adoption of TR=3 into `TURBO_PICK_ENV` = owner (no text
+change); TR=6 on top = the owner's numerics call (same category as the exact q4_K tile, and the vec kernel
+at widths 1-2 already runs its own half arithmetic).
+
+### Step 16 D: the byte loads (2026-09-07, owner: "let's try it")
+
+Per lane per 64-dim chunk of one cache row the TR forms issued 8 single-byte loads (one per tile: the lane's
+byte for tile t is chunk byte 4t + lc/2) and 8 table loads. Two forms, orthogonal to the arithmetic
+(template `LD`): **wide** (LD 1) - one 2-byte-aligned 8-byte load (`packed_ushort4`) per two tiles, the byte
+extracted by a per-lane shift and mask (4 loads + ~8 ALU per chunk instead of 8 loads); **shuffle** (LD 2) -
+the row's four lanes load one 8-byte slice each and every tile's byte comes from the lane holding it by
+`simd_shuffle` (1 load + 8 shuffles + 16 ALU). A 16-byte load would need the nibble stream 4-byte aligned
+(a 68-byte block: format change). Prescreen ranked them before the GPU did: wide 14.4 KB (smaller than the
+16.0 KB base), shuffle 19.8 KB - the same signature the iq4_xs shuffle table showed before it lost.
+
+| same run, us (prefill ms) | folded `qtn` (TR=6) | + wide `qtnw` (TR=7) | + shuffle `qtns` (TR=8) | byte-identical `qtl4` (TR=3) | + wide `qtl4w` (TR=9) | f16 |
+|---|--:|--:|--:|--:|--:|--:|
+| 8K width 4 / 5 | 248 / 298 | **242 / 287** | 286 / 364 | 278 / 335 | **261 / 310** | 207 / 271 |
+| 8K prefill 512 | 21.5 | **20.3** | 26.5 | 24.3 | **22.3** | 17.4 |
+| 24K width 4 / 5 | 714 / 847 | **703 / 816** | 806 / 1029 | 821 / 973 | **755 / 885** | 577 / 771 |
+| 24K prefill 512 | 62.4 | **59.2** | 77.0 | 70.9 | **65.2** | 53.5 |
+| 96K width 4 / 5 | 2794 / 3331 | **2757 / 3194** | 3145 / 4032 | 3232 / 3830 | **2958 / 3469** | 2297 / 3056 |
+| 96K prefill 512 (16-row tile) | 262 | **254** (`qtnw16`) | | 274 | **258** (`qt16w`) | 231 |
+
+Fewer loads won, more shuffles lost. The wide loads pay more on the byte-identical form (-6..-9%) than on the
+folded one (-1.5..-5%): its per-tile float multiply and convert are still there to overlap the extraction.
+Shas hold: TR=9 reproduces the Turbo4 text (`2802eb28cd29`, 25.48 t/s at UD 8K), TR=7 the folded lineage
+(`ef864412dede`). 41/41 cases at both tiles for every form. **Best byte-identical form: `GGML_FA_TR=9`
+(1.29x f16 at the 96K decode call, 1.11x at the 96K prefill); best overall: `GGML_FA_TR=7` (1.20x / 1.10x),
+the folded numerics.** The kernel's remaining cost is the table load per tile and the format's addressing.
+
+**E2e, filled 96K, the final forms (2026-09-07 morning, all arms in one chain, same machine state):**
+
+| 96K, width 4, depth 3 | f16 | Turbo4 before the port | TR=9 (byte-identical + wide loads) | TR=7 (folded + wide loads) |
+|---|--:|--:|--:|--:|
+| UD verify round | 134.9 ms (2026-09-06) | 181.2 | **145.5 (+7.9%)** | **142.0 (+5.3%)** |
+| UD prefill | 1102 s | 1375 | 1123 (+1.9%) | 1114 (+1.1%) |
+| Q4_0 verify round | 119.2 ms | 182 | **130.2 (+9.2%)** | **126.4 (+6.0%)** |
+| Q4_0 prefill | 1140 s (re-run; the 1015 on record does not reproduce, see below) | | 1154 (+1.3%) | 1142 (+0.2%) |
+| sha | UD `0f1e46f3edbf` / Q4_0 `94e3851bd506` | | UD `3b4127a77a1d` / Q4_0 `de52f2778bc1` (the recorded Turbo4 texts) | UD `8c3d88cd6289` / Q4_0 `9f95c806e262` |
+
+The Turbo4 line at 96K: round +5..+9% over f16 (was +34..+50%), prefill +0..+2% (was +25%), 4.7 GiB less
+memory, every arm on its recorded text. **The f16 Q4_0 96K prefill reproduces at 1136-1140 s across three
+runs on two days**, not the 1015 s in `fa-long-context.md`: today's run is slower from the FIRST 2048-token
+ubatch (12.25 s vs 10.9 s in both record runs), where attention is negligible - the prefill mul_mm plane is
+~12% slower on the Q4_0 file than on 2026-09-06 noon, while UD's 8K prefill still matches its record. The
+f16 FA kernels are byte-identical between prod and this branch (prescreen), so the suspect is the
+ud-soa-gguf merge (d7f456d4f, that evening; it touched the stored-SoA mul_mm dispatch the Q4_0_SOA file
+goes through). A/B of prod HEAD vs the pre-merge commit 0623a06a5 at the 8K prefill: below.
+
+### Step 16 E: what the KLD reference can and cannot resolve (2026-09-07, owner's question)
+
+The reference for every KLD table is the q8_0 conversion with an f16 cache, scored through
+`llama-perplexity`'s logits file: per position two floats (scale, min log-prob) and one uint16 per vocab
+entry, the logits quantized uniformly inside a 16-nat window below the argmax (below it everything is the
+floor); the test side is scored in float. Between us and the model as trained in the deep tail: q8_0's own
+weight error, that window, the 16-bit step, the reference/test asymmetry, the statistic (the 99.9th
+percentile is the worst ~25 of 24K positions), and the test weights' own quantization. **Mean, median and
+same-top are decision-grade; the tail columns are not** - the +11% on the 99.9% tail of the folded form
+(step 16 C) is unattributable, and the owner's intuition (dithered rounding is closer to a wash on average
+than a systematic per-centroid bias) is tested by the pairwise run below, not by the reference.
+
+Calibration attempt on the only model whose F16 fits (VibeThinker-3B, F16 and Q8_0 conversions of the same
+weights, 24 x 2048 on Metal; 4 chunks on the CPU backend):
+
+| | mean KLD | median | 99.9% | same-top | note |
+|---|--:|--:|--:|--:|---|
+| Q8_0 vs F16, Metal | 0.0237 | 0.0116 | 0.51 | 91.8% | wikitext PPL 496: an RL-tuned coder, nearly flat on prose |
+| Q8_0 vs F16, CPU backend | 0.0901 | 0.0452 | 1.77 | 84.3% | the CPU q8_0 path quantizes the activations to int8 too |
+| F16 Metal vs F16 CPU | **0.00009** | 0.00005 | 0.0019 | 99.6% | the backend-arithmetic floor |
+
+**Unusable as a q8_0 calibration** (out-of-domain model: any perturbation flips near-uniform
+distributions), but two facts came out: the Metal half-operand path against float is ~1e-4 mean KLD, a
+hundred times below anything compared in this file, and the 27B reference runs the cleaner of the two q8_0
+paths. A real calibration needs a same-family model in its domain (none on disk). **The owner's plan: rent
+an 80 GB GPU and generate the reference from the bf16 model as trained** (llama.cpp with a bf16 GGUF, or
+transformers writing the same file format), with the 16-nat window widened (a constant in
+`tools/perplexity/perplexity.cpp`) and the same tokenizer and wikitext chunks; until then, decide on
+mean/median/same-top and quote tail columns with this caveat.
+
+**Pairwise KLD, the folded form against the byte-identical one** (same UD weights, same Turbo4 cache, TR=3 as the
+reference logits, 24 x 2048; TAG `kld-turbo4-pair-sep07`):
+
+| | TR=3 scored against itself | TR=7 (folded norm + wide loads) |
+|---|--:|--:|
+| mean KLD | 0.000000 (max 0.00006 = the logits file's own floor) | **0.00185 +/- 0.0005** |
+| median | 0 | 0.00022 |
+| 99.0% / 99.9% / max | 0.00004 / 0.00005 / 0.00006 | 0.0065 / 0.143 / 10.0 |
+| RMS dp / same-top | 0.001% / 99.996% | 1.42% / **98.96%** |
+
+The folded rounding is a real perturbation: 0.0019 mean KLD, half of what the Turbo4 cache itself costs on
+top of the weights (0.0038 = 0.0173 - 0.0135), the argmax moved on 1.0% of positions. Against the q8_0
+reference it netted +0.0007 (inside the error bar), so the two errors partly cancel rather than add; the
+reference cannot say which direction is toward the trained model. **Recommendation stands on this
+evidence: `GGML_FA_TR=9`, byte-identical, 3% of a 96K round behind the folded form.** The self-check also
+puts the logits file's quantization floor at 6e-5 max KLD - the 16-bit step is not among the tail
+confounders that matter.
+
+### Step 16 F: the f16 pick's prefill and text moved with the file swap (2026-09-07 morning)
+
+The "1015 s does not reproduce" thread above resolved: the 2026-09-06 noon mint (`prodpick-sep06-fa`,
+60.5 s at 8K, canonical shas `95eb7e65977e` / `6678b0507d41`) loaded **the plain `Qwen3.8-27B-uniform-Q4_0.gguf`
+and the plain drafter** (its server log says so). Those files were deleted that evening and every harness
+default was repointed to the `-SOA-V1` stored files - and nobody minted the f16 pick on the stored file.
+Measured today on prod HEAD, the same env: the pick harness's own arm on the stored file prefills in
+**68.4 s (first 2048-token ubatch 12.15 s vs 10.71 s at the mint) and produces sha `4927c240e4bc` at 300 /
+`9ed7fbd54c19` at 600** - a different text; the pre-merge build gives the same numbers, and dropping the UD
+SoA env vars changes nothing. So on prod today the f16 Q4_0 pick is ~13% slower on prefill than its mint
+and on a different lineage, purely from the file: the stored Q4_0_SOA file's prefill takes the stored-type
+mul_mm branch, not the plain file's acch n64 route. This also explains the 96K f16 arm (1136-1140 s vs the
+1015 s record, which was the plain file). Route proof plain vs stored with `-lv 5`: below. The Turbo4 line's
+comparisons in this step are all stored-file vs stored-file and stand; the f16 pick's mint needs redoing on
+the stored file, or the stored Q4_0 prefill route needs the acch tiles - the owner's call.
+
+**Resolved (2026-09-07 late morning).** Route proof with `-lv 5`, plain file (regenerated by `--reverse`, then
+deleted again) vs the stored file, same env: the plain file's target tensors ran
+`kernel_mul_mm_acch_n64_q4_0_f16` (soa=0), the stored file's ran `kernel_mul_mm_q4_0_f32` (soa=1) - **the
+stored type was excluded from the acch branch (`!soa`), from the n64 shape (by name) and from the f16-B
+cast (not in its switch): f32 accumulate, 32 columns, f32 activations, three adopted levers dropped at
+once by the file swap.** Plain: 62.5 s (with logging), sha `6678b0507d41` (canonical), first ubatch 11.08 s,
+but +33 GiB resident (the runtime repack); stored: 68.3 s, `9ed7fbd54c19`, 12.13 s, +20 GiB.
+
+Fix (commit `605190cf6`, `GGML_MM_SOA_ACCH=0` restores the old routing): the stored Q4_0_SOA type takes the
+acch / n64 / f16-B tiles - the tile body's SoA reader is dispatched on the block type these instantiations
+share; 19/19 stored-type mul_mat cases pass under the pick's mm env. **Stored file, fixed: 61.9 s with
+logging (first ubatch 11.03 s = the plain file), sha `5f32a6b9d371`** - a third lineage, because the
+plain reader divides the scale by 16 in half for the high-nibble tiles (flushed under fast math for scales
+below 2^-10, the step-14 trap) while the SoA reader computes (q - 8) x d exactly.
+
+KLD against the q8_0 logits (the step-15 base, 24 x 2048), stored Q4_0 file:
+
+| routing | mean KLD | median | 99.9% | same-top | = |
+|---|--:|--:|--:|--:|---|
+| old (f32 tile, exact reader) | 0.0544 | 0.0205 | 4.82 | 90.72% | the pre-acch plain record (0.054 / 90.75%, `weight-quant-kld.md`) |
+| **fixed (acch n64 f16-B, exact reader)** | 0.0602 | 0.0264 | 4.07 | 89.92% | the acch cost on record (+11.8% mean, -0.86 pt; `mm-acc-half`) |
+
+So the "regression" was the stored file silently running WITHOUT acch: the pick had reverted to pre-acch
+quality and pre-acch speed on the day the files were swapped, and no mint noticed. The fix restores the
+pick as adopted (acch's quality trade included; the acch-drop question stays the owner's, now with the
+stored file able to go either way by env). The exact-vs-flush reader difference is invisible at this
+precision (both rows are the acch lineage's numbers). **New canonical texts on the stored file with the
+fix: the re-mint below.** Rule added to the README: a file swap is a routing change - prove the routes
+and re-mint.
+
+**Re-mint on the stored Q4_0 file with the fixed routing** (`remint-sep07-*`, branch build, 8K benchprompt,
+no logging; t/s across lineages do not compare - the old Turbo4 lineage's 70.7% acceptance was that
+trajectory's luck):
+
+| arm | prefill | decode t/s | acc | sha |
+|---|--:|--:|--:|---|
+| f16 pick depth 4 @600 | **61.6 s** (mint on the plain file: 60.5; stored before the fix: 68.4) | 29.55 | 56.5% | **`5f32a6b9d371`** (new canonical at 600) |
+| f16 pick depth 4 @300 | **59.8 s** | 28.34 (mint 28.45 at 51.4%) | 51.3% | **`822ce37ce2e5`** (new canonical at 300) |
+| Turbo4 depth 3 @600 `-c 102400`, prod FA kernel | 64.3 s (was 68.8) | 27.11 | 60.4% | **`baf08e7fa7ed`** (new Turbo4 lineage) |
+| Turbo4 depth 3 @600, `GGML_FA_TR=9` | **62.2 s** | **28.03 (+3.4% on the same text)** | 60.4% | `baf08e7fa7ed` |
+
+The f16 pick is back at its minted prefill on the file it actually runs; the Turbo4 line's 8K prefill is
+within 1% of f16 with TR=9. Adoption of the routing fix, TR=9 and the new canonical shas = owner (the fix
+changes the pick's text on the stored file, from the acch-dropped lineage back to the acch lineage).
