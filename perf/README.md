@@ -1095,6 +1095,18 @@ Refuted - do not reopen without new information:
 Superseded, kept for history - do not quote numbers from these:
 
 - `results.md` - carries an inline SUPERSEDED banner.
+- **`spec-heated.md` - speculation at temperature > 0, FIRST LOOK 2026-09-07 (branch `spec-heated`,
+  worktree `llama.cpp-active`; owner: "literally do anything, because so far we know nothing").**
+  The DFlash2 sampled path is real rejection sampling (drafter top-16 dist heated at the request
+  temperature, accept min(1, p/q), residual otherwise), live in the pick, never run before:
+  **under the server's default chain (top_k 40 / top_p 0.95 / min_p 0.05) heated acceptance and
+  t/s at 0.7 and 1.0 ARE the greedy numbers (corpus mean 69.3 / 71.7 vs 69.8%, 32.0 / 32.7 vs
+  32.2 t/s); with the chain open at 1.0 the target's own entropy costs -11.6 points / -12.6%
+  (prose -27 points)**; the sampler's CPU is free (b1 14.08 vs 14.05). Fixed the doubled
+  per-position confidence on the sampled path (`LLAMA_SPEC_EV` read misaligned bins heated);
+  the server logs `spec-accept route:` once per task. At heat cross-config shas are gone
+  (rejection sampling keeps the distribution, not the path) and mean KLD is the only numerics
+  gate. Harness `run-spec-heated.sh`.
 - **`spec-verify-narrow.md` - variable speculation depth PRICED 2026-09-07 (branch `spec-verify-narrow`,
   unmerged, owner: "let's see what we can uncover").** 7-depth Turbo4 sweep over the 9-prompt
   corpus with per-round acceptance (`run-depth-corpus.sh`): the block depth does NOT change the

@@ -8,7 +8,7 @@
 # meaningful on the first. The server log must carry "spec-accept route: residual
 # sampling" for every heated request - a silent fall to the greedy-match route would look like
 # an acceptance collapse of the drafter (2 silent-routing phantoms on record).
-#   LINE=q4|ud  KV=turbo4|f16  NPRED=300  CONFIGS="t0 t07 t10 t10pure"  SEEDS="1"  B1=0|1
+#   LINE=q4|ud  KV=turbo4|f16  NPRED=300  CONFIGS="t0 t07 t10 t10pure"  SEEDS="1"  B1=0|1  SPEC_ARM=1|0
 # Configs: t0 = greedy; t07/t10 = temperature 0.7/1.0 with the server's default chain
 # (top_k 40, top_p 0.95, min_p 0.05 - what a client that only sets temperature gets);
 # t10pure = temperature 1.0 with the chain open (top_k 0, top_p 1, min_p 0).
@@ -62,7 +62,8 @@ start_server() {  # start_server <label> <spec:0|1>
   SLOG="$OUT/$TAG-$label.server.log"
   if lsof -ti :$PORT >/dev/null 2>&1; then echo "[$label] ABORT: port $PORT busy"; return 1; fi
   local -a specargs=(); [ "$spec" = 1 ] && specargs=("${PICK_SPEC[@]}")
-  env "${PICK_ENV[@]}" "$BIN/llama-server" -m "$PICK_MODEL" "${PICK_ARGS[@]}" "${specargs[@]}" \
+  # ${arr[@]+"${arr[@]}"}: macOS bash 3.2 treats an empty array as unbound under set -u
+  env "${PICK_ENV[@]}" "$BIN/llama-server" -m "$PICK_MODEL" "${PICK_ARGS[@]}" ${specargs[@]+"${specargs[@]}"} \
       --port $PORT >"$SLOG" 2>&1 &
   SPID=$!
   for i in $(seq 1 200); do
@@ -107,7 +108,8 @@ open('$OUT/$TAG-$label.txt','w').write(c)
   echo "    route: ${route:-NONE (no verify round in this request)})"
 }
 
-# --- speculative arm (the pick) ---
+# --- speculative arm (the pick); SPEC_ARM=0 skips it ---
+if [ "${SPEC_ARM:-1}" = 1 ]; then
 start_server spec 1 || exit 1
 for p in "${PROMPTS[@]}"; do
   name=$(basename "$p" .txt)
@@ -117,6 +119,7 @@ for p in "${PROMPTS[@]}"; do
   done
 done
 stop_server
+fi
 
 # --- b1 anchor (no speculation): sampler CPU price ---
 if [ "$B1" = 1 ]; then
