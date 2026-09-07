@@ -300,6 +300,179 @@ struct server_slot {
         }
     } spec_adaptive;
 
+    // expected-value speculation depth from the drafter's confidence (LLAMA_SPEC_EV=1,
+    // perf/spec-verify-narrow.md): the drafter drafts a block b (block rule), the server verifies
+    // only k = argmax_k (1 + sum_{i<k} S_i) / cost[k] of it, S_i = prod_{j<=i} q(p_j), where p_j is
+    // the drafter's top-1 confidence at position j and q() the acceptance rate by confidence bin,
+    // learned online from the verify result (seeded from the corpus). cost[k] is an EMA of the
+    // round wall time at verify depth k (seeded from the Turbo4 8K sweep).
+    //   LLAMA_SPEC_EV_BLOCK=hybrid|full|tiered
+    //                                     hybrid (default): b = b_max if the last round verified >= 4
+    //                                     or accepted its whole prefix, else b_min; full: b_max always;
+    //                                     tiered: b_max if the last round verified >= 4 AND accepted
+    //                                     its whole prefix, else b_mid (block 5 costs the drafter 1.2 ms
+    //                                     over block 4, block 8 costs 4-5 ms)
+    //   LLAMA_SPEC_EV_BMIN=3, LLAMA_SPEC_EV_BMID=4
+    //   LLAMA_SPEC_EV_WIDTHS=1,2,3,4,7    candidate verify depths (default: every depth <= b_max)
+    //   LLAMA_SPEC_EV_COST=ms,ms,...      cost seed per depth 1..N (default: the Turbo4 8K sweep)
+    //   LLAMA_SPEC_EV_CALIB_N=30          pseudo-count behind the seeded calibration bins
+    //   LLAMA_SPEC_EV_DBG=1               per-round pick log
+    struct spec_ev_t {
+        static constexpr int   KMAX    = 15;
+        static constexpr int   NB      = 10;
+        static constexpr float C_DECAY = 0.90f;
+
+        bool  inited = false;
+        int   mode   = 1;            // 0 full block, 1 hybrid (b_min / b_max), 2 tiered (b_mid / b_max)
+        int   b_min  = 3;
+        int   b_mid  = 4;
+        int   b_max  = 7;
+        bool  widths[KMAX + 1];
+        float cost  [KMAX + 1];      // ms per round at verify depth k
+        static constexpr int   NG      = 3;   // position groups: 1 | 2-3 | 4+ (deeper positions accept less at equal p)
+        float hit   [NG][NB];        // calibration: accepted count per position group x confidence bin
+        float cnt   [NG][NB];        //              observed count
+        int   hist  [KMAX + 1];      // verify depths picked
+        int   bhist [KMAX + 1];      // blocks drafted
+        int   last_k    = 3;
+        bool  last_full = false;
+        int   cur_b     = 0;
+        int64_t t_last_us = 0;
+        std::vector<float> last_conf;
+        bool  dbg = false;
+
+        static int bin(float p) {
+            return std::max(0, std::min(NB - 1, (int) (p * NB)));
+        }
+        static int grp(int i) {
+            return i == 0 ? 0 : (i <= 2 ? 1 : 2);
+        }
+        float q(int i, float p) const {
+            return hit[grp(i)][bin(p)] / cnt[grp(i)][bin(p)];
+        }
+
+        void init(int d_max) {
+            inited = true;
+            b_max  = std::max(1, std::min(KMAX, d_max));
+            if (const char * v = getenv("LLAMA_SPEC_EV_BLOCK")) {
+                mode = strcmp(v, "full") == 0 ? 0 : (strcmp(v, "tiered") == 0 ? 2 : 1);
+            }
+            b_min = getenv("LLAMA_SPEC_EV_BMIN") ? atoi(getenv("LLAMA_SPEC_EV_BMIN")) : 3;
+            b_min = std::max(1, std::min(b_max, b_min));
+            b_mid = getenv("LLAMA_SPEC_EV_BMID") ? atoi(getenv("LLAMA_SPEC_EV_BMID")) : 4;
+            b_mid = std::max(b_min, std::min(b_max, b_mid));
+            dbg   = getenv("LLAMA_SPEC_EV_DBG") ? atoi(getenv("LLAMA_SPEC_EV_DBG")) : 0;
+
+            for (int k = 0; k <= KMAX; ++k) {
+                widths[k] = k >= 1 && k <= b_max;
+                hist[k] = bhist[k] = 0;
+            }
+            if (const char * v = getenv("LLAMA_SPEC_EV_WIDTHS")) {
+                for (int k = 0; k <= KMAX; ++k) widths[k] = false;
+                for (const auto & t : string_split<std::string>(v, ',')) {
+                    const int k = atoi(t.c_str());
+                    if (k >= 1 && k <= b_max) widths[k] = true;
+                }
+            }
+            // cost seed: Turbo4 line, 8K, depths 1-7 (perf/spec-verify-narrow.md section 2)
+            static const float seed_cost[7] = { 84.7f, 91.0f, 94.7f, 105.6f, 127.0f, 130.5f, 131.7f };
+            std::vector<float> cs;
+            if (const char * v = getenv("LLAMA_SPEC_EV_COST")) {
+                for (const auto & t : string_split<std::string>(v, ',')) cs.push_back(atof(t.c_str()));
+            } else {
+                cs.assign(seed_cost, seed_cost + 7);
+            }
+            for (int k = 0; k <= KMAX; ++k) {
+                cost[k] = cs.empty() ? 100.0f : cs[std::min((size_t) std::max(0, k - 1), cs.size() - 1)];
+            }
+            // calibration seed: acceptance by position group x top-1 confidence bin, free-form corpus
+            // (spec-verify-narrow.md section 7: position 1 accepts 96% at p >= 0.9, positions 2+ ~88%)
+            static const float seed_q[NG][NB] = {
+                { 0.20f, 0.20f, 0.22f, 0.24f, 0.46f, 0.54f, 0.50f, 0.72f, 0.72f, 0.96f },
+                { 0.20f, 0.20f, 0.22f, 0.32f, 0.35f, 0.38f, 0.45f, 0.55f, 0.60f, 0.88f },
+                { 0.20f, 0.20f, 0.22f, 0.30f, 0.35f, 0.45f, 0.42f, 0.45f, 0.55f, 0.86f },
+            };
+            const float n0 = getenv("LLAMA_SPEC_EV_CALIB_N") ? atof(getenv("LLAMA_SPEC_EV_CALIB_N")) : 30.0f;
+            for (int g = 0; g < NG; ++g) {
+                for (int b = 0; b < NB; ++b) {
+                    cnt[g][b] = n0;
+                    hit[g][b] = n0 * seed_q[g][b];
+                }
+            }
+            last_k = b_min; last_full = false; t_last_us = 0; cur_b = 0;
+        }
+
+        void begin_request() {
+            last_k = b_min; last_full = false; t_last_us = 0; cur_b = 0;
+        }
+
+        int block() const {
+            if (mode == 0) return b_max;
+            if (mode == 2) return (last_k >= 4 && last_full) ? b_max : b_mid;
+            return (last_k >= 4 || last_full) ? b_max : b_min;
+        }
+
+        // conf: per-position drafter confidence of the block just drafted; n_avail = drafted tokens
+        int pick(const std::vector<float> & conf, int n_avail) {
+            last_conf = conf;
+            if (conf.empty() || (int) conf.size() < n_avail) {
+                return n_avail;
+            }
+            float surv = 1.0f, etok = 1.0f;
+            int   best = 0; float best_score = 0.0f;
+            std::string d;
+            for (int k = 1; k <= n_avail && k <= KMAX; ++k) {
+                surv *= q(k - 1, conf[k - 1]);
+                etok += surv;
+                if (!widths[k]) continue;
+                const float score = etok / cost[k];
+                if (dbg) d += string_format(" k%d:%.2f/%.1f", k, etok, cost[k]);
+                if (score > best_score) { best_score = score; best = k; }
+            }
+            if (best == 0) best = n_avail;
+            if (dbg) {
+                std::string ps;
+                for (float p : conf) ps += string_format("%.2f ", p);
+                LOG_INF("spec-ev: b=%d p=[%s] ->%s => k=%d\n", n_avail, ps.c_str(), d.c_str(), best);
+            }
+            return best;
+        }
+
+        void update(int k, int n_accepted) {
+            const int64_t t_now = ggml_time_us();
+            if (t_last_us > 0 && k >= 1 && k <= KMAX) {
+                const float dt = (float) (t_now - t_last_us) / 1000.0f;
+                cost[k] = C_DECAY * cost[k] + (1.0f - C_DECAY) * dt;
+            }
+            t_last_us = t_now;
+            // calibration: positions before the first miss are observed accepted, the miss itself
+            // observed rejected, positions after it unobserved
+            for (int i = 0; i < k && i < (int) last_conf.size(); ++i) {
+                const int g = grp(i), b = bin(last_conf[i]);
+                if (i < n_accepted) { hit[g][b] += 1.0f; cnt[g][b] += 1.0f; }
+                else if (i == n_accepted) { cnt[g][b] += 1.0f; break; }
+            }
+            if (k >= 0 && k <= KMAX) hist[k]++;
+            if (cur_b >= 0 && cur_b <= KMAX) bhist[cur_b]++;
+            last_k = k; last_full = (n_accepted >= k);
+        }
+
+        std::string summary() const {
+            std::string h, bh, c, q;
+            for (int k = 1; k <= b_max; ++k) {
+                if (hist[k])  h  += string_format("%d:%d ", k, hist[k]);
+                if (bhist[k]) bh += string_format("%d:%d ", k, bhist[k]);
+                c += string_format("%.1f ", cost[k]);
+            }
+            for (int g = 0; g < NG; ++g) {
+                for (int b = 5; b < NB; ++b) q += string_format("%.2f ", hit[g][b] / cnt[g][b]);
+                q += "| ";
+            }
+            return string_format("k hist [%s] block hist [%s] cost [%s] calib p>=.5 by pos group [%s]", h.c_str(), bh.c_str(), c.c_str(), q.c_str());
+        }
+    } spec_ev;
+    std::vector<float> spec_conf;
+
     // TODO: move members that belong to the task (such as `generated_text`, `has_new_line`) to task_results_state
     //       see https://github.com/ggml-org/llama.cpp/pull/18283#issuecomment-3710175837
     std::unique_ptr<const server_task> task;
@@ -427,6 +600,10 @@ struct server_slot {
             spec_i_batch.clear();
             spec_ckpt.clear();
             spec_adaptive.inited = false;
+            spec_conf.clear();
+            if (spec_ev.inited) {
+                spec_ev.begin_request();
+            }
         }
         generated_tokens.clear();
         generated_token_probs.clear();
@@ -722,6 +899,9 @@ struct server_slot {
                     draft_ratio, n_draft_accepted, n_draft_total, mean_acc_len);
             SLT_TRC(*this,
                     "     acc per pos = (%s)\n", acceptance_rates_per_pos.c_str());
+            if (spec_ev.inited) {
+                SLT_INF(*this, "spec-ev: %s\n", spec_ev.summary().c_str());
+            }
         }
 
         common_speculative_print_stats(spec);
@@ -3033,6 +3213,8 @@ private:
         // LLAMA_SPEC_SLOT_BUDGET_WIDE: the budget from 4 generating slots on (default = the budget).
         // With GGML_MM_SKINNY_N16=1 (fused 16-column SoA tile) 16 pays at 4+ slots and loses at 2-3.
         static const int spec_slot_budget_wide = getenv("LLAMA_SPEC_SLOT_BUDGET_WIDE") ? atoi(getenv("LLAMA_SPEC_SLOT_BUDGET_WIDE")) : spec_slot_budget;
+        // LLAMA_SPEC_EV=1: expected-value verify depth from the drafter's confidence (spec_ev_t above)
+        static const bool env_spec_ev = getenv("LLAMA_SPEC_EV") ? atoi(getenv("LLAMA_SPEC_EV")) : 0;
         int n_gen = 0;
         iterate(slots, [&](server_slot & slot) { if (slot.state == SLOT_STATE_GENERATING) n_gen++; });
         const int spec_slot_budget_cur = n_gen >= 4 ? spec_slot_budget_wide : spec_slot_budget;
@@ -3068,6 +3250,14 @@ private:
                         slot.spec_adaptive.reset(std::min(n_draft_max, d_cli));
                     }
                     n_draft_max = std::min(n_draft_max, slot.spec_adaptive.depth(std::min(n_draft_max, d_cli)));
+                }
+
+                if (env_spec_ev && n_draft_max > 0) {
+                    if (!slot.spec_ev.inited) {
+                        slot.spec_ev.init(common_speculative_n_max(&params_base.speculative));
+                    }
+                    n_draft_max = std::min(n_draft_max, slot.spec_ev.block());
+                    slot.spec_ev.cur_b = n_draft_max;
                 }
 
                 if (spec_slot_budget_cur > 0 && n_gen > 1 && n_draft_max > 0) {
@@ -3106,6 +3296,7 @@ private:
                             /* .prompt   = */ &slot.spec_prompt,
                             /* .result   = */ &slot.spec_draft,
                             /* .dists    = */ &slot.spec_dists,
+                            /* .conf     = */ &slot.spec_conf,
                             /* .temperature = */ slot.task->params.sampling.temp,
                             /* .seed     = */ common_sampler_get_seed(slot.smpl.get()),
                         };
@@ -3130,6 +3321,16 @@ private:
 
             auto & draft = slot.spec_draft;
             auto & ckpt  = slot.spec_ckpt;
+
+            if (env_spec_ev && slot.spec_ev.inited && !draft.empty()) {
+                const int k = slot.spec_ev.pick(slot.spec_conf, (int) draft.size());
+                if (k < (int) draft.size()) {
+                    draft.resize(k);
+                    if (slot.spec_dists.size() > (size_t) k) {
+                        slot.spec_dists.resize(k);
+                    }
+                }
+            }
 
             slot.stats.n_draft_tokens += draft.size();
 
@@ -4071,6 +4272,9 @@ private:
             if (slot.spec_adaptive.inited) {
                 const int d_cli = common_speculative_n_max(&params_base.speculative);
                 slot.spec_adaptive.update((int) n_draft, (int) n_accepted, d_cli);
+            }
+            if (slot.spec_ev.inited) {
+                slot.spec_ev.update((int) n_draft, (int) n_accepted);
             }
             slot.stats.n_draft_verif_steps += 1;
 

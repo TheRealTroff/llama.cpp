@@ -179,6 +179,71 @@ What a build would need (not started - owner's call):
    an interleaved e2e A/B on the corpus against fixed depth 3, per prompt, plus the 2- and
    4-slot points under `LLAMA_SPEC_SLOT_BUDGET` and a mixed stream.
 
+### 7. BUILT: `LLAMA_SPEC_EV=1` (2026-09-07, owner: "build it")
+
+- `common/speculative.{h,cpp}`: draft params gain `conf` (per drafted token, the DFlash2 selector's
+  top-1 softmax on the greedy path, the max prob of the sampled dist otherwise); the block is still
+  sized from `n_max`.
+- `tools/server/server-context.cpp` `spec_ev_t` (next to the old `spec_adaptive_t`, which stays
+  behind `LLAMA_SPEC_ADAPTIVE`): per round the block rule sets `n_max` (hybrid: b_max if the
+  last round verified >= 4 or accepted its whole prefix, else b_min=3; `LLAMA_SPEC_EV_BLOCK=full`
+  always b_max), the draft returns with `conf`, the server truncates `spec_draft` (and `spec_dists`)
+  to k = argmax over the candidate depths of (1 + sum_{i<k} S_i)/cost[k], S from the calibration
+  bins; the accept site updates cost[k] (EMA of the round wall, seeded from section 2) and the
+  bins (positions before the first miss accepted, the miss rejected, the rest unobserved; seeded
+  from section 6 with pseudo-count 30). Composes with `LLAMA_SPEC_SLOT_BUDGET` and the
+  n_predict/context caps as a min. `LLAMA_SPEC_EV_DBG=1` logs each pick; the request summary
+  line `spec-ev: k hist [...] block hist [...] cost [...] calib [...]` is always on.
+- Smoke (03-chat, `-lv 5`, DBG): k hist 1:1 2:9 3:89 4:7 7:3, blocks 3:74 7:35, costs learned to
+  85/93/97/108/../133, calib top bin 0.95; 25.43 t/s vs 26.34 fixed-3 in the sweep - the A/B decides.
+- A/B: `perf/run-spec-ev-ab.sh` (interleaved per prompt: fixed n3 | ev hybrid | ev full | fixed n3
+  again), report `perf/specev-ab-report.py`. TAG `specev-ab-sep07`.
+
+**A/B round 1 (hybrid 3/7 block rule, pooled calibration), 300 tokens, fixed n3 = mean of the two
+fixed arms (they agree within 0.5%):**
+
+| prompt | fixed n3 | ev hybrid | ev full | hybrid vs n3 | full vs n3 |
+|---|--:|--:|--:|--:|--:|
+| benchprompt | 27.9 | 28.34 | 27.25 | +1.6% | -2.3% |
+| 01-code-explain | 28.25 | 27.43 | 26.48 | -2.9% | -6.3% |
+| 02-prose-creative | 28.9 | 29.54 | 29.42 | +2.2% | +1.8% |
+| 03-chat-support | 26.34 | 26.46 | 27.00 | +0.4% | +2.5% |
+| 04-math-derivation | 40.7 | **53.40** | 53.85 | **+31.2%** | +32.4% |
+| 05-json-boilerplate | 41.15 | **56.08** | 55.92 | **+36.3%** | +35.9% |
+| 06-algorithms | 28.96 | 26.84 | 26.60 | -7.3% | -8.2% |
+| 08-story | 25.97 | 25.63 | 24.81 | -1.3% | -4.5% |
+| **mean** | 31.02 | **34.21** | 33.92 | **+10.3%** | +9.3% |
+
+Saturated text lands where the replay put it; free-form is -7..+2% against the replay's -1..+4%.
+Shas: hybrid forks from fixed-3 on 5 of 8 prompts (expected, section 4); math/JSON/code hold theirs.
+
+**Diagnosis (debug pass `specev-dbg-hybrid-sep07`, `-lv 5` + `LLAMA_SPEC_EV_DBG=1`, accounting
+`perf/specev-dbg-account.py`; forced-depth overhead arms `ovh*`):**
+
+1. The controller path costs nothing: forced (block 4, verify 3) = 94.95 vs fixed-3 94.22 ms;
+   forced (8, 7) = 130.85 vs fixed-7 130.92.
+2. **Verifying 3 from a block-8 draft costs 99.6-100.7 ms vs 94.2 - a 5.4-6.5 ms tax, of which
+   `draft_call` is 4.0 (11.2 -> 15.2 ms) and the verify `decode` ~1.0; every other phase is
+   identical.** Tokens per round unchanged (2.70 vs 2.68): the deep block does not hurt the
+   prefix, it only costs. The hybrid rule drafts block 8 on 33-62% of free-form rounds, and the
+   pick then verifies 3 on most of them (`(7,3)` rounds: 17-29 per ~100).
+3. Per (block, verify) class on free-form prompts: `(3,3)` 96-101 ms at 2.4-2.8 tok/rd (= fixed 3);
+   `(7,3)` 100-105 ms, same tokens (the tax); `(7,4)` 110-117 ms at 3.2-3.9 tok/rd = 30-34 tok/s;
+   `(7,7)` 136-141 ms at 4.4-6.9 tok/rd = 32-50 tok/s; `(x,1)`/`(x,2)` 10-23 tok/s (narrow picks
+   lose: the cost curve below 3 is flat, 85/91/95 ms). Saturated prompts run `(7,7)` at 58 tok/s.
+4. **The calibration was pooled across positions and prompts, and the p >= 0.9 bin (n = 1378) is
+   dominated by math/JSON.** By position on free-form text: position 1 accepts 96% at p >= 0.9,
+   positions 2-7 86-89%; per prompt, positions 4-7 at p >= 0.9 accept 74% (06), 84% (bench), 86%
+   (01) vs 94-96% on prose/chat/story. The deep picks on 06/01/bench were priced with 0.94.
+5. Replayed block-rule variants (stricter triggers, a depth floor of 3) all land within +/-1% of
+   each other on the debug rounds - the rule is not the lever; the drafter tax and the deep-position
+   calibration are.
+
+**Round 2 (built): calibration bins by position group (1 | 2-3 | 4+, seeded from the free-form
+table, learned online per slot), and `LLAMA_SPEC_EV_BLOCK=tiered`: block 5 by default (drafter
++1.2 ms vs block 4), block 8 only after a round that verified >= 4 and accepted its whole prefix.**
+TAG `specev-ab2-sep07`, arms fixed n3 | tiered | hybrid | fixed n3. Results: (pending)
+
 ## Open
 
 - **Build the EV(p) controller?** Owner's call. Priced at +14% mean over this corpus

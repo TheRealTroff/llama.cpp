@@ -9,7 +9,8 @@
 #   - the drafter's own cost per block size (dflash-prof lattice sync);
 #   - the output sha per (depth, prompt) = the byte-identity map across kernel families.
 # The pick env is read from run-prod-pick.sh (single source of truth; do not copy it here).
-# LV=5 logs per-round lines (default); LV=0 is the quiet timing arm - compare the two on a
+# LV=5 logs per-round lines (default); LV=0 is the quiet timing arm (NOTE: -lv 0 also drops INFO,
+# so the dflash-prof and spec-ev summary lines are absent there; LV=1 keeps them) - compare the two on a
 # few points before trusting verbose-arm timing.
 set -u
 if [ -z "${CAFFEINATED:-}" ]; then
@@ -57,7 +58,8 @@ echo "kv=$KV depths=[$DEPTHS] lv=$LV npred=$NPRED reps=$REPS"
 echo "commit : $(cd "$B" && git rev-parse --short HEAD) on $(cd "$B" && git rev-parse --abbrev-ref HEAD) ($(cd "$B" && git status --porcelain | wc -l | tr -d ' ') dirty)"
 echo "env    : ${ENVV[*]}"
 echo
-printf 'kv\tdepth\tprompt\trep\tprompt_n\tprompt_ms\tpredicted_n\tpredicted_ms\ttps\tdraft_n\tdraft_acc\trounds\tcommitted_rd\tround_ms\tsurvival\tdrafter_ms\tsha1\n' > "$TSV"
+# append when the TSV exists so wrappers can call this per prompt under one TAG
+[ -s "$TSV" ] || printf 'kv\tdepth\tprompt\trep\tprompt_n\tprompt_ms\tpredicted_n\tpredicted_ms\ttps\tdraft_n\tdraft_acc\trounds\tcommitted_rd\tround_ms\tsurvival\tdrafter_ms\tsha1\n' > "$TSV"
 
 run_one() {
     local depth=$1 pname=$2 rep=$3
