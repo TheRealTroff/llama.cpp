@@ -315,7 +315,7 @@ struct server_slot {
     //   LLAMA_SPEC_EV_BMIN=3, LLAMA_SPEC_EV_BMID=4
     //   LLAMA_SPEC_EV_WIDTHS=1,2,3,4,7    candidate verify depths (default: every depth <= b_max)
     //   LLAMA_SPEC_EV_COST=ms,ms,...      cost seed per depth 1..N (default: the Turbo4 8K sweep)
-    //   LLAMA_SPEC_EV_CALIB_N=30          pseudo-count behind the seeded calibration bins
+    //   LLAMA_SPEC_EV_CALIB_N=10          pseudo-count behind the seeded calibration bins
     //   LLAMA_SPEC_EV_DBG=1               per-round pick log
     struct spec_ev_t {
         static constexpr int   KMAX    = 15;
@@ -392,7 +392,7 @@ struct server_slot {
                 { 0.20f, 0.20f, 0.22f, 0.32f, 0.35f, 0.38f, 0.45f, 0.55f, 0.60f, 0.88f },
                 { 0.20f, 0.20f, 0.22f, 0.30f, 0.35f, 0.45f, 0.42f, 0.45f, 0.55f, 0.86f },
             };
-            const float n0 = getenv("LLAMA_SPEC_EV_CALIB_N") ? atof(getenv("LLAMA_SPEC_EV_CALIB_N")) : 30.0f;
+            const float n0 = getenv("LLAMA_SPEC_EV_CALIB_N") ? atof(getenv("LLAMA_SPEC_EV_CALIB_N")) : 10.0f; // light seed: a request relearns its own bins within a dozen rounds (A/B round 2, math)
             for (int g = 0; g < NG; ++g) {
                 for (int b = 0; b < NB; ++b) {
                     cnt[g][b] = n0;

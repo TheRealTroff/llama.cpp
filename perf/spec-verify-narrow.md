@@ -272,6 +272,35 @@ per-position bins):
   request at block 5 and needs a fully accepted deep round to escalate (math -5 t/s vs hybrid r1).
   Hybrid + per-position bins + a lighter seed is the recommended default.
 
+### 8. The width-8 hunt, first find: the skinny B stage (`GGML_MM_SKINNY_BSPLIT`, byte-identical)
+
+Profile of the drafter at block 4 vs 8 (`drafterprof-sep07`, serialized GPU ms/round): per-layer
+projections 4.59 -> 7.00 (SoA scalar -> skinny), vocab head 3.03 -> 3.99 (1.16x -> 1.52x floor),
+TOP_K 0.86 -> 1.70, small non-SoA q4_0 1.29 -> 2.38 (a profiler artifact - those run concurrently
+under the big matmuls, `small-ne01-routing.md`). The phase timers put the real tax at
+`draft_call` 11.2 -> 15.2 ms. The drafter's layers have the target's geometry, so at 8 columns
+both run the same skinny kernel, and saturated workloads now spend ~95 of a 130 ms round in it.
+
+`skinny-tpr-bsplit.md` (2026-08-24) had left two byte-identical B-stage wins unmerged on
+`metal-mm-skinny-tpr`/`-bprefetch`: the B loader pinned to 32 threads spread over all 64
+(-2.5%/call at width 8), and four float4 loads instead of 16 scalars. The SoA skinny body
+(`kernel_mul_mm_skinny_q4_0_soa_f32`, Aug 30) was written after them and still carried the
+pinned loader. Ported behind `GGML_MM_SKINNY_BSPLIT=1` (split) / `=2` (split + float4),
+function constant `FC_MUL_MM+8`, pipeline name carries it.
+
+Fixed depth 7 (every verify at width 8), 300 tokens, two reps interleaved, TAGs `bsplit-*`:
+
+| prompt | bsplit 0 round / t/s | =1 | =2 | =2 vs 0 |
+|---|--:|--:|--:|--:|
+| 05-json-boilerplate | 130.0, 129.3 ms / 56.1, 56.4 | 124.6, 123.2 / 58.5, 59.2 | 124.0, 123.6 / 58.8, 59.0 | **-4.7% round, +4.8% t/s** |
+| 01-code-explain | 131.6, 131.5 / 23.9, 23.9 | 126.7, 125.7 / 24.8, 25.0 | 124.9, 124.8 / 25.2, 25.2 | **-5.1% round, +5.4% t/s** |
+
+Shas identical in every arm (`9f170f183316`, `dc34a4a8f1a7`). Inert at the pick's own width
+(depth 3 verifies at width 4 on the SoA scalar kernel); it pays on every width-6..8 verify, i.e.
+the controller's deep rounds, the drafter's block-8 draft, and the 2-4-slot skinny points of
+`parallel-streams.md`. The Aug-24 e2e was +1.0..1.6% at n6 on the pre-SoA kernel; at width 8
+on the SoA body it is ~5%. Adoption = owner (changes every skinny call; byte-identical).
+
 ## Open
 
 - **Build the EV(p) controller?** Owner's call. Priced at +14% mean over this corpus
