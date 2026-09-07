@@ -242,7 +242,35 @@ Shas: hybrid forks from fixed-3 on 5 of 8 prompts (expected, section 4); math/JS
 **Round 2 (built): calibration bins by position group (1 | 2-3 | 4+, seeded from the free-form
 table, learned online per slot), and `LLAMA_SPEC_EV_BLOCK=tiered`: block 5 by default (drafter
 +1.2 ms vs block 4), block 8 only after a round that verified >= 4 and accepted its whole prefix.**
-TAG `specev-ab2-sep07`, arms fixed n3 | tiered | hybrid | fixed n3. Results: (pending)
+TAG `specev-ab2-sep07`, arms fixed n3 | tiered | hybrid | fixed n3 (both EV arms with the
+per-position bins):
+
+| prompt | fixed n3 | ev tiered | ev hybrid | tiered vs n3 | hybrid vs n3 | sha vs fixed |
+|---|--:|--:|--:|--:|--:|---|
+| benchprompt | 27.9 | 27.99 | 28.18 | +0.3% | +1.0% | both fork |
+| 01-code-explain | 28.27 | 27.59 | 31.69 | -2.4% | +12.1% | tiered same, hybrid forks |
+| 02-prose-creative | 28.7 | 30.26 | 29.00 | +5.4% | +1.0% | tiered forks, hybrid same |
+| 03-chat-support | 26.26 | 25.15 | 26.82 | -4.2% | +2.1% | tiered same, hybrid forks |
+| 04-math-derivation | 40.6 | 51.36 | 49.58 | +26.4% | +22.0% | same |
+| 05-json-boilerplate | 41.17 | 55.68 | 55.96 | +35.2% | +35.9% | same |
+| 06-algorithms | 28.99 | 31.47 | 31.98 | +8.6% | +10.3% | both fork |
+| 08-story | 25.82 | 24.74 | 26.16 | -4.2% | +1.3% | both fork |
+| **mean** | 30.97 | **34.28** | **34.92** | **+10.7%** | **+12.8%** | |
+
+**Reading the three rounds together (hybrid r1 +10.3%, hybrid r2 +12.8%, tiered r2 +10.7%):**
+
+- The corpus mean is the number: +10..13% in every round. Saturated text +22..36% every time.
+- Free-form per-prompt values are TRAJECTORY NOISE wherever the sha forks (the widths cross
+  kernel families, section 4): 01 was -2.9% (same sha) in r1 and +12.1% (forked) in r2; 06
+  -7.3% and +10.3%. The clean same-sha free-form comparisons are -4.2 .. +1.0% - the drafter
+  tax of the deep block, as diagnosed. Do not read a single free-form cell as a controller effect.
+- The per-position calibration (r2) costs ~4 t/s on math (49.6 vs 53.4): its deep-position seed
+  is free-form's 86-88% while math accepts 98% there, and 40 rounds under a pseudo-count of 30
+  do not relearn it. Default `LLAMA_SPEC_EV_CALIB_N` should drop to ~10 so a request adapts
+  within its first dozen rounds (JSON, with 39 rounds, was unaffected: 55.7/56.0 vs 56.1).
+- Tiered is not better than hybrid: it saves the block-8 tax on some rounds but starts every
+  request at block 5 and needs a fully accepted deep round to escalate (math -5 t/s vs hybrid r1).
+  Hybrid + per-position bins + a lighter seed is the recommended default.
 
 ## Open
 

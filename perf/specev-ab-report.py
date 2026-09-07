@@ -27,7 +27,8 @@ for arm in arms:
                 if mm: hist = mm.group(1)
         data[prompt][arm] = dict(tps=t['predicted_per_second'], cmt=gen / nr, rms=t['predicted_ms'] / nr, sha=sha, hist=hist)
 prompts = sorted(data)
-print(f'{"prompt":18}' + ''.join(f'{a:>26}' for a in arms) + '   hybrid vs n3   full vs n3')
+ev_arms = [a for a in arms if a not in ('n3', 'n3b')]
+print(f'{"prompt":18}' + ''.join(f'{a:>26}' for a in arms) + ''.join(f'   {a} vs n3' for a in ev_arms))
 tot = defaultdict(float); n = 0
 for p in prompts:
     d = data[p]
@@ -35,13 +36,13 @@ for p in prompts:
         print(f'{p:18} (incomplete: {sorted(d)})'); continue
     base = (d['n3']['tps'] + d.get('n3b', d['n3'])['tps']) / 2
     print(f'{p:18}' + ''.join(f"{d[a]['tps']:7.2f} {d[a]['cmt']:4.2f} {d[a]['rms']:6.1f} {d[a]['sha'][:6]}" for a in arms)
-          + f"   {100 * (d['hybrid']['tps'] / base - 1):+6.1f}%       {100 * (d['full']['tps'] / base - 1):+6.1f}%")
+          + ''.join(f"   {100 * (d[a]['tps'] / base - 1):+6.1f}%    " for a in ev_arms))
     for a in arms: tot[a] += d[a]['tps']
     n += 1
 if n:
     print(f'{"mean":18}' + ''.join(f'{tot[a] / n:7.2f}{"":19}' for a in arms)
-          + f"   {100 * (tot['hybrid'] / ((tot['n3'] + tot.get('n3b', tot['n3'])) / 2) - 1):+6.1f}%       {100 * (tot['full'] / ((tot['n3'] + tot.get('n3b', tot['n3'])) / 2) - 1):+6.1f}%")
+          + ''.join(f"   {100 * (tot[a] / ((tot['n3'] + tot.get('n3b', tot['n3'])) / 2) - 1):+6.1f}%    " for a in ev_arms))
 print()
 for p in prompts:
-    for a in ('hybrid', 'full'):
+    for a in ev_arms:
         if a in data[p] and data[p][a]['hist']: print(f'{p:18} {a:7} {data[p][a]["hist"]}')
