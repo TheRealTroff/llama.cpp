@@ -1365,3 +1365,21 @@ an 80 GB GPU and generate the reference from the bf16 model as trained** (llama.
 transformers writing the same file format), with the 16-nat window widened (a constant in
 `tools/perplexity/perplexity.cpp`) and the same tokenizer and wikitext chunks; until then, decide on
 mean/median/same-top and quote tail columns with this caveat.
+
+**Pairwise KLD, the folded form against the byte-identical one** (same UD weights, same Turbo4 cache, TR=3 as the
+reference logits, 24 x 2048; TAG `kld-turbo4-pair-sep07`):
+
+| | TR=3 scored against itself | TR=7 (folded norm + wide loads) |
+|---|--:|--:|
+| mean KLD | 0.000000 (max 0.00006 = the logits file's own floor) | **0.00185 +/- 0.0005** |
+| median | 0 | 0.00022 |
+| 99.0% / 99.9% / max | 0.00004 / 0.00005 / 0.00006 | 0.0065 / 0.143 / 10.0 |
+| RMS dp / same-top | 0.001% / 99.996% | 1.42% / **98.96%** |
+
+The folded rounding is a real perturbation: 0.0019 mean KLD, half of what the Turbo4 cache itself costs on
+top of the weights (0.0038 = 0.0173 - 0.0135), the argmax moved on 1.0% of positions. Against the q8_0
+reference it netted +0.0007 (inside the error bar), so the two errors partly cancel rather than add; the
+reference cannot say which direction is toward the trained model. **Recommendation stands on this
+evidence: `GGML_FA_TR=9`, byte-identical, 3% of a 96K round behind the folded form.** The self-check also
+puts the logits file's quantization floor at 6e-5 max KLD - the 16-bit step is not among the tail
+confounders that matter.
