@@ -1096,7 +1096,8 @@ Superseded, kept for history - do not quote numbers from these:
 
 - `results.md` - carries an inline SUPERSEDED banner.
 - **`spec-heated.md` - speculation at temperature > 0, FIRST LOOK 2026-09-07 (branch `spec-heated`,
-  worktree `llama.cpp-active`; owner: "literally do anything, because so far we know nothing").**
+  MERGED to prod the same evening, owner: "Kill the logits, merge the fix"; the active worktree is
+  gone; owner's premise: "literally do anything, because so far we know nothing").**
   The DFlash2 sampled path is real rejection sampling (drafter top-16 dist heated at the request
   temperature, accept min(1, p/q), residual otherwise), live in the pick, never run before:
   **under the server's default chain (top_k 40 / top_p 0.95 / min_p 0.05) heated acceptance and

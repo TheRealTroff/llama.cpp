@@ -4,7 +4,8 @@
 want to run temperature exactly 0. What explodes once we heat things up." Then: "fix the double
 push, but literally do anything, because so far we know nothing."
 
-Branch `spec-heated` (worktree `llama.cpp-active`, off prod `2a0494998`). Harness
+Branch `spec-heated` (off prod `2a0494998`, MERGED to prod `41c7dd0f8` the same evening, owner:
+"Kill the logits, merge the fix"; the reference logits were deleted, the worktree removed). Harness
 `run-spec-heated.sh`. Raw results `kvquant-experiments/results/spech-full*` and `spech-b1*`.
 
 ## TL;DR
