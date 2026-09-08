@@ -1360,11 +1360,12 @@ weights, 24 x 2048 on Metal; 4 chunks on the CPU backend):
 **Unusable as a q8_0 calibration** (out-of-domain model: any perturbation flips near-uniform
 distributions), but two facts came out: the Metal half-operand path against float is ~1e-4 mean KLD, a
 hundred times below anything compared in this file, and the 27B reference runs the cleaner of the two q8_0
-paths. A real calibration needs a same-family model in its domain (none on disk). **The owner's plan: rent
-an 80 GB GPU and generate the reference from the bf16 model as trained** (llama.cpp with a bf16 GGUF, or
-transformers writing the same file format), with the 16-nat window widened (a constant in
-`tools/perplexity/perplexity.cpp`) and the same tokenizer and wikitext chunks; until then, decide on
-mean/median/same-top and quote tail columns with this caveat.
+paths. A real calibration needs a same-family model in its domain (none on disk). ~~**The owner's plan: rent
+an 80 GB GPU and generate the reference from the bf16 model as trained**~~ **DONE 2026-09-08 on the DGX Spark
+with transformers (`kld-bf16-reference.md`): q8_0 vs bf16 = 0.0012 mean KLD / 99.08% same-top, tail 99.9%
+0.105; the pick arms rescored against bf16 keep every bulk statistic and ordering, and the 99.9% column
+moves 5-17% from the reference swap alone - the +11% read in step 16 C is inside that. The rule stands:**
+decide on mean/median/same-top; tail claims need the bf16 file and a paired design.
 
 **Pairwise KLD, the folded form against the byte-identical one** (same UD weights, same Turbo4 cache, TR=3 as the
 reference logits, 24 x 2048; TAG `kld-turbo4-pair-sep07`):

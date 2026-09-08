@@ -107,7 +107,11 @@ round-trips exactly. Same build, same tokens, same chunks as the q8_0 table abov
   model moved it +5%, +6%, -0.3%, +17% on four arms - the same magnitude as the +11% the folded FA form
   showed in step 16 C. That reading was correctly declared unattributable; it now has a measured floor.
   Tail claims below ~20% need this file AND a paired design (the pairwise KLD of step 16 E), not one column.
-- The wider window (32 nats, reader floor -32) is in these numbers; its isolated effect is measured below.
+- **The wider window is inert.** The q4 f16 arm re-read from the same bf16 file with the old reader floor
+  (`LLAMA_KLD_FLOOR=-16`): mean KLD 0.059799 vs 0.059823 (+0.04%), 99.9% 4.26919 vs 4.26966 (+0.01%),
+  same-top identical, overlap +0.05 pt (the tail mass the -16 floor dropped). The bound held: everything
+  below e^-16 of the argmax carries no KLD. The 16-nat window was never among the tail confounders; the
+  reference's own weight error was the whole story.
 
 **The calibration.** q8_0 costs 0.0012 mean KLD against the model: 1/50 of the q4 pick's 0.060, 1/11 of
 the ud pick's 0.0135, 1/3 of what the Turbo4 cache adds on UD (0.0038), and 0.6x the folded-FA-form

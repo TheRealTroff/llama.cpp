@@ -302,6 +302,12 @@ Model files are not interchangeable: the target must be the byte-uniform Q4_0 bu
 the drafter must be the pure-Q4_0 requant. Both fast paths are hard-gated on
 `GGML_TYPE_Q4_0`, so a K-quant drafter silently misses them (drafter-quant-routing.md).
 
+> **The q8_0 reference behind every KLD table is itself calibrated since 2026-09-08
+> (`kld-bf16-reference.md`): 0.0012 mean KLD / 99.08% same-top against the bf16 checkpoint as released,
+> scored on the DGX Spark via transformers. Bulk statistics (mean, median, same-top) are
+> reference-independent; the 99.9% column moves 5-17% from the reference swap alone, so tail claims need
+> the bf16 file (on the NUCLEAR share, `/Volumes/offload/kld-references/`) and a paired design.**
+>
 > **That gate is a quality decision made by a performance constraint, and it is now priced -
 > `weight-quant-kld.md` (2026-08-23).** Against q8_0 reference logits, uniform-Q4_0 costs
 > **+2.5% PPL** but agrees on the top token only **90.75%** of the time - 1 argmax in 11 - with
