@@ -537,6 +537,11 @@ must be a separate checkout. Two arms that agree to the microsecond are a routin
 
 ## Methodology rules, learned the hard way
 
+- **The KLD gate is a prefill-path gate (stated 2026-09-09).** `llama-perplexity --kl-divergence` scores
+  chunks in 2048-token batches, so it prices the mul_mm tiles, the batched FA kernel and the GDN scan - never the
+  decode-only kernels (mv widths 1..8, GQA decode FA, FA vec, GDN decode/in-place). Every KLD row to date is
+  that. The decode kernels' numerics rest on byte-identical trajectories, which this list already says is not a
+  numerics gate; a decode-path KLD is the same harness with `-b 4 -ub 4` on the same reference logits, never run.
 - **A file swap is a routing change: prove the routes and re-mint (found 2026-09-07).** The f16 pick's
   2026-09-06 noon mint (60.5 s prefill, canonical `95eb7e65977e` / `6678b0507d41`) ran the PLAIN Q4_0 file;
   the stored Q4_0_SOA file that replaced it that evening was excluded from the acch, n64 and f16-B tiles

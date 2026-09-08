@@ -1,5 +1,16 @@
 # What Q4_0 actually costs: +2.5% PPL, and 1 token in 11 with a different argmax
 
+> **What this gate measures (stated 2026-09-09).** `llama-perplexity --kl-divergence` scores each chunk with
+> one batched `llama_decode` (batch = 2048 tokens), so every KLD figure in these notes prices the PREFILL
+> kernels: the mul_mm tiles (and their stored-row readers, acch, n64, f16-B), the batched FA kernel, the GDN
+> prefill scan. Decode-only routes are never in it: the mv kernels at widths 1..8 (the half-product SoA
+> kernels since step 6), the GQA decode FA route, the FA vec kernels, the GDN decode kernels and in-place
+> states. Their only numerics evidence to date is byte-identical text at 300/600 tokens, which the README rule
+> already says is not a numerics gate. This has been so since the first KLD row (2026-08-23); it is upstream's
+> design, not a fork choice. A decode-path KLD is the same run with `-b 4 -ub 4` against the same reference
+> logits (the reference is the model's distribution per position and does not depend on the path).
+
+
 Status: ~~open~~ **CLOSED as a decision 2026-08-28 - the owner deprioritized the q6_K
 head ("quality benchmarks were kind of meh"; with WL_XL in the pick it would also cost
 the target-head half of `shortk-head.md`'s +3%). The quality direction, when taken, is
