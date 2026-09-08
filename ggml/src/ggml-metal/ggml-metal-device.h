@@ -14,7 +14,7 @@ static inline bool ggml_metal_is_ud_remaining_soa_type(enum ggml_type t) {
 
 static inline bool ggml_metal_is_kq_soa_type(enum ggml_type t) {
     return t == GGML_TYPE_IQ4_XS_SOA || t == GGML_TYPE_Q4_K_SOA || t == GGML_TYPE_Q5_K_SOA ||
-           t == GGML_TYPE_Q3_K_SOA || t == GGML_TYPE_Q6_K_SOA || t == GGML_TYPE_IQ3_S_SOA;
+           t == GGML_TYPE_IQ4_NL_SOA || t == GGML_TYPE_Q3_K_SOA || t == GGML_TYPE_Q6_K_SOA || t == GGML_TYPE_IQ3_S_SOA;
 }
 
 static inline bool ggml_metal_is_soa_type(enum ggml_type t) {

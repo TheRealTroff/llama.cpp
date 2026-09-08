@@ -1095,6 +1095,15 @@ Refuted - do not reopen without new information:
 Superseded, kept for history - do not quote numbers from these:
 
 - `results.md` - carries an inline SUPERSEDED banner.
+- **`ud-remaining-quants.md` - the four remaining UD formats (IQ4_NL/Q3_K/Q6_K/IQ3_S) as stored SoA
+  rows, 2026-09-08 (branch `exp/ud-remaining-quants`, UNMERGED, nothing in a pick).** Lossless layouts,
+  CPU pack/unpack, `gguf-repack --type`, n64/f16-B prefill readers all pass (5e-4 gate, not a sha/KLD
+  gate). The first small-batch kernel (a generic array-form body) lost 2-19x at widths 2..8 - diagnosed
+  offline (odd-width text balloon, 208-272 B spill at 6..8) and replaced the same evening by the kq-SoA
+  form: **width 4 IQ4_NL +32..37%, Q3_K +22..24%, Q6_K +12..15%, IQ3_S +67% (native has no small-batch
+  IQ3_S kernel)**, widths 3/5 alike; width 1 loses for three formats (Q3_K +24%), widths 2/6..8 lose for
+  IQ4_NL/Q6_K on the generic ext SoA reader. Prefill readers: Q3_K -4.7%, others flat; Q3_K-only 8K e2e
+  flat (`ud-q3k-long-prefill.md`, 32K blocked by disk). Open: w1 kq-form probe, converted-file e2e, KLD.
 - **`spec-heated.md` - speculation at temperature > 0, FIRST LOOK 2026-09-07 (branch `spec-heated`,
   MERGED to prod the same evening, owner: "Kill the logits, merge the fix"; the active worktree is
   gone; owner's premise: "literally do anything, because so far we know nothing").**

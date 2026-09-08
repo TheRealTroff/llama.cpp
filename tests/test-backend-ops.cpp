@@ -10359,6 +10359,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             test_cases.emplace_back(new test_mul_mat(t, GGML_TYPE_F32, 256, n, 5120, {1, 1}, {1, 1}));
             test_cases.emplace_back(new test_mul_mat(t, GGML_TYPE_F32, 256, n, 17408, {1, 1}, {1, 1}));
         }
+        // a whitelisted row count: widths 3..5 take the kq-SoA form kernels, 2 and 6..8 the ext SoA readers
+        for (int n : {2, 3, 4, 5, 6, 7, 8}) {
+            test_cases.emplace_back(new test_mul_mat(t, GGML_TYPE_F32, 5120, n, 512, {1, 1}, {1, 1}));
+        }
         test_cases.emplace_back(new test_mul_mat(t, GGML_TYPE_F32, 4096, 512, 512, {1, 1}, {1, 1}));
         test_cases.emplace_back(new test_mul_mat(t, GGML_TYPE_F32, 37, 1, 512, {1, 1}, {3, 1}));
         test_cases.emplace_back(new test_mul_mat(t, GGML_TYPE_F32, 37, 4, 512, {1, 1}, {2, 1}));
