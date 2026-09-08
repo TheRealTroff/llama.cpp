@@ -410,7 +410,7 @@ more for 2x the state registers. Three things the follow-ups taught:
   step 16 C): the Turbo4 block norm multiplied every dequantized element (2 FMUL + 2 cvt per tile per lane);
   applying it once per key tile to the score tile instead (one accumulator per block on the K side, the P
   tile's key columns on the V side) was another -11..-14% per call. It changes the rounding (the scale lands
-  in float instead of in the half operand) - a numerics decision, KLD-priced a wash. Loop per block so the
+  in float instead of in the half operand) - a numerics decision, KLD-priced a wash against q8_0 (since 2026-09-08 a bf16 as-trained reference exists, `perf/kld-bf16-reference.md`: q8_0 sits 0.0012 mean KLD from the model and the 99.9% column moves 5-17% between references, so a numerics form's tail claim needs the bf16 file AND the pairwise KLD against its byte-identical twin). Loop per block so the
   accumulator index is a compile-time constant: the dynamic register-array index spilled 1280 B.
 - **Fewer, wider loads beat lane-cooperative shuffles for a per-lane byte stream** (2026-09-07, `perf/ud-model.md`
   step 16 D): replacing 8 single-byte loads per chunk with four 2-byte-aligned 8-byte loads (`packed_ushort4`)
