@@ -11,6 +11,7 @@
 #include <clocale>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <fstream>
@@ -230,13 +231,17 @@ static std::pair<double, float> log_softmax(int n_vocab, const float * logits, c
     double ov  = 0;
     int imax_base = -1;
     float p_log_base_max = 0;
+    // base tokens below this log-prob are skipped in the KLD/overlap sums. -16 matches the writer's
+    // 16-nat logit window; a reference written with a wider window (perf/kld-bf16-reference.md)
+    // needs LLAMA_KLD_FLOOR=-32 (or lower) for the extra tail to count.
+    static const float kld_floor = getenv("LLAMA_KLD_FLOOR") ? (float) atof(getenv("LLAMA_KLD_FLOOR")) : -16.f;
     for (int i = 0; i < n_vocab; ++i) {
         const float p_log_base = scale*base_log_prob[i] + min_log_prob;
         if (i == 0 || p_log_base > p_log_base_max) {
             p_log_base_max = p_log_base;
             imax_base = i;
         }
-        if (p_log_base > -16.f) {
+        if (p_log_base > kld_floor) {
             const float p_base = expf(p_log_base);
             sum += p_base * (p_log_base - logits[i] + max_logit);
             ov  += std::min((double) p_base, (double) expf(logits[i] - max_logit));
