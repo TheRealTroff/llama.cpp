@@ -33,6 +33,11 @@ REF_KV=${REF_KV:-f16}
 KV=${KV:-f16}
 SCRATCH=${SCRATCH:-/Users/troff/play/kvquant-experiments/logits}   # ~1.02 GB per chunk; durable, reused across runs of one TAG
 LABEL=${LABEL:-}          # suffix on the per-test log name, for re-scoring one file under another env (exported by the caller)
+# PPL_EXTRA: extra llama-perplexity args for the TEST arm only. The default scoring runs each 2048-token
+# chunk as one batch, i.e. the PREFILL kernels; PPL_EXTRA="-b 4 -ub 4" scores the same positions through
+# the width-4 DECODE kernels (mv, GQA decode FA, GDN decode) against the same reference logits
+# (README rule "the KLD gate is a prefill-path gate", 2026-09-09). ~500x the decode calls per chunk.
+PPL_EXTRA=${PPL_EXTRA:-}
 OUT=/Users/troff/play/kvquant-experiments/results
 TAG=${TAG:-kld-$(date +%m%d-%H%M)}
 mkdir -p "$OUT" "$SCRATCH"
@@ -74,7 +79,7 @@ for M in "${TESTS[@]}"; do
   echo
   echo "--- $n vs reference ---"
   "$BIN/llama-perplexity" -m "$M" -f "$W" -c "$CTX" --chunks "$CHUNKS" -fa on \
-    -ctk "$KV" -ctv "$KV" --kl-divergence --kl-divergence-base "$BASE" \
+    -ctk "$KV" -ctv "$KV" --kl-divergence --kl-divergence-base "$BASE" $PPL_EXTRA \
     >"$OUT/$TAG-$n.log" 2>&1 \
     || { echo "FAILED, see $OUT/$TAG-$n.log"; tail -5 "$OUT/$TAG-$n.log"; continue; }
   grep -E 'Mean KLD|Maximum KLD|99.0%|99.9%|Median KLD|Mean Delta|top token|Same top|RMS|PPL ratio|Final estimate' \

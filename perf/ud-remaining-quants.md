@@ -269,9 +269,22 @@ remaining unconverted q6_K/q5_K/q4_K rows (0.66/0.75/0.05 ms) are the small matr
 plan excludes. The four stored formats now read 1.1-2.2 ms per round each against byte floors of
 0.6-1.2 ms - the same 1.3-1.9x band as the pick's q4_K/q5_K/iq4_xs planes, so no new outlier.
 
-**Open before adoption (owner's call):** (1) KLD on the converted file vs the original - the width
-3..5 kernels are half-product and identical text at 600 tokens is not a numerics gate (the KLD arms
-exist: `run-kld-arms-q8ref.sh` / bf16 reference); (2) the Q6_K width-1 and the IQ4_NL/Q6_K
+**The standard KLD gate (2026-09-09 00:25-01:45, `run-quant-kld.sh`, UD f16 pick env, this tree's
+binary, 24 x 2048 wikitext chunks, reference logits from `/Volumes/offload/kld-references`):** V2 scores
+identical to V1 to every printed digit on both references - bf16 as-trained: mean KLD 0.012537 +/- 0.001521,
+median 0.002635, 99.0/99.9/max 0.0944/0.850/20.92, same-top 96.575 +/- 0.116%, overlap 96.814%; q8_0:
+mean 0.013508, same-top 96.579%, overlap 96.806% - and V1 reproduces its 2026-09-08 q8_0 row exactly.
+Expected: this gate runs 2048-token batches, so it scores the four new stored PREFILL readers (exact
+dequant into the same tile), not the width 1..5 decode kernels (README rule "the KLD gate is a
+prefill-path gate", stated the same night). Logs `kld-{bf16ref,q8ref}-sep08-*-{V1,V2cand}-ud-f16pick-sep09.log`.
+(V1's bf16 row moved in the fourth digit vs 2026-09-08 - 0.012541 -> 0.012537, overlap 96.873 -> 96.814 -
+while its q8_0 row is identical; the binary is not the variable, the bf16 base file's local copy is the
+suspect; not chased.)
+
+**Open before adoption (owner's call):** (1) ~~KLD on the converted file vs the original~~ done above for the
+prefill path; the DECODE-path KLD (`PPL_EXTRA="-b 4 -ub 4"`, this tree's `run-quant-kld.sh`) is running
+2026-09-09 01:50 on three arms - plain twin under a clean env, V1 and V2 under the pick - the first time
+any decode kernel's numerics are priced; (2) the Q6_K width-1 and the IQ4_NL/Q6_K
 width-2/6..8 losers, reached under variable depth and multi-slot only; (3) the 32K prefill pair
 that the disk killed this morning, now unblocked; (4) the file name and manifest entry for the
 pick if it goes in (a file swap is a routing change: prove routes, re-mint).
