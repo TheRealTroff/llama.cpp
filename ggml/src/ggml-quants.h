@@ -132,6 +132,18 @@ GGML_API void ggml_soa_pack_q4_K    (const block_q4_K * GGML_RESTRICT blk, void 
 GGML_API void ggml_soa_unpack_q4_K  (const void * GGML_RESTRICT row, int64_t k, int64_t sb, block_q4_K * GGML_RESTRICT blk);
 GGML_API void ggml_soa_pack_q5_K    (const block_q5_K * GGML_RESTRICT blk, void * GGML_RESTRICT row, int64_t k, int64_t sb);
 GGML_API void ggml_soa_unpack_q5_K  (const void * GGML_RESTRICT row, int64_t k, int64_t sb, block_q5_K * GGML_RESTRICT blk);
+
+#define GGML_DECLARE_UD_SOA(NAME, BLOCK) \
+GGML_API void ggml_soa_pack_##NAME(const BLOCK * GGML_RESTRICT blk, void * GGML_RESTRICT row, int64_t k, int64_t sb); \
+GGML_API void ggml_soa_unpack_##NAME(const void * GGML_RESTRICT row, int64_t k, int64_t sb, BLOCK * GGML_RESTRICT blk); \
+GGML_API void quantize_row_##NAME##_soa_ref(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k); \
+GGML_API void dequantize_row_##NAME##_soa(const void * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k); \
+GGML_API size_t quantize_##NAME##_soa(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
+GGML_DECLARE_UD_SOA(iq4_nl, block_iq4_nl)
+GGML_DECLARE_UD_SOA(q3_K, block_q3_K)
+GGML_DECLARE_UD_SOA(q6_K, block_q6_K)
+GGML_DECLARE_UD_SOA(iq3_s, block_iq3_s)
+#undef GGML_DECLARE_UD_SOA
 GGML_API size_t quantize_q4_1(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
 GGML_API size_t quantize_q5_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
 GGML_API size_t quantize_q5_1(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);

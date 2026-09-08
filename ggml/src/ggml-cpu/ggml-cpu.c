@@ -293,29 +293,33 @@ static void ggml_vec_dot_q4_0_soa_q8_0(
 
 // Row-planar SoA storage types: reference dot against f32 activations through the exact block
 // unpack (the CPU backend is the test oracle for the Metal readers; speed is irrelevant here)
-#define GGML_SOA_VEC_DOT(NAME, BLOCK, DEQ)                                                                 \
+#define GGML_SOA_VEC_DOT(NAME, BLOCK, DEQ, QK)                                                             \
 static void ggml_vec_dot_##NAME##_soa_f32(int n, float * GGML_RESTRICT s, size_t bs,                       \
         const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {     \
     GGML_UNUSED(bs); GGML_UNUSED(bx); GGML_UNUSED(by);                                                     \
-    GGML_ASSERT(n % QK_K == 0);                                                                            \
+    GGML_ASSERT(n % QK == 0);                                                                              \
     GGML_ASSERT(nrc == 1);                                                                                 \
     const float * y = (const float *) vy;                                                                  \
-    const int nsb = n/QK_K;                                                                                \
+    const int nsb = n/QK;                                                                                  \
     float sum = 0.0f;                                                                                      \
     for (int sb = 0; sb < nsb; ++sb) {                                                                     \
         BLOCK blk;                                                                                         \
-        float tmp[QK_K];                                                                                   \
+        float tmp[QK];                                                                                     \
         ggml_soa_unpack_##NAME(vx, n, sb, &blk);                                                           \
-        DEQ(&blk, tmp, QK_K);                                                                              \
-        for (int i = 0; i < QK_K; ++i) {                                                                   \
-            sum += tmp[i]*y[QK_K*sb + i];                                                                  \
+        DEQ(&blk, tmp, QK);                                                                                \
+        for (int i = 0; i < QK; ++i) {                                                                     \
+            sum += tmp[i]*y[QK*sb + i];                                                                    \
         }                                                                                                  \
     }                                                                                                      \
     *s = sum;                                                                                              \
 }
-GGML_SOA_VEC_DOT(iq4_xs, block_iq4_xs, dequantize_row_iq4_xs)
-GGML_SOA_VEC_DOT(q4_K,   block_q4_K,   dequantize_row_q4_K)
-GGML_SOA_VEC_DOT(q5_K,   block_q5_K,   dequantize_row_q5_K)
+GGML_SOA_VEC_DOT(iq4_xs, block_iq4_xs, dequantize_row_iq4_xs, 256)
+GGML_SOA_VEC_DOT(q4_K,   block_q4_K,   dequantize_row_q4_K, 256)
+GGML_SOA_VEC_DOT(q5_K,   block_q5_K,   dequantize_row_q5_K, 256)
+GGML_SOA_VEC_DOT(iq4_nl, block_iq4_nl, dequantize_row_iq4_nl, 32)
+GGML_SOA_VEC_DOT(q3_K, block_q3_K, dequantize_row_q3_K, 256)
+GGML_SOA_VEC_DOT(q6_K, block_q6_K, dequantize_row_q6_K, 256)
+GGML_SOA_VEC_DOT(iq3_s, block_iq3_s, dequantize_row_iq3_s, 256)
 
 static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
     [GGML_TYPE_F32] = {
@@ -375,6 +379,30 @@ static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
         .vec_dot                  = ggml_vec_dot_q5_K_soa_f32,
         .vec_dot_type             = GGML_TYPE_F32,
         .nrows                    = 1,
+    },
+    [GGML_TYPE_IQ4_NL_SOA] = {
+        .from_float = (ggml_from_float_t) quantize_row_iq4_nl_soa_ref,
+        .vec_dot = ggml_vec_dot_iq4_nl_soa_f32,
+        .vec_dot_type = GGML_TYPE_F32,
+        .nrows = 1,
+    },
+    [GGML_TYPE_Q3_K_SOA] = {
+        .from_float = (ggml_from_float_t) quantize_row_q3_K_soa_ref,
+        .vec_dot = ggml_vec_dot_q3_K_soa_f32,
+        .vec_dot_type = GGML_TYPE_F32,
+        .nrows = 1,
+    },
+    [GGML_TYPE_Q6_K_SOA] = {
+        .from_float = (ggml_from_float_t) quantize_row_q6_K_soa_ref,
+        .vec_dot = ggml_vec_dot_q6_K_soa_f32,
+        .vec_dot_type = GGML_TYPE_F32,
+        .nrows = 1,
+    },
+    [GGML_TYPE_IQ3_S_SOA] = {
+        .from_float = (ggml_from_float_t) quantize_row_iq3_s_soa_ref,
+        .vec_dot = ggml_vec_dot_iq3_s_soa_f32,
+        .vec_dot_type = GGML_TYPE_F32,
+        .nrows = 1,
     },
     [GGML_TYPE_Q4_1] = {
         .from_float               = quantize_row_q4_1,

@@ -7408,6 +7408,116 @@ kernel void kernel_repack_iq4_xs_soah(
     kernel_repack_iq4_xs_soa_impl<1>(args, src, dst, tgpig, tpitg);
 }
 
+// F: IQ4_NL=0, Q3_K=1, Q6_K=2, IQ3_S=3. All scales retain their original precision.
+template <int F>
+inline void ud_soa_unpack8(device const char * row, int K, int p, thread float (&w)[8]) {
+    const int nsb = K/256;
+    const int sb = p/32;
+    if constexpr (F == 0) {
+        const int nb = K/32;
+        const float d = ((device const half *) row)[p/4];
+        const uint q = ((device const uint *) (row + 2*nb))[p];
+        for (int i = 0; i < 8; ++i) { w[i] = d*kvalues_iq4nl_f[(q >> (4*i)) & 15]; }
+    } else if constexpr (F == 1) {
+        const ushort lo = ((device const ushort *) row)[p];
+        const uchar hi = ((device const uchar *) (row + 64*nsb))[p];
+        const float d = float(((device const half *) (row + 112*nsb))[sb]) * float(row[96*nsb + p/2]);
+        for (int i = 0; i < 8; ++i) { w[i] = d*(int((lo >> (2*i)) & 3) - ((hi >> i) & 1 ? 0 : 4)); }
+    } else if constexpr (F == 2) {
+        const uint lo = ((device const uint *) row)[p];
+        const ushort hi = ((device const ushort *) (row + 128*nsb))[p];
+        const float d = float(((device const half *) (row + 208*nsb))[sb]) * float(row[192*nsb + p/2]);
+        for (int i = 0; i < 8; ++i) { w[i] = d*(int(((lo >> (4*i)) & 15) | (((hi >> (2*i)) & 3) << 4)) - 32); }
+    } else {
+        const uint pack = ((device const uint *) row)[p];
+        const int j = (p%32)/4;
+        const uchar sc = ((device const uchar *) (row + 128*nsb))[4*sb + j/2];
+        const float d = float(((device const half *) (row + 132*nsb))[sb]) * (1 + 2*((sc >> (4*(j%2))) & 15));
+        const uint g0 = iq3s_grid[pack & 511];
+        const uint g1 = iq3s_grid[(pack >> 9) & 511];
+        for (int i = 0; i < 8; ++i) {
+            const int q = ((i < 4 ? g0 : g1) >> (8*(i%4))) & 255;
+            w[i] = d*q*((pack >> (18+i)) & 1 ? -1.f : 1.f);
+        }
+    }
+}
+
+template <int F, int NC, int KS>
+kernel void kernel_mul_mv_ud_soa(
+        constant ggml_metal_kargs_mul_mv_ext & args,
+        device const char * src0,
+        device const char * src1,
+        device float * dst,
+        uint3 tgpig [[threadgroup_position_in_grid]],
+        ushort lane [[thread_index_in_simdgroup]],
+        ushort sg [[simdgroup_index_in_threadgroup]]) {
+    threadgroup float partial[2][4*NC];
+    float acc[4*NC] = {};
+    const int row0 = 4*tgpig.x, col0 = NC*tgpig.y;
+    const int i12 = tgpig.z%args.ne12, i13 = tgpig.z/args.ne12;
+    src1 += (uint64_t)i12*args.nb12 + (uint64_t)i13*args.nb13;
+    dst += (uint64_t)tgpig.z*args.ne0*args.ne1;
+    const int np = args.ne00/8;
+    const int first = KS == 2 ? sg*(np/2) : 0;
+    const int end = KS == 2 ? first + np/2 : np;
+    for (int p = first + lane; p < end; p += 32) {
+        float x[NC][8];
+#pragma unroll
+        for (int c = 0; c < NC; ++c) {
+#pragma unroll
+            for (int i = 0; i < 8; ++i) {
+                x[c][i] = col0+c < args.ne11 ? *(device const float *)(src1 + (uint64_t)(col0+c)*args.nb11 + (uint64_t)(8*p+i)*args.nb10) : 0.f;
+            }
+        }
+#pragma unroll
+        for (int r = 0; r < 4; ++r) {
+            float w[8];
+            const int row = row0+r < args.ne01 ? row0+r : 0;
+            ud_soa_unpack8<F>(src0 + (uint64_t)row*args.nb01, args.ne00, p, w);
+#pragma unroll
+            for (int i = 0; i < 8; ++i) {
+#pragma unroll
+                for (int c = 0; c < NC; ++c) { acc[r*NC+c] += w[i]*x[c][i]; }
+            }
+        }
+    }
+#pragma unroll
+    for (int i = 0; i < 4*NC; ++i) { acc[i] = simd_sum(acc[i]); }
+    if constexpr (KS == 2) {
+        if (lane == 0) {
+            for (int i = 0; i < 4*NC; ++i) { partial[sg][i] = acc[i]; }
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        if (sg == 0 && lane < 4*NC) {
+            const int r = lane/NC, c = lane%NC;
+            if (row0+r < args.ne01 && col0+c < args.ne11) {
+                dst[(uint64_t)(col0+c)*args.ne0 + row0+r] = partial[0][lane] + partial[1][lane];
+            }
+        }
+    } else if (lane < 4*NC) {
+        const int r = lane/NC, c = lane%NC;
+        if (row0+r < args.ne01 && col0+c < args.ne11) { dst[(uint64_t)(col0+c)*args.ne0 + row0+r] = acc[lane]; }
+    }
+}
+
+#define UD_SOA_KERNEL(F, NAME, NC, KS) \
+template [[host_name("kernel_mul_mv_ud_" #NAME "_soa_w" #NC)]] kernel decltype(kernel_mul_mv_ud_soa<F, NC, KS>) kernel_mul_mv_ud_soa<F, NC, KS>;
+#define UD_SOA_WIDTHS(F, NAME) \
+UD_SOA_KERNEL(F, NAME, 1, 2) \
+UD_SOA_KERNEL(F, NAME, 2, 2) \
+UD_SOA_KERNEL(F, NAME, 3, 2) \
+UD_SOA_KERNEL(F, NAME, 4, 2) \
+UD_SOA_KERNEL(F, NAME, 5, 1) \
+UD_SOA_KERNEL(F, NAME, 6, 1) \
+UD_SOA_KERNEL(F, NAME, 7, 1) \
+UD_SOA_KERNEL(F, NAME, 8, 1)
+UD_SOA_WIDTHS(0, iq4_nl)
+UD_SOA_WIDTHS(1, q3_K)
+UD_SOA_WIDTHS(2, q6_K)
+UD_SOA_WIDTHS(3, iq3_s)
+#undef UD_SOA_WIDTHS
+#undef UD_SOA_KERNEL
+
 // SM: scale layout (0 exact d+int8, 1 pre-rounded half); PM: product (0 f32 FMA, 1 half product);
 // LM: lookup (0 constant table, 1 simd_shuffle from a lane-held table).
 template <int SM, int PM, int LM, int NC, int KS, typename TY = half>
@@ -16934,6 +17044,20 @@ template <typename type4x4> inline void dequantize_soa_mm(device const block_iq4
 template <typename type4x4> inline void dequantize_soa_mm(device const block_q4_K   *, device const char * row, int ne00, int block_idx, short il, thread type4x4 & reg) { dequantize_kq_soa_mm<false>(row, ne00, block_idx, il, reg); }
 template <typename type4x4> inline void dequantize_soa_mm(device const block_q5_K   *, device const char * row, int ne00, int block_idx, short il, thread type4x4 & reg) { dequantize_kq_soa_mm<true>(row, ne00, block_idx, il, reg); }
 // every other block type: never reached (the host only sets FC_mul_mm_soa for the four stored types)
+template <int F, typename type4x4>
+inline void dequantize_ud_soa_mm(device const char * row, int K, int block_idx, short il, thread type4x4 & reg) {
+    const int p0 = (F == 0 ? 4 : 32)*block_idx + 2*il;
+    for (int p = 0; p < 2; ++p) {
+        float w[8];
+        ud_soa_unpack8<F>(row, K, p0+p, w);
+        for (int i = 0; i < 8; ++i) { reg[2*p+i/4][i%4] = w[i]; }
+    }
+}
+template <typename type4x4> inline void dequantize_soa_mm(device const block_iq4_nl *, device const char * row, int K, int b, short il, thread type4x4 & reg) { dequantize_ud_soa_mm<0>(row, K, b, il, reg); }
+template <typename type4x4> inline void dequantize_soa_mm(device const block_q3_K   *, device const char * row, int K, int b, short il, thread type4x4 & reg) { dequantize_ud_soa_mm<1>(row, K, b, il, reg); }
+template <typename type4x4> inline void dequantize_soa_mm(device const block_q6_K   *, device const char * row, int K, int b, short il, thread type4x4 & reg) { dequantize_ud_soa_mm<2>(row, K, b, il, reg); }
+template <typename type4x4> inline void dequantize_soa_mm(device const block_iq3_s  *, device const char * row, int K, int b, short il, thread type4x4 & reg) { dequantize_ud_soa_mm<3>(row, K, b, il, reg); }
+
 template <typename block_q, typename type4x4> inline void dequantize_soa_mm(device const block_q *, device const char *, int, int, short, thread type4x4 & reg) { reg = type4x4(0); }
 
 // each block_q contains 16*nl weights

@@ -5657,28 +5657,154 @@ void ggml_soa_unpack_q5_K(const void * GGML_RESTRICT vrow, int64_t k, int64_t sb
     soa_unpack_kq(packs + 32*sb, hbits + 32*sb, b->qs, b->qh);
 }
 
-#define GGML_SOA_ROW_FNS(NAME, BLOCK, TYPE, QROW, QREF, DEQ)                                                              \
+void ggml_soa_pack_iq4_nl(const block_iq4_nl * GGML_RESTRICT b, void * GGML_RESTRICT vrow, int64_t k, int64_t sb) {
+    uint8_t * row = (uint8_t *) vrow;
+    uint32_t packs[4];
+    soa_pack_nibbles16(b->qs, packs);
+    memcpy(row + 2*sb, &b->d, 2);
+    memcpy(row + 2*(k/32) + 16*sb, packs, 16);
+}
+
+void ggml_soa_unpack_iq4_nl(const void * GGML_RESTRICT vrow, int64_t k, int64_t sb, block_iq4_nl * GGML_RESTRICT b) {
+    const uint8_t * row = (const uint8_t *) vrow;
+    uint32_t packs[4];
+    memcpy(&b->d, row + 2*sb, 2);
+    memcpy(packs, row + 2*(k/32) + 16*sb, 16);
+    soa_unpack_nibbles16(packs, b->qs);
+}
+
+void ggml_soa_pack_q3_K(const block_q3_K * GGML_RESTRICT b, void * GGML_RESTRICT vrow, int64_t k, int64_t sb) {
+    const int64_t nsb = k/256;
+    uint8_t * row = (uint8_t *) vrow;
+    for (int j = 0; j < 16; ++j) {
+        const int sc = ((b->scales[j%8] >> (4*(j/8))) & 15) | (((b->scales[8+j%4] >> (2*(j/4))) & 3) << 4);
+        row[96*nsb + 16*sb + j] = (uint8_t) (int8_t) (sc - 32);
+    }
+    for (int p = 0; p < 32; ++p) {
+        uint16_t lo = 0;
+        uint8_t hi = 0;
+        for (int i = 0; i < 8; ++i) {
+            const int x = 8*p+i, j = (x%128)/32;
+            lo |= (uint16_t) ((b->qs[32*(x/128)+x%32] >> (2*j)) & 3) << (2*i);
+            hi |= (uint8_t) ((b->hmask[x%32] >> (x/32)) & 1) << i;
+        }
+        memcpy(row + 64*sb + 2*p, &lo, 2);
+        row[64*nsb + 32*sb + p] = hi;
+    }
+    memcpy(row + 112*nsb + 2*sb, &b->d, 2);
+    memset(row + 114*nsb + 2*sb, 0, 2);
+}
+
+void ggml_soa_unpack_q3_K(const void * GGML_RESTRICT vrow, int64_t k, int64_t sb, block_q3_K * GGML_RESTRICT b) {
+    const int64_t nsb = k/256;
+    const uint8_t * row = (const uint8_t *) vrow;
+    memset(b, 0, sizeof(*b));
+    for (int j = 0; j < 16; ++j) {
+        const uint8_t sc = (uint8_t) ((int8_t) row[96*nsb + 16*sb + j] + 32);
+        b->scales[j%8] |= (sc & 15) << (4*(j/8));
+        b->scales[8+j%4] |= (sc >> 4) << (2*(j/4));
+    }
+    for (int p = 0; p < 32; ++p) {
+        uint16_t lo; memcpy(&lo, row + 64*sb + 2*p, 2);
+        const uint8_t hi = row[64*nsb + 32*sb + p];
+        for (int i = 0; i < 8; ++i) {
+            const int x = 8*p+i, j = (x%128)/32;
+            b->qs[32*(x/128)+x%32] |= ((lo >> (2*i)) & 3) << (2*j);
+            b->hmask[x%32] |= ((hi >> i) & 1) << (x/32);
+        }
+    }
+    memcpy(&b->d, row + 112*nsb + 2*sb, 2);
+}
+
+void ggml_soa_pack_q6_K(const block_q6_K * GGML_RESTRICT b, void * GGML_RESTRICT vrow, int64_t k, int64_t sb) {
+    const int64_t nsb = k/256;
+    uint8_t * row = (uint8_t *) vrow;
+    for (int p = 0; p < 32; ++p) {
+        uint32_t lo = 0;
+        uint16_t hi = 0;
+        for (int i = 0; i < 8; ++i) {
+            const int x = 8*p+i, j = (x%128)/32, l = x%32;
+            lo |= (uint32_t) ((b->ql[64*(x/128)+32*(j%2)+l] >> (4*(j/2))) & 15) << (4*i);
+            hi |= (uint16_t) ((b->qh[32*(x/128)+l] >> (2*j)) & 3) << (2*i);
+        }
+        memcpy(row + 128*sb + 4*p, &lo, 4);
+        memcpy(row + 128*nsb + 64*sb + 2*p, &hi, 2);
+    }
+    memcpy(row + 192*nsb + 16*sb, b->scales, 16);
+    memcpy(row + 208*nsb + 2*sb, &b->d, 2);
+    memset(row + 210*nsb + 2*sb, 0, 2);
+}
+
+void ggml_soa_unpack_q6_K(const void * GGML_RESTRICT vrow, int64_t k, int64_t sb, block_q6_K * GGML_RESTRICT b) {
+    const int64_t nsb = k/256;
+    const uint8_t * row = (const uint8_t *) vrow;
+    memset(b, 0, sizeof(*b));
+    for (int p = 0; p < 32; ++p) {
+        uint32_t lo; memcpy(&lo, row + 128*sb + 4*p, 4);
+        uint16_t hi; memcpy(&hi, row + 128*nsb + 64*sb + 2*p, 2);
+        for (int i = 0; i < 8; ++i) {
+            const int x = 8*p+i, j = (x%128)/32, l = x%32;
+            b->ql[64*(x/128)+32*(j%2)+l] |= ((lo >> (4*i)) & 15) << (4*(j/2));
+            b->qh[32*(x/128)+l] |= ((hi >> (2*i)) & 3) << (2*j);
+        }
+    }
+    memcpy(b->scales, row + 192*nsb + 16*sb, 16);
+    memcpy(&b->d, row + 208*nsb + 2*sb, 2);
+}
+
+void ggml_soa_pack_iq3_s(const block_iq3_s * GGML_RESTRICT b, void * GGML_RESTRICT vrow, int64_t k, int64_t sb) {
+    const int64_t nsb = k/256;
+    uint8_t * row = (uint8_t *) vrow;
+    for (int p = 0; p < 32; ++p) {
+        const int j = p/4, l = p%4;
+        const uint32_t a = b->qs[2*p] | (((b->qh[j] >> (2*l)) & 1) << 8);
+        const uint32_t c = b->qs[2*p+1] | (((b->qh[j] >> (2*l+1)) & 1) << 8);
+        const uint32_t pack = a | (c << 9) | ((uint32_t) b->signs[p] << 18);
+        memcpy(row + 128*sb + 4*p, &pack, 4);
+    }
+    memcpy(row + 128*nsb + 4*sb, b->scales, 4);
+    memcpy(row + 132*nsb + 2*sb, &b->d, 2);
+    memset(row + 134*nsb + 2*sb, 0, 2);
+}
+
+void ggml_soa_unpack_iq3_s(const void * GGML_RESTRICT vrow, int64_t k, int64_t sb, block_iq3_s * GGML_RESTRICT b) {
+    const int64_t nsb = k/256;
+    const uint8_t * row = (const uint8_t *) vrow;
+    memset(b, 0, sizeof(*b));
+    for (int p = 0; p < 32; ++p) {
+        uint32_t pack; memcpy(&pack, row + 128*sb + 4*p, 4);
+        b->qs[2*p] = pack & 255;
+        b->qs[2*p+1] = (pack >> 9) & 255;
+        b->qh[p/4] |= ((pack >> 8) & 1) << (2*(p%4));
+        b->qh[p/4] |= ((pack >> 17) & 1) << (2*(p%4)+1);
+        b->signs[p] = (pack >> 18) & 255;
+    }
+    memcpy(b->scales, row + 128*nsb + 4*sb, 4);
+    memcpy(&b->d, row + 132*nsb + 2*sb, 2);
+}
+
+#define GGML_SOA_ROW_FNS(NAME, BLOCK, TYPE, QROW, QREF, DEQ, QK)                                                          \
 void quantize_row_##NAME##_soa_ref(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {                   \
-    assert(k % QK_K == 0);                                                                                                \
-    const int64_t nsb = k/QK_K;                                                                                           \
+    assert(k % QK == 0);                                                                                                  \
+    const int64_t nsb = k/QK;                                                                                             \
     for (int64_t sb = 0; sb < nsb; ++sb) {                                                                                \
         BLOCK blk;                                                                                                        \
-        QREF(x + QK_K*sb, &blk, QK_K);                                                                                    \
+        QREF(x + QK*sb, &blk, QK);                                                                                        \
         ggml_soa_pack_##NAME(&blk, y, k, sb);                                                                             \
     }                                                                                                                     \
 }                                                                                                                         \
 void dequantize_row_##NAME##_soa(const void * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {                     \
-    assert(k % QK_K == 0);                                                                                                \
-    const int64_t nsb = k/QK_K;                                                                                           \
+    assert(k % QK == 0);                                                                                                  \
+    const int64_t nsb = k/QK;                                                                                             \
     for (int64_t sb = 0; sb < nsb; ++sb) {                                                                                \
         BLOCK blk;                                                                                                        \
         ggml_soa_unpack_##NAME(x, k, sb, &blk);                                                                           \
-        DEQ(&blk, y + QK_K*sb, QK_K);                                                                                     \
+        DEQ(&blk, y + QK*sb, QK);                                                                                         \
     }                                                                                                                     \
 }                                                                                                                         \
 size_t quantize_##NAME##_soa(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) { \
     const size_t row_size = ggml_row_size(TYPE, n_per_row);                                                               \
-    const int64_t nsb = n_per_row/QK_K;                                                                                   \
+    const int64_t nsb = n_per_row/QK;                                                                                     \
     BLOCK * tmp = (BLOCK *) malloc(nsb*sizeof(BLOCK));                                                                    \
     char * qrow = (char *) dst;                                                                                           \
     for (int64_t row = 0; row < nrow; ++row) {                                                                            \
@@ -5693,9 +5819,13 @@ size_t quantize_##NAME##_soa(const float * GGML_RESTRICT src, void * GGML_RESTRI
     return nrow*row_size;                                                                                                 \
 }
 
-GGML_SOA_ROW_FNS(iq4_xs, block_iq4_xs, GGML_TYPE_IQ4_XS_SOA, quantize_iq4_xs, quantize_row_iq4_xs_ref, dequantize_row_iq4_xs)
-GGML_SOA_ROW_FNS(q4_K,   block_q4_K,   GGML_TYPE_Q4_K_SOA,   quantize_q4_K,   quantize_row_q4_K_ref,   dequantize_row_q4_K)
-GGML_SOA_ROW_FNS(q5_K,   block_q5_K,   GGML_TYPE_Q5_K_SOA,   quantize_q5_K,   quantize_row_q5_K_ref,   dequantize_row_q5_K)
+GGML_SOA_ROW_FNS(iq4_xs, block_iq4_xs, GGML_TYPE_IQ4_XS_SOA, quantize_iq4_xs, quantize_row_iq4_xs_ref, dequantize_row_iq4_xs, 256)
+GGML_SOA_ROW_FNS(q4_K,   block_q4_K,   GGML_TYPE_Q4_K_SOA,   quantize_q4_K,   quantize_row_q4_K_ref,   dequantize_row_q4_K, 256)
+GGML_SOA_ROW_FNS(q5_K,   block_q5_K,   GGML_TYPE_Q5_K_SOA,   quantize_q5_K,   quantize_row_q5_K_ref,   dequantize_row_q5_K, 256)
+GGML_SOA_ROW_FNS(iq4_nl, block_iq4_nl, GGML_TYPE_IQ4_NL_SOA, quantize_iq4_nl, quantize_row_iq4_nl_ref, dequantize_row_iq4_nl, 32)
+GGML_SOA_ROW_FNS(q3_K,   block_q3_K,   GGML_TYPE_Q3_K_SOA,   quantize_q3_K,   quantize_row_q3_K_ref,   dequantize_row_q3_K, 256)
+GGML_SOA_ROW_FNS(q6_K,   block_q6_K,   GGML_TYPE_Q6_K_SOA,   quantize_q6_K,   quantize_row_q6_K_ref,   dequantize_row_q6_K, 256)
+GGML_SOA_ROW_FNS(iq3_s,  block_iq3_s,  GGML_TYPE_IQ3_S_SOA,  quantize_iq3_s,  quantize_row_iq3_s_ref,  dequantize_row_iq3_s, 256)
 
 bool ggml_validate_row_data(enum ggml_type type, const void * data, size_t nbytes) {
     if (type < 0 || type >= GGML_TYPE_COUNT) {
@@ -5836,6 +5966,10 @@ bool ggml_validate_row_data(enum ggml_type type, const void * data, size_t nbyte
         case GGML_TYPE_IQ4_XS_SOA:
         case GGML_TYPE_Q4_K_SOA:
         case GGML_TYPE_Q5_K_SOA:
+        case GGML_TYPE_IQ4_NL_SOA:
+        case GGML_TYPE_Q3_K_SOA:
+        case GGML_TYPE_Q6_K_SOA:
+        case GGML_TYPE_IQ3_S_SOA:
             {
                 // Scale and nibble streams are separated at a row-dependent offset,
                 // so this byte-count-only API cannot locate the fp16 values. The

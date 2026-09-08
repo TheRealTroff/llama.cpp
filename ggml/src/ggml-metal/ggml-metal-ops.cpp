@@ -2831,6 +2831,10 @@ static bool ggml_metal_mul_mat_use_f16_src1_mm(const ggml_tensor * op) {
         case GGML_TYPE_IQ4_XS_SOA:
         case GGML_TYPE_Q4_K_SOA:
         case GGML_TYPE_Q5_K_SOA:
+        case GGML_TYPE_IQ4_NL_SOA:
+        case GGML_TYPE_Q3_K_SOA:
+        case GGML_TYPE_Q6_K_SOA:
+        case GGML_TYPE_IQ3_S_SOA:
             return true;
         default:
             return false;
@@ -3150,6 +3154,25 @@ static int ggml_metal_op_mul_mat_impl(ggml_metal_op_t ctx, int idx, ggml_tensor 
     static const int ne11_kq_min = getenv("GGML_MV_EXT_KQ_MIN") ? atoi(getenv("GGML_MV_EXT_KQ_MIN")) : 2;
     static const int env_nsg     = getenv("GGML_MV_EXT_NSG")   ? atoi(getenv("GGML_MV_EXT_NSG"))   : 0;
     static const int env_nxpsg   = getenv("GGML_MV_EXT_NXPSG") ? atoi(getenv("GGML_MV_EXT_NXPSG")) : 0;
+
+    // New stored UD formats share exact-scale pack readers across the small-batch tile.
+    if (ggml_metal_is_ud_remaining_soa_type(op->src[0]->type) &&
+        (ne11 <= std::max(8, ne11_mm_min) || !props_dev->has_simdgroup_mm || ggml_is_transposed(op->src[1]))) {
+        const int nc = std::min(ne11, 8);
+        const int nsg = nc <= 4 ? 2 : 1;
+        auto pipeline = ggml_metal_library_get_pipeline_mul_mv_ud_soa(lib, op->src[0]->type, nc);
+        ggml_metal_kargs_mul_mv_ext args = {
+            ne00, ne01, ne02, nb00, nb01, nb02, nb03,
+            ne10, ne11, ne12, nb10, nb11, nb12, nb13, ne0, ne1, r2, r3,
+        };
+        ggml_metal_encoder_set_pipeline(enc, pipeline);
+        ggml_metal_encoder_set_bytes(enc, &args, sizeof(args), 0);
+        ggml_metal_encoder_set_buffer(enc, ggml_metal_get_buffer_id(op->src[0]), 1);
+        ggml_metal_encoder_set_buffer(enc, ggml_metal_get_buffer_id(op->src[1]), 2);
+        ggml_metal_encoder_set_buffer(enc, ggml_metal_get_buffer_id(op), 3);
+        ggml_metal_encoder_dispatch_threadgroups(enc, (ne01 + 3)/4, (ne11 + nc - 1)/nc, ne12*ne13, 32, nsg, 1);
+        return 1;
+    }
 
     // first try to use small-batch mat-mv kernels
     // these should be efficient for BS [2, ~8]
