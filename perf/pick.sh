@@ -15,6 +15,7 @@
 #   NUM-TG  decode numerics (half products, tile accumulation order): priced by the agreement / same-top
 #           harness on the model's own greedy text, or by a sha gate only - the KLD line does NOT see them
 #           (it scores prefill-shaped logits)
+#   NUM-PP/TG  changes both prefill and decode arithmetic; both fidelity questions apply
 #   KV      cache quantization: prices both paths (turbo4-quality.md, ud-model.md step 16)
 # Lines: q4 = uniform Q4_0 (willing to trade fidelity for speed, within a stated record), ud = unsloth
 # UD-Q4_K_M (closer to the unquantized model: BI/SPEC only, plus what the owner has explicitly taken).
@@ -68,7 +69,8 @@ PICK_MANIFEST=(
   "GGML_FA_GQA_HEADS=4,6|BI|both|pick|turbo4-fa-gqa-reuse.md (Turbo4 GQA tile; hash moved at widths 3-4 = a lineage, not a numerics call)"
   "GGML_FA_GQA4_NWG=6|BI|both|pick|turbo4-fa-gqa-reuse.md"
   "GGML_FA_GQA_W3_NWG=13|BI|both|pick|turbo4-fa-gqa-reuse.md"
-  "GGML_FA_TR=9|BI|both|pick|ud-model.md step 16 D (the byte-identical Turbo4 FA form; owner 2026-09-07)"
+  "GGML_FA_TR=9|BI|ud|pick|ud-model.md step 16 D (UD waits for decode-fidelity data; owner 2026-09-08)"
+  "GGML_FA_TR=7|NUM-PP/TG|q4|pick|q4-fa-folded-pick.md (owner 2026-09-08: take the faster folded form for q4_0; accuracy mixed, new output lineage)"
   # --- refused / declined, listed so pick_check knows them ---
   "GGML_FA_TR=6|NUM-TG|none|refused|ud-model.md step 16 C (folded norm, KLD a wash; owner took =9)"
   "GGML_KQ_SOA_EXACT=0|NUM-PP|none|refused|ud-model.md step 15 (=0 is the upstream half-division tile; the exact tile is the default, owner)"
