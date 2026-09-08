@@ -7582,8 +7582,8 @@ inline void ud_fetch(const thread ud_planes<F> & P, int p, thread uint & q, thre
     }
 }
 
-// weight ki (0..7) of the pack as a half, scale applied; Q3_K/Q6_K return the unsigned code x scale
-// (the -4 / -32 offset is applied by the caller through the activation sum)
+// weight ki (0..7) of the pack as a half, scale applied (widths 3..5); Q3_K/Q6_K return the unsigned
+// code x scale, the -4 / -32 offset goes through the activation sum
 template <int F>
 inline half ud_wv(uint q, uint g0, uint g1, int ki, half sh) {
     if constexpr (F == 0) {
@@ -7599,17 +7599,34 @@ inline half ud_wv(uint q, uint g0, uint g1, int ki, half sh) {
     }
 }
 
-template <int F, int NC, int KS>
+// the same weight as its unscaled f32 code (the width-1 f32-product path)
+template <int F>
+inline float ud_wq(uint q, uint g0, uint g1, int ki) {
+    if constexpr (F == 0) {
+        return kvalues_iq4nl_f[(q >> (4*ki)) & 15];
+    } else if constexpr (F == 1) {
+        return float(((q >> (2*ki)) & 3) | (((g0 >> ki) & 1) << 2));
+    } else if constexpr (F == 2) {
+        return float(((q >> (4*ki)) & 15) | (((g0 >> (2*ki)) & 3) << 4));
+    } else {
+        const uint g = ki < 4 ? g0 : g1;
+        const float m = float((g >> (8*(ki & 3))) & 255);
+        return ((q >> (18 + ki)) & 1) ? -m : m;
+    }
+}
+
+template <int F, int NC, int KS, typename TY = half>
 void kernel_mul_mv_ud_kq_impl(
         constant ggml_metal_kargs_mul_mv_ext & args,
         device const char * src0,
-        device const half * src1,
+        device const TY * src1,
         device float * dst,
         threadgroup float (&partial)[2][4*NC],
         uint3 tgpig,
         ushort tiisg,
         ushort sgitg) {
-    using half8 = vec<half, 8>;
+    using half8 = vec<TY, 8>;
+    constexpr bool F32P = is_same<TY, float>::value;   // width 1: f32 products with the exact scale
     constexpr float MINC = F == 1 ? 4.f : F == 2 ? 32.f : 0.f;
     float acc[4*NC] = {};
     const int npack = args.ne00/8;
@@ -7659,6 +7676,10 @@ void kernel_mul_mv_ud_kq_impl(
         for (int r = 0; r < 4; ++r) {
 #pragma unroll
             for (int ki = 0; ki < 8; ++ki) {
+                if (F32P) {
+                    acc[r*NC + 0] += float(v0[ki])*(ud_wq<F>(q[r], g0[r], g1[r], ki)*sf[r]);
+                    continue;
+                }
                 const half wv = ud_wv<F>(q[r], g0[r], g1[r], ki, sh[r]);
                 acc[r*NC + 0] += float(v0[ki]*wv);
                 if (NC > 1) { acc[r*NC + 1] += float(v1[ki]*wv); }
@@ -7731,6 +7752,26 @@ UD_KQ_KERNEL(3, iq3_s,  3, 2)
 UD_KQ_KERNEL(3, iq3_s,  4, 2)
 UD_KQ_KERNEL(3, iq3_s,  5, 1)
 #undef UD_KQ_KERNEL
+
+// width 1 on the same body: NC = 1, K split across two simdgroups, f32 activations and f32 products
+// with the exact scale (the kq-SoA w1 class); GGML_MV_UD_W1=1 routes it instead of the shared body
+#define UD_KQ_W1_KERNEL(F, NAME) \
+kernel void kernel_mul_mv_##NAME##_soa_w1_v1( \
+        constant ggml_metal_kargs_mul_mv_ext & args, \
+        device const char * src0, \
+        device const float * src1, \
+        device float * dst, \
+        uint3 tgpig [[threadgroup_position_in_grid]], \
+        ushort tiisg [[thread_index_in_simdgroup]], \
+        ushort sgitg [[simdgroup_index_in_threadgroup]]) { \
+    threadgroup float partial[2][4]; \
+    kernel_mul_mv_ud_kq_impl<F, 1, 2, float>(args, src0, src1, dst, partial, tgpig, tiisg, sgitg); \
+}
+UD_KQ_W1_KERNEL(0, iq4_nl)
+UD_KQ_W1_KERNEL(1, q3_K)
+UD_KQ_W1_KERNEL(2, q6_K)
+UD_KQ_W1_KERNEL(3, iq3_s)
+#undef UD_KQ_W1_KERNEL
 
 // SM: scale layout (0 exact d+int8, 1 pre-rounded half); PM: product (0 f32 FMA, 1 half product);
 // LM: lookup (0 constant table, 1 simd_shuffle from a lane-held table).

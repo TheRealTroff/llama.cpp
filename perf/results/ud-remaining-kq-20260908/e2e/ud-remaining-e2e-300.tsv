@@ -1,0 +1,5 @@
+label	arm	depth	tps	accept_pct	predicted_n	prompt_ms	sha1	footprint_mib	wired_anon_gib
+d3-orig-1	orig	3	24.74415044973114	58.95	300	63987	73ea53bbe98f	3514MB	22.892
+d3-stored-2	stored	3	25.718525277396658	58.95	300	63605	73ea53bbe98f	3530MB	22.89
+d3-stored-3	stored	3	25.77601983598348	58.95	300	63576	73ea53bbe98f	3524MB	22.935
+d3-orig-4	orig	3	24.84472462572544	58.95	300	63648	73ea53bbe98f	3525MB	22.95

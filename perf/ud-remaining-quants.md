@@ -207,6 +207,71 @@ slower sample is still +35% against native, so no conclusion above turns on a no
   reader competes with tuned native ext kernels (IQ4_NL is a t4 type there, nr0 4). A stored
   format is all-or-nothing per tensor, so these widths price the conversion under variable
   depth and multi-slot; under the pick they are not reached.
-- **E2e** is unmeasured. 35 tensors, 1.37 GiB of the model; a converted file (`llama-gguf-repack
-  --type` for the four types, ~17.4 GiB temporary, / has 92 GiB free tonight) through the UD
-  pick at 300/600 tokens with the b1 anchor is the next gate, and a KLD gate follows it.
+- ~~**E2e** is unmeasured.~~ Measured the same night, below.
+
+## Width 1 on the kq body, and the converted file end to end (2026-09-08 night)
+
+**Width 1.** The kq body at NC = 1 with f32 activations and f32 products on the exact scale (the
+incumbents' `SM=2` class; kernels `kernel_mul_mv_<type>_soa_w1_v1`, 2.1-3.0 KB, zero spill, 26/26
++ 26/26 correctness) against the shared body and native, `perf/run-ud-w1-ab.sh`, mirrored
+`plain gen kq kq gen plain`, 12 shapes, [results](results/ud-remaining-w1-20260908/):
+
+| Format | shared body vs native | kq body vs native | kq vs shared |
+|---|---:|---:|---:|
+| IQ3_S | -35.3% | **+12.3%** | +35.1% |
+| IQ4_NL | -16.7% | +1.2% | +15.4% |
+| Q3_K | +23.5% | **+31.7%** | +10.7% |
+| Q6_K | -9.3% | -5.5% | +3.4% |
+
+The kq body wins every shape (+2..+36%, max spread 4.5%), so it is the width-1 default
+(`GGML_MV_UD_W1=0` keeps the shared body for the record). Q6_K width 1 is the one remaining loser
+against native, -5.5%.
+
+**Converted file.** `llama-gguf-repack --verify --type iq4_nl --type q3_K --type q6_K --type iq3_s`
+on the production `Qwen3.8-27B-UD-Q4_K_M-SOA-V1.gguf` -> 35 tensors, 1.37 -> 1.42 GiB, every row
+reversed byte-identical, three minutes, written to the session scratchpad
+(`.../scratchpad/cand/Qwen3.8-27B-UD-Q4_K_M-SOA-V2cand.gguf`, 17.4 GiB, regenerable). The
+`output.weight` Q6_K head stays native by the tool's exclusion. Then prod's
+`perf/run-ud-soa-gguf-ab.sh` with this tree's binary (ff5e0fe10 + the width-1 default), the UD
+f16 pick from `pick.sh`, depth-3 DFlash, fresh processes, mirrored `orig stored stored orig`, the
+8K benchprompt, plus the no-spec b1 anchor at 600 ([evidence](results/ud-remaining-kq-20260908/e2e/)):
+
+| Run | orig t/s | stored t/s | delta | acceptance | sha (all four arms) | prompt s |
+|---|---:|---:|---:|---:|---|---:|
+| depth 3, 600 | 25.35 / 25.40 | 26.32 / 26.11 | **+3.3%** | 60.9% both | `5e76afaba36c` | 63.6-64.0 |
+| depth 3, 300 | 24.74 / 24.85 | 25.72 / 25.78 | **+3.8%** | 59.0% both | `73ea53bbe98f` | 63.6-64.0 |
+| b1 (no spec), 600 | 13.02 / 12.96 | 13.06 / 13.07 | +0.6% | - | `5e76afaba36c` | 63.0-63.2 |
+
+Every arm's text is byte-identical to the original file's, at both lengths and at b1: the
+half-product width 3..5 kernels and the f32 width-1 kernels moved no byte of either trajectory.
+The shas are the canonical UD lineage, so this file swap does not mint a new lineage. Prefill is
+within noise (the n64/f16-B stored readers, measured -4.7% on Q3_K's 2.3% of the weights). The
+resident footprint reads the same within the harness's own scatter (22.3-23.5 GiB deltas on both
+arms).
+
+**Attribution.** Before the e2e ran, the isolated per-shape timings times the converted tensor
+list predicted the saving per verify round; after it, one profiled run per file
+(`GGML_METAL_PROFILE=1`, 211 rounds each, `metalprof-buckets.py`) measured it, serialized decode
+GPU ms per round, main model only:
+
+| Format | tensors | predicted saving (w4) | measured orig -> stored ms/round | measured saving |
+|---|---:|---:|---|---:|
+| IQ3_S | 4 | -2.17 | 3.27 -> 1.10 | **-2.17** |
+| IQ4_NL | 7 | -0.82 | 2.35 -> 1.58 | -0.77 |
+| Q3_K | 7 | -0.60 | 2.85 -> 2.17 | -0.68 |
+| Q6_K (converted part) | 16 | -0.49 | 2.23 -> 1.97 | -0.26 |
+| all decode GPU | | -4.08 | 113.71 -> 109.57 | **-4.14 (-3.6%)** |
+
+The isolated repeated-matrix timings predicted the cold-stream e2e within 2% in total and per format
+within 0.25 ms; the hot-cache caveat did not bite at these sizes. Half the win is four IQ3_S tensors,
+because native IQ3_S has no small-batch kernel (5.7x its byte floor in the original run). The
+remaining unconverted q6_K/q5_K/q4_K rows (0.66/0.75/0.05 ms) are the small matrices the conversion
+plan excludes. The four stored formats now read 1.1-2.2 ms per round each against byte floors of
+0.6-1.2 ms - the same 1.3-1.9x band as the pick's q4_K/q5_K/iq4_xs planes, so no new outlier.
+
+**Open before adoption (owner's call):** (1) KLD on the converted file vs the original - the width
+3..5 kernels are half-product and identical text at 600 tokens is not a numerics gate (the KLD arms
+exist: `run-kld-arms-q8ref.sh` / bf16 reference); (2) the Q6_K width-1 and the IQ4_NL/Q6_K
+width-2/6..8 losers, reached under variable depth and multi-slot only; (3) the 32K prefill pair
+that the disk killed this morning, now unblocked; (4) the file name and manifest entry for the
+pick if it goes in (a file swap is a routing change: prove routes, re-mint).

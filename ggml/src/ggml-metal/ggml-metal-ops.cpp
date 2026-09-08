@@ -3166,7 +3166,13 @@ static int ggml_metal_op_mul_mat_impl(ggml_metal_op_t ctx, int idx, ggml_tensor 
     if (ggml_metal_is_ud_remaining_soa_type(op->src[0]->type) && ne11 == 1) {
         const int nc = 1;
         const int nsg = 2;
-        auto pipeline = ggml_metal_library_get_pipeline_mul_mv_ud_soa(lib, op->src[0]->type, nc);
+        // the kq-SoA body at NC = 1 (contiguous f32 column, ne12 = ne13 = 1, K % 256) - +3..+35% over the
+        // shared body on every shape (perf/ud-remaining-quants.md width-1 A/B); GGML_MV_UD_W1=0 = the shared body
+        static const int env_ud_w1 = getenv("GGML_MV_UD_W1") ? atoi(getenv("GGML_MV_UD_W1")) : 1;
+        const bool kq_form = env_ud_w1 != 0 && op->src[1]->type == GGML_TYPE_F32 && ne12 == 1 && ne13 == 1 &&
+                             !ggml_is_transposed(op->src[0]) && !ggml_is_transposed(op->src[1]) &&
+                             ne00 % 256 == 0 && nb10 == sizeof(float) && nb11 == (uint64_t) ne10*sizeof(float);
+        auto pipeline = ggml_metal_library_get_pipeline_mul_mv_ud_soa(lib, op->src[0]->type, nc, kq_form);
         ggml_metal_kargs_mul_mv_ext args = {
             ne00, ne01, ne02, nb00, nb01, nb02, nb03,
             ne10, ne11, ne12, nb10, nb11, nb12, nb13, ne0, ne1, r2, r3,

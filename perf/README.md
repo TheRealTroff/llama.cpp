@@ -1102,8 +1102,13 @@ Superseded, kept for history - do not quote numbers from these:
   offline (odd-width text balloon, 208-272 B spill at 6..8) and replaced the same evening by the kq-SoA
   form: **width 4 IQ4_NL +32..37%, Q3_K +22..24%, Q6_K +12..15%, IQ3_S +67% (native has no small-batch
   IQ3_S kernel)**, widths 3/5 alike; width 1 loses for three formats (Q3_K +24%), widths 2/6..8 lose for
-  IQ4_NL/Q6_K on the generic ext SoA reader. Prefill readers: Q3_K -4.7%, others flat; Q3_K-only 8K e2e
-  flat (`ud-q3k-long-prefill.md`, 32K blocked by disk). Open: w1 kq-form probe, converted-file e2e, KLD.
+  IQ4_NL/Q6_K on the generic ext SoA reader; width 1 then moved to the same body (f32 products), +2..+36%
+  over the shared body, IQ3_S +12% / Q3_K +32% vs native. **Converted file (all four types, 35 tensors,
+  +0.05 GiB) through the UD f16 pick, mirrored arms: depth 3 +3.3% at 600 (25.4 -> 26.2), +3.8% at 300
+  (24.8 -> 25.7), b1 +0.6%, every arm's text byte-identical to the original (canonical shas), prefill flat;
+  the per-op profile attributes the -4.1 ms/round as IQ3_S 2.2 / IQ4_NL 0.8 / Q3_K 0.7 / Q6_K 0.3, within
+  0.25 ms of the isolated-timing prediction per format.** Open: KLD before adoption, Q6_K w1 and the
+  IQ4_NL/Q6_K w2/6..8 losers, 32K prefill pair (`ud-q3k-long-prefill.md`).
 - **`spec-heated.md` - speculation at temperature > 0, FIRST LOOK 2026-09-07 (branch `spec-heated`,
   MERGED to prod the same evening, owner: "Kill the logits, merge the fix"; the active worktree is
   gone; owner's premise: "literally do anything, because so far we know nothing").**

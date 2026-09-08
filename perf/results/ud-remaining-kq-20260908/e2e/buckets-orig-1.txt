@@ -1,0 +1,77 @@
+rounds=211  serialized decode GPU ms/round by bucket:
+  m1 mm q5_K_soa              24.82
+  m1 mm iq4_xs_soa            24.19
+  m1 mm q4_K_soa              17.74
+  m1 lm_head                   4.98
+  m2 lm_head                   4.88
+  m1 elementwise/other         4.87
+  m1 mm q8_0                   4.59
+  m2 mm q4_0_soa               4.38
+  m1 flash_attn                3.87
+  m1 mm iq3_s                  3.27
+  m1 GDN                       3.00
+  m1 mm q6_K                   2.89
+  m1 mm q3_K                   2.85
+  m2 elementwise/other         2.64
+  m1 mm iq4_nl                 2.35
+  m2 mm q4_0                   1.26
+  m1 mm q5_K                   0.76
+  m2 flash_attn                0.32
+  m1 mm q4_K                   0.05
+  m2 mm f32                    0.00
+  TOTAL                      113.71
+
+MUL_MAT by format (ms/round, byte floor at 273 GB/s):
+  ctx type             ms    floor      x  calls/rd
+  m1 q6_K            7.87     5.50   1.43      24.5
+  m2 q6_K            4.88     3.86   1.27       1.0
+  m1 q8_0            4.59     0.26  17.66     106.0
+  m1 iq3_s           3.27     0.57   5.71       4.1
+  m1 q3_K            2.85     1.00   2.85       7.1
+  m1 iq4_nl          2.35     1.23   1.91       7.1
+  m2 q4_0            1.26     0.36   3.53      31.3
+  m1 q5_K            0.76     0.15   5.13      11.2
+  m1 q4_K            0.05     0.01   4.46       1.0
+  m2 f32             0.00     0.00  66.81       1.0
+
+top rows (ms/round):
+    13.94  m1 MUL_MAT iq4_xs_soa s0=[5120, 17408, 1] w=4 n/rd=61.3 227.4us/call
+     8.08  m1 MUL_MAT q5_K_soa s0=[5120, 17408, 1] w=4 n/rd=28.1 287.3us/call
+     6.89  m1 MUL_MAT q5_K_soa s0=[17408, 5120, 1] w=4 n/rd=22.1 311.9us/call
+     6.68  m1 MUL_MAT q4_K_soa s0=[5120, 17408, 1] w=4 n/rd=28.1 237.5us/call
+     5.94  m1 MUL_MAT iq4_xs_soa s0=[17408, 5120, 1] w=4 n/rd=24.1 246.1us/call
+     5.56  m1 MUL_MAT q5_K_soa s0=[6144, 5120, 1] w=4 n/rd=44.2 125.8us/call
+     4.90  m1 MUL_MAT q6_K s0=[5120, 248320, 1] w=4 n/rd=1.0 4903.6us/call  floor=3820.3us x1.28
+     4.84  m2 MUL_MAT q6_K s0=[5120, 248320, 1] w=4 n/rd=1.0 4839.7us/call  floor=3820.3us x1.27
+     4.25  m1 MUL_MAT q4_K_soa s0=[5120, 10240, 1] w=4 n/rd=29.1 145.8us/call
+     4.10  m1 MUL_MAT q8_0 s0=[5120, 48, 1] w=4 n/rd=96.5 42.6us/call  floor=1.0us x44.49
+     2.62  m1 MUL_MAT q4_K_soa s0=[17408, 5120, 1] w=4 n/rd=10.0 260.4us/call
+     2.44  m1 MUL_MAT iq3_s s0=[17408, 5120, 1] w=4 n/rd=3.0 810.4us/call  floor=140.3us x5.78
+     2.39  m1 MUL_MAT q3_K s0=[5120, 17408, 1] w=4 n/rd=6.0 397.2us/call  floor=140.3us x2.83
+     2.30  m1 MUL_MAT q4_K_soa s0=[5120, 6144, 1] w=4 n/rd=24.1 95.3us/call
+     2.19  m1 GATED_DELTA_NET f32 s0=[128, 16, 4] w=266 n/rd=48.2 45.3us/call
+     2.17  m2 MUL_MAT q4_0_soa s0=[5120, 17408, 1] w=4 n/rd=10.0 217.1us/call
+     2.11  m1 MUL_MAT q5_K_soa s0=[5120, 10240, 1] w=4 n/rd=12.1 175.0us/call
+     1.70  m1 FLASH_ATTN_EXT f32 s0=[256, 4, 24] w=24 n/rd=7.1 240.6us/call
+     1.43  m1 MUL_MAT q6_K s0=[6144, 5120, 1] w=4 n/rd=9.0 158.5us/call  floor=94.5us x1.68
+     1.37  m1 MUL_MAT q5_K_soa s0=[5120, 6144, 1] w=4 n/rd=12.1 113.4us/call
+     1.33  m1 MUL_MAT iq4_xs_soa s0=[5120, 12288, 1] w=4 n/rd=8.0 165.8us/call
+     1.19  m1 FLASH_ATTN_EXT f32 s0=[256, 4, 24] w=24 n/rd=4.9 244.4us/call
+     1.17  m2 MUL_MAT q4_0_soa s0=[17408, 5120, 1] w=4 n/rd=5.0 234.6us/call
+     1.14  m1 CPY f32 s0=[3, 10240, 1] w=1 n/rd=211.1 5.4us/call
+     1.12  m1 MUL_MAT iq4_xs_soa s0=[5120, 6144, 1] w=4 n/rd=12.1 93.0us/call
+     1.11  m1 MUL_MAT iq4_nl s0=[17408, 5120, 1] w=4 n/rd=3.0 369.7us/call  floor=183.6us x2.01
+     1.04  m1 MUL_MAT q4_K_soa s0=[5120, 12288, 1] w=4 n/rd=6.0 171.9us/call
+     1.02  m1 ADD f32 s0=[5120, 4, 1] w=4 n/rd=128.6 8.0us/call
+     1.00  m1 MUL_MAT iq4_nl s0=[5120, 17408, 1] w=4 n/rd=3.0 331.5us/call  floor=183.6us x1.81
+     0.97  m1 FLASH_ATTN_EXT f32 s0=[256, 4, 24] w=24 n/rd=4.2 231.6us/call
+     0.85  m1 MUL_MAT iq4_xs_soa s0=[5120, 10240, 1] w=4 n/rd=6.0 140.5us/call
+     0.85  m2 TOP_K f32 s0=[248320, 4, 1] w=4 n/rd=1.0 845.7us/call
+     0.81  m1 RMS_NORM f32 s0=[5120, 4, 1] w=4 n/rd=129.6 6.3us/call
+     0.81  m2 MUL_MAT q4_0 s0=[5120, 1024, 1] w=4 n/rd=20.0 40.3us/call  floor=10.8us x3.73
+     0.80  m1 MUL_MAT iq3_s s0=[5120, 17408, 1] w=4 n/rd=1.0 793.4us/call  floor=140.3us x5.66
+     0.77  m1 SSM_CONV f32 s0=[7, 10240, 1] w=4 n/rd=48.2 16.1us/call
+     0.75  m1 MUL_MAT q5_K s0=[5120, 1024, 1] w=4 n/rd=11.1 68.1us/call  floor=13.2us x5.15
+     0.68  m1 SWIGLU f32 s0=[17408, 4, 1] w=4 n/rd=64.3 10.6us/call
+     0.63  m1 MUL_MAT q6_K s0=[5120, 1024, 1] w=4 n/rd=12.1 52.6us/call  floor=15.8us x3.34
+     0.63  m1 MUL_MAT iq4_xs_soa s0=[6144, 5120, 1] w=4 n/rd=6.0 105.0us/call
