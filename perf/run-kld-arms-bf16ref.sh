@@ -2,7 +2,7 @@
 # The same arms scored against the bf16 as-trained reference written on the Spark (ref_logits.py, window 32).
 # The base file must already sit at logits/kld-base-kld-bf16ref-sep08.dat (scp from the Spark); the harness reuses it.
 cd /Users/troff/play/llama.cpp-prod/perf || exit 1
-export B=/Users/troff/play/llama.cpp-kldref TAG=kld-bf16ref-sep08 LLAMA_KLD_FLOOR=-32
+export B=${B:-/Users/troff/play/llama.cpp-prod} TAG=kld-bf16ref-sep08 LLAMA_KLD_FLOOR=-32
 run_arm() {  # run_arm <line> <kv:f16|turbo4> <model>
   local line=$1 kv=$2 model=$3
   ( source ./pick.sh >/dev/null 2>&1

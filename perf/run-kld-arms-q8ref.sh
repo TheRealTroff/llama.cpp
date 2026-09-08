@@ -2,7 +2,7 @@
 # The four pick arms scored against a fresh q8_0 reference (TAG kld-q8ref-sep08), so that the
 # same arms can be re-scored against the bf16 as-trained reference from the Spark on the same build.
 cd /Users/troff/play/llama.cpp-prod/perf || exit 1
-export B=/Users/troff/play/llama.cpp-kldref TAG=kld-q8ref-sep08
+export B=${B:-/Users/troff/play/llama.cpp-prod} TAG=kld-q8ref-sep08
 run_arm() {  # run_arm <line> <kv:f16|turbo4> <model>
   local line=$1 kv=$2 model=$3
   ( source ./pick.sh >/dev/null 2>&1
