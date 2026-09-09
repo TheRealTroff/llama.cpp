@@ -21,7 +21,7 @@ pick_env ud
 for arm in $ARMS; do
     case "$arm" in
         plain-*) types='(iq4_nl|q3_K|q6_K|iq3_s)'; w1=0 ;;
-        gen-*)   types='(iq4_nl_soa|q3_K_soa|q6_K_soa|iq3_s_soa)'; w1=0 ;;
+        gen-*)   types='(iq4_nl_soa|q3_K_soa|q6_K_soa|iq3_s_soa)'; w1=${GEN_W1:-0} ;;   # GEN_W1=2: the wide-load w1 form as the 'gen' arm
         kq-*)    types='(iq4_nl_soa|q3_K_soa|q6_K_soa|iq3_s_soa)'; w1=1 ;;
     esac
     [ -e "$OUT/$arm.log" ] && { echo "refusing to overwrite $OUT/$arm.log" >&2; exit 1; }

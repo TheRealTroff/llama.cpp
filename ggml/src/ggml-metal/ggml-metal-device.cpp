@@ -971,8 +971,11 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_ud_soa(gg
     GGML_ASSERT(ggml_metal_is_ud_remaining_soa_type(type) && width == 1);
     char name[96];
     if (kq_form) {
-        // the kq-SoA body at NC = 1 with f32 activations (perf/ud-remaining-quants.md width-1 A/B)
-        snprintf(name, sizeof(name), "kernel_mul_mv_%s_soa_w1_v1", ggml_type_name(ggml_metal_soa_base_type(type)));
+        // the kq-SoA body at NC = 1 with f32 activations (perf/ud-remaining-quants.md width-1 A/B);
+        // GGML_MV_UD_W1=2: the two-packs-per-lane wide-load form probe (q6_K / q3_K only)
+        static const int env_v = getenv("GGML_MV_UD_W1") ? atoi(getenv("GGML_MV_UD_W1")) : 1;
+        const bool wide = env_v == 2 && (type == GGML_TYPE_Q6_K_SOA || type == GGML_TYPE_Q3_K_SOA);
+        snprintf(name, sizeof(name), "kernel_mul_mv_%s_soa_w1_v%d", ggml_type_name(ggml_metal_soa_base_type(type)), wide ? 2 : 1);
     } else {
         snprintf(name, sizeof(name), "kernel_mul_mv_ud_%s_w%d", ggml_type_name(type), width);
     }

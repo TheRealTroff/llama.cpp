@@ -7767,6 +7767,97 @@ UD_KQ_KERNEL(3, iq3_s,  4, 2)
 UD_KQ_KERNEL(3, iq3_s,  5, 1)
 #undef UD_KQ_KERNEL
 
+// Width-1 form probe (perf/ud-remaining-quants.md, Q6_K width 1): two packs per lane-iteration with wide
+// loads (uint2 lo / ushort2 hi / one int8 scale per 16 weights / d per 256), i.e. 16 weights per row per
+// lane-iteration like the native kernel, halving the per-element address arithmetic (the profile's 12 B
+// class). f32 products, exact scale once per 16 weights, offset folded. GGML_MV_UD_W1=2 routes it.
+template <int F>
+void kernel_mul_mv_ud_w1_wide_impl(
+        constant ggml_metal_kargs_mul_mv_ext & args,
+        device const char * src0,
+        device const float * src1,
+        device float * dst,
+        threadgroup float (&partial)[2][4],
+        uint3 tgpig,
+        ushort tiisg,
+        ushort sgitg) {
+    static_assert(F == 2 || F == 1, "q6_K / q3_K planes");
+    constexpr float MINC = F == 1 ? 4.f : 32.f;
+    const int nsb = args.ne00/256;
+    const int n16 = args.ne00/16;                    // 16-weight units per row
+    const int row0 = 4*(int)tgpig.x;
+    const int ustart = (int)sgitg*(n16/2);            // K split across the two simdgroups
+    const int uend = ustart + n16/2;
+    const int rr1 = row0 + 1 < args.ne01 ? row0 + 1 : row0;
+    const int rr2 = row0 + 2 < args.ne01 ? row0 + 2 : row0;
+    const int rr3 = row0 + 3 < args.ne01 ? row0 + 3 : row0;
+    device const char * r0 = src0 + (uint64_t)row0*args.nb01;
+    device const char * r1 = src0 + (uint64_t)rr1 *args.nb01;
+    device const char * r2 = src0 + (uint64_t)rr2 *args.nb01;
+    device const char * r3 = src0 + (uint64_t)rr3 *args.nb01;
+    // plane bases (q6_K: lo uint/8w at 0, hi ushort/8w at 128 nsb, int8 scale/16w at 192 nsb, half d at 208 nsb;
+    //              q3_K: lo ushort/8w at 0, hi uchar/8w at 64 nsb, int8 scale/16w at 96 nsb, half d at 112 nsb)
+    constexpr int LO = 0, HI = F == 2 ? 128 : 64, SC = F == 2 ? 192 : 96, DD = F == 2 ? 208 : 112;
+    device const float4 * xv = (device const float4 *)src1;
+    float acc0 = 0.f, acc1 = 0.f, acc2 = 0.f, acc3 = 0.f;
+    for (int u = ustart + (int)tiisg; u < uend; u += 32) {
+        // 16 activations of unit u, their sum for the offset fold
+        const float4 y0 = xv[4*u + 0], y1 = xv[4*u + 1], y2 = xv[4*u + 2], y3 = xv[4*u + 3];
+        const float sy = (y0[0]+y0[1]+y0[2]+y0[3]) + (y1[0]+y1[1]+y1[2]+y1[3]) + (y2[0]+y2[1]+y2[2]+y2[3]) + (y3[0]+y3[1]+y3[2]+y3[3]);
+        const int sb = u >> 4;
+#pragma unroll
+        for (int r = 0; r < 4; ++r) {
+            device const char * row = r == 0 ? r0 : r == 1 ? r1 : r == 2 ? r2 : r3;
+            float dp = 0.f;
+            if constexpr (F == 2) {
+                const uint2   lo = ((device const uint2   *)(row + LO*nsb))[u];
+                const ushort2 hi = ((device const ushort2 *)(row + HI*nsb))[u];
+#pragma unroll
+                for (int i = 0; i < 4; ++i) {
+                    dp += y0[i]*float(((lo[0] >> (4*i))     & 15) | (((hi[0] >> (2*i))     & 3) << 4));
+                    dp += y1[i]*float(((lo[0] >> (4*i + 16)) & 15) | (((hi[0] >> (2*i + 8)) & 3) << 4));
+                    dp += y2[i]*float(((lo[1] >> (4*i))     & 15) | (((hi[1] >> (2*i))     & 3) << 4));
+                    dp += y3[i]*float(((lo[1] >> (4*i + 16)) & 15) | (((hi[1] >> (2*i + 8)) & 3) << 4));
+                }
+            } else {
+                const ushort2 lo = ((device const ushort2 *)(row + LO*nsb))[u];
+                const uchar2  hi = ((device const uchar2  *)(row + HI*nsb))[u];
+#pragma unroll
+                for (int i = 0; i < 4; ++i) {
+                    dp += y0[i]*float(((lo[0] >> (2*i))     & 3) | (((hi[0] >> (i))     & 1) << 2));
+                    dp += y1[i]*float(((lo[0] >> (2*i + 8)) & 3) | (((hi[0] >> (i + 4)) & 1) << 2));
+                    dp += y2[i]*float(((lo[1] >> (2*i))     & 3) | (((hi[1] >> (i))     & 1) << 2));
+                    dp += y3[i]*float(((lo[1] >> (2*i + 8)) & 3) | (((hi[1] >> (i + 4)) & 1) << 2));
+                }
+            }
+            const float sf = float(((device const half *)(row + DD*nsb))[sb])*float((row + SC*nsb)[u]);
+            const float t = sf*(dp - MINC*sy);
+            if (r == 0) { acc0 += t; } else if (r == 1) { acc1 += t; } else if (r == 2) { acc2 += t; } else { acc3 += t; }
+        }
+    }
+    float acc[4] = { simd_sum(acc0), simd_sum(acc1), simd_sum(acc2), simd_sum(acc3) };
+    if (tiisg == 0) { for (int i = 0; i < 4; ++i) { partial[sgitg][i] = acc[i]; } }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (sgitg == 0 && tiisg < 4 && row0 + (int)tiisg < args.ne01) {
+        dst[row0 + tiisg] = partial[0][tiisg] + partial[1][tiisg];
+    }
+}
+#define UD_W1_WIDE_KERNEL(F, NAME) \
+kernel void kernel_mul_mv_##NAME##_soa_w1_v2( \
+        constant ggml_metal_kargs_mul_mv_ext & args, \
+        device const char * src0, \
+        device const float * src1, \
+        device float * dst, \
+        uint3 tgpig [[threadgroup_position_in_grid]], \
+        ushort tiisg [[thread_index_in_simdgroup]], \
+        ushort sgitg [[simdgroup_index_in_threadgroup]]) { \
+    threadgroup float partial[2][4]; \
+    kernel_mul_mv_ud_w1_wide_impl<F>(args, src0, src1, dst, partial, tgpig, tiisg, sgitg); \
+}
+UD_W1_WIDE_KERNEL(2, q6_K)
+UD_W1_WIDE_KERNEL(1, q3_K)
+#undef UD_W1_WIDE_KERNEL
+
 // widths 6..8: the 4-column body with column groups (CG = 1), grid y = ceil(ne11/4)
 #define UD_KQ_CG_KERNEL(F, NAME) \
 kernel void kernel_mul_mv_##NAME##_soa_w4cg_v1( \
