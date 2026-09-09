@@ -7657,7 +7657,11 @@ inline float ud_wq(uint q, uint g0, uint g1, int ki) {
     }
 }
 
-template <int F, int NC, int KS, typename TY = half, int CG = 0>
+// NA (width-1 f32 path only): independent accumulator chains per row. NA = 1 is the shipped
+// kernel; NA > 1 splits each row's 8-deep FMA chain over NA partial sums (ki % NA) and folds
+// them before the reduction. Same loads, same dequant, same FMA count, more ILP - the
+// perf/agx-backend-access.md width-series probe (f32 sum order changes: not byte-identical).
+template <int F, int NC, int KS, typename TY = half, int CG = 0, int NA = 1>
 void kernel_mul_mv_ud_kq_impl(
         constant ggml_metal_kargs_mul_mv_ext & args,
         device const char * src0,
@@ -7671,6 +7675,7 @@ void kernel_mul_mv_ud_kq_impl(
     constexpr bool F32P = is_same<TY, float>::value;   // width 1: f32 products with the exact scale
     constexpr float MINC = F == 1 ? 4.f : F == 2 ? 32.f : 0.f;
     float acc[4*NC] = {};
+    float accw[4][NA > 1 ? NA : 1] = {};
     const int npack = args.ne00/8;
     const int row0 = 4*(int)tgpig.x;
     const int pstart = KS == 2 ? (int)sgitg*(npack/2) : 0;
@@ -7728,7 +7733,11 @@ void kernel_mul_mv_ud_kq_impl(
 #pragma unroll
             for (int ki = 0; ki < 8; ++ki) {
                 if (F32P) {
-                    acc[r*NC + 0] += float(v0[ki])*(ud_wq<F>(q[r], g0[r], g1[r], ki)*sf[r]);
+                    if (NA > 1) {
+                        accw[r][ki % NA] += float(v0[ki])*(ud_wq<F>(q[r], g0[r], g1[r], ki)*sf[r]);
+                    } else {
+                        acc[r*NC + 0] += float(v0[ki])*(ud_wq<F>(q[r], g0[r], g1[r], ki)*sf[r]);
+                    }
                     continue;
                 }
                 const half wv = ud_wv<F>(q[r], g0[r], g1[r], ki, sh[r]);
@@ -7749,6 +7758,15 @@ void kernel_mul_mv_ud_kq_impl(
         }
     }
 
+    if (F32P && NA > 1) {
+#pragma unroll
+        for (int r = 0; r < 4; ++r) {
+#pragma unroll
+            for (int a = 0; a < NA; ++a) {
+                acc[r*NC] += accw[r][a];
+            }
+        }
+    }
     for (int i = 0; i < 4*NC; ++i) {
         acc[i] = simd_sum(acc[i]);
     }
@@ -7847,6 +7865,31 @@ UD_KQ_W1_KERNEL(1, q3_K)
 UD_KQ_W1_KERNEL(2, q6_K)
 UD_KQ_W1_KERNEL(3, iq3_s)
 #undef UD_KQ_W1_KERNEL
+
+// width-1 ILP probe (perf/agx-backend-access.md): NA independent accumulator chains per row,
+// otherwise the kernel above; GGML_MV_UD_W1_NA=2|4|8 routes it
+#define UD_KQ_W1_NA_KERNEL(F, NAME, NA) \
+kernel void kernel_mul_mv_##NAME##_soa_w1_na##NA( \
+        constant ggml_metal_kargs_mul_mv_ext & args, \
+        device const char * src0, \
+        device const float * src1, \
+        device float * dst, \
+        uint3 tgpig [[threadgroup_position_in_grid]], \
+        ushort tiisg [[thread_index_in_simdgroup]], \
+        ushort sgitg [[simdgroup_index_in_threadgroup]]) { \
+    threadgroup float partial[2][4]; \
+    kernel_mul_mv_ud_kq_impl<F, 1, 2, float, 0, NA>(args, src0, src1, dst, partial, tgpig, tiisg, sgitg); \
+}
+UD_KQ_W1_NA_KERNEL(2, q6_K, 2)
+UD_KQ_W1_NA_KERNEL(2, q6_K, 4)
+UD_KQ_W1_NA_KERNEL(2, q6_K, 8)
+UD_KQ_W1_NA_KERNEL(0, iq4_nl, 2)
+UD_KQ_W1_NA_KERNEL(0, iq4_nl, 4)
+UD_KQ_W1_NA_KERNEL(1, q3_K, 2)
+UD_KQ_W1_NA_KERNEL(1, q3_K, 4)
+UD_KQ_W1_NA_KERNEL(3, iq3_s, 2)
+UD_KQ_W1_NA_KERNEL(3, iq3_s, 4)
+#undef UD_KQ_W1_NA_KERNEL
 
 // SM: scale layout (0 exact d+int8, 1 pre-rounded half); PM: product (0 f32 FMA, 1 half product);
 // LM: lookup (0 constant table, 1 simd_shuffle from a lane-held table).

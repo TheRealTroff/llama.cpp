@@ -970,9 +970,15 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_
 ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_ud_soa(ggml_metal_library_t lib, enum ggml_type type, int width, bool kq_form) {
     GGML_ASSERT(ggml_metal_is_ud_remaining_soa_type(type) && width == 1);
     char name[96];
-    if (kq_form) {
+    // GGML_MV_UD_W1_NA=2|4|8: the width-1 ILP probe (kernel *_soa_w1_na<N>, perf/agx-backend-access.md):
+    // the kq body with N independent accumulator chains per row; f32 sum order changes, not byte-identical
+    static const int env_na = getenv("GGML_MV_UD_W1_NA") ? atoi(getenv("GGML_MV_UD_W1_NA")) : 0;
+    const enum ggml_type base = ggml_metal_soa_base_type(type);
+    if (kq_form && (env_na == 2 || env_na == 4 || (env_na == 8 && base == GGML_TYPE_Q6_K))) {
+        snprintf(name, sizeof(name), "kernel_mul_mv_%s_soa_w1_na%d", ggml_type_name(base), env_na);
+    } else if (kq_form) {
         // the kq-SoA body at NC = 1 with f32 activations (perf/ud-remaining-quants.md width-1 A/B)
-        snprintf(name, sizeof(name), "kernel_mul_mv_%s_soa_w1_v1", ggml_type_name(ggml_metal_soa_base_type(type)));
+        snprintf(name, sizeof(name), "kernel_mul_mv_%s_soa_w1_v1", ggml_type_name(base));
     } else {
         snprintf(name, sizeof(name), "kernel_mul_mv_ud_%s_w%d", ggml_type_name(type), width);
     }
