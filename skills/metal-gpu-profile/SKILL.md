@@ -179,6 +179,16 @@ kernel win):
   bytes weight the levels equally where the runtime weights them 3.9 : 1 : 0.003. Text size ranks
   register/unroll changes; it cannot see an instruction-class swap or a loop-level move. Count
   loads per MMA instead: FA QK was 2 per MMA where mul_mm pays ~0.5.
+- **Fewer executed instructions at a higher issue share can still be SLOWER: read the issue share by
+  encoding size before believing a count** (2026-09-09, `perf/ud-remaining-quants.md` Q6_K width 1): the
+  stored q6_K width-1 kernel executed 16% fewer instructions than native at 97% issue / 3% stall and ran 4%
+  longer. Within each kernel an 8 B or 12 B instruction carried ~4x the issue time of a 4/6/10 B one
+  (per-instruction issue share 0.67-0.84 vs 0.17-0.23), and the stored hot loop put 68% of its issue in
+  that class vs native's 55% - 16 per-lane-iteration addresses (4 rows x 4 planes) vs native's 10 pointer
+  advances with immediate-offset byte loads. Recipe: `cost[size]/count[size]` over the hot rows; a kernel
+  that trades cheap 10 B forms for fat 12 B ones wins the count and loses the clock. The wide-load form that
+  halves the addresses per element recovered half the gap (+2.4%); the prescreen could not rank it because
+  it doubles the work per iteration (text 2942 -> 4502 B) - per-element counts, then timing.
 - A stall share concentrated in 1-2 load-consumer sites usually means per-iteration
   address recomputation feeding the loads - a SOURCE-form fix (see the
   `metal-kernel-prescreen` skill, step 5), not a scheduling fix.
