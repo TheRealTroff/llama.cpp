@@ -195,6 +195,43 @@ at the census's 273 GB/s:
    instruction-class question only becomes answerable on shapes or widths that leave the
    floor: mul_mm, FA, GDN, or these kernels at widths 5+ / small K where bytes stop dominating.
 
+## Dataset with function constants (2026-09-09 evening)
+
+`perf/agx-cost-dataset.py` now resolves function constants from the capture log's loaded
+pipeline name (`<base>_key=val_...`, mapped to `FC_<family> + index` per
+`ggml-metal-device.cpp`; table `FAMILIES` in the script) and records the census `x_floor`.
+Over the four Sep 06 census snapshots plus today's profiles: **106 profiles joined, 7
+skipped** (ssm_conv: a constant the name does not carry; the prefill FA at n=512: its
+translation has no nop run, alignment rule needs a second form). Output `build-air/dataset2/`.
+
+`perf/agx-cost-fit.py` fits per-class prices against measured time (kernel share of the
+capture's cost+cost2 times us/run), excluding kernels under 1.3x the floor. Relative-weighted
+fit, 4 classes survive (w1 1.7, load 67, store 304, other 13.8 us per M executed):
+
+| family | profiles | pred/meas median (min-max) |
+|---|---:|---|
+| mul_mm (acch/n64, 6 formats, 6 shapes) | 33 | 1.01 (0.96-1.03) |
+| flash_attn qt f16 | 4 | 1.04 (0.90-1.14) |
+| mul_mv w4/w5 (mostly on the floor) | 9 | 1.09 (0.90-1.22) |
+| elementwise (cpy, swiglu, rms_norm, bin_fuse) | 18 | 0.59 (0.19-1.20) |
+| gated_delta_net | 6 | 0.16 (0.09-0.68) |
+
+Reading: a linear instruction-class model holds within a few percent where the kernel is
+throughput-bound with enough parallelism (mul_mm; within one family "us per M executed"
+alone has 10% spread, per MMA count 16%). It is wrong by 2-10x for the small and serial
+kernels (GDN is a recurrent scan: latency, not throughput; elementwise kernels at 512
+tokens are launch-plus-bandwidth). The class prices themselves are not yet physics: the
+"other" class holds every unnamed opcode including the real MMA instructions, and the 75
+opcodes that appear only in mma-class kernels are unnamed. The integer-side opcode naming
+(a solve across kernels against Xcode's INT16/INT32/FP counts) is the blocker for turning
+this into a per-class table; the float side is named.
+
+Practical floor calibration: a 37 MB `CPY` streams at 252 GB/s on this M4 Pro (92% of the
+273 GB/s figure), so a decode mul_mv at 1.12x the nominal floor is at ~1.03x the practical
+one - saturated; the w4 kernels at 1.19-1.21x nominal have ~8-10% left, which is the
+compute/stream overlap (a prefetch/double-buffer form is the candidate, not instruction
+selection).
+
 ## Next
 
 1. Re-run the cost dataset on kernels that are NOT on the byte floor (mul_mm acch n64, FA,
