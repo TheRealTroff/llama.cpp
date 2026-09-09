@@ -335,12 +335,28 @@ conversion, byte-identical by construction; 143/143 cases pass. Per call:
 | q6_K 17408x5120 n=4 | 323.6 | 318.3 | 315.0 |
 | q6_K 5120x17408 n=4 | 349.9 | 335.0 | 330.7 |
 
-70-90% of the copy recovered: ~2.5 of the 3.7 ms per decode round by the profile arithmetic. The
-e2e gate (ABAB, both lines, Turbo4 arms at 300/600) is in `kvquant-experiments/results/y16cvt-*`.
+70-90% of the copy recovered: ~2.5 of the 3.7 ms per decode round by the profile arithmetic.
+
+**e2e gate (2026-09-09 19:24-19:48, ABAB x2, `run-prod-pick.sh` Turbo4 arms, DFlash depth 3, both
+lines, `kvquant-experiments/results/y16cvt-*`):**
+
+| line | arm | base r1 / r2 | cast r1 / r2 | delta | sha (base = cast, all four pairs) |
+|---|---|---:|---:|---:|---|
+| q4 | 600 | 29.568 / 29.677 | 30.386 / 30.449 | **+2.7%** | de24d885043f |
+| q4 | 300 | 27.973 / 27.975 | 28.712 / 28.730 | **+2.7%** | 04ada3a4de10 |
+| ud | 600 | 25.622 / 25.692 | 26.247 / 26.243 | **+2.3%** | 7f39f71e9d95 |
+| ud | 300 | 25.445 / 25.433 | 26.015 / 26.009 | **+2.3%** | a409bb1b45df |
+
+Acceptance unchanged (65.5/60.2% q4, 64.7/64.1% ud): a BI change. The baseline shas of tonight's
+harness run were not found in any recorded mint (the Turbo4 arms have not been minted under these
+labels since the Sep 08 FA_TR changes), so they are the lineage as of prod c19acef9a and this is
+their first record. Manifest entry `GGML_MV_Y16_CVT=1|BI|both|proposed` on `exp/q6k-w1-ilp`;
+adoption = owner. The residual 10-30% of the copy (the barrier drain around a 2-3 us dispatch)
+would need the producer to emit f16 (a graph-level change), not worth it at ~0.5 ms per round.
 
 ## Next
 
-1. GGML_MV_Y16_CVT=1 adoption on the e2e gate result (BI); the f32-y forms are refuted (cache traffic).
+1. GGML_MV_Y16_CVT=1: proposed (+2.7% q4 / +2.3% ud e2e, BI); adoption = owner. The f32-y forms are refuted (cache traffic).
 2. Re-run the cost dataset on kernels that are NOT on the byte floor (mul_mm acch n64, FA,
    GDN: function constants via `agx-nt-opt.py --cv`, FC_MUL_MV = 600 nsg/nxpsg/ne12/r2/r3/nr0_v;
    FA and mul_mm constants from `ggml-metal-device.cpp`) and fit class prices against measured
