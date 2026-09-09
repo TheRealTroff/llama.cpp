@@ -310,8 +310,44 @@ caveat: `run-quant-kld.sh` runs perplexity at default verbosity, where the pipel
 and the routes at ne11 = 4 are deterministic in the shapes and the env - the proof runs (`-v`, one plain
 chunk per arm) are part of the pairwise chain.
 
-**Open before adoption (owner's call):** (1) ~~KLD on the converted file vs the original~~ done for both
-paths above; the pairwise decode-path KLD is queued; (2) the Q6_K width-1 and the IQ4_NL/Q6_K
+### Pairwise: the kernels' own cost, with the weights' quantization noise removed (02:40-03:56)
+
+A decode-path BASE of V1 under the pick (`REF_EXTRA="-b 4 -ub 4"`, 12.2 GB, kept at
+`kvquant-experiments/logits/kld-base-kld-pair-v1dec4-sep09.dat` as the standing reference for pricing any
+future decode kernel form), then three arms scored against it, same 24,552 positions:
+
+| Test arm vs V1 decode-path base (pick) | mean KLD | median | 99.0% | 99.9% | max | same-top | overlap |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| V2 decode path, pick (the four new formats' kernels) | **0.000005 +/- 0.000002** | 0.000000 | 0.000042 | 0.000247 | 0.032 | 99.935 | 99.900 |
+| V1 PREFILL path, pick (decode kernels vs prefill tiles, same file) | 0.000026 +/- 0.000010 | 0.000001 | 0.000069 | 0.001866 | 0.177 | 99.914 | 99.861 |
+| plain twin decode path, CLEAN env (the fork's native width-4 kernels) | 0.000445 +/- 0.000344 | 0.000013 | 0.000570 | 0.011329 | 8.43 | 99.678 | 99.706 |
+| scale: q8_0 vs the bf16 model (`kld-bf16-reference.md`) | 0.0012 | | | | | 99.08 | |
+
+Reading, in order of what it settles:
+- **The four new formats' kernels cost 5e-6 mean KLD against the pick's existing decode kernels - 1/240 of
+  q8_0's own distance from the trained model, argmax identical on 99.935% of positions, 99.9% tail 0.00025.**
+  Quality-free by any standard this project has used; adoption is a speed decision.
+- **The pick's decode path sits 2.6e-5 from its prefill path** (half-product mv kernels, GQA f16 decode FA,
+  GDN decode kernels vs the exact mm tiles and the batched FA) - 1/46 of q8_0's distance. This is the number
+  the prefill-only KLD gate had been assuming was zero; it is not zero, and it is small.
+- **The fork's native width-4 decode kernels differ from the pick's by 4.5e-4** (17x the decode-vs-prefill
+  gap, still 1/3 of q8_0's distance), max 8.4 at one position, same-top 99.68%. The pairwise cannot say which
+  side is closer to the model - against bf16 both read 0.0127-0.0129 inside a 0.0015 error bar - but the
+  clean arm also swaps the FA/GDN routes (the env, not only the mv kernels), so it prices the whole pick's
+  decode numerics against the fork's defaults, not the SoA kernels alone.
+
+Routing proved for all three arms from one-chunk `-v` runs at `-b 4` (`ud-remaining-kld-dec4-routing-proof-*.log`):
+V2 under the pick compiled exactly `kernel_mul_mv_{iq4_xs_soa_w4_v5, q4_K_soa_w4_v2, q5_K_soa_w4_v2}` plus
+the four `kernel_mul_mv_{iq4_nl,q3_K,q6_K,iq3_s}_soa_w4_v1`, the plain twin under the pick the first three
+(runtime repack = V1's numerics), the plain twin under the clean env the native `kernel_mul_mv_ext_*_f16_r1_4`
+family (`_f32_` for the q4_K/q5_K/q6_K shapes below the f16y size gate, `kernel_mul_mv_iq3_s_f32` and
+`kernel_mul_mv_q6_K_f32` per column) and `kernel_flash_attn_ext_vec_f16`; the pick arms ran the `qt_f16`
+batched FA at width 4. The V2 decode arm against bf16 was run twice (the first proof attempt turned into a
+full 24-chunk run because the base file fixes the chunk count) and reproduced to every digit: the decode
+path is deterministic, one run is one sample.
+
+**Open before adoption (owner's call):** (1) ~~KLD~~ done: prefill-path gate identical, decode-path pairwise
+5e-6; (2) the Q6_K width-1 and the IQ4_NL/Q6_K
 width-2/6..8 losers, reached under variable depth and multi-slot only; (3) the 32K prefill pair
 that the disk killed this morning, now unblocked; (4) the file name and manifest entry for the
 pick if it goes in (a file swap is a routing change: prove routes, re-mint).
