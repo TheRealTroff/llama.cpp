@@ -1,0 +1,81 @@
+Summarize what this does: 
+// Voice assistant example
+//
+// Speak short text commands to the microphone.
+// This program will detect your voice command and convert them to text.
+//
+// ref: https://github.com/ggml-org/whisper.cpp/issues/171
+//
+
+#include "common-sdl.h"
+#include "common.h"
+#include "whisper.h"
+#include "grammar-parser.h"
+
+#include <algorithm>
+#include <chrono>
+#include <cstdio>
+#include <fstream>
+#include <map>
+#include <sstream>
+#include <string>
+#include <thread>
+#include <vector>
+
+// command-line parameters
+struct whisper_params {
+    int32_t n_threads  = std::min(4, (int32_t) std::thread::hardware_concurrency());
+    int32_t prompt_ms  = 5000;
+    int32_t command_ms = 8000;
+    int32_t capture_id = -1;
+    int32_t max_tokens = 32;
+    int32_t audio_ctx  = 0;
+
+    float vad_thold  = 0.6f;
+    float freq_thold = 100.0f;
+
+    float grammar_penalty = 100.0f;
+
+    grammar_parser::parse_state grammar_parsed;
+
+    bool translate     = false;
+    bool print_special = false;
+    bool print_energy  = false;
+    bool no_timestamps = true;
+    bool use_gpu       = true;
+    bool flash_attn    = true;
+
+    std::string language  = "en";
+    std::string model     = "models/ggml-base.en.bin";
+    std::string fname_out;
+    std::string commands;
+    std::string prompt;
+    std::string context;
+    std::string grammar;
+
+    // A regular expression that matches tokens to suppress
+    std::string suppress_regex;
+};
+
+void whisper_print_usage(int argc, char ** argv, const whisper_params & params);
+
+static bool whisper_params_parse(int argc, char ** argv, whisper_params & params) {
+    for (int i = 1; i < argc; i++) {
+        std::string arg = argv[i];
+
+        if (arg == "-h" || arg == "--help") {
+            whisper_print_usage(argc, argv, params);
+            exit(0);
+        }
+        else if (arg == "-t"     || arg == "--threads")       { params.n_threads     = std::stoi(argv[++i]); }
+        else if (arg == "-pms"   || arg == "--prompt-ms")     { params.prompt_ms     = std::stoi(argv[++i]); }
+        else if (arg == "-cms"   || arg == "--command-ms")    { params.command_ms    = std::stoi(argv[++i]); }
+        else if (arg == "-c"     || arg == "--capture")       { params.capture_id    = std::stoi(argv[++i]); }
+        else if (arg == "-mt"    || arg == "--max-tokens")    { params.max_tokens    = std::stoi(argv[++i]); }
+        else if (arg == "-ac"    || arg == "--audio-ctx")     { params.audio_ctx     = std::stoi(argv[++i]); }
+        else if (arg == "-vth"   || arg == "--vad-thold")     { params.vad_thold     = std::stof(argv[++i]); }
+        else if (arg == "-fth"   || arg == "--freq-thold")    { params.freq_thold    = std::stof(argv[++i]); }
+        else if (arg == "-tr"    || arg == "--translate")     { params.translate     = true; }
+        else if (arg == "-ps"    || arg == "--print-special") { params.print_special = true; }
+        else if (arg == "-pe"    || arg == "--print-energy")  { params.print_energy  = true; }
+        else if (arg

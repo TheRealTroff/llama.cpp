@@ -946,6 +946,9 @@ enum ggml_status ggml_metal_graph_compute(ggml_metal_t ctx, struct ggml_cgraph *
 void ggml_metal_graph_optimize(ggml_metal_t ctx, struct ggml_cgraph * gf) {
     //const int64_t t_start = ggml_time_us();
 
+    // small-op fusion rewrite first: the reorder below must see the rewired dependencies
+    ggml_metal_op_fuse_small_rewrite(gf);
+
     if (ctx->use_graph_optimize) {
         ggml_graph_optimize(gf);
     }

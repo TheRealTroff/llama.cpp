@@ -928,6 +928,32 @@ typedef struct {
     uint64_t dst_nb1;                               // state buffer: per-sequence stride
 } ggml_metal_kargs_ssm_conv_wb;
 
+// small-op fusion (GGML_FUSE_SMALL bit 32, perf/small-op-fusion.md): concat + ssm_conv (+ carry) + silu
+// in one kernel. The conv window is never materialized: column j of the virtual concat row is
+// state[j] for j < n_state and x[j - n_state] after it. Thread per (row, token), like the rows kernel.
+#define GGML_METAL_SSM_CONV_CAT_MAX 8
+typedef struct {
+    int64_t  nr;        // rows (channels)
+    int64_t  n_t;       // tokens per sequence
+    int64_t  nc;        // taps (conv kernel size)
+    int64_t  n_state;   // state columns (nc - 1)
+    uint64_t nbs0;      // state: column stride
+    uint64_t nbs1;      // state: row stride
+    uint64_t nbs2;      // state: sequence stride
+    uint64_t nbx0;      // x (the concat's src1, [n_t, nr, seqs]): token stride
+    uint64_t nbx1;      // x: row stride
+    uint64_t nbx2;      // x: sequence stride
+    uint64_t nbc1;      // conv weights: row stride
+    uint64_t nb0;       // dst: row stride
+    uint64_t nb1;       // dst: token stride
+    uint64_t nb2;       // dst: sequence stride
+    int32_t  silu;      // apply silu to the conv output (the SILU node fused, dst = its buffer)
+    int32_t  n_wb;      // carry slots
+    int32_t  wb_col[GGML_METAL_SSM_CONV_CAT_MAX];   // first column (in the virtual concat row) of slot j
+    uint64_t wb_off[GGML_METAL_SSM_CONV_CAT_MAX];   // byte offset of slot j in the state buffer
+    uint64_t wb_nb1;    // state buffer: per-sequence stride
+} ggml_metal_kargs_ssm_conv_cat;
+
 typedef struct {
     int64_t  d_state;
     int64_t  d_inner;
