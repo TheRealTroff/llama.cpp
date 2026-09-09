@@ -1,4 +1,4 @@
-# Small-op fusion: the cache-resident kernels between the matmuls (2026-09-10, OPEN)
+# Small-op fusion: the cache-resident kernels between the matmuls (2026-09-10, BUILT + GATED, adoption = owner)
 
 Branch `exp/small-op-fusion`, flag `GGML_FUSE_SMALL=<bitmask>` (default 0 = upstream behaviour).
 
@@ -99,6 +99,48 @@ proposed manifest entry - `LLAMA_SPEC_EV=1` (SPEC class, forks the lineage) rode
 shas with +1..6 pt acceptance on ud, while q4 happened to keep its shas. A gate for one flag passes it
 explicitly (`run-fuse-gate.sh`, PICK_PROPOSED=0). The two hours that cost are the reason this paragraph exists.
 
+## Attribution (2026-09-10, quick harness, single runs, Turbo4 depth-3 arm; noise ~0.6%)
+
+| mask | what is off | ud t/s | q4 t/s |
+|---|---|---:|---:|
+| 0 | everything (base) | 25.61 | 34.19 |
+| 63 | nothing | 25.85 | 34.85 |
+| 62 | the twins (bits 1, 2) | 25.96 | 34.91 |
+| 59 | the gated norm | 26.14 | 34.99 |
+| 55 | add + norm | 25.95 | 34.71 |
+| 47 | the gate chain in the GDN kernel | 26.13 | 35.06 |
+| 31 | concat + conv + silu | 26.10 | 34.91 |
+
+Inconclusive at this noise: the fused configurations span 1.1% and the full mask ran first in the
+sequence. The only direction shared by both lines is that dropping the gate-chain bit reads highest, which
+matches the profile (the GDN row's span grew by 0.6 ms/round with the gate inside it; the gate values are
+computed once per simdgroup and broadcast since the last build). Interleaved 63 vs 47 x3 (same harness): ud 26.03/26.15/26.15 vs 26.12/26.14/26.12 (26.11 vs 26.13),
+q4 34.96/34.99/34.96 vs 34.99/35.12/35.05 (34.97 vs 35.05), every arm on its sha: the gate-chain bit is
+neutral within noise (it removes 4 dispatches and 2 barriers per delta-net layer and puts the same
+transcendentals inside the GDN kernel, once per simdgroup). Kept in the mask: the dispatch count is the
+quantity that scales with concurrent streams. The canonical ABAB gate above is the number for the full mask.
+
+## Cache residency sweep (2026-09-10, `test-backend-ops perf`, the perf loop re-reads one source)
+
+| source | f32 copy (read + write) | row sum (read only) |
+|---:|---:|---:|
+| 2 MB | 18.0 us, 233 GB/s | 15.8 us, 133 GB/s |
+| 4 MB | 30.8 us, 273 GB/s | 27.7 us, 152 GB/s |
+| 8 MB | 46.4 us, 345 GB/s | 51.3 us, 164 GB/s |
+| 12 MB | 69.0 us, 348 GB/s | 74.9 us, 168 GB/s |
+| 16 MB | 94.8 us, 338 GB/s | 101.9 us, 165 GB/s |
+| 24 MB | 174.8 us, 275 GB/s | 150.7 us, 167 GB/s |
+| 32 MB | 265.1 us, 241 GB/s | 199.8 us, 168 GB/s |
+| 48 MB | 416.0 us, 231 GB/s | 300.0 us, 168 GB/s |
+
+The copy puts the residency knee between 16 and 24 MB of source (the mv probe's 9.4 MB at 350 GB/s and
+18.9 MB at the DRAM rate agree). Neither kernel measures the SLC's read speed: the copy writes as much as it
+reads and GPU writes bypass the SLC, so its 345 GB/s with a resident source is a blend of an SLC read and a
+DRAM write; the row sum is issue-bound at 165 GB/s at every size (one threadgroup per 1024-float row) and
+never sees the cache at all. A read-only kernel built for bandwidth (wide loads, many rows in flight) is the
+probe that would settle it; the 128% figure in `mv-bandwidth-probe.md` is a lower bound on the resident
+rate, not a measurement of it.
+
 ## Results (2026-09-10, `run-fuse-gate.sh`: run-prod-pick.sh, benchprompt, Turbo4 depth 3, ABAB x2, one binary)
 
 | line | arm | base r1 / r2 | fused (GGML_FUSE_SMALL=63) r1 / r2 | delta | sha (base = fused, all 4 arms) |
@@ -116,3 +158,13 @@ what was removed is ~550 launches and their drains per round, not the spans.
 Manifest entry `GGML_FUSE_SMALL=63|BI|both|proposed`; adoption = owner. Per-bit attribution on the quick
 harness and the cost of the in-kernel gate chain (the GDN row's span grew 0.6 ms/round in the profile;
 its gate values are now computed once per simdgroup and broadcast): see the attribution block below.
+
+## Open
+
+- Attention-side small ops (sigmoid x mul on the gate, qk RMS_NORM + ROPE, ROPE -> SET_ROWS): ~100
+  dispatches/round, not fused.
+- The drafter's REPEAT/CONCAT/CONT/FILL storm and TOP_K (on hold, owner).
+- Re-run the kernel census with the corrected parser once the branch is picked; the Sep 06 snapshots lack
+  the 3D decode rows.
+- A read-only bandwidth kernel for the SLC's actual read rate (the sweep above only bounds the knee).
+- The remaining per-matmul casts: outputs without a twin (the attention gate's MUL, the drafter paths).
