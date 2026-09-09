@@ -46,7 +46,7 @@ a flagged row.
 
 Read the census row in this order (2026-09-09, `perf/agx-backend-access.md`):
 1. **`x floor@252`** first. It is time over bytes at the measured practical peak (252 GB/s, a 37 MB
-   CPY; 273 is the LPDDR5X nominal). Under 1.2 the row is flagged FLOOR: the kernel streams at
+   CPY; 273 is the LPDDR5X nominal). Under 1.1 the row is flagged FLOOR (the width-1 mul_mv kernels sit at 1.03-1.07; 1.1-1.3 is NEAR: stream-side levers only): the kernel streams at
    the DRAM limit and NO per-instruction reading applies, whatever issue/stall says (the
    profiler cannot see the scoreboard waits - they are bits in the instructions, `Wait
    instruction count 0`). Under 0.95 it is flagged CACHE: the perf loop re-reads a tensor that

@@ -279,9 +279,33 @@ the store 17256, the f16 multiply 862 (FP16), the FMA family 2210/2190/2206 and 
 FP32-count checks are in the file and override the solver where they conflict (998). More binaries
 pin more: every census run adds joins, so re-run the solve after the next census.
 
+## The activation copy, confirmed on the server profile (2026-09-09 evening)
+
+`ggml-metal-ops.cpp` mul_mv: for every stored SoA / kq weight type at n >= 2 (`use_f16y`), the op
+encodes a `kernel_cpy_f32_f16` of src1 into scratch, then `ggml_metal_op_concurrency_reset`, then
+the mul_mv (the width-1 route reads f32 and skips both). The server profile is per op, so the copy
+is inside each MUL_MAT's time; its cost per call comes from the census captures (the cpy kernel's
+share of the case's GPU time):
+
+| K | copy us/call (captures) | perf us/run vs server us/call |
+|---|---|---|
+| 5120 | 4.3-6.0 | 222 vs 231, 287 vs 301, 283 vs 318 |
+| 17408 | 17-24 | 242 vs 263, 306 vs 339 |
+
+Both Sep 06 UD server profiles (108 rounds): **511 MUL_MAT calls per round at n >= 2, copies
+3.7 ms per round = 3.3-3.5% of the 104-110 ms decode GPU time per round** (1.9 ms at K=5120,
+1.3 ms at K=17408, 0.4 ms at K=6144). The server's per-op time also exceeds the perf case by
+10-35 us per call; the serialization around the copy is a candidate for part of that but is not
+attributed. The q8_0 rows are counted in the 511 (they copy above 8M elements).
+
+Lever: width 2-8 SoA kernels reading f32 y directly, as the width-1 kernel does. The wt-only probe
+says the y loads are free at width 4; the f32 form doubles their bytes and must be timed, and it
+changes numerics (no f16 rounding of the activations: NUM class, owner's call per the pick
+manifest). Ceiling ~3.5% of decode GPU time plus whatever the serialization costs.
+
 ## Next
 
-1. Price the activation copy on the server profile and, if it holds, an f32-y form of the width-4/5 kernels (branch exp/q6k-w1-ilp has the probes).
+1. f32-y forms of the width 2-8 SoA kernels (the copy is confirmed at 3.3-3.5% of decode GPU time; numerics change, owner's call).
 2. Re-run the cost dataset on kernels that are NOT on the byte floor (mul_mm acch n64, FA,
    GDN: function constants via `agx-nt-opt.py --cv`, FC_MUL_MV = 600 nsg/nxpsg/ne12/r2/r3/nr0_v;
    FA and mul_mm constants from `ggml-metal-device.cpp`) and fit class prices against measured

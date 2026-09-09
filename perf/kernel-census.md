@@ -30,8 +30,9 @@ this file when asked (`--md`), writes a JSON snapshot and diffs against the prev
   instructions or > 2x the class-best loads. The Q4_0 mul_mm is the reference point of the class.
 - **stream class** (everything else): x the byte floor at the PRACTICAL 252 GB/s (measured 2026-09-09,
   37 MB CPY; 273 GB/s is nominal, `x_floor_nominal` keeps it) and instructions per MB. Flagged
-  above 1.5x floor (calls over 30 us); flagged **FLOOR** under 1.2x (no per-instruction reading
-  applies - the issue/stall split cannot see encoded waits) and **CACHE** under 0.95x (the perf loop
+  above 1.5x floor (calls over 30 us); flagged **FLOOR** under 1.1x (no per-instruction reading
+  applies - the issue/stall split cannot see encoded waits; the width-1 mul_mv kernels sit at 1.03-1.07x),
+  **NEAR** at 1.1-1.3x (stream-side levers only) and **CACHE** under 0.95x (the perf loop
   re-reads a cache-resident tensor; not a DRAM number). ADD/MUL bytes count both operands.
 - **join** (every row with a trace): the traced kernel's final machine IR from the translator
   (`perf/agx-nt-opt.py`, function constants from the capture log) aligned to the native stream and

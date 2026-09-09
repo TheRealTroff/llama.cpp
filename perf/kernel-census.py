@@ -23,7 +23,7 @@ mb = importlib.util.module_from_spec(_spec); _spec.loader.exec_module(mb)
 
 PEAK_GBS = 273e9          # LPDDR5X nominal (M4 Pro)
 # what a pure streaming kernel achieves here: CPY f32, 37 MB, 252 GB/s (2026-09-09, perf/agx-backend-access.md).
-# x_floor is against THIS number; a kernel under 1.2x it is on the floor and no per-instruction reading
+# x_floor is against THIS number; a kernel under 1.1x it is on the floor and no per-instruction reading
 # applies (the profiler's issue/stall split cannot see the waits: they are encoded in the instructions).
 PRACTICAL_GBS = 252e9
 BPW = dict(mb.BPW)
@@ -196,7 +196,7 @@ def metrics(args):
                 m['instr_per_mb'] = exd/(m['bytes']/1e6)
                 if m['cls'] == 'stream':
                     # under the DRAM floor = the perf loop re-reads a cache-resident tensor: not a DRAM number
-                    m['floor_flag'] = 'CACHE' if m['x_floor'] < 0.95 else 'FLOOR' if m['x_floor'] < 1.2 else None
+                    m['floor_flag'] = 'CACHE' if m['x_floor'] < 0.95 else 'FLOOR' if m['x_floor'] < 1.1 else 'NEAR' if m['x_floor'] < 1.3 else None
             join_row(d, rid, m)
     json.dump(m, open(os.path.join(d, rid + '.metrics.json'), 'w'), indent=1)
     print(rid, 'ok' if 'exec_per_disp' in m else 'partial')
@@ -222,6 +222,7 @@ def report(args):
             if m['load14_per_gflop'] > 2*best['load14_per_gflop']: flag.append(f"loads {m['load14_per_gflop']/best['load14_per_gflop']:.1f}x best")
         if m.get('floor_flag') == 'CACHE': flag.append('CACHE: under the DRAM floor, tensor is cache-resident in the perf loop')
         elif m.get('floor_flag') == 'FLOOR': flag.append('FLOOR: on the byte floor, no per-instruction reading')
+        elif m.get('floor_flag') == 'NEAR': flag.append('near floor: stream-side levers only (split-K, copies), not instruction selection')
         elif m['cls'] == 'stream' and m.get('x_floor') and m['x_floor'] > 1.5 and m['us_call'] > 30: flag.append(f"{m['x_floor']:.1f}x floor")
         if m.get('join_error'): flag.append('no join: ' + m['join_error'][:40])
         if m.get('spill', 0) > 0: flag.append(f"spill {m['spill']}B")
