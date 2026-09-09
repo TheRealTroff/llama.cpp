@@ -177,6 +177,18 @@ def run(args, opts, module, mode_hook=None):
         proc.Continue()
     if args.mode == 'watch':
         print('option value accessed %d times%s' % (hits, '' if hits else '  (never accessed: not consulted in this pipeline)'))
+    if not os.path.exists(out):
+        # packager bug ("cannot find private metadata at offset N", position-dependent in the
+        # function list): the translation succeeded; redo it with -stop-after translate and
+        # take the native Mach-O it leaves in the cwd (same __TEXT as a packaged .gpubin,
+        # see agx-spill-probe.py)
+        r = subprocess.run([exe] + argv[:-2] + ['-stop-after', 'translate'], capture_output=True, text=True, cwd=work)
+        staged = os.path.join(work, 'script.compute-pipeline-0')
+        if os.path.exists(staged):
+            os.replace(staged, out)
+            print('note: packager failed; gpubin taken from -stop-after translate', file=sys.stderr)
+        else:
+            print('warning: no gpubin produced (%s)' % (r.stderr.strip().split('\n')[-1] if r.stderr else '?'), file=sys.stderr)
     return out, errf
 
 def extract_last_mf(errf):
@@ -195,7 +207,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('mode', choices=['mir', 'passes', 'set', 'watch'])
     ap.add_argument('metallib'); ap.add_argument('kernel')
-    ap.add_argument('--cvi', action='append', default=[], help='IDX=VAL int function constant')
+    ap.add_argument('--cv', action='append', default=[], help='IDX=VAL short (int16) function constant - ggml mul_mv/FA constants are shorts')
+    ap.add_argument('--cvi', action='append', default=[], help='IDX=VAL int32 function constant')
     ap.add_argument('--cvb', action='append', default=[], help='IDX=VAL bool function constant')
     ap.add_argument('--opt', action='append', default=[], help='NAME[=INT] backend option to set')
     ap.add_argument('--module', default='libapplegpu-nt', help='module holding the option registry')
@@ -205,7 +218,8 @@ def main():
     ap.add_argument('--gpubin', default=None); ap.add_argument('--stderr', default=None)
     ap.add_argument('--max-hits', type=int, default=3)
     args = ap.parse_args()
-    args.cvs = [(int(k), int(v), 'ConstantInt32') for k, v in (s.split('=') for s in args.cvi)] + \
+    args.cvs = [(int(k), int(v), 'ConstantShort') for k, v in (s.split('=') for s in args.cv)] + \
+               [(int(k), int(v), 'ConstantInt') for k, v in (s.split('=') for s in args.cvi)] + \
                [(int(k), v.lower() in ('1', 'true'), 'ConstantBool') for k, v in (s.split('=') for s in args.cvb)]
     opts = []
     for o in args.opt:
