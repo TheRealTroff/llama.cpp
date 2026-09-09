@@ -147,6 +147,16 @@ kernel win):
   (5.3% vs 18.6% spread), so read it as the profiler's apportioning model, not hardware
   cycles. To see what a site actually is, dump the kernel's machine IR
   (`perf/agx-nt-opt.py mir`) and join (`perf/agx-mir-align.py --profile`).
+- **"Issue" includes dependency bubbles; the per-instruction price is set by the ILP regime
+  (2026-09-09 width series, `perf/agx-backend-access.md`).** Same format, same instruction
+  classes, widths 1/2/4: us per M executed instructions 17.8/11.2/8.6 (q4_0) and
+  19.6/11.8/9.5 (q6_K), while the profiler reported q6_K w1 at 97% issue / 3% stall. Stall
+  RISES with width (2.7 -> 13%) as the ALU gets busy enough for memory waits to show. So
+  "97% issue" means "not waiting on memory", not "issue port saturated", and the 7.6-8.6 us/M
+  rule below is a width-4/5 number: expect ~2x at width 1. The two most different formats we
+  have (q6_K byte loads + 64-bit adds + bit-field extracts vs q4_0 f16 FMAs) differ by only
+  ~10% per instruction at every width - class mix is second order, independent work per
+  thread is first order.
 - **issue share x issue rate, not instruction count or stall alone, predicts time.**
   Measured both failure directions: an unroll cut dynamic instructions 15% and lost
   (stall rose), a sumy variant issued 25% MORE instructions more smoothly and lost.
