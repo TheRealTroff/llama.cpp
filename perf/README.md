@@ -1139,8 +1139,11 @@ Superseded, kept for history - do not quote numbers from these:
   to every digit (bf16 0.012537 / q8_0 0.013508); **decode-path KLD (`-b 4 -ub 4`, the first ever): pairwise
   vs a V1 decode base the new kernels cost 5e-6 mean KLD (1/240 of q8_0's distance from bf16, same-top
   99.935%); the pick's decode path sits 2.6e-5 from its prefill path; the fork's native decode kernels 4.5e-4
-  from the pick's.** Open: Q6_K w1 and the IQ4_NL/Q6_K w2/6..8 losers, 32K prefill pair
-  (`ud-q3k-long-prefill.md`), file name + manifest + re-mint if adopted.
+  from the pick's.** Widths 2 and 6..8 then moved onto the kq body (merged `c559b12dd`): every format at
+  or ahead of native at every width 2..8 except Q6_K w2 (-4%); Q6_K w1 (-5%) PROFILED: issue-bound on both
+  sides, the stored kernel executes 16% fewer instructions and loses on a fatter 8/12 B (address) mix; the
+  wide-load probe (`exp/q6k-w1-form`, not routed) recovers half. Open: the 32K prefill pair
+  (`ud-q3k-long-prefill.md`).
 - **`spec-heated.md` - speculation at temperature > 0, FIRST LOOK 2026-09-07 (branch `spec-heated`,
   MERGED to prod the same evening, owner: "Kill the logits, merge the fix"; the active worktree is
   gone; owner's premise: "literally do anything, because so far we know nothing").**

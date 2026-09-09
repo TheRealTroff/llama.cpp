@@ -401,3 +401,47 @@ width 1 (-5%) and width 2 (-4% geomean). Numerics class: the same half-product k
 depth / multi-slot widths. Correctness after the revert: synthetic 202/202, real-weight 62/62, the
 `w2_v1` / `w4cg_v1` routes engaged in the test's own stderr. `GGML_MV_UD_KQ_ALL=0` = the ext readers.
 Nothing in a pick changes; adoption = owner.
+
+## Why Q6_K loses 5% at width 1: the per-instruction profile (2026-09-09 06:30-07:20, owner: "I don't think 5% on 16 tensors at batch are worth it, but I think the knowledge might be")
+
+`run-ud-soa-profile.sh` on the 17408x5120 width-1 case, native `kernel_mul_mv_q6_K_f32` (nsg 2, nr0 2) beside
+`kernel_mul_mv_q6_K_soa_w1_v1` (the kq body at NC = 1), headless replay, `shaderprof-compare.py`
+(`kvquant-experiments/profiles/q6k-w1-sep09`; uncaptured timing 287.8 vs 300.0 us, +4.2%):
+
+| | native | stored (kq NC=1) |
+|---|---:|---:|
+| static instructions / registers / spill | 400 / 51 / 0 | 302 / 69 / 0 |
+| executed per dispatch | 19.44M | **16.26M (-16%)** |
+| issue / stall share | 95.6 / 4.4% | 97.1 / 2.9% |
+| hot loop rows, its issue share | 310, 92.1% | 211, 92.1% |
+| hot-loop issue share by encoding class 8 B + 12 B | 55% | **68%** (12 B alone 37%) |
+| issue cost per executed instruction (us x issue / M) | 14.2 | **17.9 (+27%)** |
+
+Three facts, in the order they rule things out. **Not memory:** both kernels sit at 96-97% issue with < 5%
+stall, so the byte-floor ratios (1.11x / 1.19x) describe nothing - the loop is issue-bound on both sides.
+**Not instruction count and not spill:** the stored kernel executes 16% FEWER instructions per dispatch,
+spills nothing, and still runs 4% longer - fewer instructions at a higher issue share and slower is the
+signature of a fatter instruction MIX, not of more work. **The cost lives in the encoding class:** in both
+kernels an 8 B or 12 B instruction carries ~4x the issue time of a 4/6/10 B one (per-instruction issue
+share 0.67-0.84 vs 0.17-0.23 within each kernel), and the stored hot loop leans on that class harder - 68%
+of its issue against native's 55%, the 12 B class (address arithmetic and load-consumer lowering, the
+prescreen skill's fingerprint) alone 37%. The source says why: the kq body computes 16 addresses per
+lane-iteration (4 rows x 4 planes: lo uint, hi ushort, int8 scale, half d, each indexed by the pack), where
+native advances 10 pointers and reads its bytes at immediate offsets. Native's extra 100 instructions per
+iteration are 10 B forms that cost a fifth each; the stored kernel traded them for 4 more fat ones.
+
+**The probe that tests it** (branch `exp/q6k-w1-form`, `kernel_mul_mv_{q6_K,q3_K}_soa_w1_v2`,
+`GGML_MV_UD_W1=2`): two packs per lane-iteration with wide loads (uint2 lo / ushort2 hi / one int8 scale
+per 16 weights / d per 256) - 16 weights per row per lane-iteration like native, half the addresses per
+element. Offline the text doubles (2942 -> 4502 B, 2x the work per iteration; per element 10.5 -> 8.0
+instructions, 12 B 1.9 -> 1.6, 14 B 0.72 -> 0.42 - the prescreen cannot rank a form that changes the work
+per iteration, only the timing can). Measured, mirrored plain/wide/current, 12 shapes: **q6_K -3.5% ->
+-1.1% vs native (+2.4% over the routed kernel), q3_K +0.8%**; 15/15 + 16/16 correctness, v2 named in the
+test's stderr. So the address class is about half of the gap; the other half is the remaining mix and the
+69-vs-51 register count (fewer resident simdgroups issuing across the core's pipes - the profile cannot see
+that directly on this hardware). NOT routed: +2.4% on 16 tensors at batch 1 is ~0.1% e2e and moves the f32
+rounding order (per-16 scale), i.e. the b1 sha; the branch keeps the kernel behind the env for the record.
+
+Method lesson (into `skills/metal-gpu-profile`): executed count x issue share does not predict time across
+two kernels of different form - read the issue share by encoding SIZE first; the 8/12 B class costs ~4x,
+and a kernel can win the instruction count and lose the clock on it.
