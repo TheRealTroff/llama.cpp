@@ -354,9 +354,39 @@ their first record. Manifest entry `GGML_MV_Y16_CVT=1|BI|both|proposed` on `exp/
 adoption = owner. The residual 10-30% of the copy (the barrier drain around a 2-3 us dispatch)
 would need the producer to emit f16 (a graph-level change), not worth it at ~0.5 ms per round.
 
+## The conv-state carry, fused (2026-09-09 night, branch `exp/ssm-conv-state-fuse`, `GGML_SSM_CONV_WB=1`)
+
+Every delta-net layer writes the last conv_kernel-1 columns of its conv window into 1 + rollback-depth
+recurrent-state slots with K CPY nodes placed a few nodes BEFORE the SSM_CONV that reads the same window
+(`build_conv_state`, delta-net-base.cpp): 227 copies per round of a 3 x 10240 f32 view whose 12-byte
+rows miss the 16-byte row-contiguous fast path, 5.4 us each on the generic one-element-per-thread
+kernel, 1.1-1.7% of decode GPU time in the profiles. `kernel_ssm_conv_f32_f32_rows_wb` writes the
+slots itself (thread (row, token 0) copies n_state floats per slot); the copy side drops each CPY a
+following SSM_CONV absorbs and the op side collects them, over the same 32-node window with the same
+graph-pure predicate, the GDN write-back fusion's mirror image. Route proven (only the `_wb` kernel
+loads under `LV=5`), shas identical in every arm.
+
+| line | arm | base r1 / r2 | fused r1 / r2 | delta |
+|---|---|---:|---:|---:|
+| q4 | 600 | 29.575 / 29.572 | 29.643 / 29.636 | +0.2% |
+| q4 | 300 | 27.909 / 27.873 | 28.038 / 28.048 | +0.5% |
+| ud | 600 | 25.640 / 25.621 | 25.798 / 25.796 | +0.7% |
+| ud | 300 | 25.468 / 25.453 | 25.583 / 25.547 | +0.4% |
+
+**Why a third of the estimate, and a rule.** The server profiler's per-op time is a span from dispatch
+to completion. The K carry copies of a layer ran concurrently between the same two barriers (the one
+before them, on the concat output, and the one the conv's consumer needs anyway), so their spans
+overlap K-fold and each carries the front-end latency of starting a dispatch. Summing them over-counts
+the critical path by about K. What the fusion removed was 227 launches at ~1-2 us, between barriers
+that remain: 0.2-0.5 ms per round, which is what the gate measured. The activation copy delivered
+three quarters of its share because each of those copies owned its barrier and reset (serialized with
+its matmul). Rule: a group of small ops between shared barriers is worth dispatch count x ~1.5 us, not
+the profile's per-call time; only ops that own their barriers are worth their span. The elementwise
+cluster's "3.5%" shrinks to about a third under this rule unless a fusion also removes barriers.
+
 ## Next
 
-1. GGML_MV_Y16_CVT=1: proposed (+2.7% q4 / +2.3% ud e2e, BI); adoption = owner. The f32-y forms are refuted (cache traffic).
+1. GGML_MV_Y16_CVT=1 (+2.7% q4 / +2.3% ud) and GGML_SSM_CONV_WB=1 (+0.2-0.7%), both BI, proposed; the stacked gate is in `results/stacked-*`; adoption = owner. The f32-y forms are refuted (cache traffic).
 2. Re-run the cost dataset on kernels that are NOT on the byte floor (mul_mm acch n64, FA,
    GDN: function constants via `agx-nt-opt.py --cv`, FC_MUL_MV = 600 nsg/nxpsg/ne12/r2/r3/nr0_v;
    FA and mul_mm constants from `ggml-metal-device.cpp`) and fit class prices against measured

@@ -176,6 +176,12 @@ kernel win):
   contend for DRAM (+20..90% per op measured). Any variant that removes a barrier-bearing step (the
   decode f32->f16 activation copy ends in one) measures that contention, not the kernel. Keep the
   barrier (`ggml_metal_op_concurrency_reset`) in the variant, or compare in the real graph.
+- **Per-op profile time is a span, not critical path, for small concurrent ops (2026-09-09,
+  `perf/agx-backend-access.md`).** K copies between the same two barriers overlap K-fold and each
+  span carries the dispatch front-end latency; the conv-state carry fusion removed "1.1-1.7% of GPU
+  time" and delivered 0.2-0.7%. Estimate a group of small ops between shared barriers at dispatch
+  count x ~1.5 us; only an op that owns its barrier (the activation copy did: reset after it) is
+  worth its span, and even that delivered ~75%.
 - **issue share x issue rate, not instruction count or stall alone, predicts time.**
   Measured both failure directions: an unroll cut dynamic instructions 15% and lost
   (stall rose), a sumy variant issued 25% MORE instructions more smoothly and lost.
