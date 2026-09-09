@@ -53,6 +53,42 @@ static bool ggml_metal_env_has_i32(const char * value, int32_t wanted) {
 // op still writes dst. so this depends only on the graph: no encoder state, and nothing
 // that differs between the normal encoder and the per-op profiling encoder (which
 // builds one op context per node)
+// conv-state carry (GGML_SSM_CONV_WB=1): the K CPY nodes that move the last n_state columns of a
+// conv window (the concat output) into the recurrent-state cache slots, encoded a few nodes BEFORE
+// the SSM_CONV that reads the same window. The decode ssm_conv kernel writes those slots itself and
+// the copies are dropped. Copy side and op side use the same predicate and the same window, so a
+// dropped copy is always one the op writes. Pure function of the graph, like the GDN write-back.
+#define GGML_METAL_SSM_CONV_WB_WINDOW 32
+static bool ggml_metal_ssm_conv_wb_enabled(void) {
+    static const int v = getenv("GGML_SSM_CONV_WB") ? atoi(getenv("GGML_SSM_CONV_WB")) : 0;
+    return v != 0;
+}
+static bool ggml_metal_ssm_conv_wb_cpy(const ggml_tensor * cpy, const ggml_tensor * conv) {
+    if (!cpy || !conv || cpy->op != GGML_OP_CPY || conv->op != GGML_OP_SSM_CONV || !cpy->src[0]) {
+        return false;
+    }
+    const ggml_tensor * win = conv->src[0];              // the conv window [ne00 = n_state + n_tokens, channels, seqs]
+    const ggml_tensor * src = cpy->src[0];               // view of the window: [n_state, channels, seqs]
+    if (src->view_src != win || win->type != GGML_TYPE_F32 || cpy->type != GGML_TYPE_F32 || src->type != GGML_TYPE_F32) {
+        return false;
+    }
+    if (conv->src[1]->type != GGML_TYPE_F32 || conv->ne[1] < 1 || conv->ne[1] > 16) {   // the rows-kernel widths
+        return false;
+    }
+    const int64_t n_state = conv->src[1]->ne[0] - 1;
+    if (n_state < 1 || src->ne[0] != n_state || src->ne[1] != win->ne[1] || src->ne[2] != win->ne[2] || src->ne[3] != 1) {
+        return false;
+    }
+    if (src->nb[0] != sizeof(float) || src->nb[1] != win->nb[1] || src->nb[2] != win->nb[2]) {
+        return false;
+    }
+    // dst: [n_state*channels, seqs] packed rows
+    if (cpy->ne[0] != n_state*win->ne[1] || cpy->ne[1] != win->ne[2] || cpy->ne[2] != 1 || cpy->ne[3] != 1 || cpy->nb[0] != sizeof(float)) {
+        return false;
+    }
+    return true;
+}
+
 static const ggml_tensor * ggml_metal_gdn_wb_op(const ggml_tensor * cpy) {
     if (cpy->op != GGML_OP_CPY || !cpy->src[0]) {
         return nullptr;
@@ -330,6 +366,15 @@ static int ggml_metal_op_encode_impl(ggml_metal_op_t ctx, int idx) {
         }
     }
 
+    if (ggml_metal_ssm_conv_wb_enabled() && node->op == GGML_OP_CPY) {
+        const ggml_cgraph * gf = ctx->graph();
+        const int ci = ctx->node_idx(idx);
+        for (int j = ci + 1; j < gf->n_nodes && j <= ci + GGML_METAL_SSM_CONV_WB_WINDOW; j++) {
+            if (ggml_metal_ssm_conv_wb_cpy(node, gf->nodes[j])) {
+                return 1;
+            }
+        }
+    }
     switch (node->op) {
         case GGML_OP_NONE:
         case GGML_OP_RESHAPE:
@@ -1811,15 +1856,44 @@ int ggml_metal_op_ssm_conv(ggml_metal_op_t ctx, int idx) {
     // decode/verify widths: one thread per (row, token) with 256-thread threadgroups; the batched
     // kernel at these widths dispatches ne01 x ne02 two-thread threadgroups (480 us/call at 8 seqs)
     if (ne1 >= 1 && ne1 <= 16 && op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_F32) {
-        auto pipeline = ggml_metal_library_get_pipeline(lib, "kernel_ssm_conv_f32_f32_rows");
+        // the conv-state carry copies this op absorbs (dropped on the copy side over the same window)
+        ggml_metal_kargs_ssm_conv_wb wb = {};
+        ggml_metal_buffer_id bid_state = {};
+        if (ggml_metal_ssm_conv_wb_enabled()) {
+            const ggml_cgraph * gf = ctx->graph();
+            const int gi = ctx->node_idx(idx);
+            for (int j = gi - 1; j >= 0 && j >= gi - GGML_METAL_SSM_CONV_WB_WINDOW && wb.n_wb < GGML_METAL_SSM_CONV_WB_MAX; j--) {
+                const ggml_tensor * cpy = gf->nodes[j];
+                if (!ggml_metal_ssm_conv_wb_cpy(cpy, op)) {
+                    continue;
+                }
+                ggml_metal_buffer_id bid = ggml_metal_get_buffer_id(cpy);
+                if (wb.n_wb == 0) {
+                    bid_state = bid;
+                    wb.n_state = (int32_t) cpy->src[0]->ne[0];
+                    wb.dst_nb1 = cpy->nb[1];
+                } else if (bid.metal != bid_state.metal || cpy->nb[1] != wb.dst_nb1) {
+                    GGML_ABORT("ssm_conv wb: state slots in different buffers");
+                }
+                wb.src_off[wb.n_wb] = (uint64_t) ((const char *) cpy->src[0]->data - (const char *) op->src[0]->data);
+                wb.dst_off[wb.n_wb] = (uint64_t) (bid.offs - bid_state.offs);
+                wb.n_wb++;
+            }
+        }
+        const char * kname = wb.n_wb ? "kernel_ssm_conv_f32_f32_rows_wb" : "kernel_ssm_conv_f32_f32_rows";
+        auto pipeline = ggml_metal_library_get_pipeline(lib, kname);
         if (!pipeline.pipeline) {
-            pipeline = ggml_metal_library_compile_pipeline(lib, "kernel_ssm_conv_f32_f32_rows", "kernel_ssm_conv_f32_f32_rows", nullptr);
+            pipeline = ggml_metal_library_compile_pipeline(lib, kname, kname, nullptr);
         }
         ggml_metal_encoder_set_pipeline(enc, pipeline);
         ggml_metal_encoder_set_bytes(enc, &args, sizeof(args), 0);
         ggml_metal_encoder_set_buffer(enc, ggml_metal_get_buffer_id(op->src[0]), 1);
         ggml_metal_encoder_set_buffer(enc, ggml_metal_get_buffer_id(op->src[1]), 2);
         ggml_metal_encoder_set_buffer(enc, ggml_metal_get_buffer_id(op),         3);
+        if (wb.n_wb) {
+            ggml_metal_encoder_set_bytes (enc, &wb, sizeof(wb), 4);
+            ggml_metal_encoder_set_buffer(enc, bid_state, 5);
+        }
         const int64_t n = (int64_t) ne01*ne1;
         ggml_metal_encoder_dispatch_threadgroups(enc, (int) ((n + 255)/256), 1, ne02, 256, 1, 1);
         return 1;
@@ -3554,10 +3628,109 @@ static int ggml_metal_op_mul_mat_impl(ggml_metal_op_t ctx, int idx, ggml_tensor 
         const int iq4xs_soa_variant = op->src[0]->type == GGML_TYPE_IQ4_XS_SOA ? 5 : env_soa_iq4xs;
         const int kq_soa_variant    = stored_kq ? 2 : env_soa_kq;
 
-        // optionally convert src1 to f16 into the scratch after dst: one 16B load then covers 8 elements
+        // src1 buffer; the optional f16 conversion of it is encoded below, after the route is known
         ggml_metal_buffer_id bid_src1 = ggml_metal_get_buffer_id(op->src[1]);
 
-        if (use_f16y) {
+        static const int env_ilp = getenv("GGML_MV_EXT_ILP") ? atoi(getenv("GGML_MV_EXT_ILP")) : 1;
+        static const int env_di_v2 = getenv("GGML_MV_EXT_DI_V2") ? atoi(getenv("GGML_MV_EXT_DI_V2")) : 0;
+        static const int env_half_product = getenv("GGML_MV_EXT_HALF_PRODUCT") ? atoi(getenv("GGML_MV_EXT_HALF_PRODUCT")) : 0;
+        static const int env_soa_w3 = getenv("GGML_MV_SOA_W3") ? atoi(getenv("GGML_MV_SOA_W3")) : 0;
+        static const int env_soa_w4 = getenv("GGML_MV_SOA_W4") ? atoi(getenv("GGML_MV_SOA_W4")) : 0;
+        static const int env_soa_w4_k1 = getenv("GGML_MV_SOA_W4_K1") ? atoi(getenv("GGML_MV_SOA_W4_K1")) : 0;
+        static const int env_soa_w4_r2 = getenv("GGML_MV_SOA_W4_R2") ? atoi(getenv("GGML_MV_SOA_W4_R2")) : 0;
+        static const int env_soa_w4_r3 = getenv("GGML_MV_SOA_W4_R3") ? atoi(getenv("GGML_MV_SOA_W4_R3")) : 0;
+        static const int env_soa_w4_r2_scalar = getenv("GGML_MV_SOA_W4_R2_SCALAR") ? atoi(getenv("GGML_MV_SOA_W4_R2_SCALAR")) : 0;
+        static const int env_soa_w4_r4kp = getenv("GGML_MV_SOA_W4_R4KP") ? atoi(getenv("GGML_MV_SOA_W4_R4KP")) : 0;
+        const bool soa_shape = ne12 == 1 && ne13 == 1 && use_f16y && use_di && ne00%64 == 0 &&
+                               (stored_soa || ggml_metal_mul_mat_soa_w4_rows(ne01));
+        const bool use_soa_w4 = (stored_soa || env_soa_w4) && ne11 == 4 && soa_shape;
+        const bool use_soa_w3 = (stored_soa || env_soa_w3) && ne11 == 3 && soa_shape;
+        static const int env_soa_w7 = getenv("GGML_MV_SOA_W7") ? atoi(getenv("GGML_MV_SOA_W7")) : 0;
+        const bool use_soa_w7 = !stored_soa && env_soa_w7 && ne11 == 7 && soa_shape;
+        static const int env_soa_w5 = getenv("GGML_MV_SOA_W5") ? atoi(getenv("GGML_MV_SOA_W5")) : 0;
+        static const int env_soa_w5_hp = getenv("GGML_MV_SOA_W5_HALF") ? atoi(getenv("GGML_MV_SOA_W5_HALF")) : 0;
+        const bool use_soa_w5 = (stored_soa || env_soa_w5) && ne11 == 5 && soa_shape;
+        // short-K head probe (GGML_MV_SOA_SKH=1..3): reroute the whitelisted w5 shapes
+        // above the head-size cutoff to the skh cells. 1=r6, 2=r8rs, 3=r8cs.
+        static const int env_soa_skh = getenv("GGML_MV_SOA_SKH") ? atoi(getenv("GGML_MV_SOA_SKH")) : 0;
+        const bool use_soa_skh = use_soa_w5 && env_soa_skh && ne01 >= 32768;
+        static const int env_soa_w6 = getenv("GGML_MV_SOA_W6") ? atoi(getenv("GGML_MV_SOA_W6")) : 0;
+        static const int env_soa_w6_hp = getenv("GGML_MV_SOA_W6_HALF") ? atoi(getenv("GGML_MV_SOA_W6_HALF")) : 0;
+        const bool use_soa_w6 = !stored_soa && env_soa_w6 && ne11 == 6 && soa_shape;
+        const int soa_w4_r4kp = stored_soa ? 3 : env_soa_w4_r4kp;
+        const int soa_w5_rows = stored_soa ? 4 : env_soa_w5;
+        const bool soa_w5_hp = stored_soa || env_soa_w5_hp;
+        const int variant = ne11 == 4 && use_f16y && !use_di && op->src[0]->type == GGML_TYPE_Q4_0 && env_ilp == 2 ? 2 :
+                            ne11 == 4 && use_di && env_di_v2 ? 3 :
+                            ne11 == 4 && use_f16y && !use_di && op->src[0]->type == GGML_TYPE_Q4_0 && env_half_product ? 4 : 1;
+
+        // wider-weight-load probe (GGML_MV_SOA_W5_QW=2/4): uint2/uint4 q loads on the
+        // 4-row half-product body
+        static const int env_soa_w5_qw = getenv("GGML_MV_SOA_W5_QW") ? atoi(getenv("GGML_MV_SOA_W5_QW")) : 0;
+        const bool use_soa_w5_qw = use_soa_w5 && env_soa_w5_qw && env_soa_w5 == 4 && env_soa_w5_hp && !use_soa_skh;
+
+        // GGML_MV_SOA_Y32=1: on the stored-weight SoA routes that have an f32-activation twin (kernel *_y32),
+        // read f32 y directly instead of encoding a kernel_cpy_f32_f16 + concurrency reset before every
+        // op (3.3-3.5% of decode GPU time on the Sep 06 profiles, perf/agx-backend-access.md).
+        // The twins convert y to half in registers: same arithmetic as the half-y kernels.
+        static const int env_y32 = getenv("GGML_MV_SOA_Y32") ? atoi(getenv("GGML_MV_SOA_Y32")) : 0;
+        bool y32 = false;
+        if ((env_y32 == 1 || env_y32 == 3) && use_f16y) {
+            if (use_iq4xs_soa) {
+                y32 = op->src[0]->type == GGML_TYPE_IQ4_XS_SOA && iq4xs_soa_variant == 5 && ne11 >= 3 && ne11 <= 5;
+            } else if (use_kq_soa) {
+                y32 = stored_kq && (ud_rem ? (ne11 >= 2 && ne11 <= 8) : (kq_soa_variant == 2 && ne11 >= 3 && ne11 <= 5));
+            } else if (use_soa_w5) {
+                y32 = stored_soa && soa_w5_rows == 4 && soa_w5_hp && !use_soa_skh && !use_soa_w5_qw;
+            } else if (use_soa_w4) {
+                y32 = stored_soa && soa_w4_r4kp == 3;
+            }
+        }
+        // GGML_MV_SOA_Y32=2: probe only - skip the copy but run the half-y kernel on the stale scratch (WRONG
+        // RESULTS): times the copy dispatch itself, independent of any kernel change
+        const bool copy_y16 = use_f16y && !y32 && env_y32 != 2;
+        // The copy path ends in a memory barrier (concurrency reset) that also serializes this op behind
+        // whatever preceded it; without it, back-to-back streaming dispatches overlap and contend
+        // (perf loop: +20..90% per op, perf/agx-backend-access.md). =1 and =2 keep that barrier; =3 = the
+        // y32 kernel with no forced barrier (the graph's own hazard tracking decides).
+        if (use_f16y && !copy_y16 && env_y32 != 3) {
+            ggml_metal_op_concurrency_reset(ctx);
+        }
+
+        // optionally convert src1 to f16 into the scratch after dst: one 16B load then covers 8 elements
+        // GGML_MV_Y16_CVT=1: the contiguous vectorized cast (8 elements per thread, no index math) instead of
+        // the generic kernel_cpy (one element per thread, four 64-bit divisions each) for the decode-side
+        // f32->f16 activation copy; same round-to-nearest conversion, byte-identical (perf/agx-backend-access.md)
+        static const int env_y16_cvt = getenv("GGML_MV_Y16_CVT") ? atoi(getenv("GGML_MV_Y16_CVT")) : 0;
+        const int64_t ny = ne10*ne11*ne12*ne13;
+        const bool cvt_cont = env_y16_cvt && nb10 == sizeof(float) && nb11 == (uint64_t) ne10*sizeof(float) &&
+                              nb12 == (uint64_t) ne10*ne11*sizeof(float) && nb13 == (uint64_t) ne10*ne11*ne12*sizeof(float) &&
+                              ny % 4 == 0;
+
+        if (copy_y16 && cvt_cont) {
+            assert(ggml_metal_op_mul_mat_extra_src1f16(op) != 0);
+
+            ggml_metal_buffer_id bid_y16 = ggml_metal_get_buffer_id(op);
+            bid_y16.offs += ggml_nbytes(op);
+
+            auto pipeline_cvt = ggml_metal_library_get_pipeline_cvt_f32_f16_cont(lib);
+
+            ggml_metal_kargs_cvt_cont cargs = {
+                /*.n =*/ ny,
+            };
+            const int64_t nthr = ny/8;
+
+            ggml_metal_encoder_set_pipeline(enc, pipeline_cvt);
+            ggml_metal_encoder_set_bytes   (enc, &cargs, sizeof(cargs), 0);
+            ggml_metal_encoder_set_buffer  (enc, bid_src1, 1);
+            ggml_metal_encoder_set_buffer  (enc, bid_y16,  2);
+
+            ggml_metal_encoder_dispatch_threadgroups(enc, (nthr + 255)/256, 1, 1, 256, 1, 1);
+
+            ggml_metal_op_concurrency_reset(ctx);
+
+            bid_src1 = bid_y16;
+        } else if (copy_y16) {
             assert(ggml_metal_op_mul_mat_extra_src1f16(op) != 0);
 
             ggml_metal_buffer_id bid_y16 = ggml_metal_get_buffer_id(op);
@@ -3600,53 +3773,15 @@ static int ggml_metal_op_mul_mat_impl(ggml_metal_op_t ctx, int idx, ggml_tensor 
             bid_src1 = bid_y16;
         }
 
-        static const int env_ilp = getenv("GGML_MV_EXT_ILP") ? atoi(getenv("GGML_MV_EXT_ILP")) : 1;
-        static const int env_di_v2 = getenv("GGML_MV_EXT_DI_V2") ? atoi(getenv("GGML_MV_EXT_DI_V2")) : 0;
-        static const int env_half_product = getenv("GGML_MV_EXT_HALF_PRODUCT") ? atoi(getenv("GGML_MV_EXT_HALF_PRODUCT")) : 0;
-        static const int env_soa_w3 = getenv("GGML_MV_SOA_W3") ? atoi(getenv("GGML_MV_SOA_W3")) : 0;
-        static const int env_soa_w4 = getenv("GGML_MV_SOA_W4") ? atoi(getenv("GGML_MV_SOA_W4")) : 0;
-        static const int env_soa_w4_k1 = getenv("GGML_MV_SOA_W4_K1") ? atoi(getenv("GGML_MV_SOA_W4_K1")) : 0;
-        static const int env_soa_w4_r2 = getenv("GGML_MV_SOA_W4_R2") ? atoi(getenv("GGML_MV_SOA_W4_R2")) : 0;
-        static const int env_soa_w4_r3 = getenv("GGML_MV_SOA_W4_R3") ? atoi(getenv("GGML_MV_SOA_W4_R3")) : 0;
-        static const int env_soa_w4_r2_scalar = getenv("GGML_MV_SOA_W4_R2_SCALAR") ? atoi(getenv("GGML_MV_SOA_W4_R2_SCALAR")) : 0;
-        static const int env_soa_w4_r4kp = getenv("GGML_MV_SOA_W4_R4KP") ? atoi(getenv("GGML_MV_SOA_W4_R4KP")) : 0;
-        const bool soa_shape = ne12 == 1 && ne13 == 1 && use_f16y && use_di && ne00%64 == 0 &&
-                               (stored_soa || ggml_metal_mul_mat_soa_w4_rows(ne01));
-        const bool use_soa_w4 = (stored_soa || env_soa_w4) && ne11 == 4 && soa_shape;
-        const bool use_soa_w3 = (stored_soa || env_soa_w3) && ne11 == 3 && soa_shape;
-        static const int env_soa_w7 = getenv("GGML_MV_SOA_W7") ? atoi(getenv("GGML_MV_SOA_W7")) : 0;
-        const bool use_soa_w7 = !stored_soa && env_soa_w7 && ne11 == 7 && soa_shape;
-        static const int env_soa_w5 = getenv("GGML_MV_SOA_W5") ? atoi(getenv("GGML_MV_SOA_W5")) : 0;
-        static const int env_soa_w5_hp = getenv("GGML_MV_SOA_W5_HALF") ? atoi(getenv("GGML_MV_SOA_W5_HALF")) : 0;
-        const bool use_soa_w5 = (stored_soa || env_soa_w5) && ne11 == 5 && soa_shape;
-        // short-K head probe (GGML_MV_SOA_SKH=1..3): reroute the whitelisted w5 shapes
-        // above the head-size cutoff to the skh cells. 1=r6, 2=r8rs, 3=r8cs.
-        static const int env_soa_skh = getenv("GGML_MV_SOA_SKH") ? atoi(getenv("GGML_MV_SOA_SKH")) : 0;
-        const bool use_soa_skh = use_soa_w5 && env_soa_skh && ne01 >= 32768;
-        static const int env_soa_w6 = getenv("GGML_MV_SOA_W6") ? atoi(getenv("GGML_MV_SOA_W6")) : 0;
-        static const int env_soa_w6_hp = getenv("GGML_MV_SOA_W6_HALF") ? atoi(getenv("GGML_MV_SOA_W6_HALF")) : 0;
-        const bool use_soa_w6 = !stored_soa && env_soa_w6 && ne11 == 6 && soa_shape;
-        const int soa_w4_r4kp = stored_soa ? 3 : env_soa_w4_r4kp;
-        const int soa_w5_rows = stored_soa ? 4 : env_soa_w5;
-        const bool soa_w5_hp = stored_soa || env_soa_w5_hp;
-        const int variant = ne11 == 4 && use_f16y && !use_di && op->src[0]->type == GGML_TYPE_Q4_0 && env_ilp == 2 ? 2 :
-                            ne11 == 4 && use_di && env_di_v2 ? 3 :
-                            ne11 == 4 && use_f16y && !use_di && op->src[0]->type == GGML_TYPE_Q4_0 && env_half_product ? 4 : 1;
-
-        // wider-weight-load probe (GGML_MV_SOA_W5_QW=2/4): uint2/uint4 q loads on the
-        // 4-row half-product body
-        static const int env_soa_w5_qw = getenv("GGML_MV_SOA_W5_QW") ? atoi(getenv("GGML_MV_SOA_W5_QW")) : 0;
-        const bool use_soa_w5_qw = use_soa_w5 && env_soa_w5_qw && env_soa_w5 == 4 && env_soa_w5_hp && !use_soa_skh;
-
-        auto pipeline = use_iq4xs_soa ? ggml_metal_library_get_pipeline_mul_mv_iq4_xs_soa(lib, ne11, iq4xs_soa_variant) :
-                        use_kq_soa ? ggml_metal_library_get_pipeline_mul_mv_kq_soa(lib, ggml_metal_soa_base_type(op->src[0]->type), ne11, kq_soa_variant) :
+        auto pipeline = use_iq4xs_soa ? ggml_metal_library_get_pipeline_mul_mv_iq4_xs_soa_y(lib, ne11, iq4xs_soa_variant, y32) :
+                        use_kq_soa ? ggml_metal_library_get_pipeline_mul_mv_kq_soa_y(lib, ggml_metal_soa_base_type(op->src[0]->type), ne11, kq_soa_variant, y32) :
                         use_soa_w3 ? ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w3_r4kp(lib) :
                         use_soa_w7 ? ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w7(lib, env_soa_w7) :
                         use_soa_w6 ? ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w6(lib, env_soa_w6, env_soa_w6_hp != 0) :
                         use_soa_skh ? ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w5_skh(lib, env_soa_skh) :
                         use_soa_w5_qw ? ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w5_qw(lib, env_soa_w5_qw) :
-                        use_soa_w5 ? ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w5(lib, soa_w5_rows, soa_w5_hp) :
-                        use_soa_w4 && soa_w4_r4kp ? ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w4_r4kp(lib, soa_w4_r4kp) :
+                        use_soa_w5 ? ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w5_y(lib, soa_w5_rows, soa_w5_hp, y32) :
+                        use_soa_w4 && soa_w4_r4kp ? ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w4_r4kp_y(lib, soa_w4_r4kp, y32) :
                         use_soa_w4 && env_soa_w4_r3 ? ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w4_r3(lib) :
                         use_soa_w4 && env_soa_w4_r2 && env_soa_w4_r2_scalar ? ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w4_r2_scalar(lib) :
                         use_soa_w4 && env_soa_w4_r2 ? ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w4_r2(lib) :
@@ -3665,10 +3800,10 @@ static int ggml_metal_op_mul_mat_impl(ggml_metal_op_t ctx, int idx, ggml_tensor 
             /*.ne10  =*/ ne10,
             /*.ne11  =*/ ne11,
             /*.ne12  =*/ ne12,
-            /*.nb10  =*/ use_f16y ? sizeof(ggml_fp16_t)           : nb10,
-            /*.nb11  =*/ use_f16y ? sizeof(ggml_fp16_t)*ne10      : nb11,
-            /*.nb12  =*/ use_f16y ? sizeof(ggml_fp16_t)*ne10*ne11 : nb12,
-            /*.nb13  =*/ use_f16y ? sizeof(ggml_fp16_t)*ne10*ne11*ne12 : nb13,
+            /*.nb10  =*/ copy_y16 ? sizeof(ggml_fp16_t)           : nb10,
+            /*.nb11  =*/ copy_y16 ? sizeof(ggml_fp16_t)*ne10      : nb11,
+            /*.nb12  =*/ copy_y16 ? sizeof(ggml_fp16_t)*ne10*ne11 : nb12,
+            /*.nb13  =*/ copy_y16 ? sizeof(ggml_fp16_t)*ne10*ne11*ne12 : nb13,
             /*.ne0   =*/ ne0,
             /*.ne1   =*/ ne1,
             /*.r2    =*/ r2,

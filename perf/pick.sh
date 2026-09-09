@@ -50,6 +50,8 @@ PICK_MANIFEST=(
   "DFLASH_FUSED_INJECT=1|BI|both|pick|drafter-graph-count.md"
   "DFLASH_ASYNC_INJECT=1|BI|both|pick|drafter-graph-count.md"
   "GGML_MM_SKINNY_BSPLIT=2|BI|both|pick|spec-verify-narrow.md section 8 (-5% per width-8 round, byte-identical; inert at width 4-5; in both picks since 2026-09-07)"
+  "GGML_MV_Y16_CVT=1|BI|both|pick|agx-backend-access.md (contiguous cast for the decode f32->f16 activation copy; +2.7% q4 / +2.3% ud e2e ABAB x2, shas identical; owner 2026-09-09: 'bring it in')"
+  "GGML_SSM_CONV_WB=1|BI|both|pick|agx-backend-access.md (conv-state carry fused into the decode ssm_conv kernel; +0.2..0.7% alone, stacked with the cast +3.3/+3.1% q4, +2.8/+2.0% ud e2e ABAB x2, shas identical; owner 2026-09-09: 'bring it in')"
   # --- UD SoA routes for the K-quant formats, byte-identical vs the block kernels; the stored file
   #     scored identical to the plain file on every KLD statistic under this env (ud-model.md step 15)
   "GGML_MV_SOA_IQ4XS=5|BI|ud|pick|ud-model.md step 6/13"

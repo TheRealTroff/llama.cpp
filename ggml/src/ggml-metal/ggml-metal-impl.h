@@ -917,6 +917,17 @@ typedef struct {
     uint64_t nb2;
 } ggml_metal_kargs_ssm_conv;
 
+// conv-state carry fused into the decode ssm_conv kernel (GGML_SSM_CONV_WB=1): the K copies of the
+// window's last n_state columns into the recurrent-state cache slots, see ggml_metal_ssm_conv_wb_cpy
+#define GGML_METAL_SSM_CONV_WB_MAX 8
+typedef struct {
+    int32_t  n_wb;                                  // slots (1 + rollback depth)
+    int32_t  n_state;                               // columns per slot (conv kernel size - 1)
+    uint64_t src_off[GGML_METAL_SSM_CONV_WB_MAX];   // byte offset of slot j's first column in src0
+    uint64_t dst_off[GGML_METAL_SSM_CONV_WB_MAX];   // byte offset of slot j in the state buffer
+    uint64_t dst_nb1;                               // state buffer: per-sequence stride
+} ggml_metal_kargs_ssm_conv_wb;
+
 typedef struct {
     int64_t  d_state;
     int64_t  d_inner;

@@ -952,7 +952,23 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_
 }
 
 ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w4_r4kp(ggml_metal_library_t lib, int variant) {
-    const char * name = variant == 5 ? "kernel_mul_mv_q4_0_soa_w4_r4kp_v5" :
+    return ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w4_r4kp_y(lib, variant, false);
+}
+
+// y32: the f32-activation twin (kernel *_y32, no per-op f32->f16 copy; perf/agx-backend-access.md) - v3 only
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w4_r4kp_y(ggml_metal_library_t lib, int variant, bool y32) {
+    if (y32 && variant == 3) {
+        const char * name = "kernel_mul_mv_q4_0_soa_w4_r4kp_v3_y32";
+        auto res = ggml_metal_library_get_pipeline(lib, name);
+        return res.pipeline ? res : ggml_metal_library_compile_pipeline(lib, name, name, nullptr);
+    }
+    // GGML_MV_SOA_W4_PROBE=ld|dq: the v3 kernel with the compute / the FMAs deleted (WRONG RESULTS,
+    // perf-only ceiling probes, perf/agx-backend-access.md)
+    static const char * env_probe = getenv("GGML_MV_SOA_W4_PROBE");
+    const char * name = (variant == 3 && env_probe && env_probe[0] == 'l') ? "kernel_mul_mv_q4_0_soa_w4_r4kp_v3_ldonly" :
+                        (variant == 3 && env_probe && env_probe[0] == 'd') ? "kernel_mul_mv_q4_0_soa_w4_r4kp_v3_dqonly" :
+                        (variant == 3 && env_probe && env_probe[0] == 'w') ? "kernel_mul_mv_q4_0_soa_w4_r4kp_v3_wtonly" :
+                        variant == 5 ? "kernel_mul_mv_q4_0_soa_w4_r4kp_v5" :
                         variant == 4 ? "kernel_mul_mv_q4_0_soa_w4_r4kp_v4" :
                         variant == 3 ? "kernel_mul_mv_q4_0_soa_w4_r4kp_v3" :
                         variant == 2 ? "kernel_mul_mv_q4_0_soa_w4_r4kp_v2" :
@@ -970,9 +986,15 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_
 ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_ud_soa(ggml_metal_library_t lib, enum ggml_type type, int width, bool kq_form) {
     GGML_ASSERT(ggml_metal_is_ud_remaining_soa_type(type) && width == 1);
     char name[96];
-    if (kq_form) {
+    // GGML_MV_UD_W1_NA=2|4|8: the width-1 ILP probe (kernel *_soa_w1_na<N>, perf/agx-backend-access.md):
+    // the kq body with N independent accumulator chains per row; f32 sum order changes, not byte-identical
+    static const int env_na = getenv("GGML_MV_UD_W1_NA") ? atoi(getenv("GGML_MV_UD_W1_NA")) : 0;
+    const enum ggml_type base = ggml_metal_soa_base_type(type);
+    if (kq_form && (env_na == 2 || env_na == 4 || (env_na == 8 && base == GGML_TYPE_Q6_K))) {
+        snprintf(name, sizeof(name), "kernel_mul_mv_%s_soa_w1_na%d", ggml_type_name(base), env_na);
+    } else if (kq_form) {
         // the kq-SoA body at NC = 1 with f32 activations (perf/ud-remaining-quants.md width-1 A/B)
-        snprintf(name, sizeof(name), "kernel_mul_mv_%s_soa_w1_v1", ggml_type_name(ggml_metal_soa_base_type(type)));
+        snprintf(name, sizeof(name), "kernel_mul_mv_%s_soa_w1_v1", ggml_type_name(base));
     } else {
         snprintf(name, sizeof(name), "kernel_mul_mv_ud_%s_w%d", ggml_type_name(type), width);
     }
@@ -988,10 +1010,15 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_repack_iq4_xs_so
 
 // UD line (perf/ud-model.md step 6): iq4_xs width-4 SoA kernels, variant = GGML_MV_SOA_IQ4XS
 ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_iq4_xs_soa(ggml_metal_library_t lib, int width, int variant) {
+    return ggml_metal_library_get_pipeline_mul_mv_iq4_xs_soa_y(lib, width, variant, false);
+}
+
+// y32: f32-activation twins exist for v5 at widths 3..5 (kernel *_y32)
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_iq4_xs_soa_y(ggml_metal_library_t lib, int width, int variant, bool y32) {
     char name[64];
     // widths 3 and 5 exist only for the two constant-table half-product forms (v2 exact, v5 half planar)
     const int v = width == 4 ? (variant < 1 ? 1 : variant > 6 ? 6 : variant) : (variant >= 5 ? 5 : 2);
-    snprintf(name, sizeof(name), "kernel_mul_mv_iq4_xs_soa_w%d_v%d", width, v);
+    snprintf(name, sizeof(name), "kernel_mul_mv_iq4_xs_soa_w%d_v%d%s", width, v, (y32 && v == 5 && width >= 3 && width <= 5) ? "_y32" : "");
     auto res = ggml_metal_library_get_pipeline(lib, name);
     return res.pipeline ? res : ggml_metal_library_compile_pipeline(lib, name, name, nullptr);
 }
@@ -1015,14 +1042,21 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_kq_soa_w1
 }
 
 ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_kq_soa(ggml_metal_library_t lib, enum ggml_type type, int width, int variant) {
+    return ggml_metal_library_get_pipeline_mul_mv_kq_soa_y(lib, type, width, variant, false);
+}
+
+// y32: f32-activation twins (kernel *_y32) exist for the remaining formats at widths 2..8 and for q4_K/q5_K v2 at 3..5
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_kq_soa_y(ggml_metal_library_t lib, enum ggml_type type, int width, int variant, bool y32) {
     char name[64];
     // the remaining UD formats (iq4_nl/q3_K/q6_K/iq3_s) exist in one form: exact scale -> half, half product
     const bool ud_rem = type == GGML_TYPE_IQ4_NL || type == GGML_TYPE_Q3_K || type == GGML_TYPE_Q6_K || type == GGML_TYPE_IQ3_S;
+    const int  v = ud_rem ? 1 : variant < 1 ? 1 : variant > 2 ? 2 : variant;
+    const bool has_y32 = ud_rem ? (width >= 2 && width <= 8) : (v == 2 && width >= 3 && width <= 5);
     // width > 5 on a remaining format = column groups of the 4-column body (kernel *_w4cg_v1)
     if (ud_rem && width > 5) {
-        snprintf(name, sizeof(name), "kernel_mul_mv_%s_soa_w4cg_v1", ggml_type_name(type));
+        snprintf(name, sizeof(name), "kernel_mul_mv_%s_soa_w4cg_v1%s", ggml_type_name(type), y32 ? "_y32" : "");
     } else {
-        snprintf(name, sizeof(name), "kernel_mul_mv_%s_soa_w%d_v%d", ggml_type_name(type), width, ud_rem ? 1 : variant < 1 ? 1 : variant > 2 ? 2 : variant);
+        snprintf(name, sizeof(name), "kernel_mul_mv_%s_soa_w%d_v%d%s", ggml_type_name(type), width, v, (y32 && has_y32) ? "_y32" : "");
     }
     auto res = ggml_metal_library_get_pipeline(lib, name);
     return res.pipeline ? res : ggml_metal_library_compile_pipeline(lib, name, name, nullptr);
@@ -1036,7 +1070,13 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_
 }
 
 ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w5(ggml_metal_library_t lib, int rows, bool hp) {
-    const char * name = rows == 4 ? (hp ? "kernel_mul_mv_q4_0_soa_w5_r4h" : "kernel_mul_mv_q4_0_soa_w5_r4") :
+    return ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w5_y(lib, rows, hp, false);
+}
+
+// y32: the f32-activation twin of the pick's r4h form (kernel *_y32)
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w5_y(ggml_metal_library_t lib, int rows, bool hp, bool y32) {
+    const char * name = (y32 && rows == 4 && hp) ? "kernel_mul_mv_q4_0_soa_w5_r4h_y32" :
+                        rows == 4 ? (hp ? "kernel_mul_mv_q4_0_soa_w5_r4h" : "kernel_mul_mv_q4_0_soa_w5_r4") :
                                     (hp ? "kernel_mul_mv_q4_0_soa_w5_r2h" : "kernel_mul_mv_q4_0_soa_w5_r2");
     auto res = ggml_metal_library_get_pipeline(lib, name);
     return res.pipeline ? res : ggml_metal_library_compile_pipeline(lib, name, name, nullptr);
