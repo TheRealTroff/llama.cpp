@@ -486,6 +486,17 @@ against our 144.9. Our curve is flat but high; theirs is steep with a cheap shel
 > the n3 round at **141.0 ms** (`slope-sweep.md`). What is missing is a *round decomposition*
 > at depth 3. See **`width4-verify.md`**.
 
+**UD line, first canonical mint (2026-09-09, TAG `prodpick-sep09-udv2`, prod `b3e6e4857`, the stored file
+`Qwen3.8-27B-UD-Q4_K_M-SOA-V2.gguf` = V1 + the four remaining formats stored, `ud-remaining-quants.md`):**
+`LINE=ud run-prod-pick.sh` = the depth-4 pick config: **22.54 / 22.70 at 300** (`73ea53bbe98f`), **23.70 /
+23.74 at 600** (`5e76afaba36c`), partial env 20.81, MTP d1 17.76, batch-1 12.76 at 300; prompt eval 64.7 s
+(8288 tokens, 128 t/s); every arm on the canonical UD shas. No Turbo4 arms (the UD line stays f16). The UD
+line's own optimum is depth 3 (`ud-model.md`: +11% over depth 4): the same binary and file measured
+**26.32 / 26.11 at 600 and 25.72 / 25.78 at 300 at depth 3** against V1's 25.35 / 25.40 and 24.74 / 24.85
+(`run-ud-soa-gguf-ab.sh`, mirrored, same night) - +3.3% / +3.8%, b1 +0.6%, byte-identical. Rule check:
+the file swap is a routing change; routes proved by the one-chunk `-v` runs and the per-op profile
+(`iq3_s_soa` / `iq4_nl_soa` / `q3_K_soa` / `q6_K_soa` rows) in `ud-remaining-quants.md`.
+
 ## Six traps that have each cost a day
 
 **1. n_predict is not comparable across harnesses.** Generation grows the KV cache, so

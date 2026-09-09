@@ -353,7 +353,12 @@ The converted file is the UD line's model: `/Users/troff/play/Qwen3.8-27B-UD-Q4_
 `run-ud-knobs.sh`, `run-ud-decomp.sh`, `run-ud-turbo4-ab.sh` and `run-ud-soa-gguf-ab.sh` (stored arm) point
 at it; `run-ud-remaining-kernels.sh`, `run-ud-w1-ab.sh` and `run-ud-q3k-prefill.sh` stay on V1 because their
 native arm needs the native tensors. V1 stays on disk until the mint is recorded (`--reverse --type` on V2
-regenerates it). Branch merged to prod; re-mint below.
+regenerates it). Branch merged to prod (`b3e6e4857`). **Mint TAG `prodpick-sep09-udv2`** (`LINE=ud run-prod-pick.sh`, the
+depth-4 pick config, prod binary 06:24): 22.54 / 22.70 at 300 (`73ea53bbe98f`), 23.70 / 23.74 at 600
+(`5e76afaba36c`), partial env 20.81, MTP d1 17.76, batch-1 12.76 at 300, prompt eval 64.7 s / 8288 tokens;
+all arms on the canonical UD shas. The depth-3 numbers for this file are the A/B above (26.32 / 26.11 at
+600). This is the UD line's first canonical row under `run-prod-pick.sh`; earlier UD numbers were taken
+with `run-ud-soa-gguf-ab.sh` at depth 3.
 
 **Still open (not gates):** (1) ~~KLD~~ done: prefill-path gate identical, decode-path pairwise 5e-6; (2) the Q6_K width-1 and the IQ4_NL/Q6_K
 width-2/6..8 losers, reached under variable depth and multi-slot only; (3) the 32K prefill pair
