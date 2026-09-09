@@ -44,6 +44,18 @@ Every 2026-09-05 kernel win came from that comparison done by hand on one kernel
 it for all of them. Steps 1-3 below are what it runs per kernel, and what you use to go deeper on
 a flagged row.
 
+Read the census row in this order (2026-09-09, `perf/agx-backend-access.md`):
+1. **`x floor@252`** first. It is time over bytes at the measured practical peak (252 GB/s, a 37 MB
+   CPY; 273 is the LPDDR5X nominal). Under 1.2 the row is flagged FLOOR: the kernel streams at
+   the DRAM limit and NO per-instruction reading applies, whatever issue/stall says (the
+   profiler cannot see the scoreboard waits - they are bits in the instructions, `Wait
+   instruction count 0`). Under 0.95 it is flagged CACHE: the perf loop re-reads a tensor that
+   fits the system cache, so the number is not a DRAM number and the byte floor is not the bound.
+2. Only then issue/stall, instructions per work unit, and the per-instruction join
+   (`<row>.join.json`: final machine IR aligned to the native stream and the profile, `mem%` =
+   executed share of loads/stores). The per-instruction `cost` column is executed x a static
+   per-opcode table; `cost2` (stall) is the measured column.
+
 ## Step 1 - Capture (headless)
 
 ggml already has capture built in. Both env vars are required:

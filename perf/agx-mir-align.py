@@ -3,11 +3,13 @@
 stream (perf/agx-disasm.py --json) and, optionally, the census per-instruction profile
 rows (<row>.instr.json from perf/kernel-census.sh).
 
-Alignment rule (verified 2026-09-09 on kernel_mul_mv_q4_0_soa_w5_r4h 446/446 and
-kernel_mul_mv_q6_K_soa_w1_v1 302/302, perf/agx-backend-access.md): the native text is a
-preamble program (constant/uniform preload), a run of 2-byte 0x0600 nops padding to the
-next 64-byte boundary, then the kernel body, whose instructions map ONE TO ONE, in order,
-to the instructions of the last dumped machine function. Nothing is inserted after the
+Alignment rule (verified 2026-09-09 on kernel_mul_mv_q4_0_soa_w5_r4h 446/446,
+kernel_mul_mv_q6_K_soa_w1_v1 302/302 and ~100 census profiles, perf/agx-backend-access.md):
+the native text is a preamble program (constant/uniform preload) ending on a 64-byte boundary
+(padded with 2-byte 0x0600 nops when short), then the kernel body, whose instructions map
+ONE TO ONE, in order, to the instructions of the last dumped machine function - so the body
+is the last len(MIR) native instructions; the 64-byte start, the absence of nops in the
+body, and (with a profile) zero executions of the preamble are checked. Nothing is inserted after the
 final pass; wait/scoreboard state is encoded inside the instructions (the 4/6/8-byte
 encodings of one opcode are compression forms).
 
@@ -43,14 +45,19 @@ def mir_instructions(path):
                         f16=(', 16' in s and ' 32' not in s)))
     return out
 
-def native_body(decode):
+def native_body(decode, n_mir):
+    """The body is the LAST n_mir native instructions: the preamble program comes first and is
+    padded with 2-byte 0x0600 nops to a 64-byte boundary when it is short (the ggml mul_mv
+    kernels), or ends on the boundary by itself (the prefill FA kernel: no nops at all)."""
     ins = decode['instructions']
-    i = next((j for j, x in enumerate(ins) if x['bytes'] == '0600'), None)
-    if i is None:
-        sys.exit('no nop run found: cannot locate the body start')
-    while i < len(ins) and ins[i]['bytes'] == '0600':
-        i += 1
-    return ins[:i], ins[i:]
+    if n_mir > len(ins):
+        sys.exit('MIR has %d instructions but the native stream only %d' % (n_mir, len(ins)))
+    pre, body = ins[:-n_mir], ins[-n_mir:]
+    if body and body[0]['offset'] % 64:
+        sys.exit('body start %#x is not 64-byte aligned: the tail rule does not hold for this binary' % body[0]['offset'])
+    if any(x['bytes'] == '0600' for x in body):
+        sys.exit('nop inside the body: alignment is off')
+    return pre, body
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -62,10 +69,7 @@ def main():
     args = ap.parse_args()
     mir = mir_instructions(args.mir)
     dec = json.load(open(args.decode))
-    pre, body = native_body(dec)
-    if len(body) != len(mir):
-        sys.exit('alignment failed: %d native body instructions vs %d MIR (preamble %d). '
-                 'Different toolchain output? Re-dump both from the same metallib.' % (len(body), len(mir), len(pre)))
+    pre, body = native_body(dec, len(mir))
     names = json.load(open(args.names)) if args.names else {}
     prof = None
     if args.profile:
@@ -87,6 +91,10 @@ def main():
         if bad:
             sys.exit('profile does not match this binary at %d offsets (first %s): the profile was '
                      'captured from a different build of this kernel' % (len(bad), hex(bad[0]['offset'])))
+        # the preamble must not execute in the main binary's profile (it runs as its own program)
+        pre_ex = [x for x in pre if x['offset'] in rows and rows[x['offset']]['executed'] > 0]
+        if pre_ex:
+            sys.exit('%d preamble instructions executed in the profile (first %s): the tail rule misplaced the body' % (len(pre_ex), hex(pre_ex[0]['offset'])))
         prof = rows
     join = []
     for m, x in zip(mir, body):

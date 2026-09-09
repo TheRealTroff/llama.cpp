@@ -21,7 +21,11 @@ import importlib.util
 _spec = importlib.util.spec_from_file_location('mb', os.path.join(HERE, 'metalprof-buckets.py'))
 mb = importlib.util.module_from_spec(_spec); _spec.loader.exec_module(mb)
 
-PEAK_GBS = 273e9
+PEAK_GBS = 273e9          # LPDDR5X nominal (M4 Pro)
+# what a pure streaming kernel achieves here: CPY f32, 37 MB, 252 GB/s (2026-09-09, perf/agx-backend-access.md).
+# x_floor is against THIS number; a kernel under 1.2x it is on the floor and no per-instruction reading
+# applies (the profiler's issue/stall split cannot see the waits: they are encoded in the instructions).
+PRACTICAL_GBS = 252e9
 BPW = dict(mb.BPW)
 BPW.update({'turbo4_0': 4.5/8})  # placeholder for quantized KV if it shows up
 
@@ -73,7 +77,8 @@ def work(r):
     ins = 1
     for x in s0: ins *= x
     if op in ('SWIGLU',): return 0.0, 2*ins*4 + n*4
-    if op in ('RMS_NORM', 'ADD', 'MUL', 'SILU', 'SCALE', 'CPY'): return 0.0, ins*4 + n*4
+    if op in ('ADD', 'MUL'): return 0.0, 2*ins*4 + n*4          # two full operands (perf case nr=[1,1,1,1]) + output
+    if op in ('RMS_NORM', 'SILU', 'SCALE', 'CPY'): return 0.0, ins*4 + n*4
     if op == 'GATED_DELTA_NET':
         hd, nh, nt = s0[0], s0[1], s0[2]
         nv = max(nh, dst[0] // hd) if dst else nh  # value heads (v_repeat x k-heads)
@@ -105,6 +110,41 @@ def plan(args):
     for i, x in enumerate(sel):
         x['id'] = f"{x['phase'][:3]}{i:02d}-{x['op'].lower()}-{x['typ']}-{'x'.join(map(str, x['s0'][:2]))}-n{x['s1'][1] if x['op'] in ('MUL_MAT','FLASH_ATTN_EXT') else x['dst'][-1]}"
     json.dump(sel, sys.stdout, indent=1)
+
+def join_row(d, rid, m):
+    """Final machine IR of the traced kernel (perf/agx-nt-opt.py), aligned to the native stream and the
+    per-instruction profile (perf/agx-mir-align.py) -> <rid>.join.json. Needs the translator metallib
+    (CENSUS_METALLIB, built by kernel-census.sh from the same source as the binary)."""
+    import subprocess, importlib.util
+    lib = os.environ.get('CENSUS_METALLIB') or os.path.join(HERE, '..', 'build-air', 'ggml.metallib')
+    kname = m.get('kernel_traced'); jf = os.path.join(d, rid + '.instr.json'); cap = os.path.join(d, rid + '.capture.log')
+    if not kname or not os.path.exists(lib) or not os.path.exists(jf):
+        m['join_error'] = 'no metallib' if not os.path.exists(lib) else 'no traced kernel'; return
+    spec = importlib.util.spec_from_file_location('ds', os.path.join(HERE, 'agx-cost-dataset.py'))
+    ds = importlib.util.module_from_spec(spec); spec.loader.exec_module(ds)
+    stem = os.path.join(d, rid + '.' + kname); join = os.path.join(d, rid + '.join.json')
+    why = None
+    for cv in ds.constant_args(kname, cap):
+        r = subprocess.run(['xcrun', 'python3', os.path.join(HERE, 'agx-nt-opt.py'), 'mir', lib, kname, '-o', stem + '.mir',
+                            '--gpubin', stem + '.gpubin', '--stderr', stem + '.nt.err'] + cv, capture_output=True, text=True)
+        if r.returncode or not os.path.exists(stem + '.mir') or not os.path.exists(stem + '.gpubin'):
+            why = 'mir: ' + (r.stderr.strip().split('\n')[-1] if r.stderr else 'no dump')[:100]; continue
+        with open(stem + '.dis.json', 'w') as f:
+            r = subprocess.run(['python3', os.path.join(HERE, 'agx-disasm.py'), '--json', stem + '.gpubin'], stdout=f, stderr=subprocess.PIPE, text=True)
+        if r.returncode:
+            why = 'decode failed'; continue
+        r = subprocess.run(['python3', os.path.join(HERE, 'agx-mir-align.py'), stem + '.mir', stem + '.dis.json', '--profile', jf, '--kernel', kname, '--json', join, '--top', '0'],
+                           capture_output=True, text=True)
+        if r.returncode:
+            why = 'align: ' + (r.stderr.strip() or r.stdout.strip()).split('\n')[-1][:100]; continue
+        why = None; break
+    if why:
+        m['join_error'] = why; return
+    ins = json.load(open(join))['instructions']
+    ex = sum(i['executed'] for i in ins) or 1
+    m['join'] = join
+    m['exec_mem_share'] = 100*sum(i['executed'] for i in ins if i.get('mem'))/ex
+    m['opcodes'] = len({i['op'] for i in ins})
 
 def metrics(args):
     row = json.load(open(args.row))
@@ -151,8 +191,13 @@ def metrics(args):
             if m.get('us_run'):
                 m['tflops'] = gf/(m['us_run']*1e-6)/1e3 if gf > 0 else None
                 # stream class: x the byte floor; mma class: x the measured 6.96 TFLOPS mul_mm roof
-                m['x_floor'] = (6.96/m['tflops']) if (m['cls'] == 'mma' and m.get('tflops')) else m['us_run']/(m['bytes']/PEAK_GBS*1e6)
+                m['x_floor'] = (6.96/m['tflops']) if (m['cls'] == 'mma' and m.get('tflops')) else m['us_run']/(m['bytes']/PRACTICAL_GBS*1e6)
+                m['x_floor_nominal'] = None if m['cls'] == 'mma' else m['us_run']/(m['bytes']/PEAK_GBS*1e6)
                 m['instr_per_mb'] = exd/(m['bytes']/1e6)
+                if m['cls'] == 'stream':
+                    # under the DRAM floor = the perf loop re-reads a cache-resident tensor: not a DRAM number
+                    m['floor_flag'] = 'CACHE' if m['x_floor'] < 0.95 else 'FLOOR' if m['x_floor'] < 1.2 else None
+            join_row(d, rid, m)
     json.dump(m, open(os.path.join(d, rid + '.metrics.json'), 'w'), indent=1)
     print(rid, 'ok' if 'exec_per_disp' in m else 'partial')
 
@@ -167,15 +212,18 @@ def report(args):
             best['instr_per_gflop'] = min(best.get('instr_per_gflop', 1e9), m['instr_per_gflop'])
             best['load14_per_gflop'] = min(best.get('load14_per_gflop', 1e9), m['load14_per_gflop'])
     lines = []
-    lines.append(f"| id | kernel | ms/rd or s/prefill | us/call | class | instr/GFLOP | 14B/GFLOP | TFLOPS | x floor (stream) / x roof (mma) | issue/stall | regs | spill | hot instr | flag |")
-    lines.append("|---|---|--:|--:|---|--:|--:|--:|--:|--:|--:|--:|--:|---|")
+    lines.append(f"| id | kernel | ms/rd or s/prefill | us/call | class | instr/GFLOP | 14B/GFLOP | TFLOPS | x floor@252 (stream) / x roof (mma) | issue/stall | regs | spill | hot instr | mem% | flag |")
+    lines.append("|---|---|--:|--:|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|---|")
     snap = []
     for m in ms:
         flag = []
         if m['cls'] == 'mma' and m.get('instr_per_gflop'):
             if m['instr_per_gflop'] > 1.3*best['instr_per_gflop']: flag.append(f"instr {m['instr_per_gflop']/best['instr_per_gflop']:.2f}x best")
             if m['load14_per_gflop'] > 2*best['load14_per_gflop']: flag.append(f"loads {m['load14_per_gflop']/best['load14_per_gflop']:.1f}x best")
-        if m['cls'] == 'stream' and m.get('x_floor') and m['x_floor'] > 1.5 and m['us_call'] > 30: flag.append(f"{m['x_floor']:.1f}x floor")
+        if m.get('floor_flag') == 'CACHE': flag.append('CACHE: under the DRAM floor, tensor is cache-resident in the perf loop')
+        elif m.get('floor_flag') == 'FLOOR': flag.append('FLOOR: on the byte floor, no per-instruction reading')
+        elif m['cls'] == 'stream' and m.get('x_floor') and m['x_floor'] > 1.5 and m['us_call'] > 30: flag.append(f"{m['x_floor']:.1f}x floor")
+        if m.get('join_error'): flag.append('no join: ' + m['join_error'][:40])
         if m.get('spill', 0) > 0: flag.append(f"spill {m['spill']}B")
         if m.get('stall', 0) > 25 and not (m['cls'] == 'stream' and m.get('x_floor') and m['x_floor'] < 1.3): flag.append(f"stall {m['stall']:.0f}%")  # a streaming kernel at its byte floor is SUPPOSED to stall
         if m['id'] in prev and prev[m['id']].get('us_run') and m.get('us_run'):
@@ -183,7 +231,7 @@ def report(args):
             if abs(dlt) > 2: flag.append(f"{dlt:+.1f}% vs prev")
         share = f"{m['total_ms']/m['rounds']:.1f} ms/rd" if m['phase'] == 'decode' else f"{m['total_ms']/1e3:.2f} s"
         f = lambda k, fmt: (fmt % m[k]) if m.get(k) is not None else '-'
-        lines.append(f"| {m['id']} | {(m.get('kernel_traced') or m.get('kernel') or 'NO PERF CASE').replace('kernel_','')[:48]} | {share} | {m['us_call']:.0f} | {m['cls']} | {f('instr_per_gflop','%.2f')} | {f('load14_per_gflop','%.3f')} | {f('tflops','%.2f')} | {f('x_floor','%.2f')} | {f('issue','%.0f')}/{f('stall','%.0f')} | {f('regs','%d')} | {f('spill','%d')} | {f('hot_instr','%d')} | {'; '.join(flag)} |")
+        lines.append(f"| {m['id']} | {(m.get('kernel_traced') or m.get('kernel') or 'NO PERF CASE').replace('kernel_','')[:48]} | {share} | {m['us_call']:.0f} | {m['cls']} | {f('instr_per_gflop','%.2f')} | {f('load14_per_gflop','%.3f')} | {f('tflops','%.2f')} | {f('x_floor','%.2f')} | {f('issue','%.0f')}/{f('stall','%.0f')} | {f('regs','%d')} | {f('spill','%d')} | {f('hot_instr','%d')} | {f('exec_mem_share','%.1f')} | {'; '.join(flag)} |")
         snap.append(m)
     out = '\n'.join(lines)
     print(out)

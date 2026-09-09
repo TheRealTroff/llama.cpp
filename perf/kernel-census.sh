@@ -16,6 +16,15 @@ PY=${PY:-/Users/troff/play/.venv-convert/bin/python3}
 STATS=/Users/troff/.claude/skills/metal-gpu-profile/references/gpuprofiler-stats.py
 HEADLESS=/Users/troff/.claude/skills/metal-gpu-profile/references/metal-profile-headless.py
 mkdir -p "$OUT"; exec > >(tee "$OUT/census.log") 2>&1
+# the translator metallib for the per-row machine-IR join (perf/agx-nt-opt.py): same source and macros
+# as the embedded library the binary runs (perf/agx-backend-access.md); rebuilt when the source is newer
+export CENSUS_METALLIB=${CENSUS_METALLIB:-$B/build-air/ggml.metallib}
+if [ ! -f "$CENSUS_METALLIB" ] || [ "$B/ggml/src/ggml-metal/ggml-metal.metal" -nt "$CENSUS_METALLIB" ]; then
+    mkdir -p "$(dirname "$CENSUS_METALLIB")"
+    (cd "$B" && xcrun metal -fmodules-cache-path=/tmp/air-module-cache -DGGML_METAL_HAS_BF16=1 -DTURBO_USE_4MAG=1 -DTURBO_USE_PAIR_LUT=1 \
+        -c ggml/src/ggml-metal/ggml-metal.metal -Iggml/src/ggml-metal -Iggml/src -o "${CENSUS_METALLIB%.metallib}.air" > "${CENSUS_METALLIB%.metallib}.log" 2>&1 \
+        && xcrun metallib "${CENSUS_METALLIB%.metallib}.air" -o "$CENSUS_METALLIB") || echo "translator metallib build FAILED (see ${CENSUS_METALLIB%.metallib}.log); rows get no join"
+fi
 echo "=== kernel census $TAG: $LOG"; echo "commit : $(cd "$B" && git rev-parse --short HEAD) on $(cd "$B" && git rev-parse --abbrev-ref HEAD)  env: $ENVS"
 python3 "$B/perf/kernel-census.py" plan "$LOG" --top "$TOP" --min-ms "$MIN_MS" > "$OUT/plan.json"
 n=$(python3 -c "import json;print(len(json.load(open('$OUT/plan.json'))))"); echo "rows: $n"
