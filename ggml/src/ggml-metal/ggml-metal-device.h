@@ -181,14 +181,18 @@ struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_q4
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w4_r3(ggml_metal_library_t lib);
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w4_r2_scalar(ggml_metal_library_t lib);
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w4_r4kp(ggml_metal_library_t lib, int variant);
+struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w4_r4kp_y(ggml_metal_library_t lib, int variant, bool y32);
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w3_r4kp(ggml_metal_library_t lib);
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_repack_iq4_xs_soa (ggml_metal_library_t lib, bool halfs);
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_iq4_xs_soa(ggml_metal_library_t lib, int width, int variant);
+struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_iq4_xs_soa_y(ggml_metal_library_t lib, int width, int variant, bool y32);
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_repack_kq_soa     (ggml_metal_library_t lib, enum ggml_type type, bool halfs);
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_kq_soa     (ggml_metal_library_t lib, enum ggml_type type, int width, int variant);
+struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_kq_soa_y(ggml_metal_library_t lib, enum ggml_type type, int width, int variant, bool y32);
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_kq_soa_w1  (ggml_metal_library_t lib, enum ggml_type type, int width);
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w7(ggml_metal_library_t lib, int rows);
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w5(ggml_metal_library_t lib, int rows, bool hp);
+struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w5_y(ggml_metal_library_t lib, int rows, bool hp, bool y32);
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w5_qw(ggml_metal_library_t lib, int qw);
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w5_skh(ggml_metal_library_t lib, int variant);
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w6(ggml_metal_library_t lib, int rows, bool hp);
