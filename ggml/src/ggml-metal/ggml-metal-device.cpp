@@ -952,7 +952,13 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_
 }
 
 ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w4_r4kp(ggml_metal_library_t lib, int variant) {
-    const char * name = variant == 5 ? "kernel_mul_mv_q4_0_soa_w4_r4kp_v5" :
+    // GGML_MV_SOA_W4_PROBE=ld|dq: the v3 kernel with the compute / the FMAs deleted (WRONG RESULTS,
+    // perf-only ceiling probes, perf/agx-backend-access.md)
+    static const char * env_probe = getenv("GGML_MV_SOA_W4_PROBE");
+    const char * name = (variant == 3 && env_probe && env_probe[0] == 'l') ? "kernel_mul_mv_q4_0_soa_w4_r4kp_v3_ldonly" :
+                        (variant == 3 && env_probe && env_probe[0] == 'd') ? "kernel_mul_mv_q4_0_soa_w4_r4kp_v3_dqonly" :
+                        (variant == 3 && env_probe && env_probe[0] == 'w') ? "kernel_mul_mv_q4_0_soa_w4_r4kp_v3_wtonly" :
+                        variant == 5 ? "kernel_mul_mv_q4_0_soa_w4_r4kp_v5" :
                         variant == 4 ? "kernel_mul_mv_q4_0_soa_w4_r4kp_v4" :
                         variant == 3 ? "kernel_mul_mv_q4_0_soa_w4_r4kp_v3" :
                         variant == 2 ? "kernel_mul_mv_q4_0_soa_w4_r4kp_v2" :

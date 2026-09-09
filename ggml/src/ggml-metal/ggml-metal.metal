@@ -7090,6 +7090,88 @@ kernel void kernel_mul_mv_q4_0_soa_w4_r4kp_v3(
     }
 }
 
+// Ceiling probes for the width-4 pick kernel (perf/agx-backend-access.md, width series): the same
+// loads with the compute deleted (_ldonly: every loaded word folded into one register, no dequant,
+// no FMA), with the FMAs deleted (_dqonly: dequant kept, weights folded instead of multiplied), or with
+// the activation loads deleted too (_wtonly: the weight stream alone).
+// WRONG RESULTS BY DESIGN - perf only. GGML_MV_SOA_W4_PROBE=ld|dq routes them.
+#define Q4_0_SOA_W4_PROBE(SUFFIX, DQ) \
+kernel void kernel_mul_mv_q4_0_soa_w4_r4kp_v3_##SUFFIX( \
+        constant ggml_metal_kargs_mul_mv_ext & args, \
+        device const char * src0, \
+        device const half * src1, \
+        device float * dst, \
+        uint3 tgpig [[threadgroup_position_in_grid]], \
+        ushort tiisg [[thread_index_in_simdgroup]], \
+        ushort sgitg [[simdgroup_index_in_threadgroup]]) { \
+    threadgroup float partial[2][16]; \
+    float acc[16] = {}; \
+    const int nblk = args.ne00/32; \
+    const int npack = 4*nblk; \
+    const int row0 = 4*(int)tgpig.x; \
+    const int pstart = (int)sgitg*(npack/2); \
+    const int pend = pstart + npack/2; \
+    device const half * sp0 = (device const half *)(src0 + (uint64_t)(row0 + 0)*args.nb01); \
+    device const half * sp1 = (device const half *)(src0 + (uint64_t)(row0 + 1)*args.nb01); \
+    device const half * sp2 = (device const half *)(src0 + (uint64_t)(row0 + 2)*args.nb01); \
+    device const half * sp3 = (device const half *)(src0 + (uint64_t)(row0 + 3)*args.nb01); \
+    device const uint * qp0 = (device const uint *)(sp0 + nblk); \
+    device const uint * qp1 = (device const uint *)(sp1 + nblk); \
+    device const uint * qp2 = (device const uint *)(sp2 + nblk); \
+    device const uint * qp3 = (device const uint *)(sp3 + nblk); \
+    using half8 = vec<half, 8>; \
+    const device half8 * xv = (const device half8 *)src1; \
+    const int K8 = args.ne00/8; \
+    uint fold = 0; half hf = 0.h; \
+    for (int p = pstart + (int)tiisg; p < pend; p += 32) { \
+        const int block = p/4; \
+        const half8 v0 = DQ < 2 ? xv[0*K8 + p] : half8(0); \
+        const half8 v1 = DQ < 2 ? xv[1*K8 + p] : half8(0); \
+        const half8 v2 = DQ < 2 ? xv[2*K8 + p] : half8(0); \
+        const half8 v3 = DQ < 2 ? xv[3*K8 + p] : half8(0); \
+        const uint q0 = qp0[p]; \
+        const uint q1 = qp1[p]; \
+        const uint q2 = qp2[p]; \
+        const uint q3 = qp3[p]; \
+        const half s0 = sp0[block]; \
+        const half s1 = sp1[block]; \
+        const half s2 = sp2[block]; \
+        const half s3 = sp3[block]; \
+        hf += v0[0] + v1[0] + v2[0] + v3[0]; \
+        if (DQ == 1) { \
+            const uint qs[4] = { q0, q1, q2, q3 }; const half ss[4] = { s0, s1, s2, s3 }; \
+            _Pragma("unroll") for (int r = 0; r < 4; ++r) { \
+                _Pragma("unroll") for (int ki = 0; ki < 8; ++ki) { \
+                    hf += (half((qs[r] >> (ki*4)) & 0xFu) - 8.h)*ss[r]; \
+                } \
+            } \
+        } else { \
+            fold ^= q0 ^ q1 ^ q2 ^ q3; hf += s0 + s1 + s2 + s3; \
+        } \
+    } \
+    acc[0] = float(hf) + float(fold & 1u); \
+    for (int i = 0; i < 16; ++i) { \
+        acc[i] = simd_sum(acc[i]); \
+    } \
+    if (tiisg == 0) { \
+        for (int i = 0; i < 16; ++i) { \
+            partial[sgitg][i] = acc[i]; \
+        } \
+    } \
+    threadgroup_barrier(mem_flags::mem_threadgroup); \
+    if (sgitg == 0 && tiisg < 16) { \
+        const int r = (int)tiisg/4; \
+        const int c = (int)tiisg%4; \
+        if (row0 + r < args.ne01) { \
+            dst[c*args.ne01 + row0 + r] = partial[0][tiisg] + partial[1][tiisg]; \
+        } \
+    } \
+}
+Q4_0_SOA_W4_PROBE(ldonly, 0)
+Q4_0_SOA_W4_PROBE(dqonly, 1)
+Q4_0_SOA_W4_PROBE(wtonly, 2)
+#undef Q4_0_SOA_W4_PROBE
+
 using q4_0_soa_float8 = vec<float, 8>;
 
 inline float q4_0_soa_pack_dot(uint q, q4_0_soa_float8 v) {
