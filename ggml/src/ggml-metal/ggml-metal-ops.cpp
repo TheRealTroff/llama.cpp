@@ -3533,13 +3533,21 @@ static int ggml_metal_op_mul_mat_impl(ggml_metal_op_t ctx, int idx, ggml_tensor 
         // the row whitelist take the ext SoA readers instead (exact header dequant)
         const bool kq_soa_shape = ne11 >= 3 && ne11 <= 5 && use_f16y && ne12 == 1 && ne13 == 1 && ne00 % 256 == 0 &&
                                   ggml_metal_mul_mat_soa_w4_rows(ne01);
+        // the remaining stored formats also take the kq body at width 2 and, as ceil(ne11/4) column groups of
+        // the 4-column body, at 6..8 (perf/ud-remaining-quants.md q6_K widths); GGML_MV_UD_KQ_ALL=0 = ext readers
+        static const int env_ud_kq_all = getenv("GGML_MV_UD_KQ_ALL") ? atoi(getenv("GGML_MV_UD_KQ_ALL")) : 1;
+        const bool ud_rem = ggml_metal_is_ud_remaining_soa_type(op->src[0]->type);
+        const bool ud_kq_shape = ud_rem && env_ud_kq_all && ne11 >= 2 && ne11 <= 8 && use_f16y && ne12 == 1 && ne13 == 1 &&
+                                 ne00 % 256 == 0 && ggml_metal_mul_mat_soa_w4_rows(ne01);
+        const int  ud_kq_nc = ne11 <= 5 ? ne11 : 4;
+        const int  ud_kq_groups = (ne11 + ud_kq_nc - 1)/ud_kq_nc;
         const bool use_iq4xs_soa = (op->src[0]->type == GGML_TYPE_IQ4_XS_SOA && kq_soa_shape) ||
                                    (env_soa_iq4xs && op->src[0]->type == GGML_TYPE_IQ4_XS && kq_soa_shape && ne01 % 4 == 0 &&
                                     ggml_metal_op_mul_mat_try_repack_iq4_xs(ctx, op, bid_src0, nb01_eff, env_soa_iq4xs >= 5));
         // q4_K / q5_K width-4 SoA route: GGML_MV_SOA_KQ=1 (exact scale/min) or 2 (half planar)
         static const int env_soa_kq = getenv("GGML_MV_SOA_KQ") ? atoi(getenv("GGML_MV_SOA_KQ")) : 0;
-        const bool use_kq_soa = ((op->src[0]->type == GGML_TYPE_Q4_K_SOA || op->src[0]->type == GGML_TYPE_Q5_K_SOA ||
-                                  ggml_metal_is_ud_remaining_soa_type(op->src[0]->type)) && kq_soa_shape) ||
+        const bool use_kq_soa = ((op->src[0]->type == GGML_TYPE_Q4_K_SOA || op->src[0]->type == GGML_TYPE_Q5_K_SOA) && kq_soa_shape) ||
+                                (ud_rem && (kq_soa_shape || ud_kq_shape)) ||
                                 (env_soa_kq && (op->src[0]->type == GGML_TYPE_Q4_K || op->src[0]->type == GGML_TYPE_Q5_K) &&
                                  kq_soa_shape && ne01 % 4 == 0 &&
                                  ggml_metal_op_mul_mat_try_repack_kq(ctx, op, bid_src0, nb01_eff, env_soa_kq >= 2));
@@ -3682,8 +3690,10 @@ static int ggml_metal_op_mul_mat_impl(ggml_metal_op_t ctx, int idx, ggml_tensor 
             const int rpt  = rows == 4 ? 4 : 2;
             ggml_metal_encoder_dispatch_threadgroups(enc, (ne01 + rpt - 1)/rpt, 1, 1, 32, 1, 1);
         } else if (use_iq4xs_soa || use_kq_soa) {
-            // widths 3/4: 4 rows x 2 simdgroups (K split); width 5: 4 rows x 1 simdgroup (full K)
-            ggml_metal_encoder_dispatch_threadgroups(enc, (ne01 + 3)/4, 1, 1, 32, ne11 == 5 ? 1 : 2, 1);
+            // widths 3/4: 4 rows x 2 simdgroups (K split); width 5: 4 rows x 1 simdgroup (full K);
+            // remaining formats: width 2 likewise, 6..8 as column groups of the 4-column body (grid y)
+            const int nc = ud_rem ? ud_kq_nc : ne11;
+            ggml_metal_encoder_dispatch_threadgroups(enc, (ne01 + 3)/4, ud_rem ? ud_kq_groups : 1, 1, 32, nc == 5 ? 1 : 2, 1);
         } else if (use_soa_w3) {
             ggml_metal_encoder_dispatch_threadgroups(enc, (ne01 + 3)/4, 1, 1, 32, 2, 1);
         } else if (use_soa_w4) {

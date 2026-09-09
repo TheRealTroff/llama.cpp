@@ -7615,7 +7615,7 @@ inline float ud_wq(uint q, uint g0, uint g1, int ki) {
     }
 }
 
-template <int F, int NC, int KS, typename TY = half>
+template <int F, int NC, int KS, typename TY = half, int CG = 0>
 void kernel_mul_mv_ud_kq_impl(
         constant ggml_metal_kargs_mul_mv_ext & args,
         device const char * src0,
@@ -7645,13 +7645,22 @@ void kernel_mul_mv_ud_kq_impl(
 
     const device half8 * xv = (const device half8 *)src1;
     const int K8 = args.ne00/8;
+    // CG = 1 (widths 6..8): the 4-column body over ceil(ne11/4) column groups (grid y); columns past
+    // ne11 re-read the last valid column and are dropped at the store. CG = 0 keeps the measured
+    // width 2..5 load form untouched (col0 = 0 folds away).
+    const int col0 = CG ? NC*(int)tgpig.y : 0;
+    const device half8 * x0 = xv + (uint64_t)(CG ? min(col0 + 0, (int)args.ne11 - 1) : 0)*K8;
+    const device half8 * x1 = xv + (uint64_t)(CG ? min(col0 + 1, (int)args.ne11 - 1) : 1)*K8;
+    const device half8 * x2 = xv + (uint64_t)(CG ? min(col0 + 2, (int)args.ne11 - 1) : 2)*K8;
+    const device half8 * x3 = xv + (uint64_t)(CG ? min(col0 + 3, (int)args.ne11 - 1) : 3)*K8;
+    const device half8 * x4 = xv + (uint64_t)(CG ? min(col0 + 4, (int)args.ne11 - 1) : 4)*K8;
 
     for (int p = pstart + (int)tiisg; p < pend; p += 32) {
-        const half8 v0 = xv[0*K8 + p];
-        const half8 v1 = NC > 1 ? xv[1*K8 + p] : half8(0);
-        const half8 v2 = NC > 2 ? xv[2*K8 + p] : half8(0);
-        const half8 v3 = NC > 3 ? xv[3*K8 + p] : half8(0);
-        const half8 v4 = NC > 4 ? xv[4*K8 + p] : half8(0);
+        const half8 v0 = CG ? x0[p] : xv[0*K8 + p];
+        const half8 v1 = NC > 1 ? (CG ? x1[p] : xv[1*K8 + p]) : half8(0);
+        const half8 v2 = NC > 2 ? (CG ? x2[p] : xv[2*K8 + p]) : half8(0);
+        const half8 v3 = NC > 3 ? (CG ? x3[p] : xv[3*K8 + p]) : half8(0);
+        const half8 v4 = NC > 4 ? (CG ? x4[p] : xv[4*K8 + p]) : half8(0);
 
         uint  q[4], g0[4], g1[4];
         float sf[4];
@@ -7711,22 +7720,23 @@ void kernel_mul_mv_ud_kq_impl(
         if (sgitg == 0 && tiisg < 4*NC) {
             const int r = (int)tiisg/NC;
             const int c = (int)tiisg%NC;
-            if (row0 + r < args.ne01) {
-                dst[c*args.ne01 + row0 + r] = partial[0][tiisg] + partial[1][tiisg];
+            if (row0 + r < args.ne01 && (!CG || col0 + c < args.ne11)) {
+                dst[(col0 + c)*args.ne01 + row0 + r] = partial[0][tiisg] + partial[1][tiisg];
             }
         }
     } else {
         if (tiisg < 4*NC) {
             const int r = (int)tiisg/NC;
             const int c = (int)tiisg%NC;
-            if (row0 + r < args.ne01) {
-                dst[c*args.ne01 + row0 + r] = acc[tiisg];
+            if (row0 + r < args.ne01 && (!CG || col0 + c < args.ne11)) {
+                dst[(col0 + c)*args.ne01 + row0 + r] = acc[tiisg];
             }
         }
     }
 }
 
-// widths 3/4: 4 rows x 2 simdgroups (K split); width 5: 4 rows x 1 simdgroup (the kq-SoA geometry)
+// widths 2/3/4: 4 rows x 2 simdgroups (K split); width 5: 4 rows x 1 simdgroup (the kq-SoA geometry);
+// widths 6..8: the width-4 body over ceil(ne11/4) column groups (grid y)
 #define UD_KQ_KERNEL(F, NAME, NC, KS) \
 kernel void kernel_mul_mv_##NAME##_soa_w##NC##_v1( \
         constant ggml_metal_kargs_mul_mv_ext & args, \
@@ -7739,6 +7749,10 @@ kernel void kernel_mul_mv_##NAME##_soa_w##NC##_v1( \
     threadgroup float partial[2][4*NC]; \
     kernel_mul_mv_ud_kq_impl<F, NC, KS>(args, src0, src1, dst, partial, tgpig, tiisg, sgitg); \
 }
+UD_KQ_KERNEL(0, iq4_nl, 2, 2)
+UD_KQ_KERNEL(1, q3_K,   2, 2)
+UD_KQ_KERNEL(2, q6_K,   2, 2)
+UD_KQ_KERNEL(3, iq3_s,  2, 2)
 UD_KQ_KERNEL(0, iq4_nl, 3, 2)
 UD_KQ_KERNEL(0, iq4_nl, 4, 2)
 UD_KQ_KERNEL(0, iq4_nl, 5, 1)
@@ -7752,6 +7766,25 @@ UD_KQ_KERNEL(3, iq3_s,  3, 2)
 UD_KQ_KERNEL(3, iq3_s,  4, 2)
 UD_KQ_KERNEL(3, iq3_s,  5, 1)
 #undef UD_KQ_KERNEL
+
+// widths 6..8: the 4-column body with column groups (CG = 1), grid y = ceil(ne11/4)
+#define UD_KQ_CG_KERNEL(F, NAME) \
+kernel void kernel_mul_mv_##NAME##_soa_w4cg_v1( \
+        constant ggml_metal_kargs_mul_mv_ext & args, \
+        device const char * src0, \
+        device const half * src1, \
+        device float * dst, \
+        uint3 tgpig [[threadgroup_position_in_grid]], \
+        ushort tiisg [[thread_index_in_simdgroup]], \
+        ushort sgitg [[simdgroup_index_in_threadgroup]]) { \
+    threadgroup float partial[2][16]; \
+    kernel_mul_mv_ud_kq_impl<F, 4, 2, half, 1>(args, src0, src1, dst, partial, tgpig, tiisg, sgitg); \
+}
+UD_KQ_CG_KERNEL(0, iq4_nl)
+UD_KQ_CG_KERNEL(1, q3_K)
+UD_KQ_CG_KERNEL(2, q6_K)
+UD_KQ_CG_KERNEL(3, iq3_s)
+#undef UD_KQ_CG_KERNEL
 
 // width 1 on the same body: NC = 1, K split across two simdgroups, f32 activations and f32 products
 // with the exact scale (the kq-SoA w1 class); GGML_MV_UD_W1=1 routes it instead of the shared body

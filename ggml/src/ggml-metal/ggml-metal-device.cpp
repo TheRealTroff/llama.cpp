@@ -1018,7 +1018,12 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_kq_soa(gg
     char name[64];
     // the remaining UD formats (iq4_nl/q3_K/q6_K/iq3_s) exist in one form: exact scale -> half, half product
     const bool ud_rem = type == GGML_TYPE_IQ4_NL || type == GGML_TYPE_Q3_K || type == GGML_TYPE_Q6_K || type == GGML_TYPE_IQ3_S;
-    snprintf(name, sizeof(name), "kernel_mul_mv_%s_soa_w%d_v%d", ggml_type_name(type), width, ud_rem ? 1 : variant < 1 ? 1 : variant > 2 ? 2 : variant);
+    // width > 5 on a remaining format = column groups of the 4-column body (kernel *_w4cg_v1)
+    if (ud_rem && width > 5) {
+        snprintf(name, sizeof(name), "kernel_mul_mv_%s_soa_w4cg_v1", ggml_type_name(type));
+    } else {
+        snprintf(name, sizeof(name), "kernel_mul_mv_%s_soa_w%d_v%d", ggml_type_name(type), width, ud_rem ? 1 : variant < 1 ? 1 : variant > 2 ? 2 : variant);
+    }
     auto res = ggml_metal_library_get_pipeline(lib, name);
     return res.pipeline ? res : ggml_metal_library_compile_pipeline(lib, name, name, nullptr);
 }

@@ -1,0 +1,229 @@
+diff --git a/ggml/src/ggml-metal/ggml-metal-device.cpp b/ggml/src/ggml-metal/ggml-metal-device.cpp
+index 21619cfed..394df6a10 100644
+--- a/ggml/src/ggml-metal/ggml-metal-device.cpp
++++ b/ggml/src/ggml-metal/ggml-metal-device.cpp
+@@ -971,8 +971,10 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_ud_soa(gg
+     GGML_ASSERT(ggml_metal_is_ud_remaining_soa_type(type) && width == 1);
+     char name[96];
+     if (kq_form) {
+-        // the kq-SoA body at NC = 1 with f32 activations (perf/ud-remaining-quants.md width-1 A/B)
+-        snprintf(name, sizeof(name), "kernel_mul_mv_%s_soa_w1_v1", ggml_type_name(ggml_metal_soa_base_type(type)));
++        // the kq-SoA body at NC = 1 with f32 activations (perf/ud-remaining-quants.md width-1 A/B);
++        // GGML_MV_UD_W1=2 selects v0 (scale per element, the 2026-09-08 form) for the A/B against v1 (per pack)
++        static const int env_v = getenv("GGML_MV_UD_W1") ? atoi(getenv("GGML_MV_UD_W1")) : 1;
++        snprintf(name, sizeof(name), "kernel_mul_mv_%s_soa_w1_v%d", ggml_type_name(ggml_metal_soa_base_type(type)), env_v == 2 ? 0 : 1);
+     } else {
+         snprintf(name, sizeof(name), "kernel_mul_mv_ud_%s_w%d", ggml_type_name(type), width);
+     }
+@@ -1018,7 +1020,12 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_kq_soa(gg
+     char name[64];
+     // the remaining UD formats (iq4_nl/q3_K/q6_K/iq3_s) exist in one form: exact scale -> half, half product
+     const bool ud_rem = type == GGML_TYPE_IQ4_NL || type == GGML_TYPE_Q3_K || type == GGML_TYPE_Q6_K || type == GGML_TYPE_IQ3_S;
+-    snprintf(name, sizeof(name), "kernel_mul_mv_%s_soa_w%d_v%d", ggml_type_name(type), width, ud_rem ? 1 : variant < 1 ? 1 : variant > 2 ? 2 : variant);
++    // width > 5 on a remaining format = column groups of the 4-column body (kernel *_w4cg_v1)
++    if (ud_rem && width > 5) {
++        snprintf(name, sizeof(name), "kernel_mul_mv_%s_soa_w4cg_v1", ggml_type_name(type));
++    } else {
++        snprintf(name, sizeof(name), "kernel_mul_mv_%s_soa_w%d_v%d", ggml_type_name(type), width, ud_rem ? 1 : variant < 1 ? 1 : variant > 2 ? 2 : variant);
++    }
+     auto res = ggml_metal_library_get_pipeline(lib, name);
+     return res.pipeline ? res : ggml_metal_library_compile_pipeline(lib, name, name, nullptr);
+ }
+diff --git a/ggml/src/ggml-metal/ggml-metal-ops.cpp b/ggml/src/ggml-metal/ggml-metal-ops.cpp
+index 800a714cd..ea02213b4 100644
+--- a/ggml/src/ggml-metal/ggml-metal-ops.cpp
++++ b/ggml/src/ggml-metal/ggml-metal-ops.cpp
+@@ -3533,13 +3533,21 @@ static int ggml_metal_op_mul_mat_impl(ggml_metal_op_t ctx, int idx, ggml_tensor
+         // the row whitelist take the ext SoA readers instead (exact header dequant)
+         const bool kq_soa_shape = ne11 >= 3 && ne11 <= 5 && use_f16y && ne12 == 1 && ne13 == 1 && ne00 % 256 == 0 &&
+                                   ggml_metal_mul_mat_soa_w4_rows(ne01);
++        // the remaining stored formats also take the kq body at width 2 and, as ceil(ne11/4) column groups of
++        // the 4-column body, at 6..8 (perf/ud-remaining-quants.md q6_K widths); GGML_MV_UD_KQ_ALL=0 = ext readers
++        static const int env_ud_kq_all = getenv("GGML_MV_UD_KQ_ALL") ? atoi(getenv("GGML_MV_UD_KQ_ALL")) : 1;
++        const bool ud_rem = ggml_metal_is_ud_remaining_soa_type(op->src[0]->type);
++        const bool ud_kq_shape = ud_rem && env_ud_kq_all && ne11 >= 2 && ne11 <= 8 && use_f16y && ne12 == 1 && ne13 == 1 &&
++                                 ne00 % 256 == 0 && ggml_metal_mul_mat_soa_w4_rows(ne01);
++        const int  ud_kq_nc = ne11 <= 5 ? ne11 : 4;
++        const int  ud_kq_groups = (ne11 + ud_kq_nc - 1)/ud_kq_nc;
+         const bool use_iq4xs_soa = (op->src[0]->type == GGML_TYPE_IQ4_XS_SOA && kq_soa_shape) ||
+                                    (env_soa_iq4xs && op->src[0]->type == GGML_TYPE_IQ4_XS && kq_soa_shape && ne01 % 4 == 0 &&
+                                     ggml_metal_op_mul_mat_try_repack_iq4_xs(ctx, op, bid_src0, nb01_eff, env_soa_iq4xs >= 5));
+         // q4_K / q5_K width-4 SoA route: GGML_MV_SOA_KQ=1 (exact scale/min) or 2 (half planar)
+         static const int env_soa_kq = getenv("GGML_MV_SOA_KQ") ? atoi(getenv("GGML_MV_SOA_KQ")) : 0;
+-        const bool use_kq_soa = ((op->src[0]->type == GGML_TYPE_Q4_K_SOA || op->src[0]->type == GGML_TYPE_Q5_K_SOA ||
+-                                  ggml_metal_is_ud_remaining_soa_type(op->src[0]->type)) && kq_soa_shape) ||
++        const bool use_kq_soa = ((op->src[0]->type == GGML_TYPE_Q4_K_SOA || op->src[0]->type == GGML_TYPE_Q5_K_SOA) && kq_soa_shape) ||
++                                (ud_rem && (kq_soa_shape || ud_kq_shape)) ||
+                                 (env_soa_kq && (op->src[0]->type == GGML_TYPE_Q4_K || op->src[0]->type == GGML_TYPE_Q5_K) &&
+                                  kq_soa_shape && ne01 % 4 == 0 &&
+                                  ggml_metal_op_mul_mat_try_repack_kq(ctx, op, bid_src0, nb01_eff, env_soa_kq >= 2));
+@@ -3682,8 +3690,10 @@ static int ggml_metal_op_mul_mat_impl(ggml_metal_op_t ctx, int idx, ggml_tensor
+             const int rpt  = rows == 4 ? 4 : 2;
+             ggml_metal_encoder_dispatch_threadgroups(enc, (ne01 + rpt - 1)/rpt, 1, 1, 32, 1, 1);
+         } else if (use_iq4xs_soa || use_kq_soa) {
+-            // widths 3/4: 4 rows x 2 simdgroups (K split); width 5: 4 rows x 1 simdgroup (full K)
+-            ggml_metal_encoder_dispatch_threadgroups(enc, (ne01 + 3)/4, 1, 1, 32, ne11 == 5 ? 1 : 2, 1);
++            // widths 3/4: 4 rows x 2 simdgroups (K split); width 5: 4 rows x 1 simdgroup (full K);
++            // remaining formats: width 2 likewise, 6..8 as column groups of the 4-column body (grid y)
++            const int nc = ud_rem ? ud_kq_nc : ne11;
++            ggml_metal_encoder_dispatch_threadgroups(enc, (ne01 + 3)/4, ud_rem ? ud_kq_groups : 1, 1, 32, nc == 5 ? 1 : 2, 1);
+         } else if (use_soa_w3) {
+             ggml_metal_encoder_dispatch_threadgroups(enc, (ne01 + 3)/4, 1, 1, 32, 2, 1);
+         } else if (use_soa_w4) {
+diff --git a/ggml/src/ggml-metal/ggml-metal.metal b/ggml/src/ggml-metal/ggml-metal.metal
+index f429fb7a1..97f6395be 100644
+--- a/ggml/src/ggml-metal/ggml-metal.metal
++++ b/ggml/src/ggml-metal/ggml-metal.metal
+@@ -7615,7 +7615,7 @@ inline float ud_wq(uint q, uint g0, uint g1, int ki) {
+     }
+ }
+ 
+-template <int F, int NC, int KS, typename TY = half>
++template <int F, int NC, int KS, typename TY = half, int W1 = 1, int CG = 0>
+ void kernel_mul_mv_ud_kq_impl(
+         constant ggml_metal_kargs_mul_mv_ext & args,
+         device const char * src0,
+@@ -7645,13 +7645,22 @@ void kernel_mul_mv_ud_kq_impl(
+ 
+     const device half8 * xv = (const device half8 *)src1;
+     const int K8 = args.ne00/8;
++    // CG = 1 (widths 6..8): the 4-column body over ceil(ne11/4) column groups (grid y); columns past
++    // ne11 re-read the last valid column and are dropped at the store. CG = 0 keeps the measured
++    // width 2..5 load form untouched (col0 = 0 folds away).
++    const int col0 = CG ? NC*(int)tgpig.y : 0;
++    const device half8 * x0 = xv + (uint64_t)(CG ? min(col0 + 0, (int)args.ne11 - 1) : 0)*K8;
++    const device half8 * x1 = xv + (uint64_t)(CG ? min(col0 + 1, (int)args.ne11 - 1) : 1)*K8;
++    const device half8 * x2 = xv + (uint64_t)(CG ? min(col0 + 2, (int)args.ne11 - 1) : 2)*K8;
++    const device half8 * x3 = xv + (uint64_t)(CG ? min(col0 + 3, (int)args.ne11 - 1) : 3)*K8;
++    const device half8 * x4 = xv + (uint64_t)(CG ? min(col0 + 4, (int)args.ne11 - 1) : 4)*K8;
+ 
+     for (int p = pstart + (int)tiisg; p < pend; p += 32) {
+-        const half8 v0 = xv[0*K8 + p];
+-        const half8 v1 = NC > 1 ? xv[1*K8 + p] : half8(0);
+-        const half8 v2 = NC > 2 ? xv[2*K8 + p] : half8(0);
+-        const half8 v3 = NC > 3 ? xv[3*K8 + p] : half8(0);
+-        const half8 v4 = NC > 4 ? xv[4*K8 + p] : half8(0);
++        const half8 v0 = CG ? x0[p] : xv[0*K8 + p];
++        const half8 v1 = NC > 1 ? (CG ? x1[p] : xv[1*K8 + p]) : half8(0);
++        const half8 v2 = NC > 2 ? (CG ? x2[p] : xv[2*K8 + p]) : half8(0);
++        const half8 v3 = NC > 3 ? (CG ? x3[p] : xv[3*K8 + p]) : half8(0);
++        const half8 v4 = NC > 4 ? (CG ? x4[p] : xv[4*K8 + p]) : half8(0);
+ 
+         uint  q[4], g0[4], g1[4];
+         float sf[4];
+@@ -7674,6 +7683,16 @@ void kernel_mul_mv_ud_kq_impl(
+         }
+ #pragma unroll
+         for (int r = 0; r < 4; ++r) {
++            if (F32P && W1 == 1) {
++                // width 1: the 8 unscaled products of the pack in f32, the scale (and the offset) once per pack
++                float dp = 0.f;
++#pragma unroll
++                for (int ki = 0; ki < 8; ++ki) {
++                    dp += float(v0[ki])*ud_wq<F>(q[r], g0[r], g1[r], ki);
++                }
++                acc[r*NC + 0] += sf[r]*(dp - MINC*sv0);
++                continue;
++            }
+ #pragma unroll
+             for (int ki = 0; ki < 8; ++ki) {
+                 if (F32P) {
+@@ -7711,22 +7730,23 @@ void kernel_mul_mv_ud_kq_impl(
+         if (sgitg == 0 && tiisg < 4*NC) {
+             const int r = (int)tiisg/NC;
+             const int c = (int)tiisg%NC;
+-            if (row0 + r < args.ne01) {
+-                dst[c*args.ne01 + row0 + r] = partial[0][tiisg] + partial[1][tiisg];
++            if (row0 + r < args.ne01 && (!CG || col0 + c < args.ne11)) {
++                dst[(col0 + c)*args.ne01 + row0 + r] = partial[0][tiisg] + partial[1][tiisg];
+             }
+         }
+     } else {
+         if (tiisg < 4*NC) {
+             const int r = (int)tiisg/NC;
+             const int c = (int)tiisg%NC;
+-            if (row0 + r < args.ne01) {
+-                dst[c*args.ne01 + row0 + r] = acc[tiisg];
++            if (row0 + r < args.ne01 && (!CG || col0 + c < args.ne11)) {
++                dst[(col0 + c)*args.ne01 + row0 + r] = acc[tiisg];
+             }
+         }
+     }
+ }
+ 
+-// widths 3/4: 4 rows x 2 simdgroups (K split); width 5: 4 rows x 1 simdgroup (the kq-SoA geometry)
++// widths 2/3/4: 4 rows x 2 simdgroups (K split); width 5: 4 rows x 1 simdgroup (the kq-SoA geometry);
++// widths 6..8: the width-4 body over ceil(ne11/4) column groups (grid y)
+ #define UD_KQ_KERNEL(F, NAME, NC, KS) \
+ kernel void kernel_mul_mv_##NAME##_soa_w##NC##_v1( \
+         constant ggml_metal_kargs_mul_mv_ext & args, \
+@@ -7739,6 +7759,10 @@ kernel void kernel_mul_mv_##NAME##_soa_w##NC##_v1( \
+     threadgroup float partial[2][4*NC]; \
+     kernel_mul_mv_ud_kq_impl<F, NC, KS>(args, src0, src1, dst, partial, tgpig, tiisg, sgitg); \
+ }
++UD_KQ_KERNEL(0, iq4_nl, 2, 2)
++UD_KQ_KERNEL(1, q3_K,   2, 2)
++UD_KQ_KERNEL(2, q6_K,   2, 2)
++UD_KQ_KERNEL(3, iq3_s,  2, 2)
+ UD_KQ_KERNEL(0, iq4_nl, 3, 2)
+ UD_KQ_KERNEL(0, iq4_nl, 4, 2)
+ UD_KQ_KERNEL(0, iq4_nl, 5, 1)
+@@ -7753,9 +7777,39 @@ UD_KQ_KERNEL(3, iq3_s,  4, 2)
+ UD_KQ_KERNEL(3, iq3_s,  5, 1)
+ #undef UD_KQ_KERNEL
+ 
++// widths 6..8: the 4-column body with column groups (CG = 1), grid y = ceil(ne11/4)
++#define UD_KQ_CG_KERNEL(F, NAME) \
++kernel void kernel_mul_mv_##NAME##_soa_w4cg_v1( \
++        constant ggml_metal_kargs_mul_mv_ext & args, \
++        device const char * src0, \
++        device const half * src1, \
++        device float * dst, \
++        uint3 tgpig [[threadgroup_position_in_grid]], \
++        ushort tiisg [[thread_index_in_simdgroup]], \
++        ushort sgitg [[simdgroup_index_in_threadgroup]]) { \
++    threadgroup float partial[2][16]; \
++    kernel_mul_mv_ud_kq_impl<F, 4, 2, half, 1, 1>(args, src0, src1, dst, partial, tgpig, tiisg, sgitg); \
++}
++UD_KQ_CG_KERNEL(0, iq4_nl)
++UD_KQ_CG_KERNEL(1, q3_K)
++UD_KQ_CG_KERNEL(2, q6_K)
++UD_KQ_CG_KERNEL(3, iq3_s)
++#undef UD_KQ_CG_KERNEL
++
+ // width 1 on the same body: NC = 1, K split across two simdgroups, f32 activations and f32 products
+ // with the exact scale (the kq-SoA w1 class); GGML_MV_UD_W1=1 routes it instead of the shared body
+ #define UD_KQ_W1_KERNEL(F, NAME) \
++kernel void kernel_mul_mv_##NAME##_soa_w1_v0( \
++        constant ggml_metal_kargs_mul_mv_ext & args, \
++        device const char * src0, \
++        device const float * src1, \
++        device float * dst, \
++        uint3 tgpig [[threadgroup_position_in_grid]], \
++        ushort tiisg [[thread_index_in_simdgroup]], \
++        ushort sgitg [[simdgroup_index_in_threadgroup]]) { \
++    threadgroup float partial[2][4]; \
++    kernel_mul_mv_ud_kq_impl<F, 1, 2, float, 0>(args, src0, src1, dst, partial, tgpig, tiisg, sgitg); \
++} \
+ kernel void kernel_mul_mv_##NAME##_soa_w1_v1( \
+         constant ggml_metal_kargs_mul_mv_ext & args, \
+         device const char * src0, \
+diff --git a/perf/run-ud-w1-ab.sh b/perf/run-ud-w1-ab.sh
+index 9fcf6f669..fec5dd698 100755
+--- a/perf/run-ud-w1-ab.sh
++++ b/perf/run-ud-w1-ab.sh
+@@ -16,12 +16,12 @@ pick_env ud
+     date -u
+     git -C "$ROOT" rev-parse HEAD
+     git -C "$ROOT" status --short
+-    printf 'MODEL=%s\nENV=%s\nORDER=%s\n' "$MODEL" "${PICK_ENV[*]}" "$ARMS"
++    printf 'MODEL=%s\nENV=%s\nORDER=%s\nGEN_W1=%s\n' "$MODEL" "${PICK_ENV[*]}" "$ARMS" "${GEN_W1:-0}"
+ } > "$OUT/manifest.txt"
+ for arm in $ARMS; do
+     case "$arm" in
+         plain-*) types='(iq4_nl|q3_K|q6_K|iq3_s)'; w1=0 ;;
+-        gen-*)   types='(iq4_nl_soa|q3_K_soa|q6_K_soa|iq3_s_soa)'; w1=0 ;;
++        gen-*)   types='(iq4_nl_soa|q3_K_soa|q6_K_soa|iq3_s_soa)'; w1=${GEN_W1:-0} ;;   # GEN_W1=2: the kq v0 form (scale per element) as the 'gen' arm
+         kq-*)    types='(iq4_nl_soa|q3_K_soa|q6_K_soa|iq3_s_soa)'; w1=1 ;;
+     esac
+     [ -e "$OUT/$arm.log" ] && { echo "refusing to overwrite $OUT/$arm.log" >&2; exit 1; }
