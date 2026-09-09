@@ -281,10 +281,37 @@ prefill-path gate", stated the same night). Logs `kld-{bf16ref,q8ref}-sep08-*-{V
 while its q8_0 row is identical; the binary is not the variable, the bf16 base file's local copy is the
 suspect; not chased.)
 
-**Open before adoption (owner's call):** (1) ~~KLD on the converted file vs the original~~ done above for the
-prefill path; the DECODE-path KLD (`PPL_EXTRA="-b 4 -ub 4"`, this tree's `run-quant-kld.sh`) is running
-2026-09-09 01:50 on three arms - plain twin under a clean env, V1 and V2 under the pick - the first time
-any decode kernel's numerics are priced; (2) the Q6_K width-1 and the IQ4_NL/Q6_K
+## The decode-path KLD: the first time any decode kernel's numerics were priced (2026-09-09 01:00-02:20)
+
+Owner: "the second is really interesting in its own right". Same 24 x 2048 wikitext chunks and the same
+bf16 as-trained reference, but the test arm runs `-b 4 -ub 4`: every position's logits come from 512
+four-token steps per chunk through the width-4 DECODE kernels (mv, GQA decode FA, GDN decode, in-place
+states) instead of one 2048-token prefill batch. Three arms, ~25 min each (`PPL_EXTRA`, this tree's
+`run-quant-kld.sh`; the plain twin regenerated with `--reverse --verify`, 339 tensors, 16.5 GB):
+
+| Arm (bf16 reference) | mean KLD | median | 99.0% | 99.9% | max | same-top | overlap (1-TV) |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| prefill path, V1 = V2, pick env (the standard gate) | 0.012537 +/- 0.00152 | 0.002635 | 0.0944 | 0.850 | 20.92 | 96.575 | 96.814 |
+| decode w4, plain twin, CLEAN env (the fork's native kernels) | 0.012689 +/- 0.00153 | 0.002649 | 0.0943 | 0.873 | 21.12 | 96.530 | 96.813 |
+| decode w4, V1, pick env (iq4_xs/q4_K/q5_K half-product SoA kernels) | 0.012852 +/- 0.00159 | 0.002639 | 0.0946 | 0.851 | 20.91 | 96.575 | 96.816 |
+| decode w4, V2, pick env (+ the four new formats' kernels) | 0.012831 +/- 0.00160 | 0.002641 | 0.0935 | 0.847 | 20.89 | 96.546 | 96.817 |
+
+Reading: the decode path costs +0.00015 (native, clean) to +0.00032 (the pick) of mean KLD on top of the
+weights' 0.0125 - about 1/40 of the quantization cost, inside the printed error bar, with the tails, the
+median and the overlap unmoved to three digits. Same-top moves by 0.03-0.045 pt = 7-11 of 24,552 positions,
+the size of top-2 ties. V2 vs V1 on the decode path: mean -0.00002, 99.9% -0.004, same-top -0.03 pt: the
+four new formats' kernels are quality-free at this test's resolution, and so, for the first time on record,
+are the pick's own half-product width-4 kernels. What this does NOT yet say: these are all differences of
+two noisy numbers against bf16; the kernel cost itself is the PAIRWISE KLD against the byte-identical twin
+(the README's rule for a numerics form), which needs a decode-path base of V1 - queued next. Logs
+`kld-bf16ref-sep08-*-{plain-twin-clean,SOA-V1-ud-f16pick,SOA-V2cand-ud-f16pick}-dec4.log`. Routing
+caveat: `run-quant-kld.sh` runs perplexity at default verbosity, where the pipeline-compile lines
+(`GGML_LOG_DEBUG`) are dropped, so these three logs do not name their kernels; batch_size=4 is in each log
+and the routes at ne11 = 4 are deterministic in the shapes and the env - the proof runs (`-v`, one plain
+chunk per arm) are part of the pairwise chain.
+
+**Open before adoption (owner's call):** (1) ~~KLD on the converted file vs the original~~ done for both
+paths above; the pairwise decode-path KLD is queued; (2) the Q6_K width-1 and the IQ4_NL/Q6_K
 width-2/6..8 losers, reached under variable depth and multi-slot only; (3) the 32K prefill pair
 that the disk killed this morning, now unblocked; (4) the file name and manifest entry for the
 pick if it goes in (a file swap is a routing change: prove routes, re-mint).

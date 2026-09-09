@@ -38,6 +38,7 @@ LABEL=${LABEL:-}          # suffix on the per-test log name, for re-scoring one 
 # the width-4 DECODE kernels (mv, GQA decode FA, GDN decode) against the same reference logits
 # (README rule "the KLD gate is a prefill-path gate", 2026-09-09). ~500x the decode calls per chunk.
 PPL_EXTRA=${PPL_EXTRA:-}
+REF_EXTRA=${REF_EXTRA:-}   # same, for the reference arm (a decode-path base for a pairwise decode-vs-decode score)
 OUT=/Users/troff/play/kvquant-experiments/results
 TAG=${TAG:-kld-$(date +%m%d-%H%M)}
 mkdir -p "$OUT" "$SCRATCH"
@@ -68,7 +69,7 @@ if [ ! -s "$BASE" ]; then
   [ "$FREE" -lt "$NEED" ] && { echo "ABORT: not enough space for the base logits"; exit 1; }
   echo "--- generating reference logits from $(basename "$REF") ---"
   "$BIN/llama-perplexity" -m "$REF" -f "$W" -c "$CTX" --chunks "$CHUNKS" -fa on \
-    -ctk "$REF_KV" -ctv "$REF_KV" --kl-divergence-base "$BASE" >"$OUT/$TAG-ref.log" 2>&1 \
+    -ctk "$REF_KV" -ctv "$REF_KV" --kl-divergence-base "$BASE" ${REF_EXTRA:-} >"$OUT/$TAG-ref.log" 2>&1 \
     || { echo "FAILED, see $OUT/$TAG-ref.log"; tail -5 "$OUT/$TAG-ref.log"; exit 1; }
   grep -E 'Final estimate' "$OUT/$TAG-ref.log" | sed 's/^/  ref /'
 fi
