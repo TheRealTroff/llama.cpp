@@ -1,0 +1,801 @@
+{
+ "note": "xcode_class: MILP over Xcode static class counts (15 kernel binaries, 4 tie-break trials; ambiguous = differs between trials). name: by hand from operand structure and FP32-count checks (perf/agx-backend-access.md). The MILP is time-limited and under-determined at 15 binaries: 36 opcodes are pinned, the rest ambiguous; every census run adds binaries - re-solve (perf/agx-backend-access.md, task 3).",
+ "opcodes": {
+  "423": {
+   "xcode_class": "other",
+   "name": null,
+   "static_count": 46
+  },
+  "424": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 64
+  },
+  "425": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 19
+  },
+  "426": {
+   "xcode_class": "other",
+   "name": null,
+   "static_count": 62
+  },
+  "435": {
+   "xcode_class": "other",
+   "name": null,
+   "static_count": 80
+  },
+  "437": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 2
+  },
+  "447": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 25
+  },
+  "459": {
+   "xcode_class": "ambiguous",
+   "name": "jmp",
+   "static_count": 34
+  },
+  "463": {
+   "xcode_class": "ambiguous",
+   "name": "jmp",
+   "static_count": 50
+  },
+  "554": {
+   "xcode_class": "other",
+   "name": "mov.imm32",
+   "static_count": 393
+  },
+  "555": {
+   "xcode_class": "ambiguous",
+   "name": "mov.imm16",
+   "static_count": 56
+  },
+  "575": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 6
+  },
+  "577": {
+   "xcode_class": "other",
+   "name": null,
+   "static_count": 81
+  },
+  "578": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 30
+  },
+  "579": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 4
+  },
+  "582": {
+   "xcode_class": "other",
+   "name": null,
+   "static_count": 69
+  },
+  "583": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 4
+  },
+  "586": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 75
+  },
+  "590": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 18
+  },
+  "684": {
+   "xcode_class": "ambiguous",
+   "name": "stop",
+   "static_count": 15
+  },
+  "862": {
+   "xcode_class": "FP16",
+   "name": "mul.f16",
+   "static_count": 96
+  },
+  "864": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 1
+  },
+  "998": {
+   "xcode_class": "FP32",
+   "name": "mul.f32",
+   "static_count": 51,
+   "solver_said": "INT32"
+  },
+  "999": {
+   "xcode_class": "FP32",
+   "name": null,
+   "static_count": 70
+  },
+  "1002": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 16
+  },
+  "1003": {
+   "xcode_class": "FP32",
+   "name": null,
+   "static_count": 8
+  },
+  "1004": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 1
+  },
+  "1006": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 1
+  },
+  "1016": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 16
+  },
+  "1272": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 14
+  },
+  "2190": {
+   "xcode_class": "FP32",
+   "name": "fma.f32",
+   "static_count": 44
+  },
+  "2206": {
+   "xcode_class": "FP32",
+   "name": null,
+   "static_count": 32
+  },
+  "2210": {
+   "xcode_class": "FP32",
+   "name": "fma.f16xf16->f32",
+   "static_count": 384
+  },
+  "2254": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 60
+  },
+  "2258": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 4
+  },
+  "2846": {
+   "xcode_class": "other",
+   "name": null,
+   "static_count": 128
+  },
+  "2862": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 416
+  },
+  "3290": {
+   "xcode_class": "FP32",
+   "name": "add.f32",
+   "static_count": 114
+  },
+  "3291": {
+   "xcode_class": "FP32",
+   "name": "add.f32",
+   "static_count": 7
+  },
+  "3294": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 3
+  },
+  "3298": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 2
+  },
+  "3299": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 1
+  },
+  "3306": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 32
+  },
+  "3658": {
+   "xcode_class": "FP32",
+   "name": null,
+   "static_count": 3
+  },
+  "3850": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 1
+  },
+  "9320": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 36
+  },
+  "9700": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 9
+  },
+  "9724": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 2
+  },
+  "10267": {
+   "xcode_class": "ambiguous",
+   "name": "add.i64",
+   "static_count": 313
+  },
+  "10268": {
+   "xcode_class": "ambiguous",
+   "name": "add.i64",
+   "static_count": 18
+  },
+  "10272": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 2
+  },
+  "10274": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 8
+  },
+  "10279": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 197
+  },
+  "10280": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 49
+  },
+  "10282": {
+   "xcode_class": "INT32",
+   "name": "iadd/uniform",
+   "static_count": 337
+  },
+  "10283": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 39
+  },
+  "10284": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 4
+  },
+  "10285": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 172
+  },
+  "10286": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 7
+  },
+  "10289": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 119
+  },
+  "10295": {
+   "xcode_class": "INT16",
+   "name": null,
+   "static_count": 180
+  },
+  "10369": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 25
+  },
+  "10370": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 37
+  },
+  "10372": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 17
+  },
+  "10790": {
+   "xcode_class": "other",
+   "name": null,
+   "static_count": 75
+  },
+  "10793": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 109
+  },
+  "10795": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 2
+  },
+  "10802": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 11
+  },
+  "10825": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 35
+  },
+  "10826": {
+   "xcode_class": "other",
+   "name": "uniform.alu32",
+   "static_count": 156
+  },
+  "10828": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 3
+  },
+  "10829": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 18
+  },
+  "10831": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 3
+  },
+  "10834": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 1
+  },
+  "11179": {
+   "xcode_class": "ambiguous",
+   "name": "shift/mask",
+   "static_count": 95
+  },
+  "11180": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 22
+  },
+  "11182": {
+   "xcode_class": "ambiguous",
+   "name": "shift/mask",
+   "static_count": 4
+  },
+  "11183": {
+   "xcode_class": "other",
+   "name": null,
+   "static_count": 64
+  },
+  "11309": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 2
+  },
+  "11322": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 3
+  },
+  "11362": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 5
+  },
+  "11363": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 1
+  },
+  "11364": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 70
+  },
+  "11365": {
+   "xcode_class": "INT32",
+   "name": null,
+   "static_count": 25
+  },
+  "11375": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 2
+  },
+  "11379": {
+   "xcode_class": "INT32",
+   "name": null,
+   "static_count": 16
+  },
+  "11385": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 12
+  },
+  "11392": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 2
+  },
+  "11395": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 2
+  },
+  "11432": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 2
+  },
+  "11437": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 2
+  },
+  "11452": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 3
+  },
+  "11457": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 1
+  },
+  "11461": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 2
+  },
+  "11462": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 160
+  },
+  "11468": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 16
+  },
+  "11482": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 19
+  },
+  "11486": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 6
+  },
+  "11487": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 28
+  },
+  "11490": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 1
+  },
+  "11664": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 15
+  },
+  "11665": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 5
+  },
+  "11666": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 4
+  },
+  "11667": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 28
+  },
+  "11668": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 13
+  },
+  "11670": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 3
+  },
+  "11680": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 5
+  },
+  "11839": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 4
+  },
+  "11840": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 4
+  },
+  "11842": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 6
+  },
+  "11843": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 4
+  },
+  "12328": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 228
+  },
+  "12364": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 7
+  },
+  "12376": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 36
+  },
+  "12400": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 14
+  },
+  "12646": {
+   "xcode_class": "Device load",
+   "name": "ld.s8/s16",
+   "static_count": 41
+  },
+  "12649": {
+   "xcode_class": "Device load",
+   "name": null,
+   "static_count": 34
+  },
+  "12652": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 3
+  },
+  "12655": {
+   "xcode_class": "Device load",
+   "name": null,
+   "static_count": 172
+  },
+  "12658": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 1
+  },
+  "12661": {
+   "xcode_class": "Device load",
+   "name": null,
+   "static_count": 19
+  },
+  "12673": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 4
+  },
+  "12682": {
+   "xcode_class": "Device load",
+   "name": "ld.s32",
+   "static_count": 31
+  },
+  "12688": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 2
+  },
+  "12709": {
+   "xcode_class": "ambiguous",
+   "name": "ld.v8s16",
+   "static_count": 24
+  },
+  "12715": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 12
+  },
+  "13240": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 112
+  },
+  "13252": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 4
+  },
+  "13288": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 14
+  },
+  "13300": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 20
+  },
+  "13324": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 36
+  },
+  "13559": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 2
+  },
+  "13575": {
+   "xcode_class": "other",
+   "name": null,
+   "static_count": 6
+  },
+  "13588": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 1
+  },
+  "14056": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 22
+  },
+  "14059": {
+   "xcode_class": "ambiguous",
+   "name": "get_sr",
+   "static_count": 62
+  },
+  "14060": {
+   "xcode_class": "ambiguous",
+   "name": "get_sr",
+   "static_count": 40
+  },
+  "14310": {
+   "xcode_class": "other",
+   "name": null,
+   "static_count": 63
+  },
+  "14389": {
+   "xcode_class": "INT16",
+   "name": null,
+   "static_count": 2
+  },
+  "14391": {
+   "xcode_class": "other",
+   "name": null,
+   "static_count": 73
+  },
+  "14392": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 4
+  },
+  "14394": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 14
+  },
+  "14400": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 49
+  },
+  "14423": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 1
+  },
+  "16805": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 3
+  },
+  "16817": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 13
+  },
+  "16842": {
+   "xcode_class": "other",
+   "name": null,
+   "static_count": 56
+  },
+  "16858": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 4
+  },
+  "17013": {
+   "xcode_class": "ambiguous",
+   "name": "bfe",
+   "static_count": 23
+  },
+  "17014": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 16
+  },
+  "17016": {
+   "xcode_class": "other",
+   "name": "bfe",
+   "static_count": 136
+  },
+  "17017": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 4
+  },
+  "17040": {
+   "xcode_class": "other",
+   "name": null,
+   "static_count": 36
+  },
+  "17043": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 68
+  },
+  "17229": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 5
+  },
+  "17244": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 98
+  },
+  "17256": {
+   "xcode_class": "Device store",
+   "name": null,
+   "static_count": 7
+  },
+  "17259": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 2
+  },
+  "17771": {
+   "xcode_class": "ambiguous",
+   "name": null,
+   "static_count": 11
+  }
+ }
+}

@@ -266,6 +266,19 @@ Trap logged: `env $E cmd` in zsh passes the whole string as one assignment (memo
 `zsh-env-does-not-word-split`); the first probe timings routed to the ext kernel at 370 us
 until the assignments were written out.
 
+## Opcode naming, first pass (2026-09-09 evening, `perf/agx-opcode-names.json`)
+
+An integer solve assigning each opcode to one of Xcode's static classes (FP16/FP32/INT16/INT32/
+load/store/branch/other) so that every joined binary's class counts come out: 15 distinct kernel
+binaries with matching stats, 159 opcodes. One solve reproduces the counts with a residual of 3,
+but the assignment is not unique: across four tie-broken solves (time-limited, 90 s each) only
+**36 opcodes are pinned** (46% of static instructions): the loads (12646/12649/12655/12661/12682),
+the store 17256, the f16 multiply 862 (FP16), the FMA family 2210/2190/2206 and the f32 ops
+3290/999/1003/3658 (FP32 - Xcode files the mixed f16-operand FMA 2210 under FP32), 10282/11365/
+11379 (INT32). Everything else is marked ambiguous; hand names from operand structure and the exact
+FP32-count checks are in the file and override the solver where they conflict (998). More binaries
+pin more: every census run adds joins, so re-run the solve after the next census.
+
 ## Next
 
 1. Price the activation copy on the server profile and, if it holds, an f32-y form of the width-4/5 kernels (branch exp/q6k-w1-ilp has the probes).
@@ -276,5 +289,4 @@ until the assignments were written out.
 2. Add "x byte floor" to the join table output so a kernel on the floor is flagged before any
    per-instruction reading (census already computes it; the profile skill's recipes did not
    check it).
-3. Name the opcode numbers (float side done via Xcode's FP32 counts; integer side needs a
-   solve across kernels) - `perf/agx-opcode-names.json`.
+3. Re-solve the opcode classes after the next census (more binaries); `perf/agx-opcode-names.json`.
