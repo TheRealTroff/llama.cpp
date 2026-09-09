@@ -8,12 +8,17 @@ extern "C" {
 
 // Stored SoA storage types (perf/ud-model.md step 12): the UD line's iq4_xs/q4_K/q5_K rows in the
 // Metal SoA layout with the original block header appended. Q4_0_SOA is the older Q4_0 contract.
+static inline bool ggml_metal_is_ud_remaining_soa_type(enum ggml_type t) {
+    return t == GGML_TYPE_IQ4_NL_SOA || t == GGML_TYPE_Q3_K_SOA || t == GGML_TYPE_Q6_K_SOA || t == GGML_TYPE_IQ3_S_SOA;
+}
+
 static inline bool ggml_metal_is_kq_soa_type(enum ggml_type t) {
-    return t == GGML_TYPE_IQ4_XS_SOA || t == GGML_TYPE_Q4_K_SOA || t == GGML_TYPE_Q5_K_SOA;
+    return t == GGML_TYPE_IQ4_XS_SOA || t == GGML_TYPE_Q4_K_SOA || t == GGML_TYPE_Q5_K_SOA ||
+           t == GGML_TYPE_IQ4_NL_SOA || t == GGML_TYPE_Q3_K_SOA || t == GGML_TYPE_Q6_K_SOA || t == GGML_TYPE_IQ3_S_SOA;
 }
 
 static inline bool ggml_metal_is_soa_type(enum ggml_type t) {
-    return t == GGML_TYPE_Q4_0_SOA || ggml_metal_is_kq_soa_type(t);
+    return t == GGML_TYPE_Q4_0_SOA || t == GGML_TYPE_IQ4_NL_SOA || ggml_metal_is_kq_soa_type(t);
 }
 
 // the quantization a stored SoA type carries (kernel base names, tile instantiations)
@@ -23,6 +28,10 @@ static inline enum ggml_type ggml_metal_soa_base_type(enum ggml_type t) {
         case GGML_TYPE_IQ4_XS_SOA: return GGML_TYPE_IQ4_XS;
         case GGML_TYPE_Q4_K_SOA:   return GGML_TYPE_Q4_K;
         case GGML_TYPE_Q5_K_SOA:   return GGML_TYPE_Q5_K;
+        case GGML_TYPE_IQ4_NL_SOA: return GGML_TYPE_IQ4_NL;
+        case GGML_TYPE_Q3_K_SOA:   return GGML_TYPE_Q3_K;
+        case GGML_TYPE_Q6_K_SOA:   return GGML_TYPE_Q6_K;
+        case GGML_TYPE_IQ3_S_SOA:  return GGML_TYPE_IQ3_S;
         default:                   return t;
     }
 }
@@ -79,6 +88,7 @@ struct ggml_metal_pipeline_with_params {
     bool cnt;
 };
 
+
 int ggml_metal_pipeline_max_theads_per_threadgroup(struct ggml_metal_pipeline_with_params pipeline);
 
 //
@@ -120,6 +130,8 @@ void ggml_metal_encoder_end_encoding(ggml_metal_encoder_t encoder);
 //
 
 typedef struct ggml_metal_library * ggml_metal_library_t;
+
+struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_ud_soa(ggml_metal_library_t lib, enum ggml_type type, int width, bool kq_form);
 
 ggml_metal_library_t ggml_metal_library_init            (ggml_metal_device_t dev);
 ggml_metal_library_t ggml_metal_library_init_from_source(ggml_metal_device_t dev, const char * source, bool verbose);

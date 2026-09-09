@@ -1451,3 +1451,11 @@ changes the pick's text on the stored file, from the acch-dropped lineage back t
 28.89 at 600 (`baf08e7fa7ed`, prompt 60.4 s). Both adopted 2026-09-07: the stored-file routing fix (owner: acch
 "goes in") and TR=9 (owner: "the byte-identical one is the one I want"). New canonical lineages on the stored
 files from here; the 95eb7e65977e / 6678b0507d41 / 12c3dc6bb2dd shas gate the deleted plain file only.
+
+## Step 17: the four remaining formats stored - V2 is the UD file (2026-09-09)
+
+`ud-remaining-quants.md`: IQ4_NL/Q3_K/Q6_K/IQ3_S as stored SoA rows on the kq-SoA kernel form (widths 1..5)
+with ext SoA readers at 2/6..8. Converted file e2e +3.3% at 600 / +3.8% at 300 (depth 3), b1 +0.6%, every
+arm byte-identical to V1's text (canonical shas); prefill-path KLD identical to V1 to every digit; the
+first decode-path KLD ever (pairwise vs a V1 decode base) 5e-6 mean. Owner: "pick it". The UD line's file
+is `Qwen3.8-27B-UD-Q4_K_M-SOA-V2.gguf` from here; mint in the README pick block.

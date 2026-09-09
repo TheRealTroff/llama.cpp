@@ -80,7 +80,7 @@ PICK_MANIFEST=(
 # for both lines by default; the UD spend is the context it buys.
 
 PICK_MODEL_Q4=/Users/troff/play/Qwen3.8-27B-uniform-Q4_0-SOA-V1.gguf
-PICK_MODEL_UD=/Users/troff/play/Qwen3.8-27B-UD-Q4_K_M-SOA-V1.gguf
+PICK_MODEL_UD=/Users/troff/play/Qwen3.8-27B-UD-Q4_K_M-SOA-V2.gguf
 PICK_DRAFTER=/Users/troff/play/Qwen3.8-27B-DFlash2-pureQ4_0-SOA-V1.gguf
 PICK_DEPTH=3            # DFlash depth of both lines (verify width 4, Turbo4's best width)
 PICK_CTX_TURBO4=102400

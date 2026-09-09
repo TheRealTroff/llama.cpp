@@ -12,7 +12,7 @@ fi
 B=${B:-/Users/troff/play/llama.cpp-ud-soa-gguf}
 BIN=$B/build/bin
 M=${M:-/Users/troff/play/Qwen3.8-27B-UD-Q4_K_M.gguf}  # plain twin, deleted 2026-09-06 - --reverse regenerates it for a plain-vs-stored A/B
-MS=${MS:-/Users/troff/play/Qwen3.8-27B-UD-Q4_K_M-SOA-V1.gguf}
+MS=${MS:-/Users/troff/play/Qwen3.8-27B-UD-Q4_K_M-SOA-V2.gguf}
 MD=${MD:-/Users/troff/play/Qwen3.8-27B-DFlash2-pureQ4_0-SOA-V1.gguf}
 PORT=${PORT:-8093}
 OUT=/Users/troff/play/kvquant-experiments/results

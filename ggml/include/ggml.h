@@ -449,7 +449,12 @@ extern "C" {
         GGML_TYPE_IQ4_XS_SOA = 47,
         GGML_TYPE_Q4_K_SOA   = 48,
         GGML_TYPE_Q5_K_SOA   = 49,
-        GGML_TYPE_COUNT   = 50,
+        // Exact-scale row planes for the remaining UD formats; perf/ud-remaining-quants.md.
+        GGML_TYPE_IQ4_NL_SOA = 50, // 32 values: half scales + nibble-planar packs, 18 B/block
+        GGML_TYPE_Q3_K_SOA   = 51, // 256 values: low2/high1/scales/d/pad planes, 116 B/block
+        GGML_TYPE_Q6_K_SOA   = 52, // 256 values: low4/high2/scales/d/pad planes, 212 B/block
+        GGML_TYPE_IQ3_S_SOA  = 53, // 256 values: index/sign packs + scales/d/pad, 136 B/block
+        GGML_TYPE_COUNT   = 54,
     };
 
     // precision

@@ -19,6 +19,8 @@
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
 #include "ggml-cpp.h"
+#include "gguf.h"
+#include "../ggml/src/ggml-quants.h"
 
 #include <algorithm>
 #include <atomic>
@@ -100,7 +102,9 @@ static void init_tensor_uniform(ggml_tensor * tensor, float min = -1.0f, float m
 
         std::vector<uint8_t> dataq(ggml_row_size(tensor->type, nels));
         if (tensor->type == GGML_TYPE_Q4_0_SOA || tensor->type == GGML_TYPE_IQ4_XS_SOA ||
-            tensor->type == GGML_TYPE_Q4_K_SOA || tensor->type == GGML_TYPE_Q5_K_SOA) {
+            tensor->type == GGML_TYPE_Q4_K_SOA || tensor->type == GGML_TYPE_Q5_K_SOA ||
+            tensor->type == GGML_TYPE_IQ4_NL_SOA || tensor->type == GGML_TYPE_Q3_K_SOA ||
+            tensor->type == GGML_TYPE_Q6_K_SOA || tensor->type == GGML_TYPE_IQ3_S_SOA) {
             // SoA scale/pack streams restart on every logical row and therefore
             // cannot be quantized as independent blocks.
             ggml_quantize_chunk(tensor->type, data.data(), dataq.data(),
@@ -4642,6 +4646,115 @@ struct test_mul_mat : public test_case {
         return ggml_op_name(GGML_OP_MUL_MAT);
     }
 };
+
+// Real UD weight fixtures, shared by the plain and stored-layout timing arms.
+struct test_mul_mat_ud_remaining : public test_mul_mat {
+    const ggml_type plain;
+    const std::string tensor_name;
+
+    test_mul_mat_ud_remaining(ggml_type plain, ggml_type stored, bool soa, int64_t m, int64_t n, int64_t k, const char * name)
+        : test_mul_mat(soa ? stored : plain, GGML_TYPE_F32, m, n, k, {1, 1}, {1, 1}), plain(plain), tensor_name(name) {}
+
+    std::string vars() override { return test_mul_mat::vars() + ",ud_remaining=1"; }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        const char * path = getenv("GGML_TEST_UD_GGUF");
+        if (!path) {
+            test_mul_mat::initialize_tensors(ctx);
+            return;
+        }
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t; t = ggml_get_next_tensor(ctx, t)) {
+            if (strcmp(t->name, "a") != 0) {
+                // Identical activations across fresh A/B processes.
+                std::vector<float> values(ggml_nelements(t));
+                uint32_t state = 123456789;
+                for (float & v : values) {
+                    state ^= state << 13; state ^= state >> 17; state ^= state << 5;
+                    v = float(int32_t(state & 65535) - 32768)/32768.f;
+                }
+                GGML_ASSERT(t->type == GGML_TYPE_F32);
+                ggml_backend_tensor_set(t, values.data(), 0, values.size()*sizeof(float));
+                continue;
+            }
+            static std::unordered_map<std::string, std::vector<uint8_t>> cache;
+            const std::string key = std::string(path) + ":" + tensor_name + ":" + ggml_type_name(type_a) + ":" + std::to_string(m);
+            auto & data = cache[key];
+            if (data.empty()) {
+                ggml_context * meta = nullptr;
+                gguf_context * file = gguf_init_from_file(path, {true, &meta});
+                GGML_ASSERT(file && meta);
+                const int64_t id = gguf_find_tensor(file, tensor_name.c_str());
+                GGML_ASSERT(id >= 0 && gguf_get_tensor_type(file, id) == plain);
+                const ggml_tensor * source = ggml_get_tensor(meta, tensor_name.c_str());
+                GGML_ASSERT(source && source->ne[0] == k && source->ne[1] >= m);
+                const size_t row_plain = ggml_row_size(plain, k), row_stored = ggml_row_size(type_a, k);
+                std::vector<uint8_t> original(row_plain*m);
+                std::ifstream input(path, std::ios::binary);
+                input.seekg(gguf_get_data_offset(file) + gguf_get_tensor_offset(file, id));
+                input.read(reinterpret_cast<char *>(original.data()), original.size());
+                GGML_ASSERT(input.good());
+                gguf_free(file);
+                ggml_free(meta);
+                data.resize(row_stored*m);
+                if (type_a == plain) {
+                    data = std::move(original);
+                } else {
+                    std::vector<uint8_t> restored(row_plain);
+                    for (int64_t r = 0; r < m; ++r) {
+                        const uint8_t * src = original.data() + r*row_plain;
+                        uint8_t * dst = data.data() + r*row_stored;
+#define UD_FIXTURE_PACK(TYPE, NAME, BLOCK, QK) \
+                        case TYPE: \
+                            for (int64_t b = 0; b < k/QK; ++b) { \
+                                ggml_soa_pack_##NAME(reinterpret_cast<const BLOCK *>(src) + b, dst, k, b); \
+                                ggml_soa_unpack_##NAME(dst, k, b, reinterpret_cast<BLOCK *>(restored.data()) + b); \
+                            } \
+                            break;
+                        switch (plain) {
+                            UD_FIXTURE_PACK(GGML_TYPE_IQ4_NL, iq4_nl, block_iq4_nl, 32)
+                            UD_FIXTURE_PACK(GGML_TYPE_Q3_K, q3_K, block_q3_K, 256)
+                            UD_FIXTURE_PACK(GGML_TYPE_Q6_K, q6_K, block_q6_K, 256)
+                            UD_FIXTURE_PACK(GGML_TYPE_IQ3_S, iq3_s, block_iq3_s, 256)
+                            default: GGML_ABORT("unsupported UD fixture type");
+                        }
+#undef UD_FIXTURE_PACK
+                        GGML_ASSERT(memcmp(src, restored.data(), row_plain) == 0);
+                    }
+                    fprintf(stderr, "UD fixture: %s, %lld rows, lossless round trip OK\n", tensor_name.c_str(), (long long)m);
+                }
+            }
+            GGML_ASSERT(data.size() == ggml_nbytes(t));
+            ggml_backend_tensor_set(t, data.data(), 0, data.size());
+        }
+    }
+};
+
+static void add_ud_remaining_cases(std::vector<std::unique_ptr<test_case>> & cases, bool perf) {
+    struct shape { ggml_type plain, stored; int64_t m, k; const char * name; };
+    // Tensor names and dimensions from the production UD GGUF, including its nextn projections.
+    const shape shapes[] = {
+        {GGML_TYPE_IQ4_NL, GGML_TYPE_IQ4_NL_SOA, 5120, 17408, "blk.1.ffn_down.weight"},
+        {GGML_TYPE_IQ4_NL, GGML_TYPE_IQ4_NL_SOA, 17408, 5120, "blk.27.ffn_gate.weight"},
+        {GGML_TYPE_IQ4_NL, GGML_TYPE_IQ4_NL_SOA, 10240, 5120, "blk.21.attn_qkv.weight"},
+        {GGML_TYPE_Q3_K, GGML_TYPE_Q3_K_SOA, 17408, 5120, "blk.0.ffn_up.weight"},
+        {GGML_TYPE_Q3_K, GGML_TYPE_Q3_K_SOA, 5120, 17408, "blk.13.ffn_down.weight"},
+        {GGML_TYPE_IQ3_S, GGML_TYPE_IQ3_S_SOA, 17408, 5120, "blk.11.ffn_gate.weight"},
+        {GGML_TYPE_IQ3_S, GGML_TYPE_IQ3_S_SOA, 5120, 17408, "blk.14.ffn_down.weight"},
+        {GGML_TYPE_Q6_K, GGML_TYPE_Q6_K_SOA, 5120, 6144, "blk.1.ssm_out.weight"},
+        {GGML_TYPE_Q6_K, GGML_TYPE_Q6_K_SOA, 17408, 5120, "blk.63.ffn_up.weight"},
+        {GGML_TYPE_Q6_K, GGML_TYPE_Q6_K_SOA, 5120, 17408, "blk.63.ffn_down.weight"},
+        {GGML_TYPE_Q6_K, GGML_TYPE_Q6_K_SOA, 12288, 5120, "blk.64.attn_q.weight"},
+        {GGML_TYPE_Q6_K, GGML_TYPE_Q6_K_SOA, 5120, 10240, "blk.64.nextn.eh_proj.weight"},
+    };
+    for (const shape & s : shapes) {
+        for (bool soa : {false, true}) {
+            for (int n : {1, 2, 3, 4, 5, 6, 7, 8, 9, 32, 512}) {
+                if (!perf && n != 1 && n != 4 && n != 8 && n != 512) { continue; }
+                cases.emplace_back(new test_mul_mat_ud_remaining(s.plain, s.stored, soa, perf ? s.m : 37, n, s.k, s.name));
+            }
+        }
+    }
+}
 
 // GGML_HINT_SRC0_IS_HADAMARD
 struct test_mul_mat_hadamard : public test_mul_mat {
@@ -10234,6 +10347,27 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat(
         GGML_TYPE_Q4_0_SOA, GGML_TYPE_F32, 6144, 1, 5120, {1, 1}, {1, 1}));
 
+    add_ud_remaining_cases(test_cases, false);
+
+    // Remaining UD formats: tail rows, all decode widths, prefill, and folded/strided activation batches.
+    for (ggml_type t : {GGML_TYPE_IQ4_NL_SOA, GGML_TYPE_Q3_K_SOA, GGML_TYPE_Q6_K_SOA, GGML_TYPE_IQ3_S_SOA}) {
+        for (int n : {1, 2, 3, 4, 5, 6, 7, 8, 9, 32, 512}) {
+            test_cases.emplace_back(new test_mul_mat(t, GGML_TYPE_F32, 37, n, 256, {1, 1}, {1, 1}));
+            test_cases.emplace_back(new test_mul_mat(t, GGML_TYPE_F32, 256, n, 512, {1, 1}, {1, 1}));
+        }
+        for (int n : {3, 4, 5}) {
+            test_cases.emplace_back(new test_mul_mat(t, GGML_TYPE_F32, 256, n, 5120, {1, 1}, {1, 1}));
+            test_cases.emplace_back(new test_mul_mat(t, GGML_TYPE_F32, 256, n, 17408, {1, 1}, {1, 1}));
+        }
+        // a whitelisted row count: widths 3..5 take the kq-SoA form kernels, 2 and 6..8 the ext SoA readers
+        for (int n : {2, 3, 4, 5, 6, 7, 8}) {
+            test_cases.emplace_back(new test_mul_mat(t, GGML_TYPE_F32, 5120, n, 512, {1, 1}, {1, 1}));
+        }
+        test_cases.emplace_back(new test_mul_mat(t, GGML_TYPE_F32, 4096, 512, 512, {1, 1}, {1, 1}));
+        test_cases.emplace_back(new test_mul_mat(t, GGML_TYPE_F32, 37, 1, 512, {1, 1}, {3, 1}));
+        test_cases.emplace_back(new test_mul_mat(t, GGML_TYPE_F32, 37, 4, 512, {1, 1}, {2, 1}));
+    }
+
     // Stored UD-format SoA readers (IQ4_XS_SOA / Q4_K_SOA / Q5_K_SOA): width 1 (w1 kernel), 2 and
     // 6..8 (ext SoA), 3..5 on a whitelisted row count (the pick's SoA kernels) and off it (ext SoA),
     // 32 and 512 (mul_mm, 32-column and 64-column tiles), plus the GDN-style folded batch.
@@ -10260,6 +10394,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 // Test cases for performance evaluation: should be representative of real-world use cases
 static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     std::vector<std::unique_ptr<test_case>> test_cases;
+
+    add_ud_remaining_cases(test_cases, true);
 
     // SWIGLU at a 27B-class FFN width, fused [gate|up] vs split operands
     // note: same bytes either way, so a backend that indexes them differently shows it here

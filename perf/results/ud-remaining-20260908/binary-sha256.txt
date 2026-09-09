@@ -1,0 +1,4 @@
+7779f0f1455d07481d6f0fd6d0289e5ed32924a14ff7eb216b7c5d534c596e0f  build/bin/test-backend-ops
+520c361240e21b5985b6ae5d72baa9386ca7747556a5ddf5cf857350a5d1ebb8  build/bin/libggml-metal.dylib
+b1dd90cc5a917b9bee6b4c39285f6c8f24831fdc3f3ffa128fa92a574196a680  build/bin/libggml-base.dylib
+34895e23e6edc9bbe7964f9d5d293578a90cc4882771977179725e070704af29  build/bin/libggml-cpu.dylib

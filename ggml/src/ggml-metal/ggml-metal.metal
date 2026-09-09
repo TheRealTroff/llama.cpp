@@ -7408,6 +7408,371 @@ kernel void kernel_repack_iq4_xs_soah(
     kernel_repack_iq4_xs_soa_impl<1>(args, src, dst, tgpig, tpitg);
 }
 
+// F: IQ4_NL=0, Q3_K=1, Q6_K=2, IQ3_S=3. All scales retain their original precision.
+template <int F>
+inline void ud_soa_unpack8(device const char * row, int K, int p, thread float (&w)[8]) {
+    const int nsb = K/256;
+    const int sb = p/32;
+    if constexpr (F == 0) {
+        const int nb = K/32;
+        const float d = ((device const half *) row)[p/4];
+        const uint q = ((device const uint *) (row + 2*nb))[p];
+        for (int i = 0; i < 8; ++i) { w[i] = d*kvalues_iq4nl_f[(q >> (4*i)) & 15]; }
+    } else if constexpr (F == 1) {
+        const ushort lo = ((device const ushort *) row)[p];
+        const uchar hi = ((device const uchar *) (row + 64*nsb))[p];
+        const float d = float(((device const half *) (row + 112*nsb))[sb]) * float(row[96*nsb + p/2]);
+        for (int i = 0; i < 8; ++i) { w[i] = d*(int((lo >> (2*i)) & 3) - ((hi >> i) & 1 ? 0 : 4)); }
+    } else if constexpr (F == 2) {
+        const uint lo = ((device const uint *) row)[p];
+        const ushort hi = ((device const ushort *) (row + 128*nsb))[p];
+        const float d = float(((device const half *) (row + 208*nsb))[sb]) * float(row[192*nsb + p/2]);
+        for (int i = 0; i < 8; ++i) { w[i] = d*(int(((lo >> (4*i)) & 15) | (((hi >> (2*i)) & 3) << 4)) - 32); }
+    } else {
+        const uint pack = ((device const uint *) row)[p];
+        const int j = (p%32)/4;
+        const uchar sc = ((device const uchar *) (row + 128*nsb))[4*sb + j/2];
+        const float d = float(((device const half *) (row + 132*nsb))[sb]) * (1 + 2*((sc >> (4*(j%2))) & 15));
+        const uint g0 = iq3s_grid[pack & 511];
+        const uint g1 = iq3s_grid[(pack >> 9) & 511];
+        for (int i = 0; i < 8; ++i) {
+            const int q = ((i < 4 ? g0 : g1) >> (8*(i%4))) & 255;
+            w[i] = d*q*((pack >> (18+i)) & 1 ? -1.f : 1.f);
+        }
+    }
+}
+
+template <int F, int NC, int KS>
+kernel void kernel_mul_mv_ud_soa(
+        constant ggml_metal_kargs_mul_mv_ext & args,
+        device const char * src0,
+        device const char * src1,
+        device float * dst,
+        uint3 tgpig [[threadgroup_position_in_grid]],
+        ushort lane [[thread_index_in_simdgroup]],
+        ushort sg [[simdgroup_index_in_threadgroup]]) {
+    threadgroup float partial[2][4*NC];
+    float acc[4*NC] = {};
+    const int row0 = 4*tgpig.x, col0 = NC*tgpig.y;
+    const int i12 = tgpig.z%args.ne12, i13 = tgpig.z/args.ne12;
+    src1 += (uint64_t)i12*args.nb12 + (uint64_t)i13*args.nb13;
+    dst += (uint64_t)tgpig.z*args.ne0*args.ne1;
+    const int np = args.ne00/8;
+    const int first = KS == 2 ? sg*(np/2) : 0;
+    const int end = KS == 2 ? first + np/2 : np;
+    for (int p = first + lane; p < end; p += 32) {
+        float x[NC][8];
+#pragma unroll
+        for (int c = 0; c < NC; ++c) {
+#pragma unroll
+            for (int i = 0; i < 8; ++i) {
+                x[c][i] = col0+c < args.ne11 ? *(device const float *)(src1 + (uint64_t)(col0+c)*args.nb11 + (uint64_t)(8*p+i)*args.nb10) : 0.f;
+            }
+        }
+#pragma unroll
+        for (int r = 0; r < 4; ++r) {
+            float w[8];
+            const int row = row0+r < args.ne01 ? row0+r : 0;
+            ud_soa_unpack8<F>(src0 + (uint64_t)row*args.nb01, args.ne00, p, w);
+#pragma unroll
+            for (int i = 0; i < 8; ++i) {
+#pragma unroll
+                for (int c = 0; c < NC; ++c) { acc[r*NC+c] += w[i]*x[c][i]; }
+            }
+        }
+    }
+#pragma unroll
+    for (int i = 0; i < 4*NC; ++i) { acc[i] = simd_sum(acc[i]); }
+    if constexpr (KS == 2) {
+        if (lane == 0) {
+            for (int i = 0; i < 4*NC; ++i) { partial[sg][i] = acc[i]; }
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        if (sg == 0 && lane < 4*NC) {
+            const int r = lane/NC, c = lane%NC;
+            if (row0+r < args.ne01 && col0+c < args.ne11) {
+                dst[(uint64_t)(col0+c)*args.ne0 + row0+r] = partial[0][lane] + partial[1][lane];
+            }
+        }
+    } else if (lane < 4*NC) {
+        const int r = lane/NC, c = lane%NC;
+        if (row0+r < args.ne01 && col0+c < args.ne11) { dst[(uint64_t)(col0+c)*args.ne0 + row0+r] = acc[lane]; }
+    }
+}
+
+// Width 1 only: the shared scalar body above. Its width 2..8 instantiations measured 2-19x the native
+// ext kernels (perf/ud-remaining-quants.md; odd widths ballooned the text, 6..8 spilled 208-272 B) and
+// were replaced by the kq-SoA form below (3..5) and the ext SoA readers (2, 6..8).
+#define UD_SOA_KERNEL(F, NAME, NC, KS) \
+template [[host_name("kernel_mul_mv_ud_" #NAME "_soa_w" #NC)]] kernel decltype(kernel_mul_mv_ud_soa<F, NC, KS>) kernel_mul_mv_ud_soa<F, NC, KS>;
+UD_SOA_KERNEL(0, iq4_nl, 1, 2)
+UD_SOA_KERNEL(1, q3_K,   1, 2)
+UD_SOA_KERNEL(2, q6_K,   1, 2)
+UD_SOA_KERNEL(3, iq3_s,  1, 2)
+#undef UD_SOA_KERNEL
+
+// ---------------------------------------------------------------------------------------
+// Remaining UD formats at widths 3..5: the q4_K/q5_K SoA body (kernel_mul_mv_kq_soa_impl) with the
+// per-format dequant swapped in. 4 rows x NC columns per threadgroup, hoisted per-row plane pointers,
+// f16 activations as named half8 streams, half products into f32 accumulators, the exact scale
+// (original half d x original int8/nibble scale) rounded to half once per pack, and the Q3_K/Q6_K
+// offsets (-4, -32) folded out of the element loop as (offset x scale) x sum8(v) in f32.
+// Plane offsets are the ones ud_soa_unpack8 reads (perf/ud-remaining-quants.md storage table).
+// ---------------------------------------------------------------------------------------
+template <int F> struct ud_planes {
+    device const uint   * q;    // F0: nibble packs; F2: low-nibble packs; F3: grid/sign packs
+    device const ushort * l;    // F1: 2-bit packs; F2: 2-bit high packs
+    device const uchar  * h;    // F1: high-bit masks; F3: scale nibbles
+    device const char   * s;    // F1/F2: int8 scales, one per 16 weights
+    device const half   * d;    // F0: half d per 32 weights; F1..3: half d per superblock
+};
+
+template <int F>
+inline ud_planes<F> ud_planes_of(device const char * row, int K) {
+    const int nsb = K/256;
+    ud_planes<F> P = { nullptr, nullptr, nullptr, nullptr, nullptr };
+    if constexpr (F == 0) {
+        P.d = (device const half *) row;
+        P.q = (device const uint *)(row + 2*(K/32));
+    } else if constexpr (F == 1) {
+        P.l = (device const ushort *) row;
+        P.h = (device const uchar *)(row + 64*nsb);
+        P.s = row + 96*nsb;
+        P.d = (device const half *)(row + 112*nsb);
+    } else if constexpr (F == 2) {
+        P.q = (device const uint *) row;
+        P.l = (device const ushort *)(row + 128*nsb);
+        P.s = row + 192*nsb;
+        P.d = (device const half *)(row + 208*nsb);
+    } else {
+        P.q = (device const uint *) row;
+        P.h = (device const uchar *)(row + 128*nsb);
+        P.d = (device const half *)(row + 132*nsb);
+    }
+    return P;
+}
+
+// pack p of one row: the packed payload (q; g0/g1 = the second plane or the two grid words) and its scale
+template <int F>
+inline void ud_fetch(const thread ud_planes<F> & P, int p, thread uint & q, thread uint & g0, thread uint & g1, thread float & sf, thread half & sh) {
+    g0 = 0; g1 = 0;
+    if constexpr (F == 0) {
+        q  = P.q[p];
+        sh = P.d[p >> 2];
+        sf = float(sh);
+    } else if constexpr (F == 1) {
+        q  = P.l[p];
+        g0 = P.h[p];
+        sf = float(P.d[p >> 5])*float(P.s[p >> 1]);
+        sh = half(sf);
+    } else if constexpr (F == 2) {
+        q  = P.q[p];
+        g0 = P.l[p];
+        sf = float(P.d[p >> 5])*float(P.s[p >> 1]);
+        sh = half(sf);
+    } else {
+        q  = P.q[p];
+        const int sb = p >> 5;
+        const int j  = (p & 31) >> 2;
+        const uchar sc = P.h[4*sb + (j >> 1)];
+        sf = float(P.d[sb])*float(1 + 2*((sc >> (4*(j & 1))) & 15));
+        sh = half(sf);
+        g0 = iq3s_grid[q & 511];
+        g1 = iq3s_grid[(q >> 9) & 511];
+    }
+}
+
+// weight ki (0..7) of the pack as a half, scale applied (widths 3..5); Q3_K/Q6_K return the unsigned
+// code x scale, the -4 / -32 offset goes through the activation sum
+template <int F>
+inline half ud_wv(uint q, uint g0, uint g1, int ki, half sh) {
+    if constexpr (F == 0) {
+        return kvalues_iq4nl_h[(q >> (4*ki)) & 15]*sh;
+    } else if constexpr (F == 1) {
+        return half(((q >> (2*ki)) & 3) | (((g0 >> ki) & 1) << 2))*sh;
+    } else if constexpr (F == 2) {
+        return half(((q >> (4*ki)) & 15) | (((g0 >> (2*ki)) & 3) << 4))*sh;
+    } else {
+        const uint g = ki < 4 ? g0 : g1;
+        const half m = half((g >> (8*(ki & 3))) & 255)*sh;
+        return ((q >> (18 + ki)) & 1) ? -m : m;
+    }
+}
+
+// the same weight as its unscaled f32 code (the width-1 f32-product path)
+template <int F>
+inline float ud_wq(uint q, uint g0, uint g1, int ki) {
+    if constexpr (F == 0) {
+        return kvalues_iq4nl_f[(q >> (4*ki)) & 15];
+    } else if constexpr (F == 1) {
+        return float(((q >> (2*ki)) & 3) | (((g0 >> ki) & 1) << 2));
+    } else if constexpr (F == 2) {
+        return float(((q >> (4*ki)) & 15) | (((g0 >> (2*ki)) & 3) << 4));
+    } else {
+        const uint g = ki < 4 ? g0 : g1;
+        const float m = float((g >> (8*(ki & 3))) & 255);
+        return ((q >> (18 + ki)) & 1) ? -m : m;
+    }
+}
+
+template <int F, int NC, int KS, typename TY = half>
+void kernel_mul_mv_ud_kq_impl(
+        constant ggml_metal_kargs_mul_mv_ext & args,
+        device const char * src0,
+        device const TY * src1,
+        device float * dst,
+        threadgroup float (&partial)[2][4*NC],
+        uint3 tgpig,
+        ushort tiisg,
+        ushort sgitg) {
+    using half8 = vec<TY, 8>;
+    constexpr bool F32P = is_same<TY, float>::value;   // width 1: f32 products with the exact scale
+    constexpr float MINC = F == 1 ? 4.f : F == 2 ? 32.f : 0.f;
+    float acc[4*NC] = {};
+    const int npack = args.ne00/8;
+    const int row0 = 4*(int)tgpig.x;
+    const int pstart = KS == 2 ? (int)sgitg*(npack/2) : 0;
+    const int pend = KS == 2 ? pstart + npack/2 : npack;
+
+    // rows past ne01 re-read row0 (results discarded at the store)
+    const int rr1 = row0 + 1 < args.ne01 ? row0 + 1 : row0;
+    const int rr2 = row0 + 2 < args.ne01 ? row0 + 2 : row0;
+    const int rr3 = row0 + 3 < args.ne01 ? row0 + 3 : row0;
+    const ud_planes<F> P0 = ud_planes_of<F>(src0 + (uint64_t)row0*args.nb01, args.ne00);
+    const ud_planes<F> P1 = ud_planes_of<F>(src0 + (uint64_t)rr1 *args.nb01, args.ne00);
+    const ud_planes<F> P2 = ud_planes_of<F>(src0 + (uint64_t)rr2 *args.nb01, args.ne00);
+    const ud_planes<F> P3 = ud_planes_of<F>(src0 + (uint64_t)rr3 *args.nb01, args.ne00);
+
+    const device half8 * xv = (const device half8 *)src1;
+    const int K8 = args.ne00/8;
+
+    for (int p = pstart + (int)tiisg; p < pend; p += 32) {
+        const half8 v0 = xv[0*K8 + p];
+        const half8 v1 = NC > 1 ? xv[1*K8 + p] : half8(0);
+        const half8 v2 = NC > 2 ? xv[2*K8 + p] : half8(0);
+        const half8 v3 = NC > 3 ? xv[3*K8 + p] : half8(0);
+        const half8 v4 = NC > 4 ? xv[4*K8 + p] : half8(0);
+
+        uint  q[4], g0[4], g1[4];
+        float sf[4];
+        half  sh[4];
+        ud_fetch<F>(P0, p, q[0], g0[0], g1[0], sf[0], sh[0]);
+        ud_fetch<F>(P1, p, q[1], g0[1], g1[1], sf[1], sh[1]);
+        ud_fetch<F>(P2, p, q[2], g0[2], g1[2], sf[2], sh[2]);
+        ud_fetch<F>(P3, p, q[3], g0[3], g1[3], sf[3], sh[3]);
+
+        float sv0 = 0.f, sv1 = 0.f, sv2 = 0.f, sv3 = 0.f, sv4 = 0.f;
+        if (MINC != 0.f) {
+#pragma unroll
+            for (int ki = 0; ki < 8; ++ki) {
+                sv0 += float(v0[ki]);
+                if (NC > 1) { sv1 += float(v1[ki]); }
+                if (NC > 2) { sv2 += float(v2[ki]); }
+                if (NC > 3) { sv3 += float(v3[ki]); }
+                if (NC > 4) { sv4 += float(v4[ki]); }
+            }
+        }
+#pragma unroll
+        for (int r = 0; r < 4; ++r) {
+#pragma unroll
+            for (int ki = 0; ki < 8; ++ki) {
+                if (F32P) {
+                    acc[r*NC + 0] += float(v0[ki])*(ud_wq<F>(q[r], g0[r], g1[r], ki)*sf[r]);
+                    continue;
+                }
+                const half wv = ud_wv<F>(q[r], g0[r], g1[r], ki, sh[r]);
+                acc[r*NC + 0] += float(v0[ki]*wv);
+                if (NC > 1) { acc[r*NC + 1] += float(v1[ki]*wv); }
+                if (NC > 2) { acc[r*NC + 2] += float(v2[ki]*wv); }
+                if (NC > 3) { acc[r*NC + 3] += float(v3[ki]*wv); }
+                if (NC > 4) { acc[r*NC + 4] += float(v4[ki]*wv); }
+            }
+            if (MINC != 0.f) {
+                const float mf = MINC*sf[r];
+                acc[r*NC + 0] -= mf*sv0;
+                if (NC > 1) { acc[r*NC + 1] -= mf*sv1; }
+                if (NC > 2) { acc[r*NC + 2] -= mf*sv2; }
+                if (NC > 3) { acc[r*NC + 3] -= mf*sv3; }
+                if (NC > 4) { acc[r*NC + 4] -= mf*sv4; }
+            }
+        }
+    }
+
+    for (int i = 0; i < 4*NC; ++i) {
+        acc[i] = simd_sum(acc[i]);
+    }
+    if (KS == 2) {
+        if (tiisg == 0) {
+            for (int i = 0; i < 4*NC; ++i) {
+                partial[sgitg][i] = acc[i];
+            }
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        if (sgitg == 0 && tiisg < 4*NC) {
+            const int r = (int)tiisg/NC;
+            const int c = (int)tiisg%NC;
+            if (row0 + r < args.ne01) {
+                dst[c*args.ne01 + row0 + r] = partial[0][tiisg] + partial[1][tiisg];
+            }
+        }
+    } else {
+        if (tiisg < 4*NC) {
+            const int r = (int)tiisg/NC;
+            const int c = (int)tiisg%NC;
+            if (row0 + r < args.ne01) {
+                dst[c*args.ne01 + row0 + r] = acc[tiisg];
+            }
+        }
+    }
+}
+
+// widths 3/4: 4 rows x 2 simdgroups (K split); width 5: 4 rows x 1 simdgroup (the kq-SoA geometry)
+#define UD_KQ_KERNEL(F, NAME, NC, KS) \
+kernel void kernel_mul_mv_##NAME##_soa_w##NC##_v1( \
+        constant ggml_metal_kargs_mul_mv_ext & args, \
+        device const char * src0, \
+        device const half * src1, \
+        device float * dst, \
+        uint3 tgpig [[threadgroup_position_in_grid]], \
+        ushort tiisg [[thread_index_in_simdgroup]], \
+        ushort sgitg [[simdgroup_index_in_threadgroup]]) { \
+    threadgroup float partial[2][4*NC]; \
+    kernel_mul_mv_ud_kq_impl<F, NC, KS>(args, src0, src1, dst, partial, tgpig, tiisg, sgitg); \
+}
+UD_KQ_KERNEL(0, iq4_nl, 3, 2)
+UD_KQ_KERNEL(0, iq4_nl, 4, 2)
+UD_KQ_KERNEL(0, iq4_nl, 5, 1)
+UD_KQ_KERNEL(1, q3_K,   3, 2)
+UD_KQ_KERNEL(1, q3_K,   4, 2)
+UD_KQ_KERNEL(1, q3_K,   5, 1)
+UD_KQ_KERNEL(2, q6_K,   3, 2)
+UD_KQ_KERNEL(2, q6_K,   4, 2)
+UD_KQ_KERNEL(2, q6_K,   5, 1)
+UD_KQ_KERNEL(3, iq3_s,  3, 2)
+UD_KQ_KERNEL(3, iq3_s,  4, 2)
+UD_KQ_KERNEL(3, iq3_s,  5, 1)
+#undef UD_KQ_KERNEL
+
+// width 1 on the same body: NC = 1, K split across two simdgroups, f32 activations and f32 products
+// with the exact scale (the kq-SoA w1 class); GGML_MV_UD_W1=1 routes it instead of the shared body
+#define UD_KQ_W1_KERNEL(F, NAME) \
+kernel void kernel_mul_mv_##NAME##_soa_w1_v1( \
+        constant ggml_metal_kargs_mul_mv_ext & args, \
+        device const char * src0, \
+        device const float * src1, \
+        device float * dst, \
+        uint3 tgpig [[threadgroup_position_in_grid]], \
+        ushort tiisg [[thread_index_in_simdgroup]], \
+        ushort sgitg [[simdgroup_index_in_threadgroup]]) { \
+    threadgroup float partial[2][4]; \
+    kernel_mul_mv_ud_kq_impl<F, 1, 2, float>(args, src0, src1, dst, partial, tgpig, tiisg, sgitg); \
+}
+UD_KQ_W1_KERNEL(0, iq4_nl)
+UD_KQ_W1_KERNEL(1, q3_K)
+UD_KQ_W1_KERNEL(2, q6_K)
+UD_KQ_W1_KERNEL(3, iq3_s)
+#undef UD_KQ_W1_KERNEL
+
 // SM: scale layout (0 exact d+int8, 1 pre-rounded half); PM: product (0 f32 FMA, 1 half product);
 // LM: lookup (0 constant table, 1 simd_shuffle from a lane-held table).
 template <int SM, int PM, int LM, int NC, int KS, typename TY = half>
@@ -10206,6 +10571,21 @@ template [[host_name("kernel_mul_mv_ext_" #TN "_soa_f16_r1_5")]] kernel mul_mv_e
 EXT_SOA_KERNELS(iq4_xs, block_iq4_xs)
 EXT_SOA_KERNELS(q4_K,   block_q4_K)
 EXT_SOA_KERNELS(q5_K,   block_q5_K)
+// remaining UD formats (widths 2 and 6..8, and 3..5 off the row whitelist): the same reader over the
+// dequantize_soa_mm overloads of the stored rows; iq4_nl blocks hold 32 weights
+#define EXT_SOA_KERNELS_EPB(TN, BQ, EPB) \
+template [[host_name("kernel_mul_mv_ext_" #TN "_soa_f32_r1_2")]] kernel mul_mv_ext_soa_q4x4_f32_t kernel_mul_mv_ext_soa_q4x4_f32_disp<2, BQ, EPB>; \
+template [[host_name("kernel_mul_mv_ext_" #TN "_soa_f32_r1_3")]] kernel mul_mv_ext_soa_q4x4_f32_t kernel_mul_mv_ext_soa_q4x4_f32_disp<3, BQ, EPB>; \
+template [[host_name("kernel_mul_mv_ext_" #TN "_soa_f32_r1_4")]] kernel mul_mv_ext_soa_q4x4_f32_t kernel_mul_mv_ext_soa_q4x4_f32_disp<4, BQ, EPB>; \
+template [[host_name("kernel_mul_mv_ext_" #TN "_soa_f32_r1_5")]] kernel mul_mv_ext_soa_q4x4_f32_t kernel_mul_mv_ext_soa_q4x4_f32_disp<5, BQ, EPB>; \
+template [[host_name("kernel_mul_mv_ext_" #TN "_soa_f16_r1_2")]] kernel mul_mv_ext_soa_q4x4_f32_t kernel_mul_mv_ext_soa_q4x4_f32_disp<2, BQ, EPB, half4x4>; \
+template [[host_name("kernel_mul_mv_ext_" #TN "_soa_f16_r1_3")]] kernel mul_mv_ext_soa_q4x4_f32_t kernel_mul_mv_ext_soa_q4x4_f32_disp<3, BQ, EPB, half4x4>; \
+template [[host_name("kernel_mul_mv_ext_" #TN "_soa_f16_r1_4")]] kernel mul_mv_ext_soa_q4x4_f32_t kernel_mul_mv_ext_soa_q4x4_f32_disp<4, BQ, EPB, half4x4>; \
+template [[host_name("kernel_mul_mv_ext_" #TN "_soa_f16_r1_5")]] kernel mul_mv_ext_soa_q4x4_f32_t kernel_mul_mv_ext_soa_q4x4_f32_disp<5, BQ, EPB, half4x4>;
+EXT_SOA_KERNELS_EPB(iq4_nl, block_iq4_nl, 32)
+EXT_SOA_KERNELS_EPB(q3_K,   block_q3_K,   256)
+EXT_SOA_KERNELS_EPB(q6_K,   block_q6_K,   256)
+EXT_SOA_KERNELS_EPB(iq3_s,  block_iq3_s,  256)
 
 template<typename T0, typename T1, short NR0, typename args_t>
 void kernel_mul_mv_t_t_impl(
@@ -16934,6 +17314,20 @@ template <typename type4x4> inline void dequantize_soa_mm(device const block_iq4
 template <typename type4x4> inline void dequantize_soa_mm(device const block_q4_K   *, device const char * row, int ne00, int block_idx, short il, thread type4x4 & reg) { dequantize_kq_soa_mm<false>(row, ne00, block_idx, il, reg); }
 template <typename type4x4> inline void dequantize_soa_mm(device const block_q5_K   *, device const char * row, int ne00, int block_idx, short il, thread type4x4 & reg) { dequantize_kq_soa_mm<true>(row, ne00, block_idx, il, reg); }
 // every other block type: never reached (the host only sets FC_mul_mm_soa for the four stored types)
+template <int F, typename type4x4>
+inline void dequantize_ud_soa_mm(device const char * row, int K, int block_idx, short il, thread type4x4 & reg) {
+    const int p0 = (F == 0 ? 4 : 32)*block_idx + 2*il;
+    for (int p = 0; p < 2; ++p) {
+        float w[8];
+        ud_soa_unpack8<F>(row, K, p0+p, w);
+        for (int i = 0; i < 8; ++i) { reg[2*p+i/4][i%4] = w[i]; }
+    }
+}
+template <typename type4x4> inline void dequantize_soa_mm(device const block_iq4_nl *, device const char * row, int K, int b, short il, thread type4x4 & reg) { dequantize_ud_soa_mm<0>(row, K, b, il, reg); }
+template <typename type4x4> inline void dequantize_soa_mm(device const block_q3_K   *, device const char * row, int K, int b, short il, thread type4x4 & reg) { dequantize_ud_soa_mm<1>(row, K, b, il, reg); }
+template <typename type4x4> inline void dequantize_soa_mm(device const block_q6_K   *, device const char * row, int K, int b, short il, thread type4x4 & reg) { dequantize_ud_soa_mm<2>(row, K, b, il, reg); }
+template <typename type4x4> inline void dequantize_soa_mm(device const block_iq3_s  *, device const char * row, int K, int b, short il, thread type4x4 & reg) { dequantize_ud_soa_mm<3>(row, K, b, il, reg); }
+
 template <typename block_q, typename type4x4> inline void dequantize_soa_mm(device const block_q *, device const char *, int, int, short, thread type4x4 & reg) { reg = type4x4(0); }
 
 // each block_q contains 16*nl weights

@@ -5325,6 +5325,10 @@ class GGMLQuantizationType(IntEnum):
     IQ4_XS_SOA = 47
     Q4_K_SOA = 48
     Q5_K_SOA = 49
+    IQ4_NL_SOA = 50
+    Q3_K_SOA = 51
+    Q6_K_SOA = 52
+    IQ3_S_SOA = 53
 
 
 class ExpertGatingFuncType(IntEnum):
@@ -5487,6 +5491,10 @@ GGML_QUANT_SIZES: dict[GGMLQuantizationType, tuple[int, int]] = {
     GGMLQuantizationType.IQ4_XS_SOA: (256, 152),
     GGMLQuantizationType.Q4_K_SOA: (256, 176),
     GGMLQuantizationType.Q5_K_SOA: (256, 208),
+    GGMLQuantizationType.IQ4_NL_SOA: (32, 18),
+    GGMLQuantizationType.Q3_K_SOA: (256, 116),
+    GGMLQuantizationType.Q6_K_SOA: (256, 212),
+    GGMLQuantizationType.IQ3_S_SOA: (256, 136),
     GGMLQuantizationType.Q4_1:    (32, 2 + 2 + 16),
     GGMLQuantizationType.Q5_0:    (32, 2 + 4 + 16),
     GGMLQuantizationType.Q5_1:    (32, 2 + 2 + 4 + 16),

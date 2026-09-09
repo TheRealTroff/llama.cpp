@@ -1,0 +1,386 @@
+diff --git a/ggml/src/ggml-metal/ggml-metal-device.cpp b/ggml/src/ggml-metal/ggml-metal-device.cpp
+index 394752f71..1ba586c97 100644
+--- a/ggml/src/ggml-metal/ggml-metal-device.cpp
++++ b/ggml/src/ggml-metal/ggml-metal-device.cpp
+@@ -968,7 +968,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_
+ }
+ 
+ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_ud_soa(ggml_metal_library_t lib, enum ggml_type type, int width) {
+-    GGML_ASSERT(ggml_metal_is_ud_remaining_soa_type(type) && width >= 1 && width <= 8);
++    GGML_ASSERT(ggml_metal_is_ud_remaining_soa_type(type) && width == 1);
+     char name[96];
+     snprintf(name, sizeof(name), "kernel_mul_mv_ud_%s_w%d", ggml_type_name(type), width);
+     auto res = ggml_metal_library_get_pipeline(lib, name);
+@@ -1011,7 +1011,9 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_kq_soa_w1
+ 
+ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_kq_soa(ggml_metal_library_t lib, enum ggml_type type, int width, int variant) {
+     char name[64];
+-    snprintf(name, sizeof(name), "kernel_mul_mv_%s_soa_w%d_v%d", ggml_type_name(type), width, variant < 1 ? 1 : variant > 2 ? 2 : variant);
++    // the remaining UD formats (iq4_nl/q3_K/q6_K/iq3_s) exist in one form: exact scale -> half, half product
++    const bool ud_rem = type == GGML_TYPE_IQ4_NL || type == GGML_TYPE_Q3_K || type == GGML_TYPE_Q6_K || type == GGML_TYPE_IQ3_S;
++    snprintf(name, sizeof(name), "kernel_mul_mv_%s_soa_w%d_v%d", ggml_type_name(type), width, ud_rem ? 1 : variant < 1 ? 1 : variant > 2 ? 2 : variant);
+     auto res = ggml_metal_library_get_pipeline(lib, name);
+     return res.pipeline ? res : ggml_metal_library_compile_pipeline(lib, name, name, nullptr);
+ }
+diff --git a/ggml/src/ggml-metal/ggml-metal-device.h b/ggml/src/ggml-metal/ggml-metal-device.h
+index 82ac7ef17..25e722c68 100644
+--- a/ggml/src/ggml-metal/ggml-metal-device.h
++++ b/ggml/src/ggml-metal/ggml-metal-device.h
+@@ -14,7 +14,7 @@ static inline bool ggml_metal_is_ud_remaining_soa_type(enum ggml_type t) {
+ 
+ static inline bool ggml_metal_is_kq_soa_type(enum ggml_type t) {
+     return t == GGML_TYPE_IQ4_XS_SOA || t == GGML_TYPE_Q4_K_SOA || t == GGML_TYPE_Q5_K_SOA ||
+-           t == GGML_TYPE_Q3_K_SOA || t == GGML_TYPE_Q6_K_SOA || t == GGML_TYPE_IQ3_S_SOA;
++           t == GGML_TYPE_IQ4_NL_SOA || t == GGML_TYPE_Q3_K_SOA || t == GGML_TYPE_Q6_K_SOA || t == GGML_TYPE_IQ3_S_SOA;
+ }
+ 
+ static inline bool ggml_metal_is_soa_type(enum ggml_type t) {
+diff --git a/ggml/src/ggml-metal/ggml-metal-ops.cpp b/ggml/src/ggml-metal/ggml-metal-ops.cpp
+index 49f5ac741..e6ce46f8f 100644
+--- a/ggml/src/ggml-metal/ggml-metal-ops.cpp
++++ b/ggml/src/ggml-metal/ggml-metal-ops.cpp
+@@ -2777,6 +2777,11 @@ static bool ggml_metal_mul_mat_use_f16_src1_n(const ggml_tensor * op, int64_t ne
+         case GGML_TYPE_IQ4_XS_SOA:
+         case GGML_TYPE_Q4_K_SOA:
+         case GGML_TYPE_Q5_K_SOA:
++        // the remaining stored UD formats: encode forces f16 activations at widths 2..8 (stored_kq)
++        case GGML_TYPE_IQ4_NL_SOA:
++        case GGML_TYPE_Q3_K_SOA:
++        case GGML_TYPE_Q6_K_SOA:
++        case GGML_TYPE_IQ3_S_SOA:
+             return true;
+         default:
+             return false;
+@@ -3155,11 +3160,12 @@ static int ggml_metal_op_mul_mat_impl(ggml_metal_op_t ctx, int idx, ggml_tensor
+     static const int env_nsg     = getenv("GGML_MV_EXT_NSG")   ? atoi(getenv("GGML_MV_EXT_NSG"))   : 0;
+     static const int env_nxpsg   = getenv("GGML_MV_EXT_NXPSG") ? atoi(getenv("GGML_MV_EXT_NXPSG")) : 0;
+ 
+-    // New stored UD formats share exact-scale pack readers across the small-batch tile.
+-    if (ggml_metal_is_ud_remaining_soa_type(op->src[0]->type) &&
+-        (ne11 <= std::max(8, ne11_mm_min) || !props_dev->has_simdgroup_mm || ggml_is_transposed(op->src[1]))) {
+-        const int nc = std::min(ne11, 8);
+-        const int nsg = nc <= 4 ? 2 : 1;
++    // Remaining stored UD formats (IQ4_NL/Q3_K/Q6_K/IQ3_S SoA) at width 1: the shared scalar body
++    // (perf/ud-remaining-quants.md). Widths 3..5 take the kq-SoA form through use_kq_soa below,
++    // 2 and 6..8 the ext SoA readers.
++    if (ggml_metal_is_ud_remaining_soa_type(op->src[0]->type) && ne11 == 1) {
++        const int nc = 1;
++        const int nsg = 2;
+         auto pipeline = ggml_metal_library_get_pipeline_mul_mv_ud_soa(lib, op->src[0]->type, nc);
+         ggml_metal_kargs_mul_mv_ext args = {
+             ne00, ne01, ne02, nb00, nb01, nb02, nb03,
+@@ -3407,6 +3413,10 @@ static int ggml_metal_op_mul_mat_impl(ggml_metal_op_t ctx, int idx, ggml_tensor
+            op->src[0]->type == GGML_TYPE_IQ4_XS_SOA ||
+            op->src[0]->type == GGML_TYPE_Q4_K_SOA ||
+            op->src[0]->type == GGML_TYPE_Q5_K_SOA ||
++           op->src[0]->type == GGML_TYPE_IQ4_NL_SOA ||
++           op->src[0]->type == GGML_TYPE_Q3_K_SOA ||
++           op->src[0]->type == GGML_TYPE_Q6_K_SOA ||
++           op->src[0]->type == GGML_TYPE_IQ3_S_SOA ||
+            false) && (ne11 >= ne11_kq_min && ne11 <= ne11_mv_max)
+          )
+         )
+@@ -3522,7 +3532,8 @@ static int ggml_metal_op_mul_mat_impl(ggml_metal_op_t ctx, int idx, ggml_tensor
+                                     ggml_metal_op_mul_mat_try_repack_iq4_xs(ctx, op, bid_src0, nb01_eff, env_soa_iq4xs >= 5));
+         // q4_K / q5_K width-4 SoA route: GGML_MV_SOA_KQ=1 (exact scale/min) or 2 (half planar)
+         static const int env_soa_kq = getenv("GGML_MV_SOA_KQ") ? atoi(getenv("GGML_MV_SOA_KQ")) : 0;
+-        const bool use_kq_soa = ((op->src[0]->type == GGML_TYPE_Q4_K_SOA || op->src[0]->type == GGML_TYPE_Q5_K_SOA) && kq_soa_shape) ||
++        const bool use_kq_soa = ((op->src[0]->type == GGML_TYPE_Q4_K_SOA || op->src[0]->type == GGML_TYPE_Q5_K_SOA ||
++                                  ggml_metal_is_ud_remaining_soa_type(op->src[0]->type)) && kq_soa_shape) ||
+                                 (env_soa_kq && (op->src[0]->type == GGML_TYPE_Q4_K || op->src[0]->type == GGML_TYPE_Q5_K) &&
+                                  kq_soa_shape && ne01 % 4 == 0 &&
+                                  ggml_metal_op_mul_mat_try_repack_kq(ctx, op, bid_src0, nb01_eff, env_soa_kq >= 2));
+diff --git a/ggml/src/ggml-metal/ggml-metal.metal b/ggml/src/ggml-metal/ggml-metal.metal
+index 368f740f5..fee2c5cdc 100644
+--- a/ggml/src/ggml-metal/ggml-metal.metal
++++ b/ggml/src/ggml-metal/ggml-metal.metal
+@@ -7500,24 +7500,238 @@ kernel void kernel_mul_mv_ud_soa(
+     }
+ }
+ 
++// Width 1 only: the shared scalar body above. Its width 2..8 instantiations measured 2-19x the native
++// ext kernels (perf/ud-remaining-quants.md; odd widths ballooned the text, 6..8 spilled 208-272 B) and
++// were replaced by the kq-SoA form below (3..5) and the ext SoA readers (2, 6..8).
+ #define UD_SOA_KERNEL(F, NAME, NC, KS) \
+ template [[host_name("kernel_mul_mv_ud_" #NAME "_soa_w" #NC)]] kernel decltype(kernel_mul_mv_ud_soa<F, NC, KS>) kernel_mul_mv_ud_soa<F, NC, KS>;
+-#define UD_SOA_WIDTHS(F, NAME) \
+-UD_SOA_KERNEL(F, NAME, 1, 2) \
+-UD_SOA_KERNEL(F, NAME, 2, 2) \
+-UD_SOA_KERNEL(F, NAME, 3, 2) \
+-UD_SOA_KERNEL(F, NAME, 4, 2) \
+-UD_SOA_KERNEL(F, NAME, 5, 1) \
+-UD_SOA_KERNEL(F, NAME, 6, 1) \
+-UD_SOA_KERNEL(F, NAME, 7, 1) \
+-UD_SOA_KERNEL(F, NAME, 8, 1)
+-UD_SOA_WIDTHS(0, iq4_nl)
+-UD_SOA_WIDTHS(1, q3_K)
+-UD_SOA_WIDTHS(2, q6_K)
+-UD_SOA_WIDTHS(3, iq3_s)
+-#undef UD_SOA_WIDTHS
++UD_SOA_KERNEL(0, iq4_nl, 1, 2)
++UD_SOA_KERNEL(1, q3_K,   1, 2)
++UD_SOA_KERNEL(2, q6_K,   1, 2)
++UD_SOA_KERNEL(3, iq3_s,  1, 2)
+ #undef UD_SOA_KERNEL
+ 
++// ---------------------------------------------------------------------------------------
++// Remaining UD formats at widths 3..5: the q4_K/q5_K SoA body (kernel_mul_mv_kq_soa_impl) with the
++// per-format dequant swapped in. 4 rows x NC columns per threadgroup, hoisted per-row plane pointers,
++// f16 activations as named half8 streams, half products into f32 accumulators, the exact scale
++// (original half d x original int8/nibble scale) rounded to half once per pack, and the Q3_K/Q6_K
++// offsets (-4, -32) folded out of the element loop as (offset x scale) x sum8(v) in f32.
++// Plane offsets are the ones ud_soa_unpack8 reads (perf/ud-remaining-quants.md storage table).
++// ---------------------------------------------------------------------------------------
++template <int F> struct ud_planes {
++    device const uint   * q;    // F0: nibble packs; F2: low-nibble packs; F3: grid/sign packs
++    device const ushort * l;    // F1: 2-bit packs; F2: 2-bit high packs
++    device const uchar  * h;    // F1: high-bit masks; F3: scale nibbles
++    device const char   * s;    // F1/F2: int8 scales, one per 16 weights
++    device const half   * d;    // F0: half d per 32 weights; F1..3: half d per superblock
++};
++
++template <int F>
++inline ud_planes<F> ud_planes_of(device const char * row, int K) {
++    const int nsb = K/256;
++    ud_planes<F> P = { nullptr, nullptr, nullptr, nullptr, nullptr };
++    if constexpr (F == 0) {
++        P.d = (device const half *) row;
++        P.q = (device const uint *)(row + 2*(K/32));
++    } else if constexpr (F == 1) {
++        P.l = (device const ushort *) row;
++        P.h = (device const uchar *)(row + 64*nsb);
++        P.s = row + 96*nsb;
++        P.d = (device const half *)(row + 112*nsb);
++    } else if constexpr (F == 2) {
++        P.q = (device const uint *) row;
++        P.l = (device const ushort *)(row + 128*nsb);
++        P.s = row + 192*nsb;
++        P.d = (device const half *)(row + 208*nsb);
++    } else {
++        P.q = (device const uint *) row;
++        P.h = (device const uchar *)(row + 128*nsb);
++        P.d = (device const half *)(row + 132*nsb);
++    }
++    return P;
++}
++
++// pack p of one row: the packed payload (q; g0/g1 = the second plane or the two grid words) and its scale
++template <int F>
++inline void ud_fetch(const thread ud_planes<F> & P, int p, thread uint & q, thread uint & g0, thread uint & g1, thread float & sf, thread half & sh) {
++    g0 = 0; g1 = 0;
++    if constexpr (F == 0) {
++        q  = P.q[p];
++        sh = P.d[p >> 2];
++        sf = float(sh);
++    } else if constexpr (F == 1) {
++        q  = P.l[p];
++        g0 = P.h[p];
++        sf = float(P.d[p >> 5])*float(P.s[p >> 1]);
++        sh = half(sf);
++    } else if constexpr (F == 2) {
++        q  = P.q[p];
++        g0 = P.l[p];
++        sf = float(P.d[p >> 5])*float(P.s[p >> 1]);
++        sh = half(sf);
++    } else {
++        q  = P.q[p];
++        const int sb = p >> 5;
++        const int j  = (p & 31) >> 2;
++        const uchar sc = P.h[4*sb + (j >> 1)];
++        sf = float(P.d[sb])*float(1 + 2*((sc >> (4*(j & 1))) & 15));
++        sh = half(sf);
++        g0 = iq3s_grid[q & 511];
++        g1 = iq3s_grid[(q >> 9) & 511];
++    }
++}
++
++// weight ki (0..7) of the pack as a half, scale applied; Q3_K/Q6_K return the unsigned code x scale
++// (the -4 / -32 offset is applied by the caller through the activation sum)
++template <int F>
++inline half ud_wv(uint q, uint g0, uint g1, int ki, half sh) {
++    if constexpr (F == 0) {
++        return kvalues_iq4nl_h[(q >> (4*ki)) & 15]*sh;
++    } else if constexpr (F == 1) {
++        return half(((q >> (2*ki)) & 3) | (((g0 >> ki) & 1) << 2))*sh;
++    } else if constexpr (F == 2) {
++        return half(((q >> (4*ki)) & 15) | (((g0 >> (2*ki)) & 3) << 4))*sh;
++    } else {
++        const uint g = ki < 4 ? g0 : g1;
++        const half m = half((g >> (8*(ki & 3))) & 255)*sh;
++        return ((q >> (18 + ki)) & 1) ? -m : m;
++    }
++}
++
++template <int F, int NC, int KS>
++void kernel_mul_mv_ud_kq_impl(
++        constant ggml_metal_kargs_mul_mv_ext & args,
++        device const char * src0,
++        device const half * src1,
++        device float * dst,
++        threadgroup float (&partial)[2][4*NC],
++        uint3 tgpig,
++        ushort tiisg,
++        ushort sgitg) {
++    using half8 = vec<half, 8>;
++    constexpr float MINC = F == 1 ? 4.f : F == 2 ? 32.f : 0.f;
++    float acc[4*NC] = {};
++    const int npack = args.ne00/8;
++    const int row0 = 4*(int)tgpig.x;
++    const int pstart = KS == 2 ? (int)sgitg*(npack/2) : 0;
++    const int pend = KS == 2 ? pstart + npack/2 : npack;
++
++    // rows past ne01 re-read row0 (results discarded at the store)
++    const int rr1 = row0 + 1 < args.ne01 ? row0 + 1 : row0;
++    const int rr2 = row0 + 2 < args.ne01 ? row0 + 2 : row0;
++    const int rr3 = row0 + 3 < args.ne01 ? row0 + 3 : row0;
++    const ud_planes<F> P0 = ud_planes_of<F>(src0 + (uint64_t)row0*args.nb01, args.ne00);
++    const ud_planes<F> P1 = ud_planes_of<F>(src0 + (uint64_t)rr1 *args.nb01, args.ne00);
++    const ud_planes<F> P2 = ud_planes_of<F>(src0 + (uint64_t)rr2 *args.nb01, args.ne00);
++    const ud_planes<F> P3 = ud_planes_of<F>(src0 + (uint64_t)rr3 *args.nb01, args.ne00);
++
++    const device half8 * xv = (const device half8 *)src1;
++    const int K8 = args.ne00/8;
++
++    for (int p = pstart + (int)tiisg; p < pend; p += 32) {
++        const half8 v0 = xv[0*K8 + p];
++        const half8 v1 = NC > 1 ? xv[1*K8 + p] : half8(0);
++        const half8 v2 = NC > 2 ? xv[2*K8 + p] : half8(0);
++        const half8 v3 = NC > 3 ? xv[3*K8 + p] : half8(0);
++        const half8 v4 = NC > 4 ? xv[4*K8 + p] : half8(0);
++
++        uint  q[4], g0[4], g1[4];
++        float sf[4];
++        half  sh[4];
++        ud_fetch<F>(P0, p, q[0], g0[0], g1[0], sf[0], sh[0]);
++        ud_fetch<F>(P1, p, q[1], g0[1], g1[1], sf[1], sh[1]);
++        ud_fetch<F>(P2, p, q[2], g0[2], g1[2], sf[2], sh[2]);
++        ud_fetch<F>(P3, p, q[3], g0[3], g1[3], sf[3], sh[3]);
++
++        float sv0 = 0.f, sv1 = 0.f, sv2 = 0.f, sv3 = 0.f, sv4 = 0.f;
++        if (MINC != 0.f) {
++#pragma unroll
++            for (int ki = 0; ki < 8; ++ki) {
++                sv0 += float(v0[ki]);
++                if (NC > 1) { sv1 += float(v1[ki]); }
++                if (NC > 2) { sv2 += float(v2[ki]); }
++                if (NC > 3) { sv3 += float(v3[ki]); }
++                if (NC > 4) { sv4 += float(v4[ki]); }
++            }
++        }
++#pragma unroll
++        for (int r = 0; r < 4; ++r) {
++#pragma unroll
++            for (int ki = 0; ki < 8; ++ki) {
++                const half wv = ud_wv<F>(q[r], g0[r], g1[r], ki, sh[r]);
++                acc[r*NC + 0] += float(v0[ki]*wv);
++                if (NC > 1) { acc[r*NC + 1] += float(v1[ki]*wv); }
++                if (NC > 2) { acc[r*NC + 2] += float(v2[ki]*wv); }
++                if (NC > 3) { acc[r*NC + 3] += float(v3[ki]*wv); }
++                if (NC > 4) { acc[r*NC + 4] += float(v4[ki]*wv); }
++            }
++            if (MINC != 0.f) {
++                const float mf = MINC*sf[r];
++                acc[r*NC + 0] -= mf*sv0;
++                if (NC > 1) { acc[r*NC + 1] -= mf*sv1; }
++                if (NC > 2) { acc[r*NC + 2] -= mf*sv2; }
++                if (NC > 3) { acc[r*NC + 3] -= mf*sv3; }
++                if (NC > 4) { acc[r*NC + 4] -= mf*sv4; }
++            }
++        }
++    }
++
++    for (int i = 0; i < 4*NC; ++i) {
++        acc[i] = simd_sum(acc[i]);
++    }
++    if (KS == 2) {
++        if (tiisg == 0) {
++            for (int i = 0; i < 4*NC; ++i) {
++                partial[sgitg][i] = acc[i];
++            }
++        }
++        threadgroup_barrier(mem_flags::mem_threadgroup);
++        if (sgitg == 0 && tiisg < 4*NC) {
++            const int r = (int)tiisg/NC;
++            const int c = (int)tiisg%NC;
++            if (row0 + r < args.ne01) {
++                dst[c*args.ne01 + row0 + r] = partial[0][tiisg] + partial[1][tiisg];
++            }
++        }
++    } else {
++        if (tiisg < 4*NC) {
++            const int r = (int)tiisg/NC;
++            const int c = (int)tiisg%NC;
++            if (row0 + r < args.ne01) {
++                dst[c*args.ne01 + row0 + r] = acc[tiisg];
++            }
++        }
++    }
++}
++
++// widths 3/4: 4 rows x 2 simdgroups (K split); width 5: 4 rows x 1 simdgroup (the kq-SoA geometry)
++#define UD_KQ_KERNEL(F, NAME, NC, KS) \
++kernel void kernel_mul_mv_##NAME##_soa_w##NC##_v1( \
++        constant ggml_metal_kargs_mul_mv_ext & args, \
++        device const char * src0, \
++        device const half * src1, \
++        device float * dst, \
++        uint3 tgpig [[threadgroup_position_in_grid]], \
++        ushort tiisg [[thread_index_in_simdgroup]], \
++        ushort sgitg [[simdgroup_index_in_threadgroup]]) { \
++    threadgroup float partial[2][4*NC]; \
++    kernel_mul_mv_ud_kq_impl<F, NC, KS>(args, src0, src1, dst, partial, tgpig, tiisg, sgitg); \
++}
++UD_KQ_KERNEL(0, iq4_nl, 3, 2)
++UD_KQ_KERNEL(0, iq4_nl, 4, 2)
++UD_KQ_KERNEL(0, iq4_nl, 5, 1)
++UD_KQ_KERNEL(1, q3_K,   3, 2)
++UD_KQ_KERNEL(1, q3_K,   4, 2)
++UD_KQ_KERNEL(1, q3_K,   5, 1)
++UD_KQ_KERNEL(2, q6_K,   3, 2)
++UD_KQ_KERNEL(2, q6_K,   4, 2)
++UD_KQ_KERNEL(2, q6_K,   5, 1)
++UD_KQ_KERNEL(3, iq3_s,  3, 2)
++UD_KQ_KERNEL(3, iq3_s,  4, 2)
++UD_KQ_KERNEL(3, iq3_s,  5, 1)
++#undef UD_KQ_KERNEL
++
+ // SM: scale layout (0 exact d+int8, 1 pre-rounded half); PM: product (0 f32 FMA, 1 half product);
+ // LM: lookup (0 constant table, 1 simd_shuffle from a lane-held table).
+ template <int SM, int PM, int LM, int NC, int KS, typename TY = half>
+@@ -10316,6 +10530,21 @@ template [[host_name("kernel_mul_mv_ext_" #TN "_soa_f16_r1_5")]] kernel mul_mv_e
+ EXT_SOA_KERNELS(iq4_xs, block_iq4_xs)
+ EXT_SOA_KERNELS(q4_K,   block_q4_K)
+ EXT_SOA_KERNELS(q5_K,   block_q5_K)
++// remaining UD formats (widths 2 and 6..8, and 3..5 off the row whitelist): the same reader over the
++// dequantize_soa_mm overloads of the stored rows; iq4_nl blocks hold 32 weights
++#define EXT_SOA_KERNELS_EPB(TN, BQ, EPB) \
++template [[host_name("kernel_mul_mv_ext_" #TN "_soa_f32_r1_2")]] kernel mul_mv_ext_soa_q4x4_f32_t kernel_mul_mv_ext_soa_q4x4_f32_disp<2, BQ, EPB>; \
++template [[host_name("kernel_mul_mv_ext_" #TN "_soa_f32_r1_3")]] kernel mul_mv_ext_soa_q4x4_f32_t kernel_mul_mv_ext_soa_q4x4_f32_disp<3, BQ, EPB>; \
++template [[host_name("kernel_mul_mv_ext_" #TN "_soa_f32_r1_4")]] kernel mul_mv_ext_soa_q4x4_f32_t kernel_mul_mv_ext_soa_q4x4_f32_disp<4, BQ, EPB>; \
++template [[host_name("kernel_mul_mv_ext_" #TN "_soa_f32_r1_5")]] kernel mul_mv_ext_soa_q4x4_f32_t kernel_mul_mv_ext_soa_q4x4_f32_disp<5, BQ, EPB>; \
++template [[host_name("kernel_mul_mv_ext_" #TN "_soa_f16_r1_2")]] kernel mul_mv_ext_soa_q4x4_f32_t kernel_mul_mv_ext_soa_q4x4_f32_disp<2, BQ, EPB, half4x4>; \
++template [[host_name("kernel_mul_mv_ext_" #TN "_soa_f16_r1_3")]] kernel mul_mv_ext_soa_q4x4_f32_t kernel_mul_mv_ext_soa_q4x4_f32_disp<3, BQ, EPB, half4x4>; \
++template [[host_name("kernel_mul_mv_ext_" #TN "_soa_f16_r1_4")]] kernel mul_mv_ext_soa_q4x4_f32_t kernel_mul_mv_ext_soa_q4x4_f32_disp<4, BQ, EPB, half4x4>; \
++template [[host_name("kernel_mul_mv_ext_" #TN "_soa_f16_r1_5")]] kernel mul_mv_ext_soa_q4x4_f32_t kernel_mul_mv_ext_soa_q4x4_f32_disp<5, BQ, EPB, half4x4>;
++EXT_SOA_KERNELS_EPB(iq4_nl, block_iq4_nl, 32)
++EXT_SOA_KERNELS_EPB(q3_K,   block_q3_K,   256)
++EXT_SOA_KERNELS_EPB(q6_K,   block_q6_K,   256)
++EXT_SOA_KERNELS_EPB(iq3_s,  block_iq3_s,  256)
+ 
+ template<typename T0, typename T1, short NR0, typename args_t>
+ void kernel_mul_mv_t_t_impl(
+diff --git a/tests/test-backend-ops.cpp b/tests/test-backend-ops.cpp
+index 113475abf..1c4a6f365 100644
+--- a/tests/test-backend-ops.cpp
++++ b/tests/test-backend-ops.cpp
+@@ -10359,6 +10359,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
+             test_cases.emplace_back(new test_mul_mat(t, GGML_TYPE_F32, 256, n, 5120, {1, 1}, {1, 1}));
+             test_cases.emplace_back(new test_mul_mat(t, GGML_TYPE_F32, 256, n, 17408, {1, 1}, {1, 1}));
+         }
++        // a whitelisted row count: widths 3..5 take the kq-SoA form kernels, 2 and 6..8 the ext SoA readers
++        for (int n : {2, 3, 4, 5, 6, 7, 8}) {
++            test_cases.emplace_back(new test_mul_mat(t, GGML_TYPE_F32, 5120, n, 512, {1, 1}, {1, 1}));
++        }
+         test_cases.emplace_back(new test_mul_mat(t, GGML_TYPE_F32, 4096, 512, 512, {1, 1}, {1, 1}));
+         test_cases.emplace_back(new test_mul_mat(t, GGML_TYPE_F32, 37, 1, 512, {1, 1}, {3, 1}));
+         test_cases.emplace_back(new test_mul_mat(t, GGML_TYPE_F32, 37, 4, 512, {1, 1}, {2, 1}));

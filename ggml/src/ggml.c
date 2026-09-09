@@ -753,6 +753,38 @@ static const struct ggml_type_traits type_traits[GGML_TYPE_COUNT] = {
         .to_float                 = (ggml_to_float_t) dequantize_row_q5_K_soa,
         .from_float_ref           = (ggml_from_float_t) quantize_row_q5_K_soa_ref,
     },
+    [GGML_TYPE_IQ4_NL_SOA] = {
+        .type_name = "iq4_nl_soa",
+        .blck_size = 32,
+        .type_size = 18,
+        .is_quantized = true,
+        .to_float = (ggml_to_float_t) dequantize_row_iq4_nl_soa,
+        .from_float_ref = (ggml_from_float_t) quantize_row_iq4_nl_soa_ref,
+    },
+    [GGML_TYPE_Q3_K_SOA] = {
+        .type_name = "q3_K_soa",
+        .blck_size = 256,
+        .type_size = 116,
+        .is_quantized = true,
+        .to_float = (ggml_to_float_t) dequantize_row_q3_K_soa,
+        .from_float_ref = (ggml_from_float_t) quantize_row_q3_K_soa_ref,
+    },
+    [GGML_TYPE_Q6_K_SOA] = {
+        .type_name = "q6_K_soa",
+        .blck_size = 256,
+        .type_size = 212,
+        .is_quantized = true,
+        .to_float = (ggml_to_float_t) dequantize_row_q6_K_soa,
+        .from_float_ref = (ggml_from_float_t) quantize_row_q6_K_soa_ref,
+    },
+    [GGML_TYPE_IQ3_S_SOA] = {
+        .type_name = "iq3_s_soa",
+        .blck_size = 256,
+        .type_size = 136,
+        .is_quantized = true,
+        .to_float = (ggml_to_float_t) dequantize_row_iq3_s_soa,
+        .from_float_ref = (ggml_from_float_t) quantize_row_iq3_s_soa_ref,
+    },
     [GGML_TYPE_Q4_1] = {
         .type_name                = "q4_1",
         .blck_size                = QK4_1,
@@ -8061,7 +8093,8 @@ void ggml_quantize_init(enum ggml_type type) {
         case GGML_TYPE_IQ1_S:
         case GGML_TYPE_IQ1_M:   iq2xs_init_impl(type); break;
         case GGML_TYPE_IQ3_XXS: iq3xs_init_impl(256); break;
-        case GGML_TYPE_IQ3_S:   iq3xs_init_impl(512); break;
+        case GGML_TYPE_IQ3_S:
+        case GGML_TYPE_IQ3_S_SOA: iq3xs_init_impl(512); break;
         default: // nothing
             break;
     }
@@ -8123,6 +8156,10 @@ size_t ggml_quantize_chunk(
         case GGML_TYPE_IQ4_XS_SOA: result = quantize_iq4_xs_soa(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_Q4_K_SOA: result = quantize_q4_K_soa(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_Q5_K_SOA: result = quantize_q5_K_soa(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
+        case GGML_TYPE_IQ4_NL_SOA: result = quantize_iq4_nl_soa(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
+        case GGML_TYPE_Q3_K_SOA: result = quantize_q3_K_soa(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
+        case GGML_TYPE_Q6_K_SOA: result = quantize_q6_K_soa(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
+        case GGML_TYPE_IQ3_S_SOA: result = quantize_iq3_s_soa(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_Q4_1:    result = quantize_q4_1   (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_Q5_0:    result = quantize_q5_0   (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_Q5_1:    result = quantize_q5_1   (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;

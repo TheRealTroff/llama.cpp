@@ -967,6 +967,19 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_
     return res.pipeline ? res : ggml_metal_library_compile_pipeline(lib, name, name, nullptr);
 }
 
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_ud_soa(ggml_metal_library_t lib, enum ggml_type type, int width, bool kq_form) {
+    GGML_ASSERT(ggml_metal_is_ud_remaining_soa_type(type) && width == 1);
+    char name[96];
+    if (kq_form) {
+        // the kq-SoA body at NC = 1 with f32 activations (perf/ud-remaining-quants.md width-1 A/B)
+        snprintf(name, sizeof(name), "kernel_mul_mv_%s_soa_w1_v1", ggml_type_name(ggml_metal_soa_base_type(type)));
+    } else {
+        snprintf(name, sizeof(name), "kernel_mul_mv_ud_%s_w%d", ggml_type_name(type), width);
+    }
+    auto res = ggml_metal_library_get_pipeline(lib, name);
+    return res.pipeline ? res : ggml_metal_library_compile_pipeline(lib, name, name, nullptr);
+}
+
 ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_repack_iq4_xs_soa(ggml_metal_library_t lib, bool halfs) {
     const char * name = halfs ? "kernel_repack_iq4_xs_soah" : "kernel_repack_iq4_xs_soa";
     auto res = ggml_metal_library_get_pipeline(lib, name);
@@ -1003,7 +1016,9 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_kq_soa_w1
 
 ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_kq_soa(ggml_metal_library_t lib, enum ggml_type type, int width, int variant) {
     char name[64];
-    snprintf(name, sizeof(name), "kernel_mul_mv_%s_soa_w%d_v%d", ggml_type_name(type), width, variant < 1 ? 1 : variant > 2 ? 2 : variant);
+    // the remaining UD formats (iq4_nl/q3_K/q6_K/iq3_s) exist in one form: exact scale -> half, half product
+    const bool ud_rem = type == GGML_TYPE_IQ4_NL || type == GGML_TYPE_Q3_K || type == GGML_TYPE_Q6_K || type == GGML_TYPE_IQ3_S;
+    snprintf(name, sizeof(name), "kernel_mul_mv_%s_soa_w%d_v%d", ggml_type_name(type), width, ud_rem ? 1 : variant < 1 ? 1 : variant > 2 ? 2 : variant);
     auto res = ggml_metal_library_get_pipeline(lib, name);
     return res.pipeline ? res : ggml_metal_library_compile_pipeline(lib, name, name, nullptr);
 }

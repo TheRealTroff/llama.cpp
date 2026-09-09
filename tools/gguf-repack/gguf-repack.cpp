@@ -69,20 +69,24 @@ void q4_0_from_soa(const uint8_t * src, uint8_t * dst, int64_t ne0) {
     }
 }
 
-#define SOA_ROW_FNS(NAME, BLOCK)                                                          \
+#define SOA_ROW_FNS(NAME, BLOCK, QK)                                                      \
 void NAME##_to_soa(const uint8_t * src, uint8_t * dst, int64_t ne0) {                     \
-    for (int64_t sb = 0; sb < ne0/256; ++sb) {                                            \
+    for (int64_t sb = 0; sb < ne0/QK; ++sb) {                                             \
         ggml_soa_pack_##NAME(reinterpret_cast<const BLOCK *>(src) + sb, dst, ne0, sb);    \
     }                                                                                     \
 }                                                                                         \
 void NAME##_from_soa(const uint8_t * src, uint8_t * dst, int64_t ne0) {                   \
-    for (int64_t sb = 0; sb < ne0/256; ++sb) {                                            \
+    for (int64_t sb = 0; sb < ne0/QK; ++sb) {                                             \
         ggml_soa_unpack_##NAME(src, ne0, sb, reinterpret_cast<BLOCK *>(dst) + sb);        \
     }                                                                                     \
 }
-SOA_ROW_FNS(iq4_xs, block_iq4_xs)
-SOA_ROW_FNS(q4_K,   block_q4_K)
-SOA_ROW_FNS(q5_K,   block_q5_K)
+SOA_ROW_FNS(iq4_xs, block_iq4_xs, 256)
+SOA_ROW_FNS(q4_K,   block_q4_K, 256)
+SOA_ROW_FNS(q5_K,   block_q5_K, 256)
+SOA_ROW_FNS(iq4_nl, block_iq4_nl, 32)
+SOA_ROW_FNS(q3_K, block_q3_K, 256)
+SOA_ROW_FNS(q6_K, block_q6_K, 256)
+SOA_ROW_FNS(iq3_s, block_iq3_s, 256)
 
 struct conversion {
     ggml_type   plain;
@@ -97,6 +101,10 @@ const conversion CONVERSIONS[] = {
     { GGML_TYPE_IQ4_XS, GGML_TYPE_IQ4_XS_SOA, 256, iq4_xs_to_soa, iq4_xs_from_soa },
     { GGML_TYPE_Q4_K,   GGML_TYPE_Q4_K_SOA,   256, q4_K_to_soa,   q4_K_from_soa   },
     { GGML_TYPE_Q5_K,   GGML_TYPE_Q5_K_SOA,   256, q5_K_to_soa,   q5_K_from_soa   },
+    { GGML_TYPE_IQ4_NL, GGML_TYPE_IQ4_NL_SOA, 64, iq4_nl_to_soa, iq4_nl_from_soa },
+    { GGML_TYPE_Q3_K, GGML_TYPE_Q3_K_SOA, 256, q3_K_to_soa, q3_K_from_soa },
+    { GGML_TYPE_Q6_K, GGML_TYPE_Q6_K_SOA, 256, q6_K_to_soa, q6_K_from_soa },
+    { GGML_TYPE_IQ3_S, GGML_TYPE_IQ3_S_SOA, 256, iq3_s_to_soa, iq3_s_from_soa },
 };
 
 struct params {
@@ -217,6 +225,9 @@ bool is_row_lookup_tensor(const std::string & name) {
 }
 
 std::string forward_skip_reason(const params & p, const std::string & name, const ggml_tensor * t) {
+    if (t->type == GGML_TYPE_Q6_K && name == "output.weight") {
+        return "Q6_K output head excluded (remaining-UD experiment covers projections)";
+    }
     if (is_row_lookup_tensor(name)) {
         return "row-lookup tensor";
     }

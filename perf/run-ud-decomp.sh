@@ -13,7 +13,7 @@ if [ -z "${CAFFEINATED:-}" ]; then
 fi
 B=${B:-/Users/troff/play/llama.cpp-prod}
 BIN=${BIN:-$B/build/bin}
-M=${M:-/Users/troff/play/Qwen3.8-27B-UD-Q4_K_M-SOA-V1.gguf}
+M=${M:-/Users/troff/play/Qwen3.8-27B-UD-Q4_K_M-SOA-V2.gguf}
 MD=${MD:-/Users/troff/play/Qwen3.8-27B-DFlash2-pureQ4_0-SOA-V1.gguf}
 PROMPT=/Users/troff/play/benchprompt.txt
 PORT=${PORT:-8093}
