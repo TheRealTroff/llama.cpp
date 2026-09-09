@@ -3031,6 +3031,48 @@ kernel void kernel_ssm_conv_f32_f32_rows(
     x[0] = sumf;
 }
 
+// the same, plus the conv-state carry: thread (row, token 0) copies the window's last n_state
+// columns of its row into each state slot (what the K CPY nodes after the concat did, one
+// dispatch and one barrier each; perf/agx-backend-access.md)
+kernel void kernel_ssm_conv_f32_f32_rows_wb(
+        constant ggml_metal_kargs_ssm_conv & args,
+        device const  void * src0,
+        device const  void * src1,
+        device       float * dst,
+        constant ggml_metal_kargs_ssm_conv_wb & wb,
+        device       char  * state,
+        uint3 tgpig[[threadgroup_position_in_grid]],
+        uint3 tpitg[[thread_position_in_threadgroup]],
+        uint3   ntg[[threads_per_threadgroup]]) {
+    const int64_t n_t = args.ne1;
+    const int64_t nr  = args.ne01;
+    const int64_t t   = (int64_t) tgpig.x*ntg.x + tpitg.x;
+    if (t >= nr*n_t) {
+        return;
+    }
+    const int64_t ir = t / n_t;
+    const int64_t i2 = t % n_t;
+    const int64_t i3 = tgpig.z;
+    const int64_t nc = args.ne10;
+    device const float * c = (device const float *) ((device const char *) src1 + ir*args.nb11);
+    device const float * s = (device const float *) ((device const char *) src0 + ir*args.nb01 + i2*args.nb00 + i3*args.nb02);
+    device       float * x = (device       float *) ((device       char *) dst  + ir*args.nb0  + i2*args.nb1  + i3*args.nb2);
+    float sumf = 0.0f;
+    for (int64_t i0 = 0; i0 < nc; ++i0) {
+        sumf += s[i0] * c[i0];
+    }
+    x[0] = sumf;
+    if (i2 == 0) {
+        for (int j = 0; j < wb.n_wb; ++j) {
+            device const float * ss = (device const float *) ((device const char *) src0 + wb.src_off[j] + ir*args.nb01 + i3*args.nb02);
+            device       float * sd = (device       float *) (state + wb.dst_off[j] + i3*wb.dst_nb1) + ir*wb.n_state;
+            for (int k = 0; k < wb.n_state; ++k) {
+                sd[k] = ss[k];
+            }
+        }
+    }
+}
+
 kernel void kernel_ssm_conv_f32_f32_batched(
         constant ggml_metal_kargs_ssm_conv & args,
         device const  void * src0,

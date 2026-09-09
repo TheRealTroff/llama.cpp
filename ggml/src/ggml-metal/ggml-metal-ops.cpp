@@ -53,6 +53,42 @@ static bool ggml_metal_env_has_i32(const char * value, int32_t wanted) {
 // op still writes dst. so this depends only on the graph: no encoder state, and nothing
 // that differs between the normal encoder and the per-op profiling encoder (which
 // builds one op context per node)
+// conv-state carry (GGML_SSM_CONV_WB=1): the K CPY nodes that move the last n_state columns of a
+// conv window (the concat output) into the recurrent-state cache slots, encoded a few nodes BEFORE
+// the SSM_CONV that reads the same window. The decode ssm_conv kernel writes those slots itself and
+// the copies are dropped. Copy side and op side use the same predicate and the same window, so a
+// dropped copy is always one the op writes. Pure function of the graph, like the GDN write-back.
+#define GGML_METAL_SSM_CONV_WB_WINDOW 32
+static bool ggml_metal_ssm_conv_wb_enabled(void) {
+    static const int v = getenv("GGML_SSM_CONV_WB") ? atoi(getenv("GGML_SSM_CONV_WB")) : 0;
+    return v != 0;
+}
+static bool ggml_metal_ssm_conv_wb_cpy(const ggml_tensor * cpy, const ggml_tensor * conv) {
+    if (!cpy || !conv || cpy->op != GGML_OP_CPY || conv->op != GGML_OP_SSM_CONV || !cpy->src[0]) {
+        return false;
+    }
+    const ggml_tensor * win = conv->src[0];              // the conv window [ne00 = n_state + n_tokens, channels, seqs]
+    const ggml_tensor * src = cpy->src[0];               // view of the window: [n_state, channels, seqs]
+    if (src->view_src != win || win->type != GGML_TYPE_F32 || cpy->type != GGML_TYPE_F32 || src->type != GGML_TYPE_F32) {
+        return false;
+    }
+    if (conv->src[1]->type != GGML_TYPE_F32 || conv->ne[1] < 1 || conv->ne[1] > 16) {   // the rows-kernel widths
+        return false;
+    }
+    const int64_t n_state = conv->src[1]->ne[0] - 1;
+    if (n_state < 1 || src->ne[0] != n_state || src->ne[1] != win->ne[1] || src->ne[2] != win->ne[2] || src->ne[3] != 1) {
+        return false;
+    }
+    if (src->nb[0] != sizeof(float) || src->nb[1] != win->nb[1] || src->nb[2] != win->nb[2]) {
+        return false;
+    }
+    // dst: [n_state*channels, seqs] packed rows
+    if (cpy->ne[0] != n_state*win->ne[1] || cpy->ne[1] != win->ne[2] || cpy->ne[2] != 1 || cpy->ne[3] != 1 || cpy->nb[0] != sizeof(float)) {
+        return false;
+    }
+    return true;
+}
+
 static const ggml_tensor * ggml_metal_gdn_wb_op(const ggml_tensor * cpy) {
     if (cpy->op != GGML_OP_CPY || !cpy->src[0]) {
         return nullptr;
@@ -330,6 +366,15 @@ static int ggml_metal_op_encode_impl(ggml_metal_op_t ctx, int idx) {
         }
     }
 
+    if (ggml_metal_ssm_conv_wb_enabled() && node->op == GGML_OP_CPY) {
+        const ggml_cgraph * gf = ctx->graph();
+        const int ci = ctx->node_idx(idx);
+        for (int j = ci + 1; j < gf->n_nodes && j <= ci + GGML_METAL_SSM_CONV_WB_WINDOW; j++) {
+            if (ggml_metal_ssm_conv_wb_cpy(node, gf->nodes[j])) {
+                return 1;
+            }
+        }
+    }
     switch (node->op) {
         case GGML_OP_NONE:
         case GGML_OP_RESHAPE:
@@ -1811,15 +1856,44 @@ int ggml_metal_op_ssm_conv(ggml_metal_op_t ctx, int idx) {
     // decode/verify widths: one thread per (row, token) with 256-thread threadgroups; the batched
     // kernel at these widths dispatches ne01 x ne02 two-thread threadgroups (480 us/call at 8 seqs)
     if (ne1 >= 1 && ne1 <= 16 && op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_F32) {
-        auto pipeline = ggml_metal_library_get_pipeline(lib, "kernel_ssm_conv_f32_f32_rows");
+        // the conv-state carry copies this op absorbs (dropped on the copy side over the same window)
+        ggml_metal_kargs_ssm_conv_wb wb = {};
+        ggml_metal_buffer_id bid_state = {};
+        if (ggml_metal_ssm_conv_wb_enabled()) {
+            const ggml_cgraph * gf = ctx->graph();
+            const int gi = ctx->node_idx(idx);
+            for (int j = gi - 1; j >= 0 && j >= gi - GGML_METAL_SSM_CONV_WB_WINDOW && wb.n_wb < GGML_METAL_SSM_CONV_WB_MAX; j--) {
+                const ggml_tensor * cpy = gf->nodes[j];
+                if (!ggml_metal_ssm_conv_wb_cpy(cpy, op)) {
+                    continue;
+                }
+                ggml_metal_buffer_id bid = ggml_metal_get_buffer_id(cpy);
+                if (wb.n_wb == 0) {
+                    bid_state = bid;
+                    wb.n_state = (int32_t) cpy->src[0]->ne[0];
+                    wb.dst_nb1 = cpy->nb[1];
+                } else if (bid.metal != bid_state.metal || cpy->nb[1] != wb.dst_nb1) {
+                    GGML_ABORT("ssm_conv wb: state slots in different buffers");
+                }
+                wb.src_off[wb.n_wb] = (uint64_t) ((const char *) cpy->src[0]->data - (const char *) op->src[0]->data);
+                wb.dst_off[wb.n_wb] = (uint64_t) (bid.offs - bid_state.offs);
+                wb.n_wb++;
+            }
+        }
+        const char * kname = wb.n_wb ? "kernel_ssm_conv_f32_f32_rows_wb" : "kernel_ssm_conv_f32_f32_rows";
+        auto pipeline = ggml_metal_library_get_pipeline(lib, kname);
         if (!pipeline.pipeline) {
-            pipeline = ggml_metal_library_compile_pipeline(lib, "kernel_ssm_conv_f32_f32_rows", "kernel_ssm_conv_f32_f32_rows", nullptr);
+            pipeline = ggml_metal_library_compile_pipeline(lib, kname, kname, nullptr);
         }
         ggml_metal_encoder_set_pipeline(enc, pipeline);
         ggml_metal_encoder_set_bytes(enc, &args, sizeof(args), 0);
         ggml_metal_encoder_set_buffer(enc, ggml_metal_get_buffer_id(op->src[0]), 1);
         ggml_metal_encoder_set_buffer(enc, ggml_metal_get_buffer_id(op->src[1]), 2);
         ggml_metal_encoder_set_buffer(enc, ggml_metal_get_buffer_id(op),         3);
+        if (wb.n_wb) {
+            ggml_metal_encoder_set_bytes (enc, &wb, sizeof(wb), 4);
+            ggml_metal_encoder_set_buffer(enc, bid_state, 5);
+        }
         const int64_t n = (int64_t) ne01*ne1;
         ggml_metal_encoder_dispatch_threadgroups(enc, (int) ((n + 255)/256), 1, ne02, 256, 1, 1);
         return 1;
