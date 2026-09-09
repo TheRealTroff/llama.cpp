@@ -3589,6 +3589,7 @@ static inline float kernel_gated_delta_net_beta_fn(const float b) {
 
 // one recurrence step on this thread's NSG state elements; returns this row's (unscaled) output
 // (WITH_OUT = false skips it: the replayed tokens only advance the state)
+// GATE: the gate and beta of this token arrive as values (gv, bv), computed once per simdgroup by the caller
 template<short NSG, bool WITH_OUT, bool GATE = false>
 static inline float kernel_gated_delta_net_step(
         thread float (&ls)[NSG],
@@ -3599,12 +3600,12 @@ static inline float kernel_gated_delta_net_step(
         device const float * v_ptr,
         device const float * g_ptr,
         device const float * b_ptr,
-        const float dtb = 0.0f,
-        const float av  = 0.0f) {
+        const float gv = 0.0f,
+        const float bv = 0.0f) {
     float s_k = 0.0f;
 
     if (FC_gated_delta_net_ne30 == 1) {
-        const float g_exp = exp(GATE ? kernel_gated_delta_net_gate_fn(g_ptr[0], dtb, av) : g_ptr[0]);
+        const float g_exp = exp(GATE ? gv : g_ptr[0]);
 
         FOR_UNROLL (short j = 0; j < NSG; j++) {
             const short is = tx*NSG + j;
@@ -3624,7 +3625,7 @@ static inline float kernel_gated_delta_net_step(
 
     s_k = simd_sum(s_k);
 
-    const float d = (v_ptr[i20] - s_k)*(GATE ? kernel_gated_delta_net_beta_fn(b_ptr[0]) : b_ptr[0]);
+    const float d = (v_ptr[i20] - s_k)*(GATE ? bv : b_ptr[0]);
 
     float y = 0.0f;
 
@@ -3746,8 +3747,19 @@ kernel void kernel_gated_delta_net_impl(
     const float av  = FC_gated_delta_net_GATE ? ((device const float *) ga)[i21] : 0.0f;
 
     for (short t = 0; t < args.ne22; t++) {
+        // the fused gate chain: one lane computes this token's gate and beta, the simdgroup shares them
+        float gv = 0.0f;
+        float bv = 0.0f;
+        if (FC_gated_delta_net_GATE) {
+            if (tx == 0) {
+                gv = kernel_gated_delta_net_gate_fn(g_ptr[0], dtb, av);
+                bv = kernel_gated_delta_net_beta_fn(b_ptr[0]);
+            }
+            gv = simd_broadcast_first(gv);
+            bv = simd_broadcast_first(bv);
+        }
         const float y = FC_gated_delta_net_GATE
-            ? kernel_gated_delta_net_step<NSG, true, true >(ls, tx, i20, q_ptr, k_ptr, v_ptr, g_ptr, b_ptr, dtb, av)
+            ? kernel_gated_delta_net_step<NSG, true, true >(ls, tx, i20, q_ptr, k_ptr, v_ptr, g_ptr, b_ptr, gv, bv)
             : kernel_gated_delta_net_step<NSG, true, false>(ls, tx, i20, q_ptr, k_ptr, v_ptr, g_ptr, b_ptr);
 
         if (tx == 0) {
@@ -3785,7 +3797,7 @@ kernel void kernel_gated_delta_net_impl(
                     if (G == 1) {
                         if (tx == 0) {
                             // the kept rows replay through the plain step: store the processed gate
-                            x[2*S_v*H_k + S_v*H_v + i21] = FC_gated_delta_net_GATE ? kernel_gated_delta_net_gate_fn(g_ptr[0], dtb, av) : g_ptr[0];
+                            x[2*S_v*H_k + S_v*H_v + i21] = FC_gated_delta_net_GATE ? gv : g_ptr[0];
                         }
                     } else {
                         FOR_UNROLL (short j = 0; j < NSG; j++) {
@@ -3794,7 +3806,7 @@ kernel void kernel_gated_delta_net_impl(
                         }
                     }
                     if (tx == 0) {
-                        x[2*S_v*H_k + S_v*H_v + G*H_v + i21] = FC_gated_delta_net_GATE ? kernel_gated_delta_net_beta_fn(b_ptr[0]) : b_ptr[0];
+                        x[2*S_v*H_k + S_v*H_v + G*H_v + i21] = FC_gated_delta_net_GATE ? bv : b_ptr[0];
                     }
                 }
             }

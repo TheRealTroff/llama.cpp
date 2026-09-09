@@ -1,7 +1,7 @@
 # Small-op fusion tools (2026-09-10)
 
 - `perf/run-fuse-quick.sh` - sha + speed on a 3000-char prompt, 96 tokens, both lines, batch-1 and the
-  Turbo4 depth-3 arm (`B=<tree> EXTRA="GGML_FUSE_SMALL=63" LINES="ud q4" ARMS="batch1 turbo4-n3"`).
+  Turbo4 depth-3 arm (`B=<tree> EXTRA="GGML_FUSE_SMALL=63" PICK_LINES="ud q4" ARMS="batch1 turbo4-n3"` (not LINES: bash owns that name)).
   Shas are only comparable to each other, never to the canonical mints.
 - `perf/run-fuse-gate.sh` - the canonical ABAB gate (run-prod-pick.sh, Turbo4 arms, both lines) for a
   `proposed` manifest flag: base = manifest picks, fused = PICK_PROPOSED=1.

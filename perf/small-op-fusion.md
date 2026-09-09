@@ -76,12 +76,43 @@ there is no second predicate to keep in sync.
    `volatile` round trip pins an intermediate's rounding where the unfused kernel wrote it to memory
    (fast-math would otherwise fold the multiply into the division or the exp).
 
-## Route proof
+## Route proof (2026-09-10, profiled UD Turbo4 depth-3 run, 36 rounds, `run-fuse-quick.sh`)
 
-Batch-1 graph, all bits (`GGML_METAL_GRAPH_DEBUG=1`): 1651 -> 1347 encoded nodes, 1108 -> 833
-barriers; dropped per graph: 48 conv windows, 48 conv silus, 48 gated-norm silus, 192 gate-chain
-nodes; 128 add+norm chains fused (RMS_NORM 209 -> 81).
+Target decode dispatches per round **1756 -> 1201 (-32%)**; per op: RMS_NORM 226 -> 88, ADD 191 -> 139,
+MUL 122 -> 17, SIGMOID 69 -> 17, SILU 104 -> 0, CONCAT 52 -> 0, SOFTPLUS 52 -> 0; MUL_MAT spans 88.9 ->
+87.9 ms (the casts inside them); all eight fusion kernels load (`kernel_rms_norm_mul_tw_f32_4`,
+`kernel_rms_norm_mul_gs[_tw]_f32_4`, `kernel_add_rms_norm_mul[_tw]_f32_4`, `kernel_swiglu_tw_f32`,
+`kernel_ssm_conv_f32_f32_rows_cat`, the GDN `_gate=1` pipeline). The batch-1 graph dump agrees: 1651 ->
+1347 encoded nodes, 1108 -> 833 barriers. The profiled run's sha equals the unprofiled one (the per-op
+encoder path sees the same work). Under the profiler the round moved 20.4 -> 22.0 t/s.
 
-## Results
+## Byte identity
 
-(sha gates and the ABAB e2e gate: see below, filled in as they land)
+Quick harness (3000-char prompt, 96 tokens): every bit alone and all bits together reproduce the base
+sha on both lines, batch-1 and the Turbo4 depth-3 arm (`48c93b464d9b` / `f566cc418c50` ud,
+`0065fce404d1` / `1aa8305c8b69` q4).
+
+Canonical harness (benchprompt, Turbo4 ud 300): every bit alone reproduces the canonical
+`a409bb1b45df` (bits 1, 3, 4, 8, 16, 32: 27.17 / 26.20 / 27.25 / 27.14 / 27.01 / 27.22 t/s, single
+runs). **Trap:** the first ABAB gate ran the fused arm with `PICK_PROPOSED=1`, which enables EVERY
+proposed manifest entry - `LLAMA_SPEC_EV=1` (SPEC class, forks the lineage) rode along and produced new
+shas with +1..6 pt acceptance on ud, while q4 happened to keep its shas. A gate for one flag passes it
+explicitly (`run-fuse-gate.sh`, PICK_PROPOSED=0). The two hours that cost are the reason this paragraph exists.
+
+## Results (2026-09-10, `run-fuse-gate.sh`: run-prod-pick.sh, benchprompt, Turbo4 depth 3, ABAB x2, one binary)
+
+| line | arm | base r1 / r2 | fused (GGML_FUSE_SMALL=63) r1 / r2 | delta | sha (base = fused, all 4 arms) |
+|---|---|---:|---:|---:|---|
+| ud | 600 | 27.174 / 27.222 | 27.780 / 27.778 | **+2.1%** | 7f39f71e9d95 |
+| ud | 300 | 26.938 / 27.014 | 27.442 / 27.513 | **+1.9%** | a409bb1b45df |
+| q4 | 600 | 31.468 / 31.554 | 32.262 / 32.242 | **+2.4%** | de24d885043f |
+| q4 | 300 | 29.701 / 29.724 | 30.371 / 30.331 | **+2.1%** | 04ada3a4de10 |
+
+Acceptance identical per arm (64.7 / 64.1 ud, 65.5 / 60.2 q4): a BI change on both lines. Logs
+`kvquant-experiments/results/fusegate-0910-*`. Against the 7.7 ms/round of spans the class carried
+(8% of the profiled round), the e2e is a quarter of that, in line with the span-vs-critical-path rule:
+what was removed is ~550 launches and their drains per round, not the spans.
+
+Manifest entry `GGML_FUSE_SMALL=63|BI|both|proposed`; adoption = owner. Per-bit attribution on the quick
+harness and the cost of the in-kernel gate chain (the GDN row's span grew 0.6 ms/round in the profile;
+its gate values are now computed once per simdgroup and broadcast): see the attribution block below.

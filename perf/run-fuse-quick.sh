@@ -5,7 +5,7 @@ set -u
 B=${B:-/Users/troff/play/llama.cpp-fuse}
 TAG=${TAG:-fq-$(date +%H%M%S)}
 EXTRA=${EXTRA:-}
-LINES=${LINES:-"ud q4"}
+PICK_LINES=${PICK_LINES:-"ud q4"}   # not LINES: bash owns that name (terminal rows) and drops a two-word value
 ARMS=${ARMS:-"turbo4-n3 batch1"}
 NPRED=${NPRED:-96}
 PROMPT=${PROMPT:-$B/perf/prompts/quickprompt-3000.txt}
@@ -14,7 +14,7 @@ OUT=/Users/troff/play/kvquant-experiments/results/fuse-quick
 mkdir -p "$OUT"
 source "$B/perf/pick.sh"
 echo "=== $TAG  tree=$B commit=$(cd "$B" && git rev-parse --short HEAD) extra='$EXTRA'"
-for line in $LINES; do
+for line in $PICK_LINES; do
   for arm in $ARMS; do
     if [ "$arm" = turbo4-n3 ]; then pick_env "$line" turbo4; pick_args "$line" turbo4; spec=("${PICK_SPEC[@]}")
     else pick_env "$line" f16; pick_args "$line" f16; spec=(--spec-type none); fi

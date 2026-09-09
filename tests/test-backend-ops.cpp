@@ -10484,6 +10484,15 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     test_cases.emplace_back(new test_bin_bcast(ggml_add, GGML_TYPE_F32, {4096, 1, 1, 1}, {1, 512, 1, 1}));
 
     test_cases.emplace_back(new test_cpy(GGML_TYPE_F32,  GGML_TYPE_F16,  {512, 3072, 1, 1}));
+    // cache residency sweep (perf/small-op-fusion.md): contiguous f32 copies of 2..48 MB read; the perf loop
+    // re-reads one source, so the rate above the DRAM floor is the SLC's, up to the size that no longer fits
+    for (int64_t mb : {2, 4, 8, 12, 16, 24, 32, 48}) {
+        test_cases.emplace_back(new test_cpy(GGML_TYPE_F32, GGML_TYPE_F32, {1024, mb*256, 1, 1}));
+    }
+    // the same sweep read-only (row sums): the copy writes as much as it reads and GPU writes bypass the SLC
+    for (int64_t mb : {2, 4, 8, 12, 16, 24, 32, 48}) {
+        test_cases.emplace_back(new test_sum_rows(GGML_TYPE_F32, {1024, mb*256, 1, 1}));
+    }
     test_cases.emplace_back(new test_cpy(GGML_TYPE_F32,  GGML_TYPE_F32,  {8192, 512, 2, 1}, {-1,-1,-1,-1}, {0, 2, 1, 3}));
     test_cases.emplace_back(new test_cpy(GGML_TYPE_F32,  GGML_TYPE_F32,  {3072, 512, 2, 1}, {-1,-1,-1,-1}, {0, 2, 1, 3}));
     test_cases.emplace_back(new test_cpy(GGML_TYPE_F32,  GGML_TYPE_Q4_0, {8192, 512, 2, 1}));
