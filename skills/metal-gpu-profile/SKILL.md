@@ -170,6 +170,12 @@ kernel win):
   applies. "us per M executed" fell 17.8 -> 8.6 from w1 to w4 only because more instructions
   fit into the same memory-bound time. The 7.6-8.6 us/M rule below is therefore a statement
   about the w4/w5 kernels' distance from the floor, not a hardware issue rate.
+- **`test-backend-ops perf` overlaps iterations of an op whose inputs nothing writes (2026-09-09,
+  `perf/agx-backend-access.md`).** ggml-metal only serializes dispatches on buffer hazards; a perf case's
+  src tensors are never written, so back-to-back iterations of a streaming kernel run concurrently and
+  contend for DRAM (+20..90% per op measured). Any variant that removes a barrier-bearing step (the
+  decode f32->f16 activation copy ends in one) measures that contention, not the kernel. Keep the
+  barrier (`ggml_metal_op_concurrency_reset`) in the variant, or compare in the real graph.
 - **issue share x issue rate, not instruction count or stall alone, predicts time.**
   Measured both failure directions: an unroll cut dynamic instructions 15% and lost
   (stall rose), a sumy variant issued 25% MORE instructions more smoothly and lost.

@@ -303,9 +303,44 @@ says the y loads are free at width 4; the f32 form doubles their bytes and must 
 changes numerics (no f16 rounding of the activations: NUM class, owner's call per the pick
 manifest). Ceiling ~3.5% of decode GPU time plus whatever the serialization costs.
 
+## Eliminating the copy (2026-09-09 night, branch `exp/q6k-w1-ilp`)
+
+**f32-activation kernels (`GGML_MV_SOA_Y32=1`, kernel `*_y32`): REFUTED.** Twins of the pick's q4_0
+w4/w5, iq4_xs v5, q4_K/q5_K v2 and the remaining-format kq kernels read f32 y and convert in
+registers (same arithmetic, 143/143 correctness cases). Codegen is clean (two 16-byte vector loads
+and 32 converts per iteration, +11% static instructions), but per call they are **+20% at ffn_up
+and +90% at ffn_down** (q4_0: 220 -> 265 / 238 -> 454 us; q6_K: 322 -> 372 / 349 -> 503). Every
+threadgroup reads all four columns, so the activation traffic through the cache is M x K x bytes:
+178 MB per dispatch at half, 356 MB at f32, against 50-73 MB of weights from DRAM. The wt-only
+probe's "activation loads are free" held at the half volume only. Kept env-gated for the record.
+
+**Perf-loop trap (`GGML_MV_SOA_Y32=2` probe).** Skipping the copy but running the unchanged f16
+kernel on the stale scratch measured +20..90% too - until the copy path's memory barrier
+(`ggml_metal_op_concurrency_reset`) was restored. In `test-backend-ops perf` the op's inputs are
+never written, so without that barrier consecutive iterations of a streaming kernel overlap and
+contend for DRAM. A variant that drops a barrier measures contention, not the kernel; in the real
+graph the producer of src1 supplies the hazard. With the barrier kept, the copy dispatch itself
+costs **7 us at K=5120 and 18 us at K=17408** on both formats (q4_0 220 -> 213, 238 -> 220; q6_K
+322 -> 315, 349 -> 331), matching the capture attribution.
+
+**The cheap fix (`GGML_MV_Y16_CVT=1`): the contiguous vectorized cast** (`kernel_cvt_f32_f16_cont`,
+8 elements per thread, already used by the prefill f16-B path) instead of the generic one-element-
+per-thread `kernel_cpy_f32_f16` with its four 64-bit divisions per element. Same round-to-nearest
+conversion, byte-identical by construction; 143/143 cases pass. Per call:
+
+| case | generic copy | cast | no copy (probe) |
+|---|---:|---:|---:|
+| q4_0 17408x5120 n=4 | 220.6 | 217.9 | 212.8 |
+| q4_0 5120x17408 n=4 | 239.0 | 223.2 | 220.1 |
+| q6_K 17408x5120 n=4 | 323.6 | 318.3 | 315.0 |
+| q6_K 5120x17408 n=4 | 349.9 | 335.0 | 330.7 |
+
+70-90% of the copy recovered: ~2.5 of the 3.7 ms per decode round by the profile arithmetic. The
+e2e gate (ABAB, both lines, Turbo4 arms at 300/600) is in `kvquant-experiments/results/y16cvt-*`.
+
 ## Next
 
-1. f32-y forms of the width 2-8 SoA kernels (the copy is confirmed at 3.3-3.5% of decode GPU time; numerics change, owner's call).
+1. GGML_MV_Y16_CVT=1 adoption on the e2e gate result (BI); the f32-y forms are refuted (cache traffic).
 2. Re-run the cost dataset on kernels that are NOT on the byte floor (mul_mm acch n64, FA,
    GDN: function constants via `agx-nt-opt.py --cv`, FC_MUL_MV = 600 nsg/nxpsg/ne12/r2/r3/nr0_v;
    FA and mul_mm constants from `ggml-metal-device.cpp`) and fit class prices against measured
