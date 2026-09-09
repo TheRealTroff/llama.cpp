@@ -417,13 +417,15 @@ Nothing in a pick changes; adoption = owner.
 | hot-loop issue share by encoding class 8 B + 12 B | 55% | **68%** (12 B alone 37%) |
 | issue cost per executed instruction (us x issue / M) | 14.2 | **17.9 (+27%)** |
 
-> **CORRECTION 2026-09-09 afternoon (`perf/agx-backend-access.md`, width series):** the 17.9 and 14.2
-> are width-1 numbers, not a property of the q6_K instruction mix. Per executed instruction the
-> q6_K SoA kernels cost 19.6 / 11.8 / 9.5 us/M at widths 1 / 2 / 4 and q4_0 17.8 / 11.2 / 8.6:
-> width halves the price for both, q6_K stays ~10% above q4_0 at every width. The "fatter 8/12 B
-> address mix" reading below stands only as a ~10% term; the 2x is the width-1 ILP regime, which
-> the profiler files under "issue" (97% issue / 3% stall at w1, 87 / 13 at w4). The per-instruction
-> issue column it was read from is executed x a static per-opcode table, not a measurement.
+> **CORRECTION 2026-09-09 afternoon (`perf/agx-backend-access.md`, width series):** "not memory" was
+> wrong. Both kernels stream 73.2 MB per dispatch and run at 1.09x (native) / 1.12x (stored) the
+> 273 GB/s DRAM floor, 244 GB/s achieved; q4_0 at the same shape is also 1.12x, and q6_K/q4_0 time
+> = the byte ratio (1.46). The profiler's issue/stall split cannot see the waits (Wait instruction
+> count 0: they are encoded in the instructions), so "97% issue" does not mean issue-bound. The
+> +27% "issue cost per executed instruction" and the "fatter 8/12 B address mix" reading below
+> describe how many instructions fit into a memory-bound 300 us, not what sets the 300 us. An ILP
+> probe (N accumulator chains, branch exp/q6k-w1-ilp) moved nothing. The 4% stored-vs-native gap
+> is what remains to explain; the per-instruction issue column is executed x a static table.
 
 Three facts, in the order they rule things out. **Not memory:** both kernels sit at 96-97% issue with < 5%
 stall, so the byte-floor ratios (1.11x / 1.19x) describe nothing - the loop is issue-bound on both sides.

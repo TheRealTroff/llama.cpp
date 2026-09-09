@@ -153,55 +153,56 @@ ssm_conv, bin_fuse) - the census does not record the values; they have to come f
    instruction (not yet captured on the current build) is the number that decides between
    the two readings.
 
-## Width series (2026-09-09 afternoon): the per-instruction price is the ILP regime
+## Width series (2026-09-09 afternoon): these kernels sit on the DRAM floor
 
 Captured on the prod build (c19acef9a) at 17408x5120, `run-ud-soa-profile.sh`, uncaptured
 timings from two `test-backend-ops perf` runs each
-(`kvquant-experiments/profiles/width-series-sep09`, joins in `build-air/mir/*.join.json`):
+(`kvquant-experiments/profiles/width-series-sep09`, joins in `build-air/mir/*.join.json`).
+Bytes per dispatch = weights (q4_0 18 B/32, q6_K 210 B/256) + f32 activations + output; floor
+at the census's 273 GB/s:
 
-| arm | kernel | us/run | executed/dispatch | **us per M executed** | issue / stall % |
-|---|---|---:|---:|---:|---:|
-| q4_0 w1 | mul_mv_q4_0_f32_di (native) | 205.7 | 11.53M | **17.8** | 68.9 / 31.1 |
-| q4_0 w2 | mul_mv_ext_q4_0_di_f16_r1_2 | 258.0 | 23.01M | **11.2** | 86.3 / 13.7 |
-| q4_0 w4 | mul_mv_q4_0_soa_w4_r4kp_v3 | 220.0 | 25.62M | **8.6** | 88.0 / 12.0 |
-| q4_0 SoA w1 | mul_mv_q4_0_soa_w1 (Q4_0_SOA type) | 205.4 | 13.06M | **15.7** | 98.5 / 1.5 |
-| q4_0 SoA w2 | mul_mv_q4_0_soa_w2 | 206.7 | 19.61M | **10.6** | 95.1 / 4.9 |
-| q6_K w1 | mul_mv_q6_K_soa_w1_v1 | 299.5 | 15.30M | **19.6** | 97.3 / 2.7 |
-| q6_K w2 | mul_mv_q6_K_soa_w2_v1 | 308.6 | 26.19M | **11.8** | 96.1 / 3.9 |
-| q6_K w4 | mul_mv_q6_K_soa_w4_v1 | 324.6 | 34.19M | **9.5** | 87.0 / 13.0 |
+| arm | kernel | us/run | MB | x DRAM floor | executed/dispatch | us per M executed | issue / stall % |
+|---|---|---:|---:|---:|---:|---:|---:|
+| q4_0 w1 | mul_mv_q4_0_f32_di (native) | 205.7 | 50.2 | **1.12** | 11.53M | 17.8 | 68.9 / 31.1 |
+| q4_0 SoA w1 | mul_mv_q4_0_soa_w1 | 205.4 | 50.2 | **1.12** | 13.06M | 15.7 | 98.5 / 1.5 |
+| q4_0 w2 | mul_mv_ext_q4_0_di_f16_r1_2 | 258.0 | 50.3 | 1.40 | 23.01M | 11.2 | 86.3 / 13.7 |
+| q4_0 SoA w2 | mul_mv_q4_0_soa_w2 | 206.7 | 50.3 | **1.12** | 19.61M | 10.6 | 95.1 / 4.9 |
+| q4_0 w4 | mul_mv_q4_0_soa_w4_r4kp_v3 | 220.0 | 50.5 | **1.19** | 25.62M | 8.6 | 88.0 / 12.0 |
+| q6_K w1 | mul_mv_q6_K_soa_w1_v1 | 299.5 | 73.2 | **1.12** | 15.30M | 19.6 | 97.3 / 2.7 |
+| q6_K native w1 | mul_mv_q6_K_f32 | 291.3 | 73.2 | **1.09** | 19.44M | 15.0 | 95.6 / 4.4 |
+| q6_K w2 | mul_mv_q6_K_soa_w2_v1 | 308.6 | 73.3 | **1.15** | 26.19M | 11.8 | 96.1 / 3.9 |
+| q6_K w4 | mul_mv_q6_K_soa_w4_v1 | 324.6 | 73.5 | **1.21** | 34.19M | 9.5 | 87.0 / 13.0 |
 
-1. **Time per executed instruction roughly halves from width 1 to width 4, for both
-   formats.** q4_0 SoA 15.7 -> 10.6 -> 8.6 (native/ext forms 17.8 -> 11.2), q6_K 19.6 -> 11.8
-   -> 9.5. Width adds independent accumulators per thread (ILP), nothing else; the instruction
-   mix of each format barely changes with width. Width 2 is free for q4_0 (206.7 vs 205.4 us)
-   and nearly so for q6_K (+3%).
-2. **q6_K costs 10-25% more per instruction than q4_0 SoA** (1.25 at w1, 1.11 at w2, 1.10 at
-   w4), although its stream is byte loads, 64-bit address adds and bit-field extracts where
-   q4_0's is f16 FMAs. The instruction *class* mix is the second-order term; the regime term
-   is 1.8-2.1x. The q6_K w1 gap to the fleet's 7.6-8.6 us/M rule is mostly the width-1
-   regime (the rule was measured on w4/w5 kernels); the fat address mix is the remaining
-   quarter at w1 - the September 9 morning reading, which put all of it on the mix, is
-   corrected in `perf/ud-remaining-quants.md`.
-3. **The profiler's "issue" bucket contains the dependency bubbles.** q6_K w1 shows 97.3%
-   issue / 2.7% stall while running at 2x the per-instruction time of its own w4 form; stall
-   *rises* with width (2.7 -> 3.9 -> 13.0%) as the ALU gets genuinely busy and memory waits
-   surface. "Issue-bound at 97%" therefore means "not waiting on memory", not "the issue port
-   is saturated". Where measured stall lands: on the first consumer of a load (shift/mask
-   right after the byte load), 6.5% of it on load instructions themselves at w1.
-4. Consequence for the cost model: time = executed x price(ILP regime) x (1 + small class
-   term) + memory waits. The regime term (~2x between w1 and w4) dwarfs the class term
-   (1.1-1.25x between the most different formats we have). The lever for the width-1/2 decode
-   kernels is independent work per thread (more rows or columns per thread, software
-   pipelining of the dequant chain), not instruction selection.
+1. **Every SoA arm is within 9-21% of the DRAM floor; q6_K w1 and q4_0 w1 both stream at
+   244 GB/s.** q6_K/q4_0 time ratio 1.46 = their byte ratio 1.46. Width 2 is free because the
+   bytes do not change. The "us per M executed" column falls with width only because more
+   instructions are executed inside the same memory-bound time - it is not a per-instruction
+   price and the first reading of this table (an "ILP regime") was wrong.
+2. **The ILP probe confirmed it** (branch `exp/q6k-w1-ilp`, `GGML_MV_UD_W1_NA=2|4|8`, kernel
+   `*_soa_w1_na<N>`): N independent f32 accumulator chains per row instead of one, same loads
+   and dequant. NA=2: 300 us, NA=4: 302 us (349 vs 302 static instructions), NA=8: 315 us, all
+   correct. More instructions, same time: the kernel is not waiting on its FMA chain.
+3. **Why the profiler said "issue-bound".** Both q6_K kernels report `Wait instruction count 0`:
+   on g16s the scoreboard waits are encoded in instruction bits, so there is nothing for the
+   profiler to file under "stall" while a simdgroup waits for a load. Its issue/stall split is
+   blind to exactly the wait that dominates a bandwidth-bound decode kernel. The morning's
+   "not memory: 96-97% issue" (ud-remaining-quants.md) and the afternoon's ILP reading both
+   overrode the census's own first metric for stream kernels, x the byte floor, which had the
+   answer at 1.11x. Rule: when time is within ~1.2x of bytes/273 GB/s, the kernel is on the
+   floor and no instruction-level reading applies, whatever the issue/stall split says.
+4. What is left in these kernels is the 9-21% above the floor (the native q6_K w1 at 1.09x is
+   the best of the set; the SoA form at 1.12x is the +4% the morning measured). The
+   instruction-class question only becomes answerable on shapes or widths that leave the
+   floor: mul_mm, FA, GDN, or these kernels at widths 5+ / small K where bytes stop dominating.
 
 ## Next
 
-1. Confirm the ILP reading directly: q6_K w1 with 8 rows per thread instead of 4 (more
-   independent accumulators, same instruction classes) should move us/M toward the w2 value.
-2. Function constants for the skipped kernels (read them out of `ggml-metal-device.m` per
-   pipeline name, or record them in the census plan) so mul_mm, FA and GDN enter the dataset.
-3. With those in: fit per-class prices against measured kernel time directly (not against
-   the profiler's issue column), with loads as a class; compare with the WriteRes taxonomy
-   and with the profiler's 1/4/6/8 table.
-4. Name the opcode numbers by structure for the ~80 seen so far (a `perf/agx-opcode-names.json`
-   that `agx-mir-align.py --names` and the dataset tool already accept).
+1. Re-run the cost dataset on kernels that are NOT on the byte floor (mul_mm acch n64, FA,
+   GDN: function constants via `agx-nt-opt.py --cv`, FC_MUL_MV = 600 nsg/nxpsg/ne12/r2/r3/nr0_v;
+   FA and mul_mm constants from `ggml-metal-device.cpp`) and fit class prices against measured
+   time there.
+2. Add "x byte floor" to the join table output so a kernel on the floor is flagged before any
+   per-instruction reading (census already computes it; the profile skill's recipes did not
+   check it).
+3. Name the opcode numbers (float side done via Xcode's FP32 counts; integer side needs a
+   solve across kernels) - `perf/agx-opcode-names.json`.
