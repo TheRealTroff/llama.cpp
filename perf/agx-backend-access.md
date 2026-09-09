@@ -232,9 +232,44 @@ one - saturated; the w4 kernels at 1.19-1.21x nominal have ~8-10% left, which is
 compute/stream overlap (a prefetch/double-buffer form is the candidate, not instruction
 selection).
 
+## Width-4 ceiling probes (2026-09-09 evening, branch `exp/q6k-w1-ilp`, `GGML_MV_SOA_W4_PROBE=ld|dq|wt`)
+
+The pick's width-4 q4_0 kernel (`kernel_mul_mv_q4_0_soa_w4_r4kp_v3`) with its compute deleted
+(`_ldonly`: every loaded word folded, no dequant, no FMA), its FMAs deleted (`_dqonly`), or its
+activation loads deleted too (`_wtonly`). Wrong results by design, perf only. Shapes are
+m x k (test-backend-ops naming; the census ids are k x m):
+
+| m x k | v3 | ld only | dq only | wt only | w1 kernel (f32 y) | practical floor |
+|---|---:|---:|---:|---:|---:|---:|
+| 17408 x 5120 (ffn_up) | 221 | 211 | 215 | 212 | 205 | 199 |
+| 5120 x 17408 (ffn_down) | 239 | 236 | 241 | 235 | 213 | 199 |
+
+The n=4 perf case also runs `kernel_cpy_f32_f16` on the activations (the width-4 route takes
+half y; width 1 reads f32): 4 us at ffn_up, **16 us at ffn_down** (Sep 06 census cost shares),
+inside the numbers above. Net:
+
+1. **Compute is worth 2-5%** (v3 vs ld only). **Activation traffic is worth nothing** (wt only =
+   ld only), even though every threadgroup re-reads all four columns (178 MB per dispatch from
+   cache). The kernel is its weight stream.
+2. **The width-4 weight stream is within ~3% of the width-1 kernel's** once the copy is taken
+   out (ffn_down: 236 - 16 = 220 vs 213). No double-buffer or prefetch form can recover more
+   than that.
+3. **The one item left on these kernels is the activation copy**: 16 us per ffn_down call at
+   width 4 is 7% of the call, and it is a launch-bound 280 KB conversion, not bandwidth. A
+   width-4 kernel reading f32 y directly (the width-1 kernel already does; the loads are free
+   per point 1) removes it. Rough per-round ceiling on the pick: ~1.5 ms of a ~35 ms round
+   across the FFN and projection calls, to be confirmed from the server profile rather than
+   the perf case.
+4. The SoA-pin flag is inert on these cases (A/B at both shapes, 4 runs).
+
+Trap logged: `env $E cmd` in zsh passes the whole string as one assignment (memory
+`zsh-env-does-not-word-split`); the first probe timings routed to the ext kernel at 370 us
+until the assignments were written out.
+
 ## Next
 
-1. Re-run the cost dataset on kernels that are NOT on the byte floor (mul_mm acch n64, FA,
+1. Price the activation copy on the server profile and, if it holds, an f32-y form of the width-4/5 kernels (branch exp/q6k-w1-ilp has the probes).
+2. Re-run the cost dataset on kernels that are NOT on the byte floor (mul_mm acch n64, FA,
    GDN: function constants via `agx-nt-opt.py --cv`, FC_MUL_MV = 600 nsg/nxpsg/ne12/r2/r3/nr0_v;
    FA and mul_mm constants from `ggml-metal-device.cpp`) and fit class prices against measured
    time there.
