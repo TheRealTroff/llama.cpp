@@ -135,6 +135,18 @@ kernel win):
   and `cost2` (stall) for the loop's share; histogram their `size` field for the
   codegen fingerprint (6 B ~ f32 FMA short forms, 10 B ~ compact wide-operand
   arithmetic, 14 B ~ device loads, 12 B ~ load-consumers/MMA lowering on g16s).
+- **The per-instruction `cost` (issue) column is NOT a measurement (2026-09-09,
+  `perf/agx-backend-access.md`).** Joined against the final machine IR for 10,612 instructions
+  across 34 profiles, `cost = executed x w(opcode) x k`: `w` is a fixed per-opcode weight
+  (1 for f16 arithmetic/moves/branches/compares, 4 for 32-bit shifts, bit-field extracts,
+  32-bit uniform ALU and f32 unary, 6 for one convert form, 8 for 64-bit pair ops, **0 for
+  every load, store and stop**), `k` one constant per kernel, zero residual. A "hot
+  instruction by issue" inside a kernel is count times that table. `cost2` (stall) DOES
+  vary per site and per kernel and is the measured column; per-kernel issue vs stall shares
+  remain measured. The table predicts time no better than plain counting on the mv fleet
+  (5.3% vs 18.6% spread), so read it as the profiler's apportioning model, not hardware
+  cycles. To see what a site actually is, dump the kernel's machine IR
+  (`perf/agx-nt-opt.py mir`) and join (`perf/agx-mir-align.py --profile`).
 - **issue share x issue rate, not instruction count or stall alone, predicts time.**
   Measured both failure directions: an unroll cut dynamic instructions 15% and lost
   (stall rose), a sumy variant issued 25% MORE instructions more smoothly and lost.

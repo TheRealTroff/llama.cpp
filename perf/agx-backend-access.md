@@ -109,10 +109,59 @@ StringRef write, not implemented), `print-regusage`. A patched dylib (the copy i
 signed, so a byte patch of an option's default is loadable) would make any of them
 persistent without lldb.
 
+## Alignment and the first dataset (same day)
+
+`perf/agx-mir-align.py`: after the preamble program and its run of 2-byte `0600` nops (body
+starts at the next 64-byte boundary, 0xc0 on every ggml kernel so far), the native body maps
+**one to one, in order** to the final MIR: 446/446 (q4_0 w5), 302/302 (q6_K w1), 402/402
+(q4_0 w4). Nothing is inserted after the last dumped pass; the 4/6/8-byte encodings of one
+opcode are compression forms and the wait/scoreboard state travels in the instruction words
+(the large immediates such as 536870944 = 0x20000000). The census profile rows join by
+offset (the profiler lists the final stop with size 0).
+
+`perf/agx-cost-dataset.py` ran the join over the four Sep 06 census snapshots: 34 profiles
+of 7 kernels (q4_0/iq4_xs/q4_K/q5_K SoA w4, cpy, rms_norm, swiglu). 69 profiled kernels
+were skipped because the translator needs their function constants (mul_mm, FA, GDN, cvt,
+ssm_conv, bin_fuse) - the census does not record the values; they have to come from
+`ggml-metal-device.m`'s pipeline setup. Output in `build-air/dataset/` (not committed).
+
+**What the join established (verified per instruction, 10,612 instructions, zero residual):**
+
+1. **The profiler's per-instruction `cost` (issue) column is `executed x w(opcode) x k`.**
+   `w` is a fixed per-opcode weight, identical in every kernel and every capture: 1 for f16
+   arithmetic, moves, branches, compares and 32-bit uniform moves; 4 for 32-bit shifts,
+   bit-field extracts, 32-bit uniform ALU and f32 unary ops; 6 for opcode 16842 (a
+   16->32 convert form); 8 for the 64-bit register-pair ops (address adds, 64-bit uniform
+   loads); **0 for every device load and store and for stop.** `k` is one constant per
+   kernel. So within a kernel the "hot instruction by issue" ranking is a static statement -
+   count times a table - not a measurement. The `cost2` (stall) column varies by kernel for
+   the same opcode (0.01-2.4x for the same uniform move, 2.6-22x for 16842) and is the
+   measured quantity. Per-kernel issue vs stall shares remain meaningful (the kernel's busy
+   time is measured; only its apportioning over instructions is static). This corrects the
+   reading recipes in `skills/metal-gpu-profile` and the census's "hot instruction" rows.
+2. **The weight table is not a better time predictor than counting.** Across the 9 mv
+   profiles with timings, `us per executed instruction x issue share` spreads 5.3% (the
+   existing skill rule); `us per weighted unit` spreads 18.6%, because the iq4_xs kernel's
+   LUT loads carry weight 0. Giving loads a weight of 4 brings it to 6.6%, uniform-plus-
+   loads-4 to 8.7%: with 4 kernel families the data cannot rank these. The table is Apple's
+   apportioning model, not a demonstrated hardware cost table. Do not use it as one until
+   the dataset has the K-quant w1/w2, FA, mul_mm and GDN kernels in it.
+3. **What q6_K w1 looks like at this level**: per loop 12 `load (s8)`, 12 64-bit address
+   adds (weight 8 each under the profiler's table), 44 bit-field extracts, 37 uniform-register
+   touches, 35 f32 FMAs. Under the table it is 2.5x the issue units of the q4_0 w4 loop per
+   FMA; under plain counting it is fewer instructions. Its measured stall column per
+   instruction (not yet captured on the current build) is the number that decides between
+   the two readings.
+
 ## Next
 
-1. MIR <-> decoder alignment (per-opcode sizes), then join with the census `instr.json`
-   per-instruction issue/stall rows: that is the regression dataset for class costs.
-2. Name the opcode numbers by structure for the ~60 that the census kernels use.
-3. Fit issue cycles = sum(class_i x cost_i) over the census kernels; validate on held-out
-   kernels; compare with the WriteRes taxonomy.
+1. Capture the q6_K w1/w2 (and q4_0 w1) profiles on the current build and read the
+   measured per-instruction stall column against the MIR: address-add and byte-load sites
+   versus FMA sites.
+2. Function constants for the skipped kernels (read them out of `ggml-metal-device.m` per
+   pipeline name, or record them in the census plan) so mul_mm, FA and GDN enter the dataset.
+3. With those in: fit per-class prices against measured kernel time directly (not against
+   the profiler's issue column), with loads as a class; compare with the WriteRes taxonomy
+   and with the profiler's 1/4/6/8 table.
+4. Name the opcode numbers by structure for the ~80 seen so far (a `perf/agx-opcode-names.json`
+   that `agx-mir-align.py --names` and the dataset tool already accept).
