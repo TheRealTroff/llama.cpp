@@ -32,6 +32,18 @@ one level down, and it bit the `GGML_MV_EXT_V2` work on 2026-08-22.
 
 ## The prod pick
 
+
+**2026-09-09 evening (owner: "Let's bring it in"): two byte-identical decode-side copy fixes,
+`GGML_MV_Y16_CVT=1` (the per-op f32->f16 activation copy through the contiguous cast kernel instead
+of the generic one-element-per-thread copy) and `GGML_SSM_CONV_WB=1` (the K conv-state carry copies
+fused into the decode ssm_conv kernel), in both lines' manifests. Stacked ABAB x2: +3.3/+3.1% q4,
++2.8/+2.0% ud at 600/300, every sha identical. Mint TAG `prodpick-sep09-copies-{q4,ud}` (prod
+`9e7a84ade`): q4 f16 28.80/28.83 at 300 and 30.88/30.84 at 600 (shas 822ce37ce2e5 / 5f32a6b9d371,
+canonical), Turbo4 30.57/30.49 at 600, 28.81 at 300 (de24d885043f / 04ada3a4de10), batch-1 13.86;
+ud f16 22.95/23.22 at 300 and 24.11/24.23 at 600 (73ea53bbe98f / 5e76afaba36c, canonical), Turbo4
+26.39/27.11 at 600, 27.00 at 300 (7f39f71e9d95 / a409bb1b45df), batch-1 12.64. The f32-activation
+kernels and the width probes stay env-gated as refuted experiments; the method, the profiler's
+static issue column and the span rule for small ops are in `perf/agx-backend-access.md`.
 The fastest known configuration. **Every one of these env flags defaults to off/upstream
 in the source, so a forgotten flag is silent - you get a slower number, not an error.**
 
