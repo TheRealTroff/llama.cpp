@@ -373,6 +373,20 @@ loads under `LV=5`), shas identical in every arm.
 | ud | 600 | 25.640 / 25.621 | 25.798 / 25.796 | +0.7% |
 | ud | 300 | 25.468 / 25.453 | 25.583 / 25.547 | +0.4% |
 
+
+**Stacked gate (both flags on `exp/ssm-conv-state-fuse`, which now carries the cast commits too;
+`results/stacked-*`, ABAB x2, 2026-09-09 20:45-21:09):**
+
+| line | arm | base r1 / r2 | cast + conv fusion r1 / r2 | delta |
+|---|---|---:|---:|---:|
+| q4 | 600 | 29.635 / 29.629 | 30.536 / 30.679 | **+3.3%** |
+| q4 | 300 | 27.932 / 27.971 | 28.757 / 28.891 | **+3.1%** |
+| ud | 600 | 25.749 / 25.694 | 26.444 / 26.435 | **+2.8%** |
+| ud | 300 | 25.465 / 25.459 | 25.959 / 25.989 | **+2.0%** |
+
+Shas identical in all eight pairs; the two flags add. Both entered as `proposed` in the manifest
+on `exp/ssm-conv-state-fuse` (single branch to merge: conv fusion + probes + cast + manifest).
+
 **Why a third of the estimate, and a rule.** The server profiler's per-op time is a span from dispatch
 to completion. The K carry copies of a layer ran concurrently between the same two barriers (the one
 before them, on the concat output, and the one the conv's consumer needs anyway), so their spans
