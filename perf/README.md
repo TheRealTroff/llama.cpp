@@ -1107,8 +1107,12 @@ Superseded, kept for history - do not quote numbers from these:
   +0.05 GiB) through the UD f16 pick, mirrored arms: depth 3 +3.3% at 600 (25.4 -> 26.2), +3.8% at 300
   (24.8 -> 25.7), b1 +0.6%, every arm's text byte-identical to the original (canonical shas), prefill flat;
   the per-op profile attributes the -4.1 ms/round as IQ3_S 2.2 / IQ4_NL 0.8 / Q3_K 0.7 / Q6_K 0.3, within
-  0.25 ms of the isolated-timing prediction per format.** Open: KLD before adoption, Q6_K w1 and the
-  IQ4_NL/Q6_K w2/6..8 losers, 32K prefill pair (`ud-q3k-long-prefill.md`).
+  0.25 ms of the isolated-timing prediction per format.** KLD 2026-09-09: prefill-path gate identical to V1
+  to every digit (bf16 0.012537 / q8_0 0.013508); **decode-path KLD (`-b 4 -ub 4`, the first ever): pairwise
+  vs a V1 decode base the new kernels cost 5e-6 mean KLD (1/240 of q8_0's distance from bf16, same-top
+  99.935%); the pick's decode path sits 2.6e-5 from its prefill path; the fork's native decode kernels 4.5e-4
+  from the pick's.** Open: Q6_K w1 and the IQ4_NL/Q6_K w2/6..8 losers, 32K prefill pair
+  (`ud-q3k-long-prefill.md`), file name + manifest + re-mint if adopted.
 - **`spec-heated.md` - speculation at temperature > 0, FIRST LOOK 2026-09-07 (branch `spec-heated`,
   MERGED to prod the same evening, owner: "Kill the logits, merge the fix"; the active worktree is
   gone; owner's premise: "literally do anything, because so far we know nothing").**
