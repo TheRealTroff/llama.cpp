@@ -364,3 +364,40 @@ with `run-ud-soa-gguf-ab.sh` at depth 3.
 width-2/6..8 losers, reached under variable depth and multi-slot only; (3) the 32K prefill pair
 that the disk killed this morning, now unblocked; (4) the file name and manifest entry for the
 pick if it goes in (a file swap is a routing change: prove routes, re-mint).
+
+## Q6_K and the off-pick widths (2026-09-09 05:00-05:40, owner: "let's not get distracted from the q6_k stuff")
+
+Branch `exp/q6k-soa-widths` off prod `a5ddd78a1`. The remaining losers after adoption were width 1 (Q6_K
+-5.5%, the shared body's successor on the kq form) and widths 2 and 6..8 on the generic ext SoA reader
+(Q6_K -27..-44% / -3..-16%, IQ4_NL -23..-34% / -20..-32%). Three probes, prescreened first, the pick's
+width 3..5 kernels byte-identical throughout (3196/4598/4612/4098 at width 4):
+
+1. **Width 1, scale once per pack instead of per element** (the native kernels' form: 8 unscaled f32
+   products, then one FMA with the scale and the folded offset). Prescreen text moved by < 30 B; measured
+   +0.3..+0.6% on every format (`results/ud-q6k-widths-20260909/w1`, mirrored, max spread 4.6%): inert -
+   the compiler was already there. REVERTED; the width-1 kernel is prod's, byte for byte. Q6_K width 1
+   stays -5.2% vs `kernel_mul_mv_q6_K_f32` (1.19x vs 1.11x its byte floor); the next lever is a
+   per-instruction profile, not another source form.
+2. **Width 2 on the kq body** (`kernel_mul_mv_<type>_soa_w2_v1`, NC = 2, K split, 2.6-3.6 KB, zero spill)
+   instead of the ext SoA reader.
+3. **Widths 6..8 as column groups of the 4-column body** (`*_w4cg_v1`: grid y = ceil(ne11/4), column
+   pointers hoisted and clamped to the last valid column, the tail dropped at the store; a separate
+   instantiation so the width-4 kernel's loop is untouched; q3_K/q6_K spill 16 B, near-threshold).
+
+Full sweep, same harness and shapes (`results/ud-q6k-widths-20260909/sweep`, 132 timings x 4 mirrored arms,
+max spread plain 3.2% / SoA 8.8%; the untouched width 3..5 rows repeat last night's within 0.3%):
+
+| Format | w2 before -> after | w6 | w7 | w8 | w1 (unchanged) |
+|---|---:|---:|---:|---:|---:|
+| Q6_K | -27..-44% -> **-2..-7%** | +5..9% | +9..12% | +10..12% | -5.2% |
+| IQ4_NL | -23..-34% -> **+5..+19%** | +15..16% | +30..31% | +31% | +3.6% |
+| Q3_K | -3% -> **+9..11%** | +5..8% | +17..19% | +17..20% | +32% |
+| IQ3_S | +45% -> **+48..49%** | +54..56% | +60..62% | +65..67% | +13% |
+
+Every width 2..8 of every format is now at or ahead of native except Q6_K at width 2 (-2..-7%, four of five
+shapes; the ext reader it replaces was -27..-44%). The only losers left on the whole map are Q6_K at
+width 1 (-5%) and width 2 (-4% geomean). Numerics class: the same half-product kq body as widths 3..5
+(pairwise decode-path KLD 5e-6 at width 4); width 2 and 6..8 are outside the pick and are the variable
+depth / multi-slot widths. Correctness after the revert: synthetic 202/202, real-weight 62/62, the
+`w2_v1` / `w4cg_v1` routes engaged in the test's own stderr. `GGML_MV_UD_KQ_ALL=0` = the ext readers.
+Nothing in a pick changes; adoption = owner.
