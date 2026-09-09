@@ -28,8 +28,17 @@ this file when asked (`--md`), writes a JSON snapshot and diffs against the prev
 - **mma class** (MUL_MAT at ne11 > 8, FLASH_ATTN_EXT): executed instructions per GFLOP, 14 B
   (load-class) instructions per GFLOP, achieved TFLOPS. Flagged at > 1.3x the class-best
   instructions or > 2x the class-best loads. The Q4_0 mul_mm is the reference point of the class.
-- **stream class** (everything else): x the 273 GB/s byte floor and instructions per MB. Flagged
-  above 1.5x floor (calls over 30 us).
+- **stream class** (everything else): x the byte floor at the PRACTICAL 252 GB/s (measured 2026-09-09,
+  37 MB CPY; 273 GB/s is nominal, `x_floor_nominal` keeps it) and instructions per MB. Flagged
+  above 1.5x floor (calls over 30 us); flagged **FLOOR** under 1.1x (no per-instruction reading
+  applies - the issue/stall split cannot see encoded waits; the width-1 mul_mv kernels sit at 1.03-1.07x),
+  **NEAR** at 1.1-1.3x (stream-side levers only) and **CACHE** under 0.95x (the perf loop
+  re-reads a cache-resident tensor; not a DRAM number). ADD/MUL bytes count both operands.
+- **join** (every row with a trace): the traced kernel's final machine IR from the translator
+  (`perf/agx-nt-opt.py`, function constants from the capture log) aligned to the native stream and
+  the per-instruction profile -> `<row>.join.json`, `mem%` = executed share of loads/stores
+  (`perf/agx-backend-access.md`). The translator metallib is built by `kernel-census.sh` from the
+  same source and macros as the binary.
 - both: issue/stall share, registers, spill, hottest-tier instruction count; > 25% stall or any
   spill is flagged; a > 2% timing move against the previous snapshot is flagged.
 

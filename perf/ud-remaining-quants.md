@@ -417,6 +417,16 @@ Nothing in a pick changes; adoption = owner.
 | hot-loop issue share by encoding class 8 B + 12 B | 55% | **68%** (12 B alone 37%) |
 | issue cost per executed instruction (us x issue / M) | 14.2 | **17.9 (+27%)** |
 
+> **CORRECTION 2026-09-09 afternoon (`perf/agx-backend-access.md`, width series):** "not memory" was
+> wrong. Both kernels stream 73.2 MB per dispatch and run at 1.09x (native) / 1.12x (stored) the
+> 273 GB/s DRAM floor, 244 GB/s achieved; q4_0 at the same shape is also 1.12x, and q6_K/q4_0 time
+> = the byte ratio (1.46). The profiler's issue/stall split cannot see the waits (Wait instruction
+> count 0: they are encoded in the instructions), so "97% issue" does not mean issue-bound. The
+> +27% "issue cost per executed instruction" and the "fatter 8/12 B address mix" reading below
+> describe how many instructions fit into a memory-bound 300 us, not what sets the 300 us. An ILP
+> probe (N accumulator chains, branch exp/q6k-w1-ilp) moved nothing. The 4% stored-vs-native gap
+> is what remains to explain; the per-instruction issue column is executed x a static table.
+
 Three facts, in the order they rule things out. **Not memory:** both kernels sit at 96-97% issue with < 5%
 stall, so the byte-floor ratios (1.11x / 1.19x) describe nothing - the loop is issue-bound on both sides.
 **Not instruction count and not spill:** the stored kernel executes 16% FEWER instructions per dispatch,

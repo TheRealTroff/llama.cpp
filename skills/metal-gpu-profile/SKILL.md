@@ -44,6 +44,18 @@ Every 2026-09-05 kernel win came from that comparison done by hand on one kernel
 it for all of them. Steps 1-3 below are what it runs per kernel, and what you use to go deeper on
 a flagged row.
 
+Read the census row in this order (2026-09-09, `perf/agx-backend-access.md`):
+1. **`x floor@252`** first. It is time over bytes at the measured practical peak (252 GB/s, a 37 MB
+   CPY; 273 is the LPDDR5X nominal). Under 1.1 the row is flagged FLOOR (the width-1 mul_mv kernels sit at 1.03-1.07; 1.1-1.3 is NEAR: stream-side levers only): the kernel streams at
+   the DRAM limit and NO per-instruction reading applies, whatever issue/stall says (the
+   profiler cannot see the scoreboard waits - they are bits in the instructions, `Wait
+   instruction count 0`). Under 0.95 it is flagged CACHE: the perf loop re-reads a tensor that
+   fits the system cache, so the number is not a DRAM number and the byte floor is not the bound.
+2. Only then issue/stall, instructions per work unit, and the per-instruction join
+   (`<row>.join.json`: final machine IR aligned to the native stream and the profile, `mem%` =
+   executed share of loads/stores). The per-instruction `cost` column is executed x a static
+   per-opcode table; `cost2` (stall) is the measured column.
+
 ## Step 1 - Capture (headless)
 
 ggml already has capture built in. Both env vars are required:
@@ -135,6 +147,41 @@ kernel win):
   and `cost2` (stall) for the loop's share; histogram their `size` field for the
   codegen fingerprint (6 B ~ f32 FMA short forms, 10 B ~ compact wide-operand
   arithmetic, 14 B ~ device loads, 12 B ~ load-consumers/MMA lowering on g16s).
+- **The per-instruction `cost` (issue) column is NOT a measurement (2026-09-09,
+  `perf/agx-backend-access.md`).** Joined against the final machine IR for 10,612 instructions
+  across 34 profiles, `cost = executed x w(opcode) x k`: `w` is a fixed per-opcode weight
+  (1 for f16 arithmetic/moves/branches/compares, 4 for 32-bit shifts, bit-field extracts,
+  32-bit uniform ALU and f32 unary, 6 for one convert form, 8 for 64-bit pair ops, **0 for
+  every load, store and stop**), `k` one constant per kernel, zero residual. A "hot
+  instruction by issue" inside a kernel is count times that table. `cost2` (stall) DOES
+  vary per site and per kernel and is the measured column; per-kernel issue vs stall shares
+  remain measured. The table predicts time no better than plain counting on the mv fleet
+  (5.3% vs 18.6% spread), so read it as the profiler's apportioning model, not hardware
+  cycles. To see what a site actually is, dump the kernel's machine IR
+  (`perf/agx-nt-opt.py mir`) and join (`perf/agx-mir-align.py --profile`).
+- **Check x-the-byte-floor BEFORE the issue/stall split; the split cannot see encoded waits
+  (2026-09-09 width series, `perf/agx-backend-access.md`).** On g16s the scoreboard waits are
+  bits inside instructions (`Wait instruction count 0` in the stats), so a simdgroup waiting on
+  DRAM is not "stall" to the profiler. q6_K and q4_0 mul_mv at 17408x5120, widths 1/2/4, all
+  run at 1.09-1.21x the 273 GB/s floor (244 GB/s achieved) while reporting 87-98% issue; their
+  time ratio is exactly their byte ratio, width 2 is free, and an ILP probe (N accumulator
+  chains) moved nothing. The census computes `x_floor` for stream kernels: if it is under ~1.2,
+  stop - no per-instruction reading (issue site, class mix, encoding size, us per M executed)
+  applies. "us per M executed" fell 17.8 -> 8.6 from w1 to w4 only because more instructions
+  fit into the same memory-bound time. The 7.6-8.6 us/M rule below is therefore a statement
+  about the w4/w5 kernels' distance from the floor, not a hardware issue rate.
+- **`test-backend-ops perf` overlaps iterations of an op whose inputs nothing writes (2026-09-09,
+  `perf/agx-backend-access.md`).** ggml-metal only serializes dispatches on buffer hazards; a perf case's
+  src tensors are never written, so back-to-back iterations of a streaming kernel run concurrently and
+  contend for DRAM (+20..90% per op measured). Any variant that removes a barrier-bearing step (the
+  decode f32->f16 activation copy ends in one) measures that contention, not the kernel. Keep the
+  barrier (`ggml_metal_op_concurrency_reset`) in the variant, or compare in the real graph.
+- **Per-op profile time is a span, not critical path, for small concurrent ops (2026-09-09,
+  `perf/agx-backend-access.md`).** K copies between the same two barriers overlap K-fold and each
+  span carries the dispatch front-end latency; the conv-state carry fusion removed "1.1-1.7% of GPU
+  time" and delivered 0.2-0.7%. Estimate a group of small ops between shared barriers at dispatch
+  count x ~1.5 us; only an op that owns its barrier (the activation copy did: reset after it) is
+  worth its span, and even that delivered ~75%.
 - **issue share x issue rate, not instruction count or stall alone, predicts time.**
   Measured both failure directions: an unroll cut dynamic instructions 15% and lost
   (stall rose), a sumy variant issued 25% MORE instructions more smoothly and lost.
