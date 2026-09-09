@@ -177,6 +177,22 @@ Forms measured to matter on AGX/g16s (each worth re-trying on any slow inner loo
   ones guarded by `if (NC > 3)`) reproduce the measured width-4 text byte-for-byte and give
   sane width-3/5 kernels. Text-size identity to the measured kernel is the cheap regression
   check for any template refactor of a tuned body.
+  Reproduced 2026-09-08 on a fresh generic `float x[NC][8]` kernel (`exp/ud-remaining-quants`): w4 7.8 KB,
+  w3 11.4 KB, w5 23.3 KB, and w6/7/8 spilled 208/240/272 B - the odd widths timed 7-19x slower than native.
+  Probe every width of a templated column kernel before timing any of them. The fix was not tuning: porting
+  the incumbent kq-SoA body (named streams, hoisted plane pointers, f16 activations) per format probed
+  2.9-5.0 KB / 0 spill at every width and measured +12..+68% at width 4 where the array form had lost 2x.
+- **A decode kernel's numerics are priced by a PAIRWISE decode-path KLD, not by the standard KLD and not by
+  a sha** (2026-09-09, `perf/ud-remaining-quants.md` in the fork): `llama-perplexity --kl-divergence` scores
+  2048-token batches, i.e. the prefill tiles - every KLD row before that date never ran an mv kernel. With
+  `-b 4 -ub 4` the same positions go through the width-4 decode kernels (~25 min for 24 chunks); a base written
+  the same way from the incumbent (`REF_EXTRA="-b 4 -ub 4"` in `run-quant-kld.sh`, kept at
+  `kvquant-experiments/logits/kld-base-kld-pair-v1dec4-sep09.dat` for the UD pick) gives the kernel's own cost
+  with the weights' quantization noise removed. Scale: q8_0 sits 0.0012 mean KLD from bf16; the four new
+  UD-format kernels measured 5e-6 pairwise, the whole pick's decode path 2.6e-5 from its prefill path, the
+  fork's native decode kernels 4.5e-4 from the pick's. Prove the arm's routing with a one-chunk `-v` run
+  (pipeline-compile lines are DEBUG level and dropped at default verbosity); `--chunks` is ignored when a KL
+  base file is given, so run the proof as plain perplexity.
 - **Pre-rounding a per-block scale to half in the layout is free at e2e** where the
   product is already half: iq4_xs/q4_K/q5_K half-planar layouts were 7-11% faster per call
   than the exact d*int8 forms and moved no byte of a 600-token trajectory at any depth.
