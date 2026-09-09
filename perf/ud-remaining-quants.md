@@ -346,8 +346,16 @@ batched FA at width 4. The V2 decode arm against bf16 was run twice (the first p
 full 24-chunk run because the base file fixes the chunk count) and reproduced to every digit: the decode
 path is deterministic, one run is one sample.
 
-**Open before adoption (owner's call):** (1) ~~KLD~~ done: prefill-path gate identical, decode-path pairwise
-5e-6; (2) the Q6_K width-1 and the IQ4_NL/Q6_K
+## Adopted (2026-09-09, owner: "It's another home run for you - pick it")
+
+The converted file is the UD line's model: `/Users/troff/play/Qwen3.8-27B-UD-Q4_K_M-SOA-V2.gguf`
+(V1 + the four remaining formats stored, 17.4 GiB, +0.05 GiB over V1). `perf/pick.sh` `PICK_MODEL_UD`,
+`run-ud-knobs.sh`, `run-ud-decomp.sh`, `run-ud-turbo4-ab.sh` and `run-ud-soa-gguf-ab.sh` (stored arm) point
+at it; `run-ud-remaining-kernels.sh`, `run-ud-w1-ab.sh` and `run-ud-q3k-prefill.sh` stay on V1 because their
+native arm needs the native tensors. V1 stays on disk until the mint is recorded (`--reverse --type` on V2
+regenerates it). Branch merged to prod; re-mint below.
+
+**Still open (not gates):** (1) ~~KLD~~ done: prefill-path gate identical, decode-path pairwise 5e-6; (2) the Q6_K width-1 and the IQ4_NL/Q6_K
 width-2/6..8 losers, reached under variable depth and multi-slot only; (3) the 32K prefill pair
 that the disk killed this morning, now unblocked; (4) the file name and manifest entry for the
 pick if it goes in (a file swap is a routing change: prove routes, re-mint).

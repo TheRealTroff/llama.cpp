@@ -1096,7 +1096,8 @@ Superseded, kept for history - do not quote numbers from these:
 
 - `results.md` - carries an inline SUPERSEDED banner.
 - **`ud-remaining-quants.md` - the four remaining UD formats (IQ4_NL/Q3_K/Q6_K/IQ3_S) as stored SoA
-  rows, 2026-09-08 (branch `exp/ud-remaining-quants`, UNMERGED, nothing in a pick).** Lossless layouts,
+  rows, 2026-09-08/09 (branch `exp/ud-remaining-quants`, MERGED to prod 2026-09-09; ADOPTED, owner: "pick
+  it" - the UD line's file is now `Qwen3.8-27B-UD-Q4_K_M-SOA-V2.gguf`, `PICK_MODEL_UD` in `pick.sh`).** Lossless layouts,
   CPU pack/unpack, `gguf-repack --type`, n64/f16-B prefill readers all pass (5e-4 gate, not a sha/KLD
   gate). The first small-batch kernel (a generic array-form body) lost 2-19x at widths 2..8 - diagnosed
   offline (odd-width text balloon, 208-272 B spill at 6..8) and replaced the same evening by the kq-SoA
