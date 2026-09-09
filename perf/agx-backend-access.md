@@ -73,16 +73,16 @@ as class labels once named by structure. First readings:
 | 10370 / 10372 / 11322 | compare to flag | |
 | 582 / 578 / 577 / 463 / 459 / 684 | branch-on-flag / pop / jmp / stop | |
 
-**The final MIR is shorter than the native stream.** q4_0 w5: 446 MIR vs 488 decoded
-(3690 B); q6_K w1: 302 vs 335; toy fma: 36 vs 63. The difference is inserted by the
-assembly printer after the last dumped pass (scoreboard waits, most likely the 2- and 4-byte
-encodings). Aligning MIR to decoder byte runs is the open item; the per-opcode encoding
-sizes should make it a deterministic sequence alignment.
+~~**The final MIR is shorter than the native stream.** q4_0 w5: 446 MIR vs 488 decoded;
+the difference is inserted by the assembly printer (scoreboard waits).~~ Superseded the same
+day: the difference is the preamble program plus nop padding, and the body maps one to one
+(see "Alignment" below).
 
 **q6_K w1 in this light** (the "fewer instructions, more issue" case from the census): per
 loop, 12 single-byte loads (`load (s8)`), 12 64-bit address adds, 44 bit-field extracts,
 37 uniform-register touches, against 35 f32 FMAs. The q4_0 w5 loop is 160 f16 FMAs against
-4 s32 + 4 s16 loads. Class mix, not count, is the whole story here.
+4 s32 + 4 s16 loads. ~~Class mix, not count, is the whole story here.~~ Refuted by the
+width series below: the class mix is worth 10-25%, the width-1 ILP regime the rest.
 
 **Static simulator: present but not in the pipeline.** `agx3-static-sim` ("AGX3 Static
 Performance Model and Simulator") is registered and would print TotalIssueTime,
