@@ -237,3 +237,14 @@ sum it writes in place over the out-projection output. On paper every read is or
 (the MUL's range includes the twin, the encode loop records all three fused nodes). Test running:
 `GGML_FUSE_SMALL_TWIN_RESET=1` (a diagnostic that restores the cast path's unconditional reset before a
 twin-reading mul_mv) on mask 11, and mask 9 (no swiglu twin) to name the twin.
+
+**Diagnostic (6 runs each):** mask 11 (twins + swiglu twin + add+norm) FAIL 3/6; the same with
+`GGML_FUSE_SMALL_TWIN_RESET=1` (a reset before every twin-reading mul_mv) PASS 6/6; mask 9 (no swiglu
+twin) PASS 6/6. So the racing read is the ffn_down mul_mv's read of the **swiglu's twin**, with the fused
+add+norm right after it; the norm-produced twins are clean. On paper the hazard table orders both (the
+swiglu's range includes its twin, the matmul records src1, the fused ADD's sources conflict with the
+matmul's output) - the overlap it misses is not identified; candidates: the allocator placing the fused
+kernel's outputs into the swiglu block freed after the matmul (that block's tail is the twin) with the
+matmul's recorded source range somehow not covering it. **Fix applied:** a reset before a mul_mv that
+reads a GLU-produced twin (the barrier the cast path had; the cast dispatch is still saved). Verification
+runs: mask 63 x8 on the reproducer, then the full mint on both lines.
