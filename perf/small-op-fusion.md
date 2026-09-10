@@ -248,3 +248,17 @@ kernel's outputs into the swiglu block freed after the matmul (that block's tail
 matmul's recorded source range somehow not covering it. **Fix applied:** a reset before a mul_mv that
 reads a GLU-produced twin (the barrier the cast path had; the cast dispatch is still saved). Verification
 runs: mask 63 x8 on the reproducer, then the full mint on both lines.
+
+**The targeted fix did not hold:** with the barrier only for the swiglu's twin, mask 63 went 3/8 off-sha
+on the reproducer (two runs badly degraded). So the gated norm's twin (bit 4) races the same way; the
+swiglu was only the twin active in mask 11. The consistent cure is the barrier before *every* twin-reading
+mul_mv (mask 11: 3/6 -> 0/6), i.e. the ordering the cast path always had: the cast dispatch is still saved,
+the barrier is not. That is now the default (`GGML_FUSE_SMALL_TWIN_NORESET=1` drops it, diagnostic only).
+Verification chain: mask 63 x8 on the reproducer, falling back to mask 60 (no twins, 6/6 clean earlier) if
+it fails, then the ABAB gate (the +2.1/+2.4% was priced barrier-free and must be re-priced) and the mint.
+Still open: WHY the hazard table misses the ordering between a twin-reading mul_mv and the fused add+norm
+after it - a reset before the mul_mv only orders it behind earlier work, so the missed hazard is on the
+mul_mv's own reads (the twin) against something in flight, most plausibly the previous layer's fused
+add+norm still writing (its outputs are tracked as MUL/ADD dsts, but the twin region belongs to the MUL's
+alloc size only if `ggml_backend_buft_get_alloc_size` sees the same tensor state on both sides - check that
+the range recorded for the fused MUL includes its twin at encode time).

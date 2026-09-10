@@ -4108,12 +4108,13 @@ static int ggml_metal_op_mul_mat_impl(ggml_metal_op_t ctx, int idx, ggml_tensor 
         if (copy_y16 && twin_src) {
             // no cast dispatch and no barrier of our own: the twin's range is the producer's allocation,
             // so the graph's hazard tracking orders this op behind it like any other read of src1.
-            // The swiglu's twin read here raced with the fused residual add+norm that follows the matmul
-            // (2026-09-10 reproducer: 3 of 6 long runs off-sha, 0 of 6 with this barrier, 0 of 6 without the
-            // swiglu twin); the overlap the hazard table misses is not identified yet - keep the barrier the
-            // cast path had for that producer. GGML_FUSE_SMALL_TWIN_RESET=1 applies it to every twin read.
-            static const bool twin_reset = getenv("GGML_FUSE_SMALL_TWIN_RESET") != nullptr;
-            if (twin_reset || twin_src->op == GGML_OP_GLU) {
+            // A twin read here raced with the fused residual add+norm that follows the matmul (2026-09-10
+            // reproducer: 3 of 6 long runs off-sha without a barrier, 0 of 6 with one; a barrier for the
+            // swiglu's twin alone left 3 of 8, the gated norm's twin races the same way). The overlap the
+            // hazard table misses is not identified: keep the barrier the cast path always had, the cast
+            // dispatch is still saved. GGML_FUSE_SMALL_TWIN_NORESET=1 drops it (diagnostic only).
+            static const bool twin_noreset = getenv("GGML_FUSE_SMALL_TWIN_NORESET") != nullptr;
+            if (!twin_noreset) {
                 ggml_metal_op_concurrency_reset(ctx);
             }
             bid_src1 = ggml_metal_get_buffer_id(twin_src);
