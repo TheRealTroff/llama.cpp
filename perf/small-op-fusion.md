@@ -437,3 +437,15 @@ f16-cache arms never run it); a stale-padding read that enters an online-softmax
 rounding-sized, timing-dependent change - to be read against E's thirty. Per-round localization: the server's
 `accepted n/m draft tokens` line is SLT_INF and absent at the harness's verbosity; the next probe passes `LV=`
 so the first diverging round can be found and the tap-layer hidden state compared there.
+
+**Extension to 30 runs each (`dd*_11..30`, finished ~14:10):** A (mask 63, control) 2/30 (runs 4, 13: 602 generated);
+B (async inject off) **1/30** (run 25: 602); E (`GGML_FA_TR=9`) **1/30** (run 19: 634 against its 637). Base stays
+0/10 here and 0/20 in the mint history. So neither the async inject nor the folded Turbo4 dequant is the mechanism:
+the deviation is generic to mask 63 on this arm, about 1 run in 20, and its clean tens were the one-in-five events
+they were priced as. What is left: the drafter's own kernels under the q4 line's environment, or the q4 target's
+path outside FA - and the fact that the UD Turbo4 arm (14 runs) and the q4 f16-cache pick arm (8 runs) never moved
+is now the strongest constraint (both are compatible with a 1-in-20 rate at those counts, so it is weak). Next, in
+this order: (1) a per-round localization run - `LV=` on the quick harness for the `accepted n/m draft tokens` line,
+repeated until a run deviates, then the first diverging round's tap-layer hidden state and drafter logits
+compared against a clean run (`fuse-observe.cpp` OBS_DUMP for the tap tensor only, cheap per round); (2) only then a
+bit bisect on this arm, which at a 1-in-20 rate costs ~40 runs per configuration and is the last resort.
