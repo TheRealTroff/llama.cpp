@@ -369,3 +369,48 @@ group's output block must be one that existed while every input of the group was
 first node's block, or the earlier inputs made sources of the node that allocates the output. `ggml-alloc`
 knows nothing about backend fusion; the backend has to shape the graph so the allocator's single-node
 guarantee covers the group. The guard is what turns the next such bug into a log line instead of a 1-in-10 sha.
+
+## Verification of the fix (2026-09-10, `exp/fuse-alias` a1796cb76, one binary, both add operands pinned)
+
+- Partial env (`partial-n6-300`, the arm the fuse3 mint collapsed on): ud 21.44 t/s, 53.7%, `73ea53bbe98f`;
+  q4 26.10 t/s, 55.7%, `9ad7e023c6ab` (the pre-acch lineage that env gates) - canonical, 0 guard hits.
+- Quick probe, mask 63: 0 guard hits on all four arms, shas = the base's (`f566cc418c50` / `48c93b464d9b` ud,
+  `1aa8305c8b69` / `0065fce404d1` q4).
+- Reproducer (q4 Turbo4 depth-3, benchprompt, 1200 tokens): 8/8 with the first cut, 3/3 with the final binary,
+  all `648a18f46d5c` (`fuse-quick/rk63f_*`, `rk63f2_*`).
+- ABAB x2 gate (`run-fuse-gate.sh`, Turbo4 arms, base vs `GGML_FUSE_SMALL=63`, `fusegate-0910-10*`):
+
+| line | arm | base r1 / r2 | fused r1 / r2 | delta | sha (all 4 arms) |
+|---|---|---:|---:|---:|---|
+| ud | 600 | 25.893 / 26.410 | 26.860 / 26.887 | **+2.8%** | 7f39f71e9d95 |
+| ud | 300 | 26.168 / 26.080 | 26.601 / 26.423 | **+1.5%** | a409bb1b45df |
+| q4 | 600 | 30.569 / 30.430 | 31.264 / 31.082 | **+2.2%** | de24d885043f |
+| q4 | 300 | 28.829 / 28.250 | 29.438 / 29.459 | **+3.2%** | 04ada3a4de10 |
+
+  Acceptance identical per arm (64.7 / 64.1 ud, 65.5 / 60.2 q4): still a BI change, the same ~+2% the
+  race-free bits priced; the twins are worth about the noise on top of mask 60. The pre-mint on the branch
+  (`prodpick-sep10-fuse5-*`, all arms, both lines, mask 63) follows.
+
+**Pre-mint on the branch (`prodpick-sep10-fuse5-{ud,q4}`, a1796cb76, mask 63, all arms):** every arm canonical
+on both lines, 0 guard hits in every gate and pre-mint log. ud 23.38 / 24.29 / 24.29 (pick 300 / 600 / 600-r2) /
+12.55 b1 / 26.32 / 26.25 / 26.06 (turbo4 600 / 600-r2 / 300); q4 28.68 / 30.93 / 30.30 / 13.75 b1 / 30.63 /
+30.00 / 28.76. The pick decision: mask 60 was clean by layout luck and forfeits the twins; mask 63 on the fixed
+branch is the candidate - merge `exp/fuse-alias` into prod, re-mint there, and the manifest entry
+`GGML_FUSE_SMALL=63|BI|both` goes from `proposed` to picked on the owner's call.
+
+## Open: a drafter-side count deviation on the q4 Turbo4 600 arm under mask 63 (found 2026-09-10 late morning)
+
+The target text is canonical, but the draft counts are not always: this arm reports **396 accepted / 605
+generated** in every base run (10 of 10), every mask-60 run (2 of 2) and most mask-63 runs, and **397 / 602** in
+the pre-mint r1 (65.9%), **397 / 601** in the very first fused gate's r1 (`fusegate-0910-0021-q4-fused-r1`, canonical
+sha, before any fix) and **396 / 608** in the fuse3 r1 that was also off-sha. Three of ~14 mask-63 runs of this arm,
+zero of ~14 without the twins. The ud Turbo4 600 arm (394 / 609) and the q4 pick 600 arm (415 / 735) never move.
+A changed draft with an unchanged target argmax means either the drafter's own graphs or the injected features
+(the target's hidden state at the tap layer, via the async fused inject) differed by a rounding somewhere - a
+race that does not flip a token. The alias guard is silent (it covers the drafter's graphs too), so it is not
+the fused-group alias. Suspects, in order: the async inject reading the ring before the inject graph landed
+(timing moved by the -32% dispatch count); a fused kernel in the drafter's or the inject graph's path racing
+on something the guard does not model. Discriminator: 12 runs of this arm at mask 63 with `DFLASH_ASYNC_INJECT=0`
+against 12 with it on, counting 396/605; then the same with `DFLASH_FUSED_INJECT=0`. Not a bytes question for the
+pick (the target's sha holds), but the "acceptance identical per arm" invariant is broken by it, and it should be
+closed before the twins are called race-free.
