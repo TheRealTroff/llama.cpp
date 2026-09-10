@@ -449,3 +449,41 @@ this order: (1) a per-round localization run - `LV=` on the quick harness for th
 repeated until a run deviates, then the first diverging round's tap-layer hidden state and drafter logits
 compared against a clean run (`fuse-observe.cpp` OBS_DUMP for the tap tensor only, cheap per round); (2) only then a
 bit bisect on this arm, which at a 1-in-20 rate costs ~40 runs per configuration and is the last resort.
+
+## The drafter count deviation, from the drafter's side (2026-09-10 evening): an input-overwrite race in back-to-back decodes
+
+**Instrument.** `DFLASH_TRACE=1` (common/speculative.cpp): per process() call a hash of the feature rows the
+drafter receives (the target's tap, already on the host), per draft() a hash of the lattice block and the draft
+ids; with `DFLASH_CONF_LOG=1` the per-position confidence/margin. Two base runs at 600 tokens: 625 trace lines,
+identical. `perf/trace-compare.py`-style diff (scratchpad `trace-compare.py`) prints the first differing line and
+whether it is a FEATURE (target side) or a DRAFT/LATTICE (drafter side) line.
+
+**Finding.** Mask 63, 1200 tokens (`fuse-quick/tr63_*`): 2 of 6 runs deviate, and both diverge at the SAME trace
+line 18 - the first draft round after the prefill - with every feature hash before it identical (16 prefill
+chunks of 512 rows and the 4-row verify chunk): same input, different lattice (`a2a23f7fd8045284` vs
+`fbfd6c6a9a8ed677`), confidences off in the third decimal (0.9206/3.045 vs 0.9216/3.071), same three draft ids
+that round, the count difference accumulating later. So: the drafter's own state after the prefill inject burst
+differs between runs. Not the alias (guard silent), not the inject *flags* (config C deviated with both off), not
+the Turbo4 dequant (E deviated), not atomics, not the command-buffer split.
+
+**Mechanism.** `llama_context::process_ubatch` on the graph-reuse path synchronizes before `set_inputs` only
+`if (cparams.pipeline_parallel)` (off in the server). A reused graph has the same input tensors, and the Metal
+shared-buffer `set_tensor` is a plain memcpy, so the next decode's inputs land under a graph that may still be
+reading them. Every upstream caller reads an output between decodes, which synchronizes, so upstream never sees
+it. `DFLASH_ASYNC_INJECT=1` drops exactly that read on the drafter, on the recorded assumption that "llama_decode
+copies the batch into device memory before it returns" - true, and irrelevant: the NEXT llama_decode overwrites
+that device memory. The prefill issues 16 inject decodes of 512 rows, the 4-row one, then the ring re-injection
+chunks, all back to back on the drafter's context; a graph that loses the race reads part of the following
+chunk's rows as its own, and the drafter's KV for those positions is wrong by "a different row", which reaches
+the lattice as a 1e-3 change. Fewer dispatches under mask 63 shorten the CPU encode, so the overwrite arrives
+earlier relative to the GPU: the fusion exposed the race, it did not create it. The mint's Q4-only pattern is
+timing too (the UD line's inject graphs run under different routes); at a 1-in-20 rate the other arms were
+never separable from luck anyway.
+
+**Fix** (`src/llama-context.cpp`): synchronize before `set_inputs` on both paths of `process_ubatch` whenever a
+compute may be in flight - free when the backend is idle (Metal waits on a nil last command buffer), and the
+required wait when it is not. `LLAMA_SYNC_INPUTS=0` restores the pipeline-parallel-only sync (diagnostic). The
+async inject keeps its overlap with the target's verify (a different context); only drafter-to-drafter
+back-to-back decodes serialize, which is the behaviour the flag's own comment assumed. Confirmation chain
+(`sync-test.sh`, `fuse-quick/sy_*`): fix on x12, fix off + async inject off x12, fix off + async on x6, all
+traced against `tr63_1`; the ABAB gate must then be re-priced with the fix (the async inject's +0.76% may shrink).
