@@ -1,4 +1,4 @@
-# Small-op fusion: the cache-resident kernels between the matmuls (2026-09-10, BUILT + GATED, adoption = owner)
+# Small-op fusion: the cache-resident kernels between the matmuls (2026-09-10, MERGED, UN-PICKED: intermittent at the mint, OPEN)
 
 Branch `exp/small-op-fusion`, flag `GGML_FUSE_SMALL=<bitmask>` (default 0 = upstream behaviour).
 
@@ -174,3 +174,24 @@ its gate values are now computed once per simdgroup and broadcast): see the attr
   the 3D decode rows.
 - A read-only bandwidth kernel for the SLC's actual read rate (the sweep above only bounds the knee).
 - The remaining per-matmul casts: outputs without a twin (the attention gate's MUL, the drafter paths).
+
+## Mint (2026-09-10 night): an intermittent the gate never hit
+
+Merged into prod (42aaa743b) on the owner's "merge and mint". The mint (`prodpick-sep10-fuse-{ud,q4}`,
+all arms, both lines) was canonical on 17 of 20 arms; the other three: q4 `pick-n6-600` collapsed to 2.2%
+acceptance with a garbage sha (its repeat canonical), q4 `turbo4-n3-600` the same (2.8%, repeat
+canonical), ud `turbo4-n3-300` a new sha `ca071dd7d127` at normal speed while its 600 twin matched.
+Suspecting the one change the gate binary lacked (the GDN gate values computed once per simdgroup and
+broadcast), that was reverted and the three arms re-run twice per line: 11 of 12 canonical, q4
+`turbo4-n3-600` once more on a new sha (`49df0220581f`, 64.6% acceptance, normal speed). So: a race
+that shows at roughly one run in ten on 600-token generations (many rollbacks) and never in ~70 runs of 96
+tokens, never in the 16-arm ABAB gate, never in the 6-arm canonical 300 bisect. The manifest entry is
+back to `proposed`; the code stays merged and off by default.
+
+Where to look first (all four were clean on paper): the twins are read with no reset of the mul_mv's own
+(the producer's range must still be in the hazard table or fenced - check the encoder-boundary case, where
+a new command buffer starts with an empty table and the producer's twin write was in the previous one:
+command buffers on one queue are ordered, but the mul_mv's cast path used to reset unconditionally);
+the fused conv writing the carry slots the rollback's SCALE clears; the gated norm's in-place output over
+z; the add+norm's in-place sum. The reproducer: the q4 Turbo4 arm at 1200 tokens, fused vs base, repeated
+until a sha moves, then bits by halves.

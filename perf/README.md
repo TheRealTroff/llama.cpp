@@ -33,7 +33,7 @@ one level down, and it bit the `GGML_MV_EXT_V2` work on 2026-08-22.
 ## The prod pick
 
 
-**2026-09-10 (owner: "merge and mint"): small-op fusion `GGML_FUSE_SMALL=63`, in both picks** - the cache-resident
+**2026-09-10 (owner: "merge and mint"): small-op fusion `GGML_FUSE_SMALL=63` MERGED but NOT in the pick - the mint found an intermittent sha change (~1 run in 10 on the 600-token arms, a race the 16-arm gate never hit); un-picked pending the hunt, see `small-op-fusion.md` 'Mint'** - the cache-resident
 elementwise/norm/gate kernels between the matmuls, fused so that ~550 of the ~1750 target decode dispatches
 per round (and their barrier drains) go away: f16 twins of the norm/swiglu outputs replace the per-matmul
 activation casts, the gated norm, the residual add+norm, the delta-net gate chain folded into the GDN
