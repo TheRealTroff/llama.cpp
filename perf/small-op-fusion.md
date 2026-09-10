@@ -201,3 +201,13 @@ fused x6: five runs on `648a18f46d5c` (67.5% acceptance, EOS at 1151), the sixth
 acceptance and ran to the cap with sha `cfa900ccd683`; base x3: all `648a18f46d5c`. Fused-only, ~1 in 6
 per 1200-token run. A bisect by halves on this reproducer (2400 tokens, 6 runs per config, a config
 fails when its shas disagree) runs next: twins (3) vs the rest (60), then the failing half's halves.
+
+**Bisect (same reproducer, 6 runs per config; a config fails when its shas disagree):** twins alone (3):
+6/6 on `648a18f46d5c`; the rest (60): 6/6 the same; base: 3/3 the same; the full mask (63): 4/6 the same,
+one run diverged mid-text (64.0% acceptance, ran to 2195 tokens, `c667e63f6db4`), one late (1224 tokens,
+`d0e646f4c7cd`). So the race needs both halves: the twins (bit 1 or 2) interacting with one of the graph
+rewrites (4, 16, 32) or the add+norm (8). The single-bit-removed split (62, 59, 55, 47, 31) is the next
+result; the twin's reader is the width 2-8 mul_mv, so the suspects are the producers a rewrite changed: the
+gated norm's MUL (its twin is reserved by the marker the rewrite sets, and its output may be allocated in
+place over z) and the add+norm's MUL. Note the generation length: n_predict above 1151 adds no exposure on
+this prompt (EOS), and a diverged run runs longer.
