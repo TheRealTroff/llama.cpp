@@ -211,3 +211,20 @@ result; the twin's reader is the width 2-8 mul_mv, so the suspects are the produ
 gated norm's MUL (its twin is reserved by the marker the rewrite sets, and its output may be allocated in
 place over z) and the add+norm's MUL. Note the generation length: n_predict above 1151 adds no exposure on
 this prompt (EOS), and a diverged run runs longer.
+
+**Single-bit-removed split (6 runs each):** 62 (no twins) PASS, 59 (no gated norm) PASS, 55 (no add+norm)
+PASS, 31 (no conv) PASS, 47 (no gate chain) FAIL 1/6 (`a92139fd0396`). Read with the halves: the race needs
+the twins and, given three independent passes against a 2-in-6 rate, probably at least two of {gated norm,
+add+norm, conv} together - an allocation-layout interaction (what each fusion changes: tensor alloc sizes
+and lifetimes) rather than one kernel pair. Running next: twins + one (7, 11, 35) and twins + two
+(15, 39, 43), 6 runs each; results in `kvquant-experiments/results/fuse-quick/re*` and the session
+scratchpad log `race4.log` if this note is not updated after them.
+
+Thoughts for the hunt, in order: (1) where a twin region could be read after the hazard table forgot its
+producer - the ranges use the base tensor and its alloc size (twin included), so look for a path that
+resolves a *different* base (a view whose view_src is not the producer, e.g. after the conv-cat rewrite
+re-points view_src); (2) the gated norm's MUL allocated in place over z through the view-parent path
+(`ggml_gallocr_free_extra_space` on view_src) - the twin bytes belong to the child, check that path with
+a twin-sized child; (3) an in-place ADD (bit 8) whose sum aliases the twin-bearing input of a *later*
+consumer; (4) run the failing combination under `GGML_METAL_GRAPH_DEBUG=3` on the round that diverges (the
+observer's OBS_DUMP per round, compared against a clean run, finds the round and the tensor).
