@@ -228,3 +228,12 @@ re-points view_src); (2) the gated norm's MUL allocated in place over z through 
 a twin-sized child; (3) an in-place ADD (bit 8) whose sum aliases the twin-bearing input of a *later*
 consumer; (4) run the failing combination under `GGML_METAL_GRAPH_DEBUG=3` on the round that diverges (the
 observer's OBS_DUMP per round, compared against a clean run, finds the round and the tensor).
+
+**Combinations (6 runs each):** twins + gated norm (7) PASS, twins + add+norm (11) **FAIL 1/6**, twins +
+conv (35) PASS, twins + gated norm + add+norm (15) **FAIL 2/6**, twins + gated norm + conv (39) PASS, twins +
+add+norm + conv (43) PASS. The pair is **the f16 twins with the fused residual add+norm**: the
+`kernel_add_rms_norm_mul_tw_f32_4` output's twin read by the ffn gate/up (and the qkv/z) mul_mv, or the
+sum it writes in place over the out-projection output. On paper every read is ordered by the hazard table
+(the MUL's range includes the twin, the encode loop records all three fused nodes). Test running:
+`GGML_FUSE_SMALL_TWIN_RESET=1` (a diagnostic that restores the cast path's unconditional reset before a
+twin-reading mul_mv) on mask 11, and mask 9 (no swiglu twin) to name the twin.

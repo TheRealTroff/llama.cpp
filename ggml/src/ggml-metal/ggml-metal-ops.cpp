@@ -4107,7 +4107,12 @@ static int ggml_metal_op_mul_mat_impl(ggml_metal_op_t ctx, int idx, ggml_tensor 
 
         if (copy_y16 && twin_src) {
             // no cast dispatch and no barrier of our own: the twin's range is the producer's allocation,
-            // so the graph's hazard tracking orders this op behind it like any other read of src1
+            // so the graph's hazard tracking orders this op behind it like any other read of src1.
+            // GGML_FUSE_SMALL_TWIN_RESET=1: diagnostic, the unconditional barrier the cast path had
+            static const bool twin_reset = getenv("GGML_FUSE_SMALL_TWIN_RESET") != nullptr;
+            if (twin_reset) {
+                ggml_metal_op_concurrency_reset(ctx);
+            }
             bid_src1 = ggml_metal_get_buffer_id(twin_src);
             bid_src1.offs += ggml_nbytes(twin_src);
         } else if (copy_y16 && cvt_cont) {
