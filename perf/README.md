@@ -33,7 +33,7 @@ one level down, and it bit the `GGML_MV_EXT_V2` work on 2026-08-22.
 ## The prod pick
 
 
-**2026-09-10 (PROPOSED, adoption = owner): small-op fusion `GGML_FUSE_SMALL=63`** - the cache-resident
+**2026-09-10 (owner: "merge and mint"): small-op fusion `GGML_FUSE_SMALL=63`, in both picks** - the cache-resident
 elementwise/norm/gate kernels between the matmuls, fused so that ~550 of the ~1750 target decode dispatches
 per round (and their barrier drains) go away: f16 twins of the norm/swiglu outputs replace the per-matmul
 activation casts, the gated norm, the residual add+norm, the delta-net gate chain folded into the GDN
