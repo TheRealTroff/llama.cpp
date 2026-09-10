@@ -414,3 +414,26 @@ on something the guard does not model. Discriminator: 12 runs of this arm at mas
 against 12 with it on, counting 396/605; then the same with `DFLASH_FUSED_INJECT=0`. Not a bytes question for the
 pick (the target's sha holds), but the "acceptance identical per arm" invariant is broken by it, and it should be
 closed before the twins are called race-free.
+
+**Discriminator (2026-09-10 midday, `fuse-quick/dd*`; the q4 Turbo4 depth-3 arm, benchprompt, 600 tokens, the
+quick harness reproduces the mint arm exactly - `de24d885043f`, 396/605 - four configs interleaved x10, then
+a fifth x10):**
+
+| config | runs | draft-count deviations (target sha canonical in every run) |
+|---|---:|---|
+| base, mask 0 | 10 | none (396/605 every run; 20 of 20 with the mint history) |
+| A: mask 63, pick env | 10 | 1 (r4: 602 generated) |
+| B: mask 63 + `DFLASH_ASYNC_INJECT=0` | 10 | none |
+| C: mask 63 + async and fused inject off | 10 | 2 (r2: 398/599, r8: 608) |
+| E: mask 63 + `GGML_FA_TR=9` (the UD line's byte-identical Turbo4 form; its own lineage, 637 generated) | 10 | none, 10 identical |
+
+Settled: the inject path is not the mechanism (C deviates with both inject flags off), and the target's argmax
+survives every deviation - the perturbation is rounding-sized. Not settled: B and E each show zero in ten, but at
+the observed ~15% rate a clean ten is a one-in-five event; both are being extended to thirty runs interleaved with
+A as the live control (`drafter-disc3.sh`, `dd*_11..30`). Ruled out on the way: atomics and split-K accumulation
+(none on any compute route), the command-buffer split (fixed per graph), the fused-group alias (guard silent).
+The one kernel that exists only in this arm is the folded Turbo4 dequant `GGML_FA_TR=7` (UD keeps `=9`, the q4
+f16-cache arms never run it); a stale-padding read that enters an online-softmax max would produce exactly a
+rounding-sized, timing-dependent change - to be read against E's thirty. Per-round localization: the server's
+`accepted n/m draft tokens` line is SLT_INF and absent at the harness's verbosity; the next probe passes `LV=`
+so the first diverging round can be found and the tap-layer hidden state compared there.
