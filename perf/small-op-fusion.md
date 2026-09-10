@@ -195,3 +195,9 @@ command buffers on one queue are ordered, but the mul_mv's cast path used to res
 the fused conv writing the carry slots the rollback's SCALE clears; the gated norm's in-place output over
 z; the add+norm's in-place sum. The reproducer: the q4 Turbo4 arm at 1200 tokens, fused vs base, repeated
 until a sha moves, then bits by halves.
+
+**Reproducer (2026-09-10 night, `run-fuse-quick.sh`, q4 Turbo4 depth-3 arm, benchprompt, 1200 tokens):**
+fused x6: five runs on `648a18f46d5c` (67.5% acceptance, EOS at 1151), the sixth collapsed to 19.7%
+acceptance and ran to the cap with sha `cfa900ccd683`; base x3: all `648a18f46d5c`. Fused-only, ~1 in 6
+per 1200-token run. A bisect by halves on this reproducer (2400 tokens, 6 runs per config, a config
+fails when its shas disagree) runs next: twins (3) vs the rest (60), then the failing half's halves.
