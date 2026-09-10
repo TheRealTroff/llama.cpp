@@ -41,6 +41,7 @@ size_t ggml_metal_op_mul_mat_extra_src1f16(const struct ggml_tensor * op);
 // f16 twin of a decode-width norm-chain / gated-norm / swiglu output (GGML_FUSE_SMALL bit 1),
 // written by its producer right after it, read by the width 2-8 mul_mv instead of casting
 size_t ggml_metal_op_extra_f16_twin(const struct ggml_tensor * op);
+size_t ggml_metal_op_extra_f16_twin_norm(const struct ggml_tensor * op);
 
 // small-op fusion graph rewrite (GGML_FUSE_SMALL bits 4, 16, 32), run by ggml_metal_graph_optimize before allocation
 void ggml_metal_op_fuse_small_rewrite(struct ggml_cgraph * gf);
