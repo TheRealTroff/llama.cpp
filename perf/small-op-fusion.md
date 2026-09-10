@@ -161,8 +161,14 @@ its gate values are now computed once per simdgroup and broadcast): see the attr
 
 ## Open
 
-- Attention-side small ops (sigmoid x mul on the gate, qk RMS_NORM + ROPE, ROPE -> SET_ROWS): ~100
-  dispatches/round, not fused.
+- Attention-side small ops, ~160 dispatches/round, not fused. Per attention layer at decode: q is
+  RMS_NORM -> ROPE -> TURBO_WHT (q is rotated because Turbo K is stored WHT-rotated inside the set_rows
+  quantizer; the generic Hadamard rotation is excluded for Turbo types), then FA, then TURBO_WHT inverse ->
+  CONT -> SIGMOID -> MUL (the gate) -> the out-projection's cast; k is RMS_NORM -> ROPE -> SET_ROWS (the
+  quantizer does the WHT); v is the projection -> SET_ROWS. The q chain is three per-head ops on one row
+  (one kernel: 48 dispatches/round); the output chain is five ops on one [6144, 4] activation (one kernel
+  with an f16 twin, the gated-norm rewrite as the template: 80/round); rope into the k quantizer's prologue
+  is moderate; quantization into the v projection is the hard one.
 - The drafter's REPEAT/CONCAT/CONT/FILL storm and TOP_K (on hold, owner).
 - Re-run the kernel census with the corrected parser once the branch is picked; the Sep 06 snapshots lack
   the 3D decode rows.
