@@ -341,9 +341,17 @@ failed at the same 1-in-10 as before. It is removed.
 1. `ggml_metal_op_extra_f16_twin_norm`: the RMS_NORM output reserves the twin tail too (alloc hook,
    `GGML_OP_RMS_NORM`), so the twin-bearing MUL takes the norm's block in place again - a block that exists
    while the norm's input is live. The gated norm's second MUL then takes the first MUL's block (equal sizes).
-2. Rewrite for bit 8 (`ggml_metal_fuse_small_rewrite_addnorm`, pre-allocation): the add's second operand
-   becomes `src[1]` of the RMS_NORM - a lifetime, not data (the norm kernels read `src[0]` only) - so the
-   norm's block cannot be allocated over the residual. The first operand lives on as the in-place sum.
+2. Rewrite for bit 8 (`ggml_metal_fuse_small_rewrite_addnorm`, pre-allocation): BOTH add operands become
+   sources of the RMS_NORM (`src[1]`, `src[2]`) - lifetimes, not data (the norm kernels read `src[0]` only) -
+   so the norm's block cannot be allocated over either. First cut pinned only the residual (src1), on the
+   reasoning that src0 lives on as the in-place sum; the partial env refuted it within the hour: there the
+   linear-attention layer's output is a reshape VIEW of the GDN output (no `GGML_GDN_FUSE_WB`), the allocator
+   cannot take a view in place, the view dies at the add, and the norm's block landed 32 KB into it
+   (`add+norm: output attn_post_norm-0 [132224, 173184, twin to 193664) overlaps input linear_attn_out-0
+   (reshaped) [164992, 205952)`, every layer, both lines, decode and prefill; the guard caught all of them and
+   the arms were canonical - 53.7% / 55.7% acceptance, `73ea53bbe98f` / `9ad7e023c6ab`, against the 0-1%
+   collapse of the fuse3 mint). The sum is then no longer in place over src0 (two children at the add):
+   one decode-width block per layer, nothing else.
 3. `ggml_metal_fuse_small_alias_ok`: an encode-time tripwire on every fused group (add+norm, norm+twin,
    gated norm): every output range (alloc size, twin tail included) against every input range; exact
    in-place is allowed, anything else logs `fuse-alias:` and runs the group unfused (safe). `GGML_FUSE_SMALL_ALIAS=0`
@@ -352,8 +360,9 @@ failed at the same 1-in-10 as before. It is removed.
 5. A second, deterministic bug found on the way: the gated norm's encoder-boundary fallback (the rewritten
    MUL whose norm sits in the previous command buffer) staged `silu(z)` in dst - which is wmul's block in
    place - and multiplied garbage. It now writes `silu(z)` over z (the rewrite requires z's only use) and
-   multiplies from there. Never hit in the pick's graphs (the sha was canonical); a candidate for the
-   partial-env collapse, whose graph splits differently - measured in the chain below.
+   multiplies from there. Never hit in the pick's graphs (the sha was canonical). **The partial-env collapse
+   (the "second defect") was the alias of item 2, not a companion-flag assumption**: with the guard on, the
+   partial arms are canonical; with the two-operand rewrite the guard should be silent there (chain below).
 
 Rule, generalizing trap 5: **a fused kernel may read only what its own node lists as sources, AND a fused
 group's output block must be one that existed while every input of the group was live** - in place over the

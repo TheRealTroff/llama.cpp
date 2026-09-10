@@ -384,12 +384,15 @@ static void ggml_metal_fuse_small_rewrite_gnorm(ggml_cgraph * gf, ggml_tensor * 
     silu->op = GGML_OP_NONE;
 }
 
-// bit 8, the residual add + norm + mul group. The add's second operand is the residual, dead after the
-// add (the first operand lives on as the add's in-place output), and the norm's block is allocated one
-// node later - it can land over that operand, which the fused kernel still reads from other threadgroups
-// while it writes the block. Making the operand a dependency of the norm keeps it allocated until the
+// bit 8, the residual add + norm + mul group. Whichever add operand the sum does not take in place is
+// dead after the add (the residual, `ggml_add(cur, inpSA)`; or the layer output when it is a view the
+// allocator cannot reuse - the partial env's linear_attn_out), and the norm's block is allocated one node
+// later: it can land over that operand, which the fused kernel still reads from other threadgroups while
+// it writes the block. Both operands become dependencies of the norm, so they stay allocated until the
 // norm's block exists; the MUL then takes the norm's block in place (ggml_metal_op_extra_f16_twin_norm
-// sizes the norm for it). The norm kernels read src[0] only, so the extra source is a lifetime, not data.
+// sizes the norm for it). The norm kernels read src[0] only: the extra sources are lifetimes, not data.
+// (The sum is then no longer in place over src0 - src0 has two children at the add - which costs one
+// decode-width block per layer and nothing else; the kernel reads x and writes the sum wherever it is.)
 static void ggml_metal_fuse_small_rewrite_addnorm(ggml_cgraph * gf, int inorm) {
     ggml_tensor * norm = gf->nodes[inorm];
     ggml_tensor * add  = norm->src[0];
@@ -417,6 +420,7 @@ static void ggml_metal_fuse_small_rewrite_addnorm(ggml_cgraph * gf, int inorm) {
         return;
     }
     norm->src[1] = add->src[1];
+    norm->src[2] = add->src[0];
 }
 
 void ggml_metal_op_fuse_small_rewrite(ggml_cgraph * gf) {
