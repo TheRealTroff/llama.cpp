@@ -178,7 +178,8 @@ static bool ggml_metal_fuse_small_nofix(void) {
 // of 2026-09-10 (perf/small-op-fusion.md, 'Root cause').
 size_t ggml_metal_op_extra_f16_twin_norm(const ggml_tensor * t) {
     const int fs = ggml_metal_fuse_small();
-    if (!(fs & GGML_METAL_FUSE_SMALL_TWIN) || ggml_metal_fuse_small_nofix() || t->op != GGML_OP_RMS_NORM) {
+    static const bool noreserve = getenv("GGML_FUSE_SMALL_NORESERVE") != nullptr; // diagnostic: the fix's reservation half off
+    if (!(fs & GGML_METAL_FUSE_SMALL_TWIN) || ggml_metal_fuse_small_nofix() || noreserve || t->op != GGML_OP_RMS_NORM) {
         return 0;
     }
     if (t->type != GGML_TYPE_F32 || t->view_src || !ggml_is_contiguous(t)) {
@@ -393,34 +394,49 @@ static void ggml_metal_fuse_small_rewrite_gnorm(ggml_cgraph * gf, ggml_tensor * 
 // sizes the norm for it). The norm kernels read src[0] only: the extra sources are lifetimes, not data.
 // (The sum is then no longer in place over src0 - src0 has two children at the add - which costs one
 // decode-width block per layer and nothing else; the kernel reads x and writes the sum wherever it is.)
-static void ggml_metal_fuse_small_rewrite_addnorm(ggml_cgraph * gf, int inorm) {
+// the structural half of the encoder's add+norm match (ggml_metal_addnorm_match): ONE predicate for the
+// encoder and for the lifetime rewrite, so the rewrite never touches a group the encoder will not fuse
+static bool ggml_metal_addnorm_shape_ok(const ggml_cgraph * gf, const ggml_tensor * add, const ggml_tensor * norm, const ggml_tensor * wmul) {
+    if (add->op != GGML_OP_ADD || norm->op != GGML_OP_RMS_NORM || wmul->op != GGML_OP_MUL) {
+        return false;
+    }
+    if (!add->src[0] || !add->src[1] || add->view_src || add->type != GGML_TYPE_F32 || add->src[0]->type != GGML_TYPE_F32 || add->src[1]->type != GGML_TYPE_F32) {
+        return false;
+    }
+    if (!ggml_are_same_shape(add, add->src[0]) || !ggml_are_same_shape(add, add->src[1]) ||
+        !ggml_is_contiguous(add) || !ggml_is_contiguous(add->src[0]) || !ggml_is_contiguous(add->src[1])) {
+        return false;
+    }
+    if (norm->src[0] != add || norm->type != GGML_TYPE_F32 || ggml_metal_use_count(gf, norm) != 1 || norm->view_src) {
+        return false;
+    }
+    if (wmul->src[0] != norm || !wmul->src[1] || wmul->src[1]->ne[0] != add->ne[0] || !ggml_is_contiguous_rows(wmul->src[1]) ||
+        wmul->type != GGML_TYPE_F32 || !ggml_is_contiguous(wmul) || !ggml_are_same_shape(wmul, add) || wmul->view_src) {
+        return false;
+    }
+    if (add->ne[0] % 4 != 0) {
+        return false;
+    }
+    return true;
+}
+
+static void ggml_metal_fuse_small_rewrite_addnorm(ggml_cgraph * gf, int iadd, int inorm, int imul) {
+    ggml_tensor * add  = gf->nodes[iadd];
     ggml_tensor * norm = gf->nodes[inorm];
-    ggml_tensor * add  = norm->src[0];
-    if (norm->src[1] || !add || add->op != GGML_OP_ADD || !add->src[0] || !add->src[1] || add->view_src || norm->view_src) {
-        return;
-    }
-    if (norm->type != GGML_TYPE_F32 || add->type != GGML_TYPE_F32 || add->src[0]->type != GGML_TYPE_F32 || add->src[1]->type != GGML_TYPE_F32) {
-        return;
-    }
-    if (!ggml_are_same_shape(add, add->src[0]) || !ggml_are_same_shape(add, add->src[1]) || !ggml_is_contiguous(add) || add->ne[0] % 4 != 0) {
-        return;
-    }
-    if (ggml_metal_use_count(gf, norm) != 1) {
-        return;
-    }
-    bool mul = false;
-    for (int j = inorm + 1; j < gf->n_nodes && j < inorm + 4; j++) {
-        const ggml_tensor * m = gf->nodes[j];
-        if (m->op == GGML_OP_MUL && m->src[0] == norm && ggml_are_same_shape(m, norm)) {
-            mul = true;
-            break;
-        }
-    }
-    if (!mul) {
+    ggml_tensor * wmul = gf->nodes[imul];
+    if (norm->src[1] || !ggml_metal_addnorm_shape_ok(gf, add, norm, wmul)) {
         return;
     }
     norm->src[1] = add->src[1];
     norm->src[2] = add->src[0];
+    static const bool sites = getenv("GGML_FUSE_SMALL_SITES") != nullptr;
+    if (sites) {
+        static std::set<std::string> seen;
+        const std::string key = std::string(add->name) + "|" + norm->name + "|" + std::to_string(add->ne[0]) + "x" + std::to_string(add->ne[1]);
+        if (seen.insert(key).second) {
+            GGML_LOG_WARN("fuse-dep: rewrite add=%s [%lld,%lld] src0=%s src1=%s norm=%s\n", add->name, (long long) add->ne[0], (long long) add->ne[1], add->src[0]->name, add->src[1]->name, norm->name);
+        }
+    }
 }
 
 void ggml_metal_op_fuse_small_rewrite(ggml_cgraph * gf) {
@@ -430,9 +446,6 @@ void ggml_metal_op_fuse_small_rewrite(ggml_cgraph * gf) {
     }
     for (int i = 0; i < gf->n_nodes; i++) {
         ggml_tensor * n = gf->nodes[i];
-        if ((fs & GGML_METAL_FUSE_SMALL_ADDNORM) && !ggml_metal_fuse_small_nofix() && n->op == GGML_OP_RMS_NORM) {
-            ggml_metal_fuse_small_rewrite_addnorm(gf, i);
-        }
         if ((fs & GGML_METAL_FUSE_SMALL_CONV) && n->op == GGML_OP_SSM_CONV) {
             ggml_metal_fuse_small_rewrite_conv(gf, i);
         }
@@ -442,6 +455,41 @@ void ggml_metal_op_fuse_small_rewrite(ggml_cgraph * gf) {
         if ((fs & GGML_METAL_FUSE_SMALL_GNORM) && n->op == GGML_OP_MUL && ggml_get_op_params_i32(n, 0) != GGML_METAL_FUSE_SMALL_GS_MARK) {
             ggml_metal_fuse_small_rewrite_gnorm(gf, n);
         }
+    }
+}
+
+// After the reorder: the add+norm dependency only where the encoder will fuse - the ADD, the RMS_NORM and
+// the MUL adjacent (view nodes skipped, as the encoder does). A graph where they are not adjacent (the
+// drafter's conv layers) keeps its plain nodes untouched: the first cut applied the dependency to every
+// structural match, and a stray lifetime on an unfused norm changed the drafter's allocation enough to
+// expose a race the fused sites never showed (2026-09-10, 'from the drafter's side').
+void ggml_metal_op_fuse_small_rewrite_post(ggml_cgraph * gf) {
+    const int fs = ggml_metal_fuse_small();
+    static const bool nodep = getenv("GGML_FUSE_SMALL_NODEP") != nullptr; // diagnostic: the fix's dependency half off
+    if (!(fs & GGML_METAL_FUSE_SMALL_ADDNORM) || ggml_metal_fuse_small_nofix() || nodep) {
+        return;
+    }
+    auto next = [&](int i) {
+        for (int j = i + 1; j < gf->n_nodes; j++) {
+            if (!ggml_op_is_empty(gf->nodes[j]->op)) {
+                return j;
+            }
+        }
+        return -1;
+    };
+    for (int i = 0; i < gf->n_nodes; i++) {
+        if (gf->nodes[i]->op != GGML_OP_ADD) {
+            continue;
+        }
+        const int j = next(i);
+        if (j < 0 || gf->nodes[j]->op != GGML_OP_RMS_NORM || gf->nodes[j]->src[0] != gf->nodes[i]) {
+            continue;
+        }
+        const int k = next(j);
+        if (k < 0 || gf->nodes[k]->op != GGML_OP_MUL || gf->nodes[k]->src[0] != gf->nodes[j]) {
+            continue;
+        }
+        ggml_metal_fuse_small_rewrite_addnorm(gf, i, j, k);
     }
 }
 
@@ -684,6 +732,22 @@ static bool ggml_metal_fuse_small_alias_ok(const char * what, const ggml_tensor 
         const size_t o0 = bo.offs;
         const size_t o1 = o0 + ggml_nbytes(to);
         const size_t o2 = o1 + ggml_metal_op_extra_f16_twin(to);
+        // an output range (twin tail included) past the end of its ggml buffer is a write into whatever
+        // buffer follows in the address space
+        if (to->buffer) {
+            const size_t bsz = ggml_backend_buffer_get_size(to->buffer);
+            const size_t off = (const char *) to->data - (const char *) ggml_backend_buffer_get_base(to->buffer);
+            if (off + (o2 - o0) > bsz) {
+                if (n_logged < 32) {
+                    n_logged++;
+                    GGML_LOG_WARN("fuse-oob: %s: output %s at %zu + %zu exceeds its buffer (%zu bytes)\n", what, to->name, off, o2 - o0, bsz);
+                }
+                if (mode == 2) {
+                    GGML_ABORT("fuse-oob");
+                }
+                return false;
+            }
+        }
         for (int i = 0; i < n_in; i++) {
             const ggml_tensor * ti = ins[i];
             if (!ti) {
@@ -727,25 +791,26 @@ static bool ggml_metal_addnorm_match(ggml_metal_op_t ctx, int i) {
     const ggml_tensor * add  = ctx->node(i);
     const ggml_tensor * norm = ctx->node(i + 1);
     const ggml_tensor * wmul = ctx->node(i + 2);
-    if (add->op != GGML_OP_ADD || norm->op != GGML_OP_RMS_NORM || wmul->op != GGML_OP_MUL) {
+    if (!ggml_metal_addnorm_shape_ok(gf, add, norm, wmul)) {
         return false;
     }
-    if (add->view_src || add->type != GGML_TYPE_F32 || add->src[0]->type != GGML_TYPE_F32 || add->src[1]->type != GGML_TYPE_F32) {
-        return false;
-    }
-    if (!ggml_are_same_shape(add, add->src[0]) || !ggml_are_same_shape(add, add->src[1]) ||
-        !ggml_is_contiguous(add) || !ggml_is_contiguous(add->src[0]) || !ggml_is_contiguous(add->src[1])) {
-        return false;
-    }
-    if (norm->src[0] != add || norm->type != GGML_TYPE_F32 || ggml_metal_use_count(gf, norm) != 1 || norm->view_src) {
-        return false;
-    }
-    if (wmul->src[0] != norm || wmul->src[1]->ne[0] != add->ne[0] || !ggml_is_contiguous_rows(wmul->src[1]) ||
-        wmul->type != GGML_TYPE_F32 || !ggml_is_contiguous(wmul) || !ggml_are_same_shape(wmul, add) || wmul->view_src) {
-        return false;
-    }
-    if (add->ne[0] % 4 != 0) {
-        return false;
+    // diagnostics: GGML_FUSE_SMALL_ADDNORM_SKIP=<substring> leaves groups whose add or mul name contains it
+    // unfused; GGML_FUSE_SMALL_SITES=1 logs each distinct site once
+    {
+        static const char * skip = getenv("GGML_FUSE_SMALL_ADDNORM_SKIP");
+        if (skip && (strstr(add->name, skip) || strstr(wmul->name, skip))) {
+            return false;
+        }
+        static const bool sites = getenv("GGML_FUSE_SMALL_SITES") != nullptr;
+        if (sites) {
+            static std::set<std::string> seen;
+            const std::string key = std::string(add->name) + "|" + wmul->name;
+            if (seen.insert(key).second) {
+                GGML_LOG_WARN("fuse-site: add+norm add=%s [%lld,%lld,%lld] src0=%s src1=%s norm=%s mul=%s twin=%zu\n",
+                        add->name, (long long) add->ne[0], (long long) add->ne[1], (long long) add->ne[2],
+                        add->src[0]->name, add->src[1]->name, norm->name, wmul->name, ggml_metal_op_extra_f16_twin(wmul));
+            }
+        }
     }
     {
         const ggml_tensor * ins[3]  = { add->src[0], add->src[1], add };
@@ -4156,7 +4221,9 @@ static int ggml_metal_op_mul_mat_impl(ggml_metal_op_t ctx, int idx, ggml_tensor 
         ggml_metal_buffer_id bid_src1 = ggml_metal_get_buffer_id(op->src[1]);
 
         // small-op fusion (GGML_FUSE_SMALL bit 1): src1's producer wrote an f16 twin right after it
-        const ggml_tensor * twin_src = ggml_metal_f16_twin_src(op->src[1]);
+        // (GGML_FUSE_SMALL_TWIN_NOREAD=1: diagnostic, twins are written but every mul_mv casts as before)
+        static const bool twin_noread = getenv("GGML_FUSE_SMALL_TWIN_NOREAD") != nullptr;
+        const ggml_tensor * twin_src = twin_noread ? nullptr : ggml_metal_f16_twin_src(op->src[1]);
 
         static const int env_ilp = getenv("GGML_MV_EXT_ILP") ? atoi(getenv("GGML_MV_EXT_ILP")) : 1;
         static const int env_di_v2 = getenv("GGML_MV_EXT_DI_V2") ? atoi(getenv("GGML_MV_EXT_DI_V2")) : 0;
@@ -5874,7 +5941,10 @@ static int ggml_metal_op_add_rms_norm(ggml_metal_op_t ctx, int idx) {
         /*.nbf3   =*/ { nb03, w->nb[3], b->nb[3] },
     };
 
-    const size_t twin = ggml_metal_op_extra_f16_twin(wmul);
+    const size_t twin_owed = ggml_metal_op_extra_f16_twin(wmul);
+    // GGML_FUSE_SMALL_ADDNORM_NOTW=1 (diagnostic): the plain fused kernel, the twin written by a cast after it
+    static const bool notw = getenv("GGML_FUSE_SMALL_ADDNORM_NOTW") != nullptr;
+    const size_t twin = notw ? 0 : twin_owed;
 
     for (int i = 1; i < 3; ++i) {
         if (!ggml_metal_op_concurrency_check(ctx, ctx->node(idx + i))) {
@@ -5920,6 +5990,20 @@ static int ggml_metal_op_add_rms_norm(ggml_metal_op_t ctx, int idx) {
     ggml_metal_encoder_set_threadgroup_memory_size(enc, 32*sizeof(float), 0);
 
     ggml_metal_encoder_dispatch_threadgroups(enc, ne01, ne02, ne03, nth, 1, 1);
+
+    if (notw && twin_owed) {
+        ggml_metal_op_concurrency_reset(ctx);
+        ggml_metal_buffer_id bid_tw = bid_dst;
+        bid_tw.offs += ggml_nbytes(wmul);
+        auto pipeline_cvt = ggml_metal_library_get_pipeline_cvt_f32_f16_cont(lib);
+        ggml_metal_kargs_cvt_cont cargs = { /*.n =*/ ggml_nelements(wmul) };
+        const int64_t nthr = ggml_nelements(wmul)/8;
+        ggml_metal_encoder_set_pipeline(enc, pipeline_cvt);
+        ggml_metal_encoder_set_bytes   (enc, &cargs, sizeof(cargs), 0);
+        ggml_metal_encoder_set_buffer  (enc, bid_dst, 1);
+        ggml_metal_encoder_set_buffer  (enc, bid_tw,  2);
+        ggml_metal_encoder_dispatch_threadgroups(enc, (nthr + 255)/256, 1, 1, 256, 1, 1);
+    }
 
     return 3;
 }

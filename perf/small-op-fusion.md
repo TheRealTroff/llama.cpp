@@ -487,3 +487,78 @@ async inject keeps its overlap with the target's verify (a different context); o
 back-to-back decodes serialize, which is the behaviour the flag's own comment assumed. Confirmation chain
 (`sync-test.sh`, `fuse-quick/sy_*`): fix on x12, fix off + async inject off x12, fix off + async on x6, all
 traced against `tr63_1`; the ABAB gate must then be re-priced with the fix (the async inject's +0.76% may shrink).
+
+**Correction (same evening, after the confirmation runs):** the reference run of the hunt, `tr63_1`, was itself the
+corrupted one (its first-draft lattice differs from both base runs and from every other run); the two runs flagged
+as deviating matched base at that point and deviated later. Read against the consensus, EVERY mask-63 run departs
+at a random early round (trace lines 18, 21, 48, 54, 57, 60, 63 - all within the first sixteen rounds), with the
+sync fix on or off and with the async inject on or off, while three base runs agree line for line. The count
+deviations are the rare departures that flip a draft token. So the sync-before-inputs finding stands as a bug
+(kept), but it is not this one.
+
+**Bit bisect with the trace as detector** (`fuse-quick/bb*`, one 600-token run per mask, first difference against
+the base trace; identical = 625 lines equal): 0 identical (x3), **60 identical**, 3 identical, **8 identical**, 62
+(no twins) identical, 55 (no add+norm) identical, 1 identical; **9 departs at line 21**, 11 at 45, 61 (no swiglu
+twin) at 45, 63 at 123. Bits 1 and 8 together, nothing else: the f16 twin on the residual add+norm group. The
+guard is silent, the allocation fix is on. Toggle matrix on mask 9 (`tm9_*`): control, `GGML_FUSE_SMALL_TWIN_NOREAD=1`
+(twins written, every mul_mv casts), `GGML_FUSE_SMALL_NORESERVE=1`, `GGML_FUSE_SMALL_NODEP=1`, `GGML_FUSE_SMALL_NOFIX=1`.
+Mask 60 is identical to base in the trace, which is a far stronger clean than the counts were.
+
+**Toggle matrix on mask 9** (`fuse-quick/tm9_*`, one traced 600-token run each, first difference vs base): control
+departs (line 321, and 39 on the repeat); `TWIN_NOREAD=1` (twins written, every mul_mv casts) departs (51); mask 63
+with NOREAD departs (231); `NORESERVE=1`, `NODEP=1`, `NOFIX=1` all IDENTICAL - in each of those the guard fires
+(32 hits) and the aliasing groups run unfused. So: the twin READ is not the mechanism, neither half of the
+allocation fix is, and the discriminator is whether `kernel_add_rms_norm_mul_tw_f32_4` runs at all. The same
+kernel is deterministic in the target (the tap features never move), so it is a drafter site or shape. Next:
+`ADDNORM_NOTW=1` (the plain fused kernel, the twin owed by a cast after it) and `SITES=1` (the drafter's fused
+add+norm sites by name), then `ADDNORM_SKIP=<name>` per site.
+
+**Further exclusions (same evening, `fuse-quick/tm9_*`, `x9_*`, `rate63_*`, one traced run each unless noted):**
+`ADDNORM_NOTW=1` (the plain fused kernel, the twin owed by a cast after it) departs (66) - the twin variant of
+the kernel is not it; `SITES=1` lists the fused add+norm sites: all 127 are the TARGET's (`l_out`,
+`attn_residual`, `attn_post_norm`, `h_nextn`), the drafter has none - so bit 8 acts only in the target, whose tap
+features never move, yet the drafter diverges; the out-of-bounds check on every fused output (twin tail vs its
+buffer size) finds nothing; `GGML_METAL_GET_MEMCPY=0` (blit readbacks) departs (135); `LLAMA_GRAPH_REUSE_DISABLE=1`
+departs (498); three more mask-63 runs depart at 177/174/204 after two that were identical - the rate and the
+round move with the machine's state, so single clean runs prove little (the bisect's clean masks were each one run;
+the diverging ones are consistent across eleven runs). Resources are in Metal's default tracked mode, one queue,
+no untracked buffers. Every host-side channel between the two contexts is now excluded; what is left is a GPU write
+past a buffer's end (the compute buffers are separate VM regions, the drafter's mapped after the target's; the
+canary cannot look past a buffer end) or a timing-exposed race inside the drafter's own bit-1 machinery.
+Running: `GGML_METAL_BUFFER_SLACK=64M` (every Metal allocation padded; a past-the-end write lands in the pad) vs
+control, interleaved.
+
+**Where the drafter-side hunt stands (2026-09-10, end of the evening).** Excluded with traced runs: past-the-end
+writes (`GGML_METAL_BUFFER_SLACK=64M` pads every Metal allocation: still departs, at the first draft), the deferred
+readback (`GET_MEMCPY=0`: departs), graph reuse (`LLAMA_GRAPH_REUSE_DISABLE=1`: departs), the fused kernel's twin
+variant (`ADDNORM_NOTW`: departs), the twin read (`TWIN_NOREAD`: departs), the async and fused inject (config C),
+the folded Turbo4 dequant (E), the sync-before-inputs bug (real, fixed, not this). Found: the bit-8 lifetime
+rewrite is a structural pass and also lands on the DRAFTER's residual-norm sites (`ffn_inp = add(attn_conv_out,
+l_out)`, `l_out = add(ffn_conv_out, ffn_inp)`, layer 0 with `inp_noise_embd`), 34 of them, which the encoder never
+fuses there - even after moving the rewrite behind the reorder and giving it the encoder's exact structural
+predicate (`ggml_metal_addnorm_shape_ok`, now shared), it still applies to those 34 and the encoder still refuses
+them: the two decisions are made on different graph objects (the encoder sees the scheduler's split view; use
+counts and node adjacency can differ there). The drafter therefore runs plain RMS_NORM nodes carrying two
+lifetime sources under bits 1+8, and that is the only thing bits 1+8 change inside the drafter. With bit 8 alone
+(mask 8, mask 60) the same stray sources are present and the trace is identical, so the sources alone are not it;
+with bit 1 alone (masks 1, 3) the twins alone are not it; both together in the drafter, the trace departs at a
+random early round in nine of eleven runs. The mechanism connecting a stray lifetime and a twin tail in the
+drafter's allocation to a nondeterministic kernel is not identified. The rate and the round move with the
+machine's state (two of two identical runs followed by three of three departing, same binary).
+
+**Instruments left in the tree** (all env-gated, off by default): `DFLASH_TRACE=1` (feature/lattice/draft hashes),
+`GGML_FUSE_SMALL_SITES=1` (`fuse-site`, `fuse-dep`), `GGML_FUSE_SMALL_ADDNORM_SKIP=<name>`, `ADDNORM_NOTW`,
+`TWIN_NOREAD`, `NORESERVE`, `NODEP`, `NOFIX`, `GGML_FUSE_SMALL_ALIAS` (guard + `fuse-oob` check),
+`GGML_METAL_BUFFER_SLACK`, `LLAMA_SYNC_INPUTS`; `scratchpad/trace-compare.py` (copy into perf/ when picked up).
+
+**Decision for the pick, as of tonight.** Mask 60 (no twins) plus the two real fixes (allocation alias, sync
+before inputs): identical trace to base, canonical in every count run, gate ud +1.9/+1.8%. The ABAB gate must be
+re-run on the final binary, because the sync-before-inputs wait can take back part of the async inject's +0.76%.
+Mask 63 stays off until the drafter interaction is understood; the twins are worth about the noise on top of 60.
+Next session, in order: (1) make the encoder's add+norm decision and the rewrite agree by construction - the
+rewrite marks the norm (op_params) and the encoder fuses on the marker, so no graph ever carries a lifetime
+without the kernel; if the drafter's 34 sites then fuse, re-run the mask-9 trace; (2) if it still departs, watch
+the drafter's own tensors with `LLAMA_TRACE_WATCH` across the target's graphs (cross-context corruption) and hash
+the drafter's KV per round; (3) the drafter's twin tails: `ROPE` in place over a twin-bearing MUL frees the tail
+(`ggml_gallocr_free_extra_space`) to a later tensor while the norm kernel still writes it - ordered by the
+hazard table on paper, worth a canary at that exact spot.

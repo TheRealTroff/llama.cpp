@@ -1837,6 +1837,17 @@ ggml_metal_buffer_t ggml_metal_buffer_init(ggml_metal_device_t dev, size_t size,
 
     shared = shared && props_dev->use_shared_buffers;
 
+    // GGML_METAL_BUFFER_SLACK=<bytes> (diagnostic): pad every allocation the allocator never hands out, so a
+    // kernel writing past a buffer's end lands in the pad instead of whatever region was mapped next
+    {
+        static size_t slack = (size_t) -1;
+        if (slack == (size_t) -1) {
+            const char * v = getenv("GGML_METAL_BUFFER_SLACK");
+            slack = v ? (size_t) atoll(v) : 0;
+        }
+        size_aligned += slack;
+    }
+
     // allocate shared buffer if the device supports it and it is required by the buffer type
     if (shared) {
         res->all_data = ggml_metal_host_malloc(size_aligned);
