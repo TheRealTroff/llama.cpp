@@ -262,3 +262,20 @@ mul_mv's own reads (the twin) against something in flight, most plausibly the pr
 add+norm still writing (its outputs are tracked as MUL/ADD dsts, but the twin region belongs to the MUL's
 alloc size only if `ggml_backend_buft_get_alloc_size` sees the same tensor state on both sides - check that
 the range recorded for the fused MUL includes its twin at encode time).
+
+**With the barrier before every twin read (2026-09-10, very late):** reproducer mask 63 x8: 8/8
+canonical. ABAB x2 gate: ud 600 26.50/26.36 -> 27.05/26.91 (+2.0%), ud 300 26.21/26.19 -> 26.76/26.77
+(+2.1%), all shas canonical; q4 600 30.54/29.90 -> 31.44/31.43, q4 300 28.89/27.46 -> 29.61/29.55 - the q4
+base arms were throttling after five hours of runs (27.46 is not a real base number), so the q4 delta is
+unpriced. Mint (`prodpick-sep10-fuse3-*`): every pick arm canonical EXCEPT q4 `turbo4-n3-600` r1
+(`b8e82e64700a`, 65.1%, repeat canonical) - **the race is reduced, not gone** (about 1 in 10 at 600
+tokens, invisible at 1200 tokens on this prompt). And both `partial-n6-300` arms (the OLD partial env, no
+SSM_CONV_WB / GDN_FUSE_WB / SoA routes, with the fusion exported) collapsed to 0-1% acceptance: **a second
+defect - the fusion assumes the pick's companion flags** (candidates: the gate rewrite without
+GDN_FUSE_WB, the twin read on the ext f16y mul_mv routes); it must refuse when they are absent, or be fixed.
+
+Status at the end of the session: merged, `proposed`, off by default. Next: (a) mask 60 (no twins) x8 on
+the reproducer, gate and mint - a chain was left running (`fixchain3.log`, results
+`prodpick-sep10-fuse4-*`, `fusegate-*`), it is the candidate pick if clean; (b) the twin race root cause -
+the barrier before the read is not sufficient, so the hazard is on the twin WRITE side or an untracked
+overlap of the twin region; (c) the partial-env collapse.
