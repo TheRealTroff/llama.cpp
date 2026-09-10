@@ -13,3 +13,10 @@
 - `perf/fuse-observe.cpp` - the real model with an eval callback on named tensors (sum + hash per graph),
   `OBS_DUMP=<dir>` writes them for an element-wise diff. Its splits synchronize at the observed tensors,
   which masks ordering bugs between them; `GGML_METAL_GRAPH_DEBUG=3` (range overlaps) is the tool for those.
+- **Alias guard + NOFIX probe (2026-09-10, `small-op-fusion.md` 'Root cause')** - the encoder checks every
+  fused group's output ranges (alloc size, twin tail included) against its input ranges before fusing
+  (`ggml_metal_fuse_small_alias_ok`): a non-identical overlap logs `fuse-alias: <group>: output X [a, b, twin to c)
+  overlaps input Y [d, e) - not fused` and runs the group unfused. `GGML_FUSE_SMALL_ALIAS=0` disables it, `=2`
+  aborts on a hit; `GGML_FUSE_SMALL_NOFIX=1` turns the allocation fix off so the guard shows the aliases a
+  configuration would have raced on. This is how a fused-group lifetime bug is PROVED: one 96-token run per mask,
+  `grep -c fuse-alias <server.log>`, no race run, no 6-run bisect. Grep every mint's server log for `fuse-alias`.

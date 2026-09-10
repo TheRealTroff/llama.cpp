@@ -1,4 +1,4 @@
-# Small-op fusion: the cache-resident kernels between the matmuls (2026-09-10, MERGED, UN-PICKED: intermittent at the mint, OPEN)
+# Small-op fusion: the cache-resident kernels between the matmuls (2026-09-10, MERGED, UN-PICKED; the intermittent ROOT-CAUSED and FIXED on `exp/fuse-alias` the next morning - see 'Root cause' at the end; verification chain results follow it)
 
 Branch `exp/small-op-fusion`, flag `GGML_FUSE_SMALL=<bitmask>` (default 0 = upstream behaviour).
 
@@ -279,3 +279,84 @@ the reproducer, gate and mint - a chain was left running (`fixchain3.log`, resul
 `prodpick-sep10-fuse4-*`, `fusegate-*`), it is the candidate pick if clean; (b) the twin race root cause -
 the barrier before the read is not sufficient, so the hazard is on the twin WRITE side or an untracked
 overlap of the twin region; (c) the partial-env collapse.
+
+## Mask 60 chain (2026-09-10 morning, the chain left running): clean everywhere
+
+Reproducer (q4 Turbo4 depth-3, 1200 tokens) x8: 8/8 on `648a18f46d5c`. ABAB x2 gate: ud 600 26.458/26.440 ->
+26.931/26.956 (**+1.9%**), ud 300 26.199/26.162 -> 26.671/26.664 (**+1.8%**), shas canonical; q4 600
+30.647/29.696 -> 31.351/31.348, q4 300 28.868/27.412 -> 28.629/29.505 - the q4 base arms wander by 3-5%
+between reps (the machine after a night of runs), the q4 delta is unpriced again. Mint `prodpick-sep10-fuse4-{ud,q4}`
+(prod 89b746853 + `GGML_FUSE_SMALL=60`): **every arm canonical on both lines** - ud 22.31 / 24.61 / 24.73 (pick
+300 / 600 / 600-r2) / 12.56 b1 / 26.84 / 26.00 / 26.56 (turbo4 600 / 600-r2 / 300); q4 29.49 / 31.59 / 31.63 /
+14.12 b1 / 31.16 / 31.21 / 29.10. Logs `kvquant-experiments/results/fuse-quick/rk60_*`, `fusegate-0910-0721-*`,
+`fusegate-0910-0833-*`, `prodpick-sep10-fuse4-*`. Mask 60 is clean by *layout luck*, not by construction (next
+section): bit 8 carries the same class of hazard, it just does not land on these shapes.
+
+## Root cause (2026-09-10 morning): a fused group's output is allocated after the group's inputs are freed
+
+`ggml-alloc` allocates a node's output before it decrements its parents' use counts, so a **single** kernel's
+output can never overlap its inputs except by the explicit in-place reuse (same address, same layout), and
+the per-thread read-before-write rule makes that safe. A **fused group** breaks the premise: the group's
+output is the LAST node's tensor, allocated at that node's position, and the inputs of the group's EARLIER
+nodes were freed at those nodes. Best-fit then puts the output at the start of whatever free block fits -
+which can be the block an input just vacated, merged with its neighbours, so the output lands a few rows
+before or after that input, and the kernel writes its rows while other threadgroups still read the input's.
+
+Upstream's fusions never hit this because the last node reuses the first node's block in place (RMS_NORM's
+output has one child, same size: the MUL takes it), and that block was allocated while the norm's input
+was live. **The f16 twin breaks the in-place chain**: the twin-bearing MUL's alloc size exceeds its norm
+parent's, `ggml-alloc`'s new size check (trap 4) refuses the reuse, and the MUL's block is allocated fresh at
+the MUL's node. The residual add+norm group (bit 8) is the worst case even without a twin: the add's second
+operand is the residual (`ggml_add(cur, inpSA)`: src0 is the projection output, reused in place as the sum;
+src1 the residual, dead after the add), the norm's block is allocated one node later, and the sum-free
+residual block is the best fit next door.
+
+**Deterministic evidence, no race run needed** (`GGML_FUSE_SMALL_NOFIX=1` turns the fix off, the alias
+guard logs each hit; quick harness, 96 tokens, both lines; `fuse-quick/ap-*`):
+
+| config | ud hits | q4 hits | first hit |
+|---|---:|---:|---|
+| base (0) | 0 | 0 | |
+| 63, fix off | 32+ | 32+ | ud: `add+norm: output attn_norm-4 [595168, 636128, twin to 656608) overlaps input attn_residual-3 [636128, 677088)` - the twin tail is written over the residual the kernel reads; q4: `norm+twin: output node_36 [535680, 568448, twin to 584832) overlaps input (reshaped) [554112, 586880)` - a q/k norm's output 18 KB into its own input |
+| 11, fix off | 32+ | 32+ | the same sites |
+| 9, fix off | 32+ | 32+ | the same sites - mask 9 "passed" the 6-run reproducer by timing, not by layout |
+| 60, fix off | 0 | 0 | no twins: the MULs reuse their norms in place; bit 8's residual hazard does not land on these shapes |
+| 63, fix on | 0 | 0 | shas `f566cc418c50` / `1aa8305c8b69` = base |
+| 60, fix on | 0 | 0 | same shas |
+
+The sites (32-line log cap): on ud every delta-net layer's `attn_norm-N` add+norm group over `attn_residual-(N-1)`,
+plus `h_nextn` (the MTP head's norm over the last residual); on q4 the same plus the q/k norms of the attention
+layers (`node_36`, `node_495`, `node_648`). Why it was rare: the twin tail over the residual is two half rows
+over one f32 row, so threadgroup 1's twin write lands on row 0's second half, which threadgroup 0 reads in its
+first loop; the two threadgroups run the same code in lockstep and the overlap needs threadgroup 1 to reach its
+write loop before threadgroup 0 finishes its read loop - one round in a few thousand. Why "twins + add+norm":
+the twin creates the fresh allocation, the add+norm group is the one whose earlier input (the residual) is
+dead and adjacent. Why the "barrier before every twin-reading mul_mv" seemed to help: it did nothing - the
+encode loop's own check already fences the producer (its range is the alloc size, twin included), so the extra
+reset was a second back-to-back barrier; 0/14 clean runs against a ~20% rate is a 3% event, and the mint then
+failed at the same 1-in-10 as before. It is removed.
+
+**The fix (commit on `exp/fuse-alias`, worktree `llama.cpp-fuse`), at the allocation, not the kernel:**
+
+1. `ggml_metal_op_extra_f16_twin_norm`: the RMS_NORM output reserves the twin tail too (alloc hook,
+   `GGML_OP_RMS_NORM`), so the twin-bearing MUL takes the norm's block in place again - a block that exists
+   while the norm's input is live. The gated norm's second MUL then takes the first MUL's block (equal sizes).
+2. Rewrite for bit 8 (`ggml_metal_fuse_small_rewrite_addnorm`, pre-allocation): the add's second operand
+   becomes `src[1]` of the RMS_NORM - a lifetime, not data (the norm kernels read `src[0]` only) - so the
+   norm's block cannot be allocated over the residual. The first operand lives on as the in-place sum.
+3. `ggml_metal_fuse_small_alias_ok`: an encode-time tripwire on every fused group (add+norm, norm+twin,
+   gated norm): every output range (alloc size, twin tail included) against every input range; exact
+   in-place is allowed, anything else logs `fuse-alias:` and runs the group unfused (safe). `GGML_FUSE_SMALL_ALIAS=0`
+   off, `=2` abort. Grep every mint's server log for `fuse-alias` - a hit means a shape the fix does not cover.
+4. The placebo barrier removed (above).
+5. A second, deterministic bug found on the way: the gated norm's encoder-boundary fallback (the rewritten
+   MUL whose norm sits in the previous command buffer) staged `silu(z)` in dst - which is wmul's block in
+   place - and multiplied garbage. It now writes `silu(z)` over z (the rewrite requires z's only use) and
+   multiplies from there. Never hit in the pick's graphs (the sha was canonical); a candidate for the
+   partial-env collapse, whose graph splits differently - measured in the chain below.
+
+Rule, generalizing trap 5: **a fused kernel may read only what its own node lists as sources, AND a fused
+group's output block must be one that existed while every input of the group was live** - in place over the
+first node's block, or the earlier inputs made sources of the node that allocates the output. `ggml-alloc`
+knows nothing about backend fusion; the backend has to shape the graph so the allocator's single-node
+guarantee covers the group. The guard is what turns the next such bug into a log line instead of a 1-in-10 sha.
