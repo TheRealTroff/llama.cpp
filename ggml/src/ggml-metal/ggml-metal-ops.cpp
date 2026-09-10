@@ -89,6 +89,292 @@ static bool ggml_metal_ssm_conv_wb_cpy(const ggml_tensor * cpy, const ggml_tenso
     return true;
 }
 
+
+// small-op fusion (GGML_FUSE_SMALL=<bitmask>, perf/small-op-fusion.md). The cache-resident elementwise,
+// norm and gate kernels between the weight-streaming matmuls each sit behind their own memory barrier
+// and cost launch + drain, not bytes (~1200 dispatches per decode round). Every fusion here reproduces
+// the unfused kernels' expressions and reduction geometry (byte-identical by construction) and is, like
+// the GDN write-back, a pure function of the graph on the op side and on the drop side.
+#define GGML_METAL_FUSE_SMALL_TWIN     1   // producers write an f16 twin of their output; width 2-8 mul_mv reads it instead of casting
+#define GGML_METAL_FUSE_SMALL_SWIGLU   2   // the swiglu output gets a twin too (with bit 1)
+#define GGML_METAL_FUSE_SMALL_GNORM    4   // rms_norm + mul(w) + mul(silu(z)): the delta-net gated norm in one kernel
+#define GGML_METAL_FUSE_SMALL_ADDNORM  8   // residual add + rms_norm + mul(w) in one kernel
+#define GGML_METAL_FUSE_SMALL_GDNGATE 16   // add/softplus/mul/sigmoid gate chain folded into the delta-net kernel
+#define GGML_METAL_FUSE_SMALL_CONV    32   // concat + ssm_conv (+ carry) + silu in one kernel
+#define GGML_METAL_FUSE_SMALL_GS_MARK   0x4753  // op_params[0] of the gated norm's MUL: src1 is z, silu applied in the kernel
+#define GGML_METAL_FUSE_SMALL_CONV_SILU 1       // op_params[0] of a rewritten SSM_CONV: silu applied to the output
+#define GGML_METAL_FUSE_SMALL_CONV_MAX_WB 6     // carry slots an SSM_CONV can take as sources (src[4..9])
+
+static int ggml_metal_fuse_small(void) {
+    static const int v = getenv("GGML_FUSE_SMALL") ? atoi(getenv("GGML_FUSE_SMALL")) : 0;
+    return v;
+}
+
+// uses of a tensor in the graph (ggml_node_get_use_count, by tensor)
+static int32_t ggml_metal_use_count(const ggml_cgraph * gf, const ggml_tensor * t) {
+    const size_t pos = ggml_hash_find(&gf->visited_hash_set, t);
+    if (!ggml_bitset_get(gf->visited_hash_set.used, pos)) {
+        return 0;
+    }
+    return gf->use_counts[pos];
+}
+
+// through plain reshapes (same bytes, same order)
+static const ggml_tensor * ggml_metal_unreshape(const ggml_tensor * t) {
+    while (t && t->op == GGML_OP_RESHAPE && t->src[0]) {
+        t = t->src[0];
+    }
+    return t;
+}
+
+// f16 twin: a decode-width f32 output whose producer also writes it as halves right after itself, in
+// the layout the mul_mv cast scratch uses. Producers: the norm chain's MUL (rms_norm + mul(w), fused
+// or not), the gated norm's MUL, the swiglu. The alloc hook reserves it, the producer's op writes it
+// (its fused kernel, or a cast dispatch when its route cannot), the mul_mv reads it. A function of
+// the tensor alone, so the alloc hook and both encoders agree.
+size_t ggml_metal_op_extra_f16_twin(const ggml_tensor * t) {
+    const int fs = ggml_metal_fuse_small();
+    if (!(fs & GGML_METAL_FUSE_SMALL_TWIN)) {
+        return 0;
+    }
+    if (t->type != GGML_TYPE_F32 || t->view_src || !ggml_is_contiguous(t)) {
+        return 0;
+    }
+    if (t->ne[0] % 8 != 0 || ggml_nelements(t) > 8*32768) {
+        return 0; // decode widths only ([17408, 8] is the largest)
+    }
+    bool ok = false;
+    switch (t->op) {
+        case GGML_OP_MUL:
+            if (t->src[0] && t->src[0]->op == GGML_OP_RMS_NORM) {
+                ok = true;
+            }
+            if (ggml_get_op_params_i32(t, 0) == GGML_METAL_FUSE_SMALL_GS_MARK && t->src[0] && t->src[0]->op == GGML_OP_MUL &&
+                t->src[0]->src[0] && t->src[0]->src[0]->op == GGML_OP_RMS_NORM) {
+                ok = true; // the gated norm's output (rewritten graph)
+            }
+            break;
+        case GGML_OP_GLU:
+            ok = (fs & GGML_METAL_FUSE_SMALL_SWIGLU) && ggml_get_glu_op(t) == GGML_GLU_OP_SWIGLU &&
+                 t->src[1] != nullptr && t->src[0]->type == GGML_TYPE_F32 && t->src[1]->type == GGML_TYPE_F32 &&
+                 ggml_is_contiguous_1(t->src[0]) && ggml_is_contiguous_1(t->src[1]);
+            break;
+        default:
+            break;
+    }
+    return ok ? GGML_PAD(ggml_nelements(t)*sizeof(ggml_fp16_t), 32) : 0;
+}
+
+// the tensor whose f16 twin holds src1 (src1 itself, or the tensor it is a contiguous full view of)
+static const ggml_tensor * ggml_metal_f16_twin_src(const ggml_tensor * src1) {
+    const ggml_tensor * p = src1->view_src ? src1->view_src : src1;
+    if (ggml_metal_op_extra_f16_twin(p) == 0) {
+        return nullptr;
+    }
+    if (src1->type != GGML_TYPE_F32 || src1->data != p->data || ggml_nelements(src1) != ggml_nelements(p) || !ggml_is_contiguous(src1)) {
+        return nullptr;
+    }
+    return p;
+}
+
+
+// Graph rewrite (ggml_metal_graph_optimize, before allocation). A kernel that absorbs other nodes reads
+// their inputs, so the absorbing node takes those inputs as its own sources: the allocator keeps them alive
+// until it runs and the hazard tracking orders it behind their producers. The absorbed nodes become
+// GGML_OP_NONE (the construct ggml-backend uses for dependency-only nodes: never encoded, their sources
+// still count). Reading a dropped node's input without this is a use-after-free by graph lifetime.
+// Idempotent: rewritten nodes carry a marker.
+
+static void ggml_metal_fuse_small_rewrite_conv(ggml_cgraph * gf, int iconv) {
+    ggml_tensor * conv = gf->nodes[iconv];
+    if (!ggml_metal_ssm_conv_wb_enabled() || conv->src[2] || conv->type != GGML_TYPE_F32 || conv->ne[1] < 1 || conv->ne[1] > 16) {
+        return;
+    }
+    ggml_tensor * cat = conv->src[0];
+    ggml_tensor * cw  = conv->src[1];
+    if (!cat || cat->op != GGML_OP_CONCAT || ggml_get_op_params_i32(cat, 0) != 0 || cat->type != GGML_TYPE_F32 || cw->type != GGML_TYPE_F32) {
+        return;
+    }
+    ggml_tensor * st = cat->src[0];
+    ggml_tensor * x  = cat->src[1];
+    if (!st || !x || st->type != GGML_TYPE_F32 || x->type != GGML_TYPE_F32) {
+        return;
+    }
+    const int64_t nc = cw->ne[0];
+    if (st->ne[0] != nc - 1 || st->ne[1] != cat->ne[1] || x->ne[1] != cat->ne[1] || st->ne[2] != cat->ne[2] || x->ne[2] != cat->ne[2] ||
+        st->ne[0] + x->ne[0] != cat->ne[0] || x->ne[0] != conv->ne[1] || cat->ne[3] != 1 || cat->nb[0] != sizeof(float) || st->ne[0] + x->ne[0] > 24) {
+        return;
+    }
+    if (!ggml_is_contiguous(conv) || !ggml_is_contiguous(cw)) {
+        return;
+    }
+    // the carry copies read the window: they must all be absorbed, and nothing else may read it
+    ggml_tensor * cpys[GGML_METAL_FUSE_SMALL_CONV_MAX_WB];
+    int n_cpy = 0;
+    for (int j = 0; j < gf->n_nodes; j++) {
+        ggml_tensor * c = gf->nodes[j];
+        if (c->op == GGML_OP_CPY && ggml_metal_ssm_conv_wb_cpy(c, conv)) {
+            if (n_cpy == GGML_METAL_FUSE_SMALL_CONV_MAX_WB) {
+                return;
+            }
+            cpys[n_cpy++] = c;
+        }
+    }
+    if (ggml_metal_use_count(gf, cat) != 1 + n_cpy) {
+        return;
+    }
+    ggml_tensor * silu = nullptr;
+    if (ggml_metal_use_count(gf, conv) == 1) {
+        for (int j = iconv + 1; j < gf->n_nodes; j++) {
+            ggml_tensor * n = gf->nodes[j];
+            if (n->op == GGML_OP_UNARY && ggml_get_unary_op(n) == GGML_UNARY_OP_SILU && n->src[0] == conv) {
+                if (n->type == GGML_TYPE_F32 && !n->view_src && ggml_are_same_shape(n, conv) && ggml_is_contiguous(n)) {
+                    silu = n;
+                }
+                break;
+            }
+        }
+    }
+    conv->src[2] = st;
+    conv->src[3] = x;
+    for (int k = 0; k < n_cpy; k++) {
+        conv->src[4 + k] = cpys[k];
+        cpys[k]->op = GGML_OP_NONE;
+    }
+    cat->op = GGML_OP_NONE;
+    if (silu) {
+        for (int j = iconv + 1; j < gf->n_nodes; j++) {
+            ggml_tensor * n = gf->nodes[j];
+            if (n->view_src == silu) {
+                n->view_src = conv;
+            }
+            for (int k = 0; k < GGML_MAX_SRC; k++) {
+                if (n->src[k] == silu) {
+                    n->src[k] = conv;
+                }
+            }
+        }
+        silu->op = GGML_OP_NONE;
+        ggml_set_op_params_i32(conv, 0, GGML_METAL_FUSE_SMALL_CONV_SILU);
+    }
+}
+
+static void ggml_metal_fuse_small_rewrite_gate(ggml_cgraph * gf, ggml_tensor * gdn) {
+    ggml_tensor * r3 = gdn->src[3];
+    ggml_tensor * r4 = gdn->src[4];
+    // the gate arrives through a reshape ([H, T, S] -> [1, H, T, S]); the beta is either reshaped or the sigmoid node itself
+    if (!r3 || !r4 || r3->op != GGML_OP_RESHAPE || r3->src[1] || r3->ne[0] != 1 || gdn->src[2]->ne[2] > 8) {
+        return;
+    }
+    const int64_t H = gdn->src[2]->ne[1];
+    ggml_tensor * mul = (ggml_tensor *) ggml_metal_unreshape(r3->src[0]);
+    ggml_tensor * sig = r4->op == GGML_OP_RESHAPE ? (ggml_tensor *) ggml_metal_unreshape(r4->src[0]) : r4;
+    if (!mul || mul->op != GGML_OP_MUL || !mul->src[0] || !mul->src[1] || mul->type != GGML_TYPE_F32) {
+        return;
+    }
+    ggml_tensor * sp = mul->src[0];
+    if (sp->op != GGML_OP_UNARY || ggml_get_unary_op(sp) != GGML_UNARY_OP_SOFTPLUS || sp->type != GGML_TYPE_F32 || !sp->src[0]) {
+        return;
+    }
+    ggml_tensor * add = sp->src[0];
+    if (add->op != GGML_OP_ADD || add->type != GGML_TYPE_F32 || !add->src[0] || !add->src[1]) {
+        return;
+    }
+    if (!sig || sig->op != GGML_OP_UNARY || ggml_get_unary_op(sig) != GGML_UNARY_OP_SIGMOID || sig->type != GGML_TYPE_F32 || !sig->src[0]) {
+        return;
+    }
+    ggml_tensor * dtb   = add->src[1];
+    ggml_tensor * av    = mul->src[1];
+    ggml_tensor * alpha = add->src[0];
+    ggml_tensor * beta  = sig->src[0];
+    if (dtb->type != GGML_TYPE_F32 || av->type != GGML_TYPE_F32 || ggml_nelements(dtb) != H || ggml_nelements(av) != H ||
+        !ggml_is_contiguous(dtb) || !ggml_is_contiguous(av) || dtb->ne[0] != H || av->ne[0] != H) {
+        return;
+    }
+    if (add->ne[0] != H || !ggml_are_same_shape(add, alpha) || !ggml_are_same_shape(sp, add) || !ggml_are_same_shape(mul, add) ||
+        ggml_nelements(sig) != ggml_nelements(beta)) {
+        return;
+    }
+    if (alpha->type != GGML_TYPE_F32 || beta->type != GGML_TYPE_F32 || !ggml_is_contiguous(alpha) || !ggml_is_contiguous(beta) ||
+        !ggml_is_contiguous(add) || !ggml_is_contiguous(sp) || !ggml_is_contiguous(mul) || !ggml_is_contiguous(sig)) {
+        return;
+    }
+    if (ggml_nelements(alpha) != ggml_nelements(r3) || ggml_nelements(beta) != ggml_nelements(r4)) {
+        return;
+    }
+    if (ggml_metal_use_count(gf, add) != 1 || ggml_metal_use_count(gf, sp) != 1 || ggml_metal_use_count(gf, mul) != 1 || ggml_metal_use_count(gf, sig) != 1 ||
+        ggml_metal_use_count(gf, r3) != 1 || ggml_metal_use_count(gf, r4) != 1 || r3->src[0] != mul || (r4 != sig && r4->src[0] != sig)) {
+        return;
+    }
+    // the reshapes now view the raw projections; the weights ride on the gate reshape as its marker
+    r3->src[0]    = alpha;
+    r3->view_src  = alpha->view_src ? alpha->view_src : alpha;
+    r3->view_offs = alpha->view_src ? alpha->view_offs : 0;
+    r3->src[1]    = dtb;
+    r3->src[2]    = av;
+    if (r4 == sig) {
+        gdn->src[4] = beta;
+    } else {
+        r4->src[0]    = beta;
+        r4->view_src  = beta->view_src ? beta->view_src : beta;
+        r4->view_offs = beta->view_src ? beta->view_offs : 0;
+    }
+    add->op = GGML_OP_NONE;
+    sp->op  = GGML_OP_NONE;
+    mul->op = GGML_OP_NONE;
+    sig->op = GGML_OP_NONE;
+}
+
+static void ggml_metal_fuse_small_rewrite_gnorm(ggml_cgraph * gf, ggml_tensor * gmul) {
+    ggml_tensor * wmul = gmul->src[0];
+    ggml_tensor * silu = gmul->src[1];
+    if (!wmul || !silu || wmul->op != GGML_OP_MUL || silu->op != GGML_OP_UNARY || ggml_get_unary_op(silu) != GGML_UNARY_OP_SILU || silu->view_src) {
+        return;
+    }
+    ggml_tensor * norm = wmul->src[0];
+    ggml_tensor * z    = silu->src[0];
+    if (!norm || norm->op != GGML_OP_RMS_NORM || !z || !norm->src[0]) {
+        return;
+    }
+    if (gmul->type != GGML_TYPE_F32 || wmul->type != GGML_TYPE_F32 || silu->type != GGML_TYPE_F32 || z->type != GGML_TYPE_F32 || norm->type != GGML_TYPE_F32) {
+        return;
+    }
+    if (!ggml_are_same_shape(gmul, wmul) || !ggml_are_same_shape(silu, wmul) || !ggml_are_same_shape(z, wmul) || !ggml_are_same_shape(norm, wmul)) {
+        return;
+    }
+    if (!ggml_is_contiguous(gmul) || !ggml_is_contiguous(wmul) || !ggml_is_contiguous(z) || !ggml_is_contiguous(norm->src[0]) || norm->ne[0] % 4 != 0) {
+        return;
+    }
+    if (wmul->src[1]->ne[0] != norm->ne[0] || !ggml_is_contiguous_rows(wmul->src[1])) {
+        return;
+    }
+    if (ggml_metal_use_count(gf, norm) != 1 || ggml_metal_use_count(gf, wmul) != 1 || ggml_metal_use_count(gf, silu) != 1) {
+        return;
+    }
+    gmul->src[1] = z;
+    ggml_set_op_params_i32(gmul, 0, GGML_METAL_FUSE_SMALL_GS_MARK);
+    silu->op = GGML_OP_NONE;
+}
+
+void ggml_metal_op_fuse_small_rewrite(ggml_cgraph * gf) {
+    const int fs = ggml_metal_fuse_small();
+    if (fs == 0) {
+        return;
+    }
+    for (int i = 0; i < gf->n_nodes; i++) {
+        ggml_tensor * n = gf->nodes[i];
+        if ((fs & GGML_METAL_FUSE_SMALL_CONV) && n->op == GGML_OP_SSM_CONV) {
+            ggml_metal_fuse_small_rewrite_conv(gf, i);
+        }
+        if ((fs & GGML_METAL_FUSE_SMALL_GDNGATE) && n->op == GGML_OP_GATED_DELTA_NET) {
+            ggml_metal_fuse_small_rewrite_gate(gf, n);
+        }
+        if ((fs & GGML_METAL_FUSE_SMALL_GNORM) && n->op == GGML_OP_MUL && ggml_get_op_params_i32(n, 0) != GGML_METAL_FUSE_SMALL_GS_MARK) {
+            ggml_metal_fuse_small_rewrite_gnorm(gf, n);
+        }
+    }
+}
+
 static const ggml_tensor * ggml_metal_gdn_wb_op(const ggml_tensor * cpy) {
     if (cpy->op != GGML_OP_CPY || !cpy->src[0]) {
         return nullptr;
@@ -309,6 +595,39 @@ int ggml_metal_op_node_idx(ggml_metal_op_t ctx, int i) {
     return ctx->node_idx(i);
 }
 
+// residual add + rms_norm + mul(w) at encoder index i: node(i) = ADD(a, b) (its sum feeds the next
+// residual too, so it is still written), node(i + 1) = RMS_NORM(add), node(i + 2) = MUL(norm, w)
+static bool ggml_metal_addnorm_match(ggml_metal_op_t ctx, int i) {
+    if (!(ggml_metal_fuse_small() & GGML_METAL_FUSE_SMALL_ADDNORM) || !ctx->use_fusion || i < 0 || i + 2 >= ctx->n_nodes()) {
+        return false;
+    }
+    const ggml_cgraph * gf = ctx->graph();
+    const ggml_tensor * add  = ctx->node(i);
+    const ggml_tensor * norm = ctx->node(i + 1);
+    const ggml_tensor * wmul = ctx->node(i + 2);
+    if (add->op != GGML_OP_ADD || norm->op != GGML_OP_RMS_NORM || wmul->op != GGML_OP_MUL) {
+        return false;
+    }
+    if (add->view_src || add->type != GGML_TYPE_F32 || add->src[0]->type != GGML_TYPE_F32 || add->src[1]->type != GGML_TYPE_F32) {
+        return false;
+    }
+    if (!ggml_are_same_shape(add, add->src[0]) || !ggml_are_same_shape(add, add->src[1]) ||
+        !ggml_is_contiguous(add) || !ggml_is_contiguous(add->src[0]) || !ggml_is_contiguous(add->src[1])) {
+        return false;
+    }
+    if (norm->src[0] != add || norm->type != GGML_TYPE_F32 || ggml_metal_use_count(gf, norm) != 1 || norm->view_src) {
+        return false;
+    }
+    if (wmul->src[0] != norm || wmul->src[1]->ne[0] != add->ne[0] || !ggml_is_contiguous_rows(wmul->src[1]) ||
+        wmul->type != GGML_TYPE_F32 || !ggml_is_contiguous(wmul) || !ggml_are_same_shape(wmul, add) || wmul->view_src) {
+        return false;
+    }
+    if (add->ne[0] % 4 != 0) {
+        return false;
+    }
+    return true;
+}
+
 static bool ggml_metal_op_concurrency_reset(ggml_metal_op_t ctx) {
     if (!ctx->mem_ranges) {
         return true;
@@ -375,6 +694,7 @@ static int ggml_metal_op_encode_impl(ggml_metal_op_t ctx, int idx) {
             }
         }
     }
+
     switch (node->op) {
         case GGML_OP_NONE:
         case GGML_OP_RESHAPE:
@@ -1076,6 +1396,16 @@ int ggml_metal_op_glu(ggml_metal_op_t ctx, int idx) {
 
     auto pipeline = ggml_metal_library_get_pipeline_glu(lib, op);
 
+    // small-op fusion (GGML_FUSE_SMALL bit 2): the swiglu writes the f16 twin of its output as well
+    const size_t twin = ggml_metal_op_extra_f16_twin(op);
+    if (twin) {
+        const char * kname = "kernel_swiglu_tw_f32";
+        pipeline = ggml_metal_library_get_pipeline(lib, kname);
+        if (!pipeline.pipeline) {
+            pipeline = ggml_metal_library_compile_pipeline(lib, kname, kname, nullptr);
+        }
+    }
+
     const int32_t swp = ggml_get_op_params_i32(op, 1);
     const float alpha = ggml_get_op_params_f32(op, 2);
     const float limit = ggml_get_op_params_f32(op, 3);
@@ -1109,6 +1439,11 @@ int ggml_metal_op_glu(ggml_metal_op_t ctx, int idx) {
         ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[0]), 2);
     }
     ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         3);
+    if (twin) {
+        ggml_metal_buffer_id bid_twin = ggml_metal_get_buffer_id(op);
+        bid_twin.offs += ggml_nbytes(op);
+        ggml_metal_encoder_set_buffer  (enc, bid_twin, 4);
+    }
 
     ggml_metal_encoder_dispatch_threadgroups(enc, nrows, 1, 1, nth, 1, 1);
 
@@ -1856,6 +2191,55 @@ int ggml_metal_op_ssm_conv(ggml_metal_op_t ctx, int idx) {
     // decode/verify widths: one thread per (row, token) with 256-thread threadgroups; the batched
     // kernel at these widths dispatches ne01 x ne02 two-thread threadgroups (480 us/call at 8 seqs)
     if (ne1 >= 1 && ne1 <= 16 && op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_F32) {
+        // small-op fusion (GGML_FUSE_SMALL bit 32, rewritten graph): src[2] = the state, src[3] = the batch's tokens,
+        // src[4..] = the carry slots (the CPY nodes), op_params[0] = apply the silu. One dispatch for the window
+        // concat, the conv, the carry and the silu.
+        if (op->src[2] && op->src[3]) {
+            const ggml_tensor * st = op->src[2];
+            const ggml_tensor * x  = op->src[3];
+            ggml_metal_kargs_ssm_conv_cat cargs = {};
+            cargs.nr      = ne01;
+            cargs.n_t     = ne1;
+            cargs.nc      = ne10;
+            cargs.n_state = st->ne[0];
+            cargs.nbs0 = st->nb[0]; cargs.nbs1 = st->nb[1]; cargs.nbs2 = st->nb[2];
+            cargs.nbx0 = x->nb[0];  cargs.nbx1 = x->nb[1];  cargs.nbx2 = x->nb[2];
+            cargs.nbc1 = nb11;
+            cargs.nb0 = nb0; cargs.nb1 = nb1; cargs.nb2 = nb2;
+            cargs.silu = ggml_get_op_params_i32(op, 0) == GGML_METAL_FUSE_SMALL_CONV_SILU ? 1 : 0;
+            ggml_metal_buffer_id bid_state = {};
+            for (int k = 4; k < GGML_MAX_SRC && op->src[k]; k++) {
+                const ggml_tensor * cpy = op->src[k];
+                ggml_metal_buffer_id bid = ggml_metal_get_buffer_id(cpy);
+                if (cargs.n_wb == 0) {
+                    bid_state = bid;
+                    cargs.wb_nb1 = cpy->nb[1];
+                } else if (bid.metal != bid_state.metal || cpy->nb[1] != cargs.wb_nb1) {
+                    GGML_ABORT("ssm_conv cat: state slots in different buffers");
+                }
+                cargs.wb_col[cargs.n_wb] = (int32_t) (cpy->src[0]->view_offs/sizeof(float));
+                cargs.wb_off[cargs.n_wb] = (uint64_t) (bid.offs - bid_state.offs);
+                cargs.n_wb++;
+            }
+            GGML_ASSERT(st->ne[0] + ne1 <= 24);
+            const char * kname = "kernel_ssm_conv_f32_f32_rows_cat";
+            auto pipeline = ggml_metal_library_get_pipeline(lib, kname);
+            if (!pipeline.pipeline) {
+                pipeline = ggml_metal_library_compile_pipeline(lib, kname, kname, nullptr);
+            }
+            if (ctx->debug_fusion > 1) {
+                GGML_LOG_DEBUG("%s: fuse: CONCAT + SSM_CONV%s%s\n", __func__, cargs.n_wb ? " + carry" : "", cargs.silu ? " + SILU" : "");
+            }
+            ggml_metal_encoder_set_pipeline(enc, pipeline);
+            ggml_metal_encoder_set_bytes (enc, &cargs, sizeof(cargs), 0);
+            ggml_metal_encoder_set_buffer(enc, ggml_metal_get_buffer_id(st),         1);
+            ggml_metal_encoder_set_buffer(enc, ggml_metal_get_buffer_id(x),          2);
+            ggml_metal_encoder_set_buffer(enc, ggml_metal_get_buffer_id(op->src[1]), 3);
+            ggml_metal_encoder_set_buffer(enc, ggml_metal_get_buffer_id(op),         4);
+            ggml_metal_encoder_set_buffer(enc, cargs.n_wb ? bid_state : ggml_metal_get_buffer_id(op), 5);
+            ggml_metal_encoder_dispatch_threadgroups(enc, (int) ((ne01 + 255)/256), 1, ne02, 256, 1, 1);
+            return 1;
+        }
         // the conv-state carry copies this op absorbs (dropped on the copy side over the same window)
         ggml_metal_kargs_ssm_conv_wb wb = {};
         ggml_metal_buffer_id bid_state = {};
@@ -2155,7 +2539,16 @@ int ggml_metal_op_gated_delta_net(ggml_metal_op_t ctx, int idx) {
         ggml_metal_op_concurrency_reset(ctx);
     }
 
-    auto pipeline = ggml_metal_library_get_pipeline_gated_delta_net(lib, op, fuse_wb, ext);
+    // small-op fusion (GGML_FUSE_SMALL bit 16): the gate chain folded into the kernel; g and b are
+    // then the raw alpha / beta projections and the chain's nodes are dropped by the encoder
+    const bool fuse_gate = op->src[3]->op == GGML_OP_RESHAPE && op->src[3]->src[1] != nullptr && op->src[3]->src[2] != nullptr;
+    const ggml_tensor * gt_dtb = fuse_gate ? op->src[3]->src[1] : nullptr;
+    const ggml_tensor * gt_av  = fuse_gate ? op->src[3]->src[2] : nullptr;
+    if (fuse_gate && ctx->debug_fusion > 1) {
+        GGML_LOG_DEBUG("%s: fuse: gate chain (ADD + SOFTPLUS + MUL, SIGMOID) into GATED_DELTA_NET\n", __func__);
+    }
+
+    auto pipeline = ggml_metal_library_get_pipeline_gated_delta_net(lib, op, fuse_wb, ext, fuse_gate);
 
     int ida = 0;
 
@@ -2212,8 +2605,8 @@ int ggml_metal_op_gated_delta_net(ggml_metal_op_t ctx, int idx) {
     ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[0]), ida++); // q
     ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[1]), ida++); // k
     ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[2]), ida++); // v
-    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[3]), ida++); // gate
-    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[4]), ida++); // beta
+    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[3]), ida++); // gate (the raw alpha when fused)
+    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[4]), ida++); // beta (the raw beta when fused)
     ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[5]), ida++); // state
     ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         ida++); // dst
     ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(fuse_wb ? cpy : op), ida++); // snapshot writeback
@@ -2222,6 +2615,8 @@ int ggml_metal_op_gated_delta_net(ggml_metal_op_t ctx, int idx) {
     ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(fuse_xk ? cpy_xk : op), ida++); // kept inputs
     ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(xrow  ? xrow  : op), ida++); // replay rows
     ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(xwrow ? xwrow : op), ida++); // kept-input rows
+    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(fuse_gate ? gt_dtb : op), ida++); // dt_bias [H]
+    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(fuse_gate ? gt_av  : op), ida++); // A [H]
 
     const int nsg = pipeline.nsg;
     const int nr  = pipeline.nr0 > 1 ? pipeline.nr0 : 1; // state rows per simdgroup (GGML_GDN_NR)
@@ -3631,6 +4026,9 @@ static int ggml_metal_op_mul_mat_impl(ggml_metal_op_t ctx, int idx, ggml_tensor 
         // src1 buffer; the optional f16 conversion of it is encoded below, after the route is known
         ggml_metal_buffer_id bid_src1 = ggml_metal_get_buffer_id(op->src[1]);
 
+        // small-op fusion (GGML_FUSE_SMALL bit 1): src1's producer wrote an f16 twin right after it
+        const ggml_tensor * twin_src = ggml_metal_f16_twin_src(op->src[1]);
+
         static const int env_ilp = getenv("GGML_MV_EXT_ILP") ? atoi(getenv("GGML_MV_EXT_ILP")) : 1;
         static const int env_di_v2 = getenv("GGML_MV_EXT_DI_V2") ? atoi(getenv("GGML_MV_EXT_DI_V2")) : 0;
         static const int env_half_product = getenv("GGML_MV_EXT_HALF_PRODUCT") ? atoi(getenv("GGML_MV_EXT_HALF_PRODUCT")) : 0;
@@ -3707,7 +4105,12 @@ static int ggml_metal_op_mul_mat_impl(ggml_metal_op_t ctx, int idx, ggml_tensor 
                               nb12 == (uint64_t) ne10*ne11*sizeof(float) && nb13 == (uint64_t) ne10*ne11*ne12*sizeof(float) &&
                               ny % 4 == 0;
 
-        if (copy_y16 && cvt_cont) {
+        if (copy_y16 && twin_src) {
+            // no cast dispatch and no barrier of our own: the twin's range is the producer's allocation,
+            // so the graph's hazard tracking orders this op behind it like any other read of src1
+            bid_src1 = ggml_metal_get_buffer_id(twin_src);
+            bid_src1.offs += ggml_nbytes(twin_src);
+        } else if (copy_y16 && cvt_cont) {
             assert(ggml_metal_op_mul_mat_extra_src1f16(op) != 0);
 
             ggml_metal_buffer_id bid_y16 = ggml_metal_get_buffer_id(op);
@@ -5019,12 +5422,112 @@ static bool ggml_metal_op_can_fuse_snake(ggml_metal_op_t ctx, int idx) {
     return types_ok && shape_ok && dim_ok && contig_ok && x_in_add == x;
 }
 
+static int ggml_metal_op_add_rms_norm(ggml_metal_op_t ctx, int idx);
+
 int ggml_metal_op_bin(ggml_metal_op_t ctx, int idx) {
     if (ctx->use_fusion && ggml_metal_op_can_fuse_snake(ctx, idx)) {
         return ggml_metal_op_snake_fused(ctx, idx);
     }
 
+    // small-op fusion (GGML_FUSE_SMALL bit 8): residual add + rms_norm + mul(w) in one kernel
+    if (ctx->node(idx)->op == GGML_OP_ADD && ggml_metal_addnorm_match(ctx, idx)) {
+        return ggml_metal_op_add_rms_norm(ctx, idx);
+    }
+
     ggml_tensor * op = ctx->node(idx);
+
+    // the rewritten gated norm's MUL that its norm did not fuse (encoder boundary): silu(z) into dst, then the
+    // multiply in place - the two dispatches the graph had
+    if (op->op == GGML_OP_MUL && ggml_get_op_params_i32(op, 0) == GGML_METAL_FUSE_SMALL_GS_MARK) {
+        ggml_metal_library_t lib = ctx->lib;
+        ggml_metal_encoder_t enc = ctx->enc;
+        const ggml_tensor * z = op->src[1];
+        ggml_tensor tmp = *op;
+        tmp.op = GGML_OP_UNARY;
+        ggml_set_op_params_i32(&tmp, 0, GGML_UNARY_OP_SILU);
+        tmp.src[0] = (ggml_tensor *) z;
+        auto pipeline_silu = ggml_metal_library_get_pipeline_unary(lib, &tmp);
+        ggml_metal_kargs_unary uargs = {
+            /*.ne00  =*/ (int32_t) z->ne[0], /*.ne01 =*/ (int32_t) z->ne[1], /*.ne02 =*/ (int32_t) z->ne[2], /*.ne03 =*/ (int32_t) z->ne[3],
+            /*.nb00  =*/ z->nb[0], /*.nb01 =*/ z->nb[1], /*.nb02 =*/ z->nb[2], /*.nb03 =*/ z->nb[3],
+            /*.ne0   =*/ (int32_t) op->ne[0], /*.ne1 =*/ (int32_t) op->ne[1], /*.ne2 =*/ (int32_t) op->ne[2], /*.ne3 =*/ (int32_t) op->ne[3],
+            /*.nb0   =*/ op->nb[0], /*.nb1 =*/ op->nb[1], /*.nb2 =*/ op->nb[2], /*.nb3 =*/ op->nb[3],
+            /*.slope =*/ 0.0f, /*.scale =*/ 0.0f, /*.bias =*/ 0.0f, /*.val =*/ 0.0f, /*.min =*/ 0.0f, /*.max =*/ 0.0f,
+        };
+        if (pipeline_silu.c4) {
+            uargs.ne00 /= 4;
+            uargs.ne0  /= 4;
+        }
+        ggml_metal_encoder_set_pipeline(enc, pipeline_silu);
+        ggml_metal_encoder_set_bytes   (enc, &uargs, sizeof(uargs), 0);
+        ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(z),  1);
+        ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op), 2);
+        if (pipeline_silu.cnt) {
+            ggml_metal_encoder_dispatch_threadgroups(enc, pipeline_silu.c4 ? ggml_nelements(op)/4 : ggml_nelements(op), 1, 1, 1, 1, 1);
+        } else {
+            const int nth_max = MIN(256, ggml_metal_pipeline_max_theads_per_threadgroup(pipeline_silu));
+            const int nth = MIN(uargs.ne00, nth_max);
+            const int nk0 = (uargs.ne00 + nth - 1)/nth;
+            ggml_metal_encoder_dispatch_threadgroups(enc, nk0*uargs.ne01, uargs.ne02, uargs.ne03, nth, 1, 1);
+        }
+        ggml_metal_op_concurrency_reset(ctx);
+        ggml_tensor mul = *op;
+        ggml_set_op_params_i32(&mul, 0, 0);
+        mul.src[1] = &mul; // src1 is dst now: the bin kernel reads and writes each element once
+        ggml_metal_library_t lib2 = lib;
+        GGML_TENSOR_LOCALS( int32_t, mne0, mul.src[0], ne);
+        GGML_TENSOR_LOCALS(uint64_t, mnb0, mul.src[0], nb);
+        GGML_TENSOR_LOCALS( int32_t, mne,  &mul,        ne);
+        GGML_TENSOR_LOCALS(uint64_t, mnb,  &mul,        nb);
+        ggml_metal_buffer_id mb_src0 = ggml_metal_get_buffer_id(mul.src[0]);
+        ggml_metal_buffer_id mb_dst  = ggml_metal_get_buffer_id(op);
+        ggml_metal_kargs_bin margs = {
+            /*.ne00 =*/ mne00, /*.ne01 =*/ mne01, /*.ne02 =*/ mne02, /*.ne03 =*/ mne03,
+            /*.nb00 =*/ mnb00, /*.nb01 =*/ mnb01, /*.nb02 =*/ mnb02, /*.nb03 =*/ mnb03,
+            /*.ne10 =*/ mne0,  /*.ne11 =*/ mne1,  /*.ne12 =*/ mne2,  /*.ne13 =*/ mne3,
+            /*.nb10 =*/ mnb0,  /*.nb11 =*/ mnb1,  /*.nb12 =*/ mnb2,  /*.nb13 =*/ mnb3,
+            /*.ne0  =*/ mne0,  /*.ne1  =*/ mne1,  /*.ne2  =*/ mne2,  /*.ne3  =*/ mne3,
+            /*.nb0  =*/ mnb0,  /*.nb1  =*/ mnb1,  /*.nb2  =*/ mnb2,  /*.nb3  =*/ mnb3,
+            /*.offs =*/ 0,
+            /*.o1   =*/ { 0 },
+        };
+        auto pipeline_mul = ggml_metal_library_get_pipeline_bin(lib2, &mul, 1);
+        if (pipeline_mul.c4) {
+            margs.ne00 /= 4;
+            margs.ne10 /= 4;
+            margs.ne0  /= 4;
+        }
+        ggml_metal_encoder_set_pipeline(enc, pipeline_mul);
+        ggml_metal_encoder_set_bytes   (enc, &margs, sizeof(margs), 0);
+        ggml_metal_encoder_set_buffer  (enc, mb_src0, 1);
+        ggml_metal_encoder_set_buffer  (enc, mb_dst,  2);
+        ggml_metal_encoder_set_buffer  (enc, mb_dst,  3);
+        if (pipeline_mul.cnt) {
+            ggml_metal_encoder_dispatch_threadgroups(enc, margs.ne0, ggml_nrows(op), 1, 1, 1, 1);
+        } else {
+            const int nth_max = MIN(256, ggml_metal_pipeline_max_theads_per_threadgroup(pipeline_mul));
+            int nth = 1;
+            while (2*nth < margs.ne0 && nth < nth_max) {
+                nth *= 2;
+            }
+            ggml_metal_encoder_dispatch_threadgroups(enc, mne01, mne02, mne03, nth, 1, 1);
+        }
+        // the twin, if this output carries one
+        if (ggml_metal_op_extra_f16_twin(op) > 0) {
+            ggml_metal_op_concurrency_reset(ctx);
+            ggml_metal_buffer_id bid_twin = mb_dst;
+            bid_twin.offs += ggml_nbytes(op);
+            auto pipeline_cvt = ggml_metal_library_get_pipeline_cvt_f32_f16_cont(lib);
+            ggml_metal_kargs_cvt_cont cargs = { /*.n =*/ ggml_nelements(op) };
+            const int64_t nthr = ggml_nelements(op)/8;
+            ggml_metal_encoder_set_pipeline(enc, pipeline_cvt);
+            ggml_metal_encoder_set_bytes   (enc, &cargs, sizeof(cargs), 0);
+            ggml_metal_encoder_set_buffer  (enc, mb_dst,   1);
+            ggml_metal_encoder_set_buffer  (enc, bid_twin, 2);
+            ggml_metal_encoder_dispatch_threadgroups(enc, (nthr + 255)/256, 1, 1, 256, 1, 1);
+        }
+        return 1;
+    }
 
     ggml_metal_library_t lib = ctx->lib;
     ggml_metal_encoder_t enc = ctx->enc;
@@ -5176,7 +5679,116 @@ int ggml_metal_op_bin(ggml_metal_op_t ctx, int idx) {
         ggml_metal_encoder_dispatch_threadgroups(enc, ne01, ne02, ne03, nth, 1, 1);
     }
 
+    // small-op fusion: a twin-bearing MUL the norm op did not fuse still owes its f16 twin
+    if (n_fuse == 1 && op->op == GGML_OP_MUL && ggml_metal_op_extra_f16_twin(op) > 0) {
+        ggml_metal_op_concurrency_reset(ctx);
+
+        ggml_metal_buffer_id bid_twin = bid_dst;
+        bid_twin.offs += ggml_nbytes(op);
+
+        auto pipeline_cvt = ggml_metal_library_get_pipeline_cvt_f32_f16_cont(lib);
+
+        ggml_metal_kargs_cvt_cont cargs = {
+            /*.n =*/ ggml_nelements(op),
+        };
+        const int64_t nthr = ggml_nelements(op)/8;
+
+        ggml_metal_encoder_set_pipeline(enc, pipeline_cvt);
+        ggml_metal_encoder_set_bytes   (enc, &cargs, sizeof(cargs), 0);
+        ggml_metal_encoder_set_buffer  (enc, bid_dst,  1);
+        ggml_metal_encoder_set_buffer  (enc, bid_twin, 2);
+
+        ggml_metal_encoder_dispatch_threadgroups(enc, (nthr + 255)/256, 1, 1, 256, 1, 1);
+    }
+
     return n_fuse;
+}
+
+// small-op fusion (GGML_FUSE_SMALL bit 8): nodes[idx] = ADD(a, b), nodes[idx + 1] = RMS_NORM(add),
+// nodes[idx + 2] = MUL(norm, w). One kernel writes the sum (the next residual reads it) and the normed
+// output (plus its f16 twin), with the norm kernel's geometry: one dispatch and one barrier for three.
+static int ggml_metal_op_add_rms_norm(ggml_metal_op_t ctx, int idx) {
+    ggml_tensor * add  = ctx->node(idx);
+    ggml_tensor * norm = ctx->node(idx + 1);
+    ggml_tensor * wmul = ctx->node(idx + 2);
+
+    ggml_metal_library_t lib = ctx->lib;
+    ggml_metal_encoder_t enc = ctx->enc;
+
+    GGML_TENSOR_LOCALS( int32_t, ne0, add->src[0], ne);
+    GGML_TENSOR_LOCALS(uint64_t, nb0, add->src[0], nb);
+    GGML_TENSOR_LOCALS( int32_t, ne,  wmul,        ne);
+    GGML_TENSOR_LOCALS(uint64_t, nb,  wmul,        nb);
+
+    float eps;
+    memcpy(&eps, norm->op_params, sizeof(float));
+
+    const ggml_tensor * b = add->src[1];
+    const ggml_tensor * w = wmul->src[1];
+
+    ggml_metal_kargs_norm args = {
+        /*.ne00   =*/ ne00,
+        /*.ne00_t =*/ ne00/4,
+        /*.nb1    =*/ nb1,
+        /*.nb2    =*/ nb2,
+        /*.nb3    =*/ nb3,
+        /*.eps    =*/ eps,
+        /*.nef1   =*/ { ne01, (int32_t) w->ne[1], (int32_t) b->ne[1] },
+        /*.nef2   =*/ { ne02, (int32_t) w->ne[2], (int32_t) b->ne[2] },
+        /*.nef3   =*/ { ne03, (int32_t) w->ne[3], (int32_t) b->ne[3] },
+        /*.nbf1   =*/ { nb01, w->nb[1], b->nb[1] },
+        /*.nbf2   =*/ { nb02, w->nb[2], b->nb[2] },
+        /*.nbf3   =*/ { nb03, w->nb[3], b->nb[3] },
+    };
+
+    const size_t twin = ggml_metal_op_extra_f16_twin(wmul);
+
+    for (int i = 1; i < 3; ++i) {
+        if (!ggml_metal_op_concurrency_check(ctx, ctx->node(idx + i))) {
+            ggml_metal_op_concurrency_reset(ctx);
+            break;
+        }
+    }
+
+    char kname[128];
+    snprintf(kname, sizeof(kname), "kernel_add_rms_norm_mul%s_f32_4", twin ? "_tw" : "");
+    auto pipeline = ggml_metal_library_get_pipeline(lib, kname);
+    if (!pipeline.pipeline) {
+        pipeline = ggml_metal_library_compile_pipeline(lib, kname, kname, nullptr);
+    }
+    auto pipeline_plain = ggml_metal_library_get_pipeline_norm(lib, norm, 2);
+    int nth = 32;
+    while (nth < args.ne00_t && nth < ggml_metal_pipeline_max_theads_per_threadgroup(pipeline_plain)) {
+        nth *= 2;
+    }
+    nth = std::min(nth, ggml_metal_pipeline_max_theads_per_threadgroup(pipeline_plain));
+    nth = std::min(nth, (args.ne00_t + 31)/32*32);
+    GGML_ASSERT(nth <= ggml_metal_pipeline_max_theads_per_threadgroup(pipeline) && "fused add+norm kernel cannot run the plain kernel's geometry");
+
+    ggml_metal_buffer_id bid_dst  = ggml_metal_get_buffer_id(wmul);
+    ggml_metal_buffer_id bid_twin = bid_dst;
+    if (twin) {
+        bid_twin.offs += ggml_nbytes(wmul);
+    }
+
+    if (ctx->debug_fusion > 1) {
+        GGML_LOG_DEBUG("%s: fuse: ADD + RMS_NORM + MUL%s\n", __func__, twin ? " (+ f16 twin)" : "");
+    }
+
+    ggml_metal_encoder_set_pipeline(enc, pipeline);
+    ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);
+    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(add->src[0]), 1);
+    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(w),           2);
+    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(b),           3);
+    ggml_metal_encoder_set_buffer  (enc, bid_dst,                               4);
+    ggml_metal_encoder_set_buffer  (enc, bid_twin,                              5);
+    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(add),         6);
+
+    ggml_metal_encoder_set_threadgroup_memory_size(enc, 32*sizeof(float), 0);
+
+    ggml_metal_encoder_dispatch_threadgroups(enc, ne01, ne02, ne03, nth, 1, 1);
+
+    return 3;
 }
 
 int ggml_metal_op_silu_back(ggml_metal_op_t ctx, int idx) {
@@ -5427,6 +6039,28 @@ int ggml_metal_op_norm(ggml_metal_op_t ctx, int idx) {
         }
     }
 
+    // small-op fusion (GGML_FUSE_SMALL): the gated norm (bit 4) and the f16 twin of the output (bit 1)
+    const ggml_tensor * gs_silu = nullptr; // the rewritten gate MUL (src1 = z, silu applied here)
+    if (n_fuse == 2 && op->op == GGML_OP_RMS_NORM && idx + 2 < ctx->n_nodes()) {
+        const ggml_tensor * gmul = ctx->node(idx + 2);
+        if (gmul->op == GGML_OP_MUL && ggml_get_op_params_i32(gmul, 0) == GGML_METAL_FUSE_SMALL_GS_MARK && gmul->src[0] == ctx->node(idx + 1) &&
+            ggml_are_same_shape(gmul, op) && ggml_is_contiguous(gmul) && ggml_is_contiguous(gmul->src[1])) {
+            gs_silu = gmul;
+        }
+    }
+    if (gs_silu) {
+        n_fuse = 3;
+        const ggml_tensor * z = gs_silu->src[1];
+        bid_fuse[1] = ggml_metal_get_buffer_id(z);
+        args.nef1[2] = z->ne[1]; args.nef2[2] = z->ne[2]; args.nef3[2] = z->ne[3];
+        args.nbf1[2] = z->nb[1]; args.nbf2[2] = z->nb[2]; args.nbf3[2] = z->nb[3];
+        if (debug_fusion > 1) {
+            GGML_LOG_DEBUG("%s: fuse: RMS_NORM + MUL + MUL(SILU) (gated norm)\n", __func__);
+        }
+    }
+    const size_t twin = (n_fuse == 2 || gs_silu) && op->op == GGML_OP_RMS_NORM && ne00 % 4 == 0 && ggml_is_contiguous(ctx->node(idx + n_fuse - 1))
+                      ? ggml_metal_op_extra_f16_twin(ctx->node(idx + n_fuse - 1)) : 0;
+
     if (n_fuse > 1) {
         bid_dst = ggml_metal_get_buffer_id(ctx->node(idx + n_fuse - 1));
 
@@ -5437,6 +6071,44 @@ int ggml_metal_op_norm(ggml_metal_op_t ctx, int idx) {
                 break;
             }
         }
+    }
+
+    if (gs_silu || twin) {
+        char kname[128];
+        snprintf(kname, sizeof(kname), "kernel_rms_norm_mul%s%s_f32_4", gs_silu ? "_gs" : "", twin ? "_tw" : "");
+        auto pipeline = ggml_metal_library_get_pipeline(lib, kname);
+        if (!pipeline.pipeline) {
+            pipeline = ggml_metal_library_compile_pipeline(lib, kname, kname, nullptr);
+        }
+        // the reduction geometry of the unfused kernel (its nth comes from its own pipeline)
+        auto pipeline_plain = ggml_metal_library_get_pipeline_norm(lib, op, 2);
+        int nth = 32;
+        while (nth < args.ne00_t && nth < ggml_metal_pipeline_max_theads_per_threadgroup(pipeline_plain)) {
+            nth *= 2;
+        }
+        nth = std::min(nth, ggml_metal_pipeline_max_theads_per_threadgroup(pipeline_plain));
+        nth = std::min(nth, (args.ne00_t + 31)/32*32);
+        GGML_ASSERT(nth <= ggml_metal_pipeline_max_theads_per_threadgroup(pipeline) && "fused norm kernel cannot run the plain kernel's geometry");
+
+        ggml_metal_buffer_id bid_twin = bid_dst;
+        if (twin) {
+            bid_twin.offs += ggml_nbytes(ctx->node(idx + n_fuse - 1));
+        }
+
+        ggml_metal_encoder_set_pipeline(enc, pipeline);
+        ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);
+        ggml_metal_encoder_set_buffer  (enc, bid_src0,    1);
+        ggml_metal_encoder_set_buffer  (enc, bid_fuse[0], 2);
+        ggml_metal_encoder_set_buffer  (enc, bid_fuse[1], 3);
+        ggml_metal_encoder_set_buffer  (enc, bid_dst,     4);
+        ggml_metal_encoder_set_buffer  (enc, bid_twin,    5);
+        ggml_metal_encoder_set_buffer  (enc, bid_dst,     6);
+
+        ggml_metal_encoder_set_threadgroup_memory_size(enc, 32*sizeof(float), 0);
+
+        ggml_metal_encoder_dispatch_threadgroups(enc, ne01, ne02, ne03, nth, 1, 1);
+
+        return n_fuse;
     }
 
     auto pipeline = ggml_metal_library_get_pipeline_norm(lib, op, n_fuse);

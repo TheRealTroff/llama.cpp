@@ -47,6 +47,14 @@ with several loop levels (use `shaderprof-compare.py --tiers` on the row's `inst
 text size cannot see an instruction-class swap (the transposed-Q case), and timing comes from
 the uncaptured runs only.
 
+
+**Parser correction (2026-09-10).** `metalprof-buckets.py`'s decode rule read the token count from the
+dump's two printed dst dims, so every 3D decode activation ([128, 48, T] post-GDN norm / silu / gate MUL,
+[128, 16, T] L2 norms) and the conv window CONCAT were filed under prefill: the census never had those rows
+(~1.6 ms/round of spans on the Sep 8 profile). The rule now takes the token count from `s0[2]` for 3D
+tensors and from `s1[0]` for the CONCAT. Re-run the census after the small-op fusion lands
+(`small-op-fusion.md`); the Sep 06 snapshots are missing those rows.
+
 ## Census runs
 
 ### census-ud-sep06 (2026-09-06, UD full prefill stack: SoA w3-5 + n64 + QT + F16B, depth 3, benchprompt)

@@ -2325,6 +2325,36 @@ typedef decltype(kernel_swiglu<float>) kernel_swiglu_t;
 template [[host_name("kernel_swiglu_f32")]] kernel kernel_swiglu_t kernel_swiglu<float>;
 template [[host_name("kernel_swiglu_f16")]] kernel kernel_swiglu_t kernel_swiglu<half>;
 
+// small-op fusion (GGML_FUSE_SMALL bit 2): swiglu that also writes the f16 twin of its output right
+// after it, so the following width 2-8 mul_mv reads the twin instead of casting (same f32 value, one
+// rounding, as the separate cast kernel)
+kernel void kernel_swiglu_tw_f32(
+        constant ggml_metal_kargs_glu & args,
+        device const char * src0,
+        device const char * src1,
+        device       char * dst,
+        device       char * twin,
+        uint tgpig[[threadgroup_position_in_grid]],
+        uint tpitg[[thread_position_in_threadgroup]],
+        uint   ntg[[threads_per_threadgroup]]) {
+    device const float * src0_row = (device const float *) ((device const char *) src0 + tgpig*args.nb01) + args.i00;
+    device const float * src1_row = (device const float *) ((device const char *) src1 + tgpig*args.nb11) + args.i10;
+    device       float * dst_row  = (device       float *) ((device       char *) dst  + tgpig*args.nb1);
+    device       half  * tw_row   = (device       half  *) (twin) + (uint64_t) tgpig*args.ne0;
+
+    for (int i0 = tpitg; i0 < args.ne0; i0 += ntg) {
+        const float x0 = src0_row[i0];
+        const float x1 = src1_row[i0];
+
+        const float silu = x0 / (1.0f + exp(-x0));
+
+        const float v = silu*x1;
+
+        dst_row[i0] = v;
+        tw_row[i0]  = (half) v;
+    }
+}
+
 template<typename T>
 kernel void kernel_swiglu_oai(
         constant ggml_metal_kargs_glu & args,
@@ -3073,6 +3103,63 @@ kernel void kernel_ssm_conv_f32_f32_rows_wb(
     }
 }
 
+// small-op fusion (GGML_FUSE_SMALL bit 32): concat + conv + carry + silu in one kernel. The conv
+// window (the CONCAT of the state's n_state columns and the batch's tokens) is read in place:
+// column j of the virtual row is state[j] for j < n_state, x[j - n_state] after it. One thread per
+// row: the state view and the carry slot can be the same cache row (in-place recurrent states), so
+// the row's window is loaded to registers before anything is written. Same tap order as the rows
+// kernel, the silu of the unary kernel, the carry of the _wb kernel.
+#define GGML_METAL_SSM_CONV_CAT_WIN 24
+kernel void kernel_ssm_conv_f32_f32_rows_cat(
+        constant ggml_metal_kargs_ssm_conv_cat & args,
+        device const  char * state,
+        device const  char * x,
+        device const  char * cw,
+        device        char * dst,
+        device        char * wbuf,
+        uint3 tgpig[[threadgroup_position_in_grid]],
+        uint3 tpitg[[thread_position_in_threadgroup]],
+        uint3   ntg[[threads_per_threadgroup]]) {
+    const int64_t ir = (int64_t) tgpig.x*ntg.x + tpitg.x;
+    if (ir >= args.nr) {
+        return;
+    }
+    const int64_t i3  = tgpig.z;
+    const int     n_t = (int) args.n_t;
+    const int     nc  = (int) args.nc;
+    const int     ns  = (int) args.n_state;
+
+    device const float * c  = (device const float *) (cw + ir*args.nbc1);
+    device const char  * sr = state + ir*args.nbs1 + i3*args.nbs2;
+    device const char  * xr = x     + ir*args.nbx1 + i3*args.nbx2;
+
+    float win[GGML_METAL_SSM_CONV_CAT_WIN];
+    for (int j = 0; j < ns; ++j) {
+        win[j] = *(device const float *) (sr + j*args.nbs0);
+    }
+    for (int j = 0; j < n_t; ++j) {
+        win[ns + j] = *(device const float *) (xr + j*args.nbx0);
+    }
+
+    for (int i2 = 0; i2 < n_t; ++i2) {
+        float sumf = 0.0f;
+        for (int i0 = 0; i0 < nc; ++i0) {
+            sumf += win[i2 + i0] * c[i0];
+        }
+        if (args.silu) {
+            sumf = sumf / (1 + exp(-sumf));
+        }
+        *(device float *) (dst + ir*args.nb0 + i2*args.nb1 + i3*args.nb2) = sumf;
+    }
+
+    for (int j = 0; j < args.n_wb; ++j) {
+        device float * sd = (device float *) (wbuf + args.wb_off[j] + i3*args.wb_nb1) + ir*ns;
+        for (int k = 0; k < ns; ++k) {
+            sd[k] = win[args.wb_col[j] + k];
+        }
+    }
+}
+
 kernel void kernel_ssm_conv_f32_f32_batched(
         constant ggml_metal_kargs_ssm_conv & args,
         device const  void * src0,
@@ -3478,10 +3565,32 @@ constant bool  FC_gated_delta_net_WB   [[function_constant(FC_GATED_DELTA_NET + 
 // ext semantics (ggml_gated_delta_net_ext): replay kept tokens first, slot 1 = the state before
 // the last n_keep tokens, keep those tokens' inputs
 constant bool  FC_gated_delta_net_XK   [[function_constant(FC_GATED_DELTA_NET + 4)]];
+// small-op fusion (GGML_FUSE_SMALL bit 16): g and b hold the RAW alpha / beta projections; the kernel
+// applies the dropped ADD(dt_bias) -> SOFTPLUS -> MUL(A) chain and the SIGMOID itself (same expressions
+// as kernel_bin / kernel_unary, so the bytes are the unfused bytes). Decode widths only (the NR
+// prefill kernel keeps the separate ops).
+constant bool  FC_gated_delta_net_GATE [[function_constant(FC_GATED_DELTA_NET + 5)]];
+
+// each value is what the unfused ADD / SOFTPLUS / MUL / SIGMOID kernel wrote to memory: the volatile
+// round trips pin those rounding points, or fast-math folds the chain into the exp that follows
+static inline float kernel_gated_delta_net_gate_fn(const float a, const float dtb, const float av) {
+    volatile float abv = a + dtb;                                    // ADD (bin)
+    const float ab = abv;
+    volatile float spv = select(log(1 + exp(ab)), ab, ab > 20);      // SOFTPLUS (unary)
+    const float sp = spv;
+    volatile float gv = sp * av;                                     // MUL (bin)
+    return gv;
+}
+
+static inline float kernel_gated_delta_net_beta_fn(const float b) {
+    volatile float bv = 1 / (1 + exp(-b));                           // SIGMOID (unary)
+    return bv;
+}
 
 // one recurrence step on this thread's NSG state elements; returns this row's (unscaled) output
 // (WITH_OUT = false skips it: the replayed tokens only advance the state)
-template<short NSG, bool WITH_OUT>
+// GATE: the gate and beta of this token arrive as values (gv, bv), computed once per simdgroup by the caller
+template<short NSG, bool WITH_OUT, bool GATE = false>
 static inline float kernel_gated_delta_net_step(
         thread float (&ls)[NSG],
         const short tx,
@@ -3490,11 +3599,13 @@ static inline float kernel_gated_delta_net_step(
         device const float * k_ptr,
         device const float * v_ptr,
         device const float * g_ptr,
-        device const float * b_ptr) {
+        device const float * b_ptr,
+        const float gv = 0.0f,
+        const float bv = 0.0f) {
     float s_k = 0.0f;
 
     if (FC_gated_delta_net_ne30 == 1) {
-        const float g_exp = exp(g_ptr[0]);
+        const float g_exp = exp(GATE ? gv : g_ptr[0]);
 
         FOR_UNROLL (short j = 0; j < NSG; j++) {
             const short is = tx*NSG + j;
@@ -3514,7 +3625,7 @@ static inline float kernel_gated_delta_net_step(
 
     s_k = simd_sum(s_k);
 
-    const float d = (v_ptr[i20] - s_k)*b_ptr[0];
+    const float d = (v_ptr[i20] - s_k)*(GATE ? bv : b_ptr[0]);
 
     float y = 0.0f;
 
@@ -3547,6 +3658,8 @@ kernel void kernel_gated_delta_net_impl(
         device       char * xk,
         device const char * xrow,
         device const char * xwrow,
+        device const char * gb,
+        device const char * ga,
         uint3 tgpig[[threadgroup_position_in_grid]],
         uint3 tpitg[[thread_position_in_threadgroup]],
         uint3   ntg[[threads_per_threadgroup]])  {
@@ -3629,8 +3742,25 @@ kernel void kernel_gated_delta_net_impl(
         }
     }
 
+    // fused gate chain: this head's dt_bias and A
+    const float dtb = FC_gated_delta_net_GATE ? ((device const float *) gb)[i21] : 0.0f;
+    const float av  = FC_gated_delta_net_GATE ? ((device const float *) ga)[i21] : 0.0f;
+
     for (short t = 0; t < args.ne22; t++) {
-        const float y = kernel_gated_delta_net_step<NSG, true>(ls, tx, i20, q_ptr, k_ptr, v_ptr, g_ptr, b_ptr);
+        // the fused gate chain: one lane computes this token's gate and beta, the simdgroup shares them
+        float gv = 0.0f;
+        float bv = 0.0f;
+        if (FC_gated_delta_net_GATE) {
+            if (tx == 0) {
+                gv = kernel_gated_delta_net_gate_fn(g_ptr[0], dtb, av);
+                bv = kernel_gated_delta_net_beta_fn(b_ptr[0]);
+            }
+            gv = simd_broadcast_first(gv);
+            bv = simd_broadcast_first(bv);
+        }
+        const float y = FC_gated_delta_net_GATE
+            ? kernel_gated_delta_net_step<NSG, true, true >(ls, tx, i20, q_ptr, k_ptr, v_ptr, g_ptr, b_ptr, gv, bv)
+            : kernel_gated_delta_net_step<NSG, true, false>(ls, tx, i20, q_ptr, k_ptr, v_ptr, g_ptr, b_ptr);
 
         if (tx == 0) {
             dst_attn[t*args.ne21*S_v] = y*scale;
@@ -3666,7 +3796,8 @@ kernel void kernel_gated_delta_net_impl(
                 if (tgpig.x == 0 && ty == 0) {
                     if (G == 1) {
                         if (tx == 0) {
-                            x[2*S_v*H_k + S_v*H_v + i21] = g_ptr[0];
+                            // the kept rows replay through the plain step: store the processed gate
+                            x[2*S_v*H_k + S_v*H_v + i21] = FC_gated_delta_net_GATE ? gv : g_ptr[0];
                         }
                     } else {
                         FOR_UNROLL (short j = 0; j < NSG; j++) {
@@ -3675,7 +3806,7 @@ kernel void kernel_gated_delta_net_impl(
                         }
                     }
                     if (tx == 0) {
-                        x[2*S_v*H_k + S_v*H_v + G*H_v + i21] = b_ptr[0];
+                        x[2*S_v*H_k + S_v*H_v + G*H_v + i21] = FC_gated_delta_net_GATE ? bv : b_ptr[0];
                     }
                 }
             }
@@ -3945,6 +4076,8 @@ kernel void kernel_gated_delta_net_nr_impl(
         device       char * xk,
         device const char * xrow,
         device const char * xwrow,
+        device const char * gb,
+        device const char * ga,
         uint3 tgpig[[threadgroup_position_in_grid]],
         uint3 tpitg[[thread_position_in_threadgroup]],
         uint3   ntg[[threads_per_threadgroup]])  {
@@ -4558,6 +4691,99 @@ template [[host_name("kernel_rms_norm_mul_add_f32")]] kernel kernel_rms_norm_fus
 template [[host_name("kernel_rms_norm_f32_4")]]         kernel kernel_rms_norm_fuse_t kernel_rms_norm_fuse_impl<float4, 1>;
 template [[host_name("kernel_rms_norm_mul_f32_4")]]     kernel kernel_rms_norm_fuse_t kernel_rms_norm_fuse_impl<float4, 2>;
 template [[host_name("kernel_rms_norm_mul_add_f32_4")]] kernel kernel_rms_norm_fuse_t kernel_rms_norm_fuse_impl<float4, 3>;
+
+// small-op fusion (GGML_FUSE_SMALL, perf/small-op-fusion.md): rms_norm + mul(w), plus
+//  AR: the residual add in front (x = a + b, b in slot 2; the sum is written to dst_s as well,
+//      the next residual reads it) - one dispatch and one barrier instead of two of each
+//  GS: the delta-net gated norm: y = ((x*scale)*w) * silu(z), z in slot 2 (the SILU node is dropped)
+//  TW: the f16 twin of y right after y (the mv cast-scratch layout): a width 2-8 mul_mv reads it
+//      instead of casting y itself, so its cast dispatch and the barrier around it go away
+// Same loop geometry, reduction and operation order as kernel_rms_norm_fuse_impl<T, 2> followed by
+// the separate ADD / SILU / MUL / cast kernels, so the bytes are the unfused bytes.
+template <typename T, typename TH, bool AR, bool GS, bool TW>
+kernel void kernel_rms_norm_fuse_small_impl(
+        constant ggml_metal_kargs_norm & args,
+        device const char * src0,
+        device const char * src1_0,
+        device const char * src1_1,
+        device       char * dst,
+        device       char * twin,
+        device       char * dst_s,
+        threadgroup float * shmem_f32 [[threadgroup(0)]],
+        uint3   tgpig[[threadgroup_position_in_grid]],
+        ushort3 tpitg[[thread_position_in_threadgroup]],
+        ushort  sgitg[[simdgroup_index_in_threadgroup]],
+        ushort  tiisg[[thread_index_in_simdgroup]],
+        ushort3   ntg[[threads_per_threadgroup]]) {
+    if (sgitg == 0) {
+        shmem_f32[tiisg] = 0.0f;
+    }
+
+    const int i01 = tgpig.x;
+    const int i02 = tgpig.y;
+    const int i03 = tgpig.z;
+
+    device const T * x = (device const T *) (src0 + i03*args.nbf3[0] + i02*args.nbf2[0] + i01*args.nbf1[0]);
+
+    device const T * f0 = (device const T *) (src1_0 + (i03%args.nef3[1])*args.nbf3[1] + (i02%args.nef2[1])*args.nbf2[1] + (i01%args.nef1[1])*args.nbf1[1]);
+    device const T * f1 = (device const T *) (src1_1 + (i03%args.nef3[2])*args.nbf3[2] + (i02%args.nef2[2])*args.nbf2[2] + (i01%args.nef1[2])*args.nbf1[2]);
+
+    device T * s = (device T *) (dst_s + i03*args.nb3 + i02*args.nb2 + i01*args.nb1);
+
+    float sumf = 0.0f;
+
+    // parallel sum
+    for (int i00 = tpitg.x; i00 < args.ne00_t; i00 += ntg.x) {
+        const T xv = AR ? (x[i00] + f1[i00]) : x[i00];
+        if (AR) {
+            s[i00] = xv;
+        }
+        sumf += dot(xv, xv);
+    }
+    sumf = simd_sum(sumf);
+
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    if (tiisg == 0) {
+        shmem_f32[sgitg] = sumf;
+    }
+
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    sumf = shmem_f32[tiisg];
+    sumf = simd_sum(sumf);
+
+    const float mean  = sumf/args.ne00;
+    const float scale = 1.0f/sqrt(mean + args.eps);
+
+    device T  * y  = (device T  *) (dst + i03*args.nb3 + i02*args.nb2 + i01*args.nb1);
+    device TH * tw = (device TH *) (twin) + ((uint64_t) (i03*args.nef2[0] + i02)*args.nef1[0] + i01)*args.ne00_t;
+    for (int i00 = tpitg.x; i00 < args.ne00_t; i00 += ntg.x) {
+        // AR: the sum may live in place over x (the allocator reuses the parent), so read it back
+        const T xv = AR ? s[i00] : x[i00];
+        T yv = (xv*scale)*f0[i00];
+        if (GS) {
+            // the unfused SILU writes its value to memory before the MUL reads it: pin the same rounding
+            // point, or fast-math reassociates the multiply into the division
+            const T z = f1[i00];
+            volatile T sv = z / (1 + exp(-z));
+            const T s = sv;
+            yv = yv * s;
+        }
+        y[i00] = yv;
+        if (TW) {
+            tw[i00] = (TH) yv;
+        }
+    }
+}
+
+typedef decltype(kernel_rms_norm_fuse_small_impl<float4, half4, false, false, true>) kernel_rms_norm_fuse_small_t;
+
+template [[host_name("kernel_rms_norm_mul_tw_f32_4")]]     kernel kernel_rms_norm_fuse_small_t kernel_rms_norm_fuse_small_impl<float4, half4, false, false, true>;
+template [[host_name("kernel_rms_norm_mul_gs_f32_4")]]     kernel kernel_rms_norm_fuse_small_t kernel_rms_norm_fuse_small_impl<float4, half4, false, true,  false>;
+template [[host_name("kernel_rms_norm_mul_gs_tw_f32_4")]]  kernel kernel_rms_norm_fuse_small_t kernel_rms_norm_fuse_small_impl<float4, half4, false, true,  true>;
+template [[host_name("kernel_add_rms_norm_mul_f32_4")]]    kernel kernel_rms_norm_fuse_small_t kernel_rms_norm_fuse_small_impl<float4, half4, true,  false, false>;
+template [[host_name("kernel_add_rms_norm_mul_tw_f32_4")]] kernel kernel_rms_norm_fuse_small_t kernel_rms_norm_fuse_small_impl<float4, half4, true,  false, true>;
 
 template <typename T0, typename T>
 kernel void kernel_l2_norm_impl(

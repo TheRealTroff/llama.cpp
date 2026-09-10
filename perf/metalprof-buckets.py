@@ -49,8 +49,15 @@ def is_decode(r):
         return r['s0'][1] <= 8            # query count
     if r['op'] == 'GATED_DELTA_NET':
         return r['s0'][2] <= 8
-    if r['op'] in ('SSM_CONV', 'CONCAT'):
+    if r['op'] == 'SSM_CONV':
         return r['dst'][-1] <= 8          # s1 is the always-wide state/history
+    if r['op'] == 'CONCAT':
+        return r['s1'][0] <= 8            # the conv window: [n_state, C] ++ [tokens, C]
+    # the dump prints two dst dims: a 3D activation ([128, 48, T], [128, 16, T]) carries its token
+    # count in s0[2] (found 2026-09-10: the post-GDN norm, the L2 norms and the gate ops were filed
+    # under prefill by the dst rule)
+    if len(r['s0']) >= 3 and r['s0'][2] > 1 and r['op'] != 'MUL_MAT':
+        return r['s0'][2] <= 8
     return r['dst'][-1] <= 8 and r['s1'][-1] <= 8
 
 

@@ -33,6 +33,20 @@ one level down, and it bit the `GGML_MV_EXT_V2` work on 2026-08-22.
 ## The prod pick
 
 
+**2026-09-10 (owner: "merge and mint"): small-op fusion `GGML_FUSE_SMALL=63`, in both picks** - the cache-resident
+elementwise/norm/gate kernels between the matmuls, fused so that ~550 of the ~1750 target decode dispatches
+per round (and their barrier drains) go away: f16 twins of the norm/swiglu outputs replace the per-matmul
+activation casts, the gated norm, the residual add+norm, the delta-net gate chain folded into the GDN
+kernel, concat+conv+carry+silu in one kernel. Byte-identical by construction and by gate: every bit
+reproduces the canonical shas on both lines; ABAB x2 on the Turbo4 arms **+2.1/+1.9% ud, +2.4/+2.1% q4
+at 600/300** (27.20 -> 27.78 / 26.98 -> 27.48 ud; 31.51 -> 32.25 / 29.71 -> 30.35 q4). Branch
+`exp/small-op-fusion` (unmerged). Read `small-op-fusion.md` first for the two traps that matter beyond this
+branch: a fused kernel may read only its own node's sources (the graph allocator recycles everything else -
+a use-after-free by graph lifetime; cross-node fusions are a pre-allocation graph rewrite), and
+`PICK_PROPOSED=1` enables every proposed entry at once, so a gate for one flag passes it explicitly
+(`run-fuse-gate.sh`). The profile parser fix in the same branch files the 3D decode activations under decode;
+the Sep 06 census snapshots are missing those rows.
+
 **2026-09-09 evening (owner: "Let's bring it in"): two byte-identical decode-side copy fixes,
 `GGML_MV_Y16_CVT=1` (the per-op f32->f16 activation copy through the contiguous cast kernel instead
 of the generic one-element-per-thread copy) and `GGML_SSM_CONV_WB=1` (the K conv-state carry copies

@@ -646,7 +646,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_rwkv(ggml_metal_
     return res;
 }
 
-ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_gated_delta_net(ggml_metal_library_t lib, const ggml_tensor * op, bool wb, bool xk) {
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_gated_delta_net(ggml_metal_library_t lib, const ggml_tensor * op, bool wb, bool xk, bool gate) {
     char base[256];
     char name[256];
 
@@ -677,7 +677,9 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_gated_delta_net(
     } else {
         snprintf(base, 256, "kernel_gated_delta_net_%s_%d", ggml_type_name(op->src[0]->type), nsg);
     }
-    snprintf(name, 256, "%s_ne20=%d_ne30=%d_K=%d_wb=%d_xk=%d", base, ne20, ne30, K, wb ? 1 : 0, xk ? 1 : 0);
+    // the fused gate chain (GGML_FUSE_SMALL bit 16) lives in the decode kernel only
+    GGML_ASSERT(!(gate && nr > 1) && "fused gate chain requested on the NR prefill kernel");
+    snprintf(name, 256, "%s_ne20=%d_ne30=%d_K=%d_wb=%d_xk=%d_gate=%d", base, ne20, ne30, K, wb ? 1 : 0, xk ? 1 : 0, gate ? 1 : 0);
 
     ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
     if (!res.pipeline) {
@@ -688,6 +690,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_gated_delta_net(
         ggml_metal_cv_set_int16(cv, K,    FC_GATED_DELTA_NET + 2);
         ggml_metal_cv_set_bool (cv, wb,   FC_GATED_DELTA_NET + 3);
         ggml_metal_cv_set_bool (cv, xk,   FC_GATED_DELTA_NET + 4);
+        ggml_metal_cv_set_bool (cv, gate, FC_GATED_DELTA_NET + 5);
 
         res = ggml_metal_library_compile_pipeline(lib, base, name, cv);
 

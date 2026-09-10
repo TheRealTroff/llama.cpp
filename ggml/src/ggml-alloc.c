@@ -653,6 +653,13 @@ static void ggml_gallocr_allocate_node(ggml_gallocr_t galloc, struct ggml_tensor
                 }
 
                 struct hash_node * p_hn = ggml_gallocr_hash_get(galloc, parent);
+
+                // a backend may reserve scratch after the node (its alloc size exceeds the parent's): no reuse then
+                if (ggml_backend_buft_get_alloc_size(galloc->bufts[buffer_id], node) > ggml_backend_buft_get_alloc_size(galloc->bufts[p_hn->buffer_id], parent)) {
+                    AT_PRINTF("not reusing parent %s for %s as the node needs more space\n", parent->name, node->name);
+                    continue;
+                }
+
                 if (p_hn->n_children == 1 && p_hn->n_views == 0) {
                     if (ggml_impl_is_view(parent)) {
                         struct ggml_tensor * view_src = parent->view_src;

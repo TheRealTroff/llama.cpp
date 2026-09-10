@@ -219,6 +219,11 @@ static size_t ggml_backend_metal_buffer_type_get_alloc_size(ggml_backend_buffer_
             {
                 res += ggml_metal_op_mul_mat_extra_src1f16(tensor);
             } break;
+        case GGML_OP_MUL:
+        case GGML_OP_GLU:
+            {
+                res += ggml_metal_op_extra_f16_twin(tensor);
+            } break;
         case GGML_OP_MUL_MAT_ID:
             {
                 res += ggml_metal_op_mul_mat_id_extra_tpe(tensor);
