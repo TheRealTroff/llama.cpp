@@ -562,3 +562,21 @@ the drafter's own tensors with `LLAMA_TRACE_WATCH` across the target's graphs (c
 the drafter's KV per round; (3) the drafter's twin tails: `ROPE` in place over a twin-bearing MUL frees the tail
 (`ggml_gallocr_free_extra_space`) to a later tensor while the norm kernel still writes it - ordered by the
 hazard table on paper, worth a canary at that exact spot.
+
+## Mask 60 + both fixes, priced on the final binary (2026-09-11, `exp/fuse-alias` 7559abd03)
+
+ABAB x2 gate (`run-fuse-gate.sh`, Turbo4 arms, one binary, base = manifest picks, fused = `GGML_FUSE_SMALL=60`;
+`fusegate-0911-*`): every sha canonical, acceptance identical per arm (64.7 / 64.1 ud, 65.5 / 60.2 q4); the q4
+base arms held within 0.15% this time, so the q4 delta is priced for the first time.
+
+| line | arm | base r1 / r2 | mask 60 r1 / r2 | delta |
+|---|---|---:|---:|---:|
+| ud | 600 | 25.756 / 25.798 | 26.161 / 26.236 | **+1.6%** |
+| ud | 300 | 25.538 / 25.557 | 26.003 / 26.005 | **+1.8%** |
+| q4 | 600 | 29.745 / 29.727 | 30.381 / 30.321 | **+2.1%** |
+| q4 | 300 | 28.040 / 28.082 | 28.611 / 28.660 | **+2.0%** |
+
+The sync-before-inputs fix is in both arms; its own cost, mask 60 with `LLAMA_SYNC_INPUTS=0` vs on, interleaved x3
+on the 600 arm (`synccost-*`): ud 25.707 vs 25.727, q4 29.724 vs 29.701 - zero within noise (the wait is free when
+the drafter's previous graph is done, which it is by the time the target's verify has run). Absolute numbers on
+this day are ~2% under yesterday's (machine state); deltas are what the gate prices.
