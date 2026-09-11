@@ -77,7 +77,7 @@ run_one() {
 import json
 p = open('/Users/troff/play/benchprompt.txt').read()
 print(json.dumps({'prompt': p, 'n_predict': $NPRED, 'temperature': 0}))" \
-  | curl -s -X POST "http://127.0.0.1:$PORT/completion" -d @- > "$OUT/$TAG-$label.json"
+  | curl -s -H "Content-Type: application/json" -X POST "http://127.0.0.1:$PORT/completion" -d @- > "$OUT/$TAG-$label.json"
   local fp=$(footprint -p $pid 2>/dev/null | sed -n 's/.*Footprint: \([0-9.]* [KMG]B\).*/\1/p' | head -1 | tr -d ' ')
   local mem_gib=$(vm_wired_anon_gib)
   python3 - "$label" "$arm" "$depth" "$fp" "$base_gib" "$mem_gib" <<PY

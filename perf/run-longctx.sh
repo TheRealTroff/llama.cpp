@@ -48,7 +48,7 @@ done
 python3 -c "
 import json
 print(json.dumps({'prompt': open('$PROMPT').read(), 'n_predict': $NPRED, 'temperature': 0}))" \
-  | curl -s -X POST "http://127.0.0.1:$PORT/completion" -d @- --max-time 7200 | python3 -c "
+  | curl -s -H "Content-Type: application/json" -X POST "http://127.0.0.1:$PORT/completion" -d @- --max-time 7200 | python3 -c "
 import json,sys,hashlib
 d=json.load(sys.stdin)
 if 'error' in d: print('ERROR', json.dumps(d['error'])[:200]); sys.exit(0)

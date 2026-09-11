@@ -76,7 +76,7 @@ run_one() {
 import json
 p = open('/Users/troff/play/benchprompt.txt').read()
 print(json.dumps({'prompt': p, 'n_predict': $npred, 'temperature': 0}))" \
-  | curl -s -X POST "http://127.0.0.1:$PORT/completion" -d @- | python3 -c "
+  | curl -s -H "Content-Type: application/json" -X POST "http://127.0.0.1:$PORT/completion" -d @- | python3 -c "
 import json,sys,hashlib
 d=json.load(sys.stdin)
 if 'error' in d:

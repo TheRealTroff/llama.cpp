@@ -25,7 +25,7 @@ for line in $PICK_LINES; do
     for i in $(seq 1 150); do curl -sf -o /dev/null "http://127.0.0.1:$PORT/health" && { ok=1; break; }; sleep 2; kill -0 $pid 2>/dev/null || { echo "[$label] server died:"; tail -3 "$OUT/$label.server.log"; break; }; done
     [ $ok = 1 ] || { kill -9 $pid 2>/dev/null; continue; }
     python3 -c "import json;print(json.dumps({'prompt':open('$PROMPT').read(),'n_predict':$NPRED,'temperature':0}))" \
-      | curl -s -X POST "http://127.0.0.1:$PORT/completion" -d @- | python3 -c "
+      | curl -s -H "Content-Type: application/json" -X POST "http://127.0.0.1:$PORT/completion" -d @- | python3 -c "
 import json,sys,hashlib
 d=json.load(sys.stdin)
 if 'error' in d: print('[$label] ERROR', json.dumps(d['error'])[:160]); sys.exit(0)

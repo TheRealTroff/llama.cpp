@@ -49,7 +49,7 @@ gen() {  # gen <corpus> <temperature> <label>
     python3 -c "
 import json
 print(json.dumps({'prompt': open('$pf').read(), 'n_predict': $NPRED, 'temperature': $temp, 'seed': $SEED}))" \
-    | curl -s -X POST "http://127.0.0.1:$PORT/completion" -d @- | python3 -c "
+    | curl -s -H "Content-Type: application/json" -X POST "http://127.0.0.1:$PORT/completion" -d @- | python3 -c "
 import json,sys
 d=json.load(sys.stdin)
 if 'error' in d:

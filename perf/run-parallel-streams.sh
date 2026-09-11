@@ -39,7 +39,7 @@ for set in $SETS; do for n in $NS; do
   # warm-up: one short request so model/repack state is settled before timing (WARMUP=0 skips it)
   if [ "${WARMUP:-1}" = 1 ]; then
     for w in $(seq 1 ${WARMUP_N:-1}); do
-      python3 -c "import json;print(json.dumps({'prompt':'Say hello.','n_predict':16,'temperature':0}))" | curl -s -X POST "http://127.0.0.1:$PORT/completion" -d @- >/dev/null &
+      python3 -c "import json;print(json.dumps({'prompt':'Say hello.','n_predict':16,'temperature':0}))" | curl -s -H "Content-Type: application/json" -X POST "http://127.0.0.1:$PORT/completion" -d @- >/dev/null &
     done; wait $(jobs -p | grep -v "^$pid$") 2>/dev/null
   fi
   sleep 2
@@ -47,7 +47,7 @@ for set in $SETS; do for n in $NS; do
   for s in $(seq 0 $((n-1))); do
     if [ "$set" = same ]; then pf=${UNIQUE[${SAME_IDX:-0}]}; else pf=${UNIQUE[$s]}; fi   # SAME_IDX picks the SAME-set prompt (01 is a first-token tie)
     ( python3 -c "import json;print(json.dumps({'prompt':open('$pf').read(),'n_predict':$NPRED,'temperature':0}))" \
-      | curl -s -X POST "http://127.0.0.1:$PORT/completion" -d @- > "$OUT/$TAG-$set-n$n-s$s.json" ) &
+      | curl -s -H "Content-Type: application/json" -X POST "http://127.0.0.1:$PORT/completion" -d @- > "$OUT/$TAG-$set-n$n-s$s.json" ) &
   done
   wait $(jobs -p | grep -v "^$pid$") 2>/dev/null
   t1=$(python3 -c 'import time;print(time.time())')
