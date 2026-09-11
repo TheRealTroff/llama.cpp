@@ -953,6 +953,9 @@ void ggml_metal_graph_optimize(ggml_metal_t ctx, struct ggml_cgraph * gf) {
         ggml_graph_optimize(gf);
     }
 
+    // the add+norm lifetime dependency: after the reorder, only where the three nodes are adjacent
+    ggml_metal_op_fuse_small_rewrite_post(gf);
+
     //printf("%s: graph optimize took %.3f ms\n", __func__, (ggml_time_us() - t_start) / 1000.0);
 }
 

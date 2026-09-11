@@ -1,4 +1,4 @@
-# Small-op fusion: the cache-resident kernels between the matmuls (2026-09-10, MERGED, UN-PICKED: intermittent at the mint, OPEN)
+# Small-op fusion: the cache-resident kernels between the matmuls (2026-09-10, MERGED, UN-PICKED; the intermittent ROOT-CAUSED and FIXED on `exp/fuse-alias` the next morning - see 'Root cause' at the end; verification chain results follow it)
 
 Branch `exp/small-op-fusion`, flag `GGML_FUSE_SMALL=<bitmask>` (default 0 = upstream behaviour).
 
@@ -279,3 +279,304 @@ the reproducer, gate and mint - a chain was left running (`fixchain3.log`, resul
 `prodpick-sep10-fuse4-*`, `fusegate-*`), it is the candidate pick if clean; (b) the twin race root cause -
 the barrier before the read is not sufficient, so the hazard is on the twin WRITE side or an untracked
 overlap of the twin region; (c) the partial-env collapse.
+
+## Mask 60 chain (2026-09-10 morning, the chain left running): clean everywhere
+
+Reproducer (q4 Turbo4 depth-3, 1200 tokens) x8: 8/8 on `648a18f46d5c`. ABAB x2 gate: ud 600 26.458/26.440 ->
+26.931/26.956 (**+1.9%**), ud 300 26.199/26.162 -> 26.671/26.664 (**+1.8%**), shas canonical; q4 600
+30.647/29.696 -> 31.351/31.348, q4 300 28.868/27.412 -> 28.629/29.505 - the q4 base arms wander by 3-5%
+between reps (the machine after a night of runs), the q4 delta is unpriced again. Mint `prodpick-sep10-fuse4-{ud,q4}`
+(prod 89b746853 + `GGML_FUSE_SMALL=60`): **every arm canonical on both lines** - ud 22.31 / 24.61 / 24.73 (pick
+300 / 600 / 600-r2) / 12.56 b1 / 26.84 / 26.00 / 26.56 (turbo4 600 / 600-r2 / 300); q4 29.49 / 31.59 / 31.63 /
+14.12 b1 / 31.16 / 31.21 / 29.10. Logs `kvquant-experiments/results/fuse-quick/rk60_*`, `fusegate-0910-0721-*`,
+`fusegate-0910-0833-*`, `prodpick-sep10-fuse4-*`. Mask 60 is clean by *layout luck*, not by construction (next
+section): bit 8 carries the same class of hazard, it just does not land on these shapes.
+
+## Root cause (2026-09-10 morning): a fused group's output is allocated after the group's inputs are freed
+
+`ggml-alloc` allocates a node's output before it decrements its parents' use counts, so a **single** kernel's
+output can never overlap its inputs except by the explicit in-place reuse (same address, same layout), and
+the per-thread read-before-write rule makes that safe. A **fused group** breaks the premise: the group's
+output is the LAST node's tensor, allocated at that node's position, and the inputs of the group's EARLIER
+nodes were freed at those nodes. Best-fit then puts the output at the start of whatever free block fits -
+which can be the block an input just vacated, merged with its neighbours, so the output lands a few rows
+before or after that input, and the kernel writes its rows while other threadgroups still read the input's.
+
+Upstream's fusions never hit this because the last node reuses the first node's block in place (RMS_NORM's
+output has one child, same size: the MUL takes it), and that block was allocated while the norm's input
+was live. **The f16 twin breaks the in-place chain**: the twin-bearing MUL's alloc size exceeds its norm
+parent's, `ggml-alloc`'s new size check (trap 4) refuses the reuse, and the MUL's block is allocated fresh at
+the MUL's node. The residual add+norm group (bit 8) is the worst case even without a twin: the add's second
+operand is the residual (`ggml_add(cur, inpSA)`: src0 is the projection output, reused in place as the sum;
+src1 the residual, dead after the add), the norm's block is allocated one node later, and the sum-free
+residual block is the best fit next door.
+
+**Deterministic evidence, no race run needed** (`GGML_FUSE_SMALL_NOFIX=1` turns the fix off, the alias
+guard logs each hit; quick harness, 96 tokens, both lines; `fuse-quick/ap-*`):
+
+| config | ud hits | q4 hits | first hit |
+|---|---:|---:|---|
+| base (0) | 0 | 0 | |
+| 63, fix off | 32+ | 32+ | ud: `add+norm: output attn_norm-4 [595168, 636128, twin to 656608) overlaps input attn_residual-3 [636128, 677088)` - the twin tail is written over the residual the kernel reads; q4: `norm+twin: output node_36 [535680, 568448, twin to 584832) overlaps input (reshaped) [554112, 586880)` - a q/k norm's output 18 KB into its own input |
+| 11, fix off | 32+ | 32+ | the same sites |
+| 9, fix off | 32+ | 32+ | the same sites - mask 9 "passed" the 6-run reproducer by timing, not by layout |
+| 60, fix off | 0 | 0 | no twins: the MULs reuse their norms in place; bit 8's residual hazard does not land on these shapes |
+| 63, fix on | 0 | 0 | shas `f566cc418c50` / `1aa8305c8b69` = base |
+| 60, fix on | 0 | 0 | same shas |
+
+The sites (32-line log cap): on ud every delta-net layer's `attn_norm-N` add+norm group over `attn_residual-(N-1)`,
+plus `h_nextn` (the MTP head's norm over the last residual); on q4 the same plus the q/k norms of the attention
+layers (`node_36`, `node_495`, `node_648`). Why it was rare: the twin tail over the residual is two half rows
+over one f32 row, so threadgroup 1's twin write lands on row 0's second half, which threadgroup 0 reads in its
+first loop; the two threadgroups run the same code in lockstep and the overlap needs threadgroup 1 to reach its
+write loop before threadgroup 0 finishes its read loop - one round in a few thousand. Why "twins + add+norm":
+the twin creates the fresh allocation, the add+norm group is the one whose earlier input (the residual) is
+dead and adjacent. Why the "barrier before every twin-reading mul_mv" seemed to help: it did nothing - the
+encode loop's own check already fences the producer (its range is the alloc size, twin included), so the extra
+reset was a second back-to-back barrier; 0/14 clean runs against a ~20% rate is a 3% event, and the mint then
+failed at the same 1-in-10 as before. It is removed.
+
+**The fix (commit on `exp/fuse-alias`, worktree `llama.cpp-fuse`), at the allocation, not the kernel:**
+
+1. `ggml_metal_op_extra_f16_twin_norm`: the RMS_NORM output reserves the twin tail too (alloc hook,
+   `GGML_OP_RMS_NORM`), so the twin-bearing MUL takes the norm's block in place again - a block that exists
+   while the norm's input is live. The gated norm's second MUL then takes the first MUL's block (equal sizes).
+2. Rewrite for bit 8 (`ggml_metal_fuse_small_rewrite_addnorm`, pre-allocation): BOTH add operands become
+   sources of the RMS_NORM (`src[1]`, `src[2]`) - lifetimes, not data (the norm kernels read `src[0]` only) -
+   so the norm's block cannot be allocated over either. First cut pinned only the residual (src1), on the
+   reasoning that src0 lives on as the in-place sum; the partial env refuted it within the hour: there the
+   linear-attention layer's output is a reshape VIEW of the GDN output (no `GGML_GDN_FUSE_WB`), the allocator
+   cannot take a view in place, the view dies at the add, and the norm's block landed 32 KB into it
+   (`add+norm: output attn_post_norm-0 [132224, 173184, twin to 193664) overlaps input linear_attn_out-0
+   (reshaped) [164992, 205952)`, every layer, both lines, decode and prefill; the guard caught all of them and
+   the arms were canonical - 53.7% / 55.7% acceptance, `73ea53bbe98f` / `9ad7e023c6ab`, against the 0-1%
+   collapse of the fuse3 mint). The sum is then no longer in place over src0 (two children at the add):
+   one decode-width block per layer, nothing else.
+3. `ggml_metal_fuse_small_alias_ok`: an encode-time tripwire on every fused group (add+norm, norm+twin,
+   gated norm): every output range (alloc size, twin tail included) against every input range; exact
+   in-place is allowed, anything else logs `fuse-alias:` and runs the group unfused (safe). `GGML_FUSE_SMALL_ALIAS=0`
+   off, `=2` abort. Grep every mint's server log for `fuse-alias` - a hit means a shape the fix does not cover.
+4. The placebo barrier removed (above).
+5. A second, deterministic bug found on the way: the gated norm's encoder-boundary fallback (the rewritten
+   MUL whose norm sits in the previous command buffer) staged `silu(z)` in dst - which is wmul's block in
+   place - and multiplied garbage. It now writes `silu(z)` over z (the rewrite requires z's only use) and
+   multiplies from there. Never hit in the pick's graphs (the sha was canonical). **The partial-env collapse
+   (the "second defect") was the alias of item 2, not a companion-flag assumption**: with the guard on, the
+   partial arms are canonical; with the two-operand rewrite the guard should be silent there (chain below).
+
+Rule, generalizing trap 5: **a fused kernel may read only what its own node lists as sources, AND a fused
+group's output block must be one that existed while every input of the group was live** - in place over the
+first node's block, or the earlier inputs made sources of the node that allocates the output. `ggml-alloc`
+knows nothing about backend fusion; the backend has to shape the graph so the allocator's single-node
+guarantee covers the group. The guard is what turns the next such bug into a log line instead of a 1-in-10 sha.
+
+## Verification of the fix (2026-09-10, `exp/fuse-alias` a1796cb76, one binary, both add operands pinned)
+
+- Partial env (`partial-n6-300`, the arm the fuse3 mint collapsed on): ud 21.44 t/s, 53.7%, `73ea53bbe98f`;
+  q4 26.10 t/s, 55.7%, `9ad7e023c6ab` (the pre-acch lineage that env gates) - canonical, 0 guard hits.
+- Quick probe, mask 63: 0 guard hits on all four arms, shas = the base's (`f566cc418c50` / `48c93b464d9b` ud,
+  `1aa8305c8b69` / `0065fce404d1` q4).
+- Reproducer (q4 Turbo4 depth-3, benchprompt, 1200 tokens): 8/8 with the first cut, 3/3 with the final binary,
+  all `648a18f46d5c` (`fuse-quick/rk63f_*`, `rk63f2_*`).
+- ABAB x2 gate (`run-fuse-gate.sh`, Turbo4 arms, base vs `GGML_FUSE_SMALL=63`, `fusegate-0910-10*`):
+
+| line | arm | base r1 / r2 | fused r1 / r2 | delta | sha (all 4 arms) |
+|---|---|---:|---:|---:|---|
+| ud | 600 | 25.893 / 26.410 | 26.860 / 26.887 | **+2.8%** | 7f39f71e9d95 |
+| ud | 300 | 26.168 / 26.080 | 26.601 / 26.423 | **+1.5%** | a409bb1b45df |
+| q4 | 600 | 30.569 / 30.430 | 31.264 / 31.082 | **+2.2%** | de24d885043f |
+| q4 | 300 | 28.829 / 28.250 | 29.438 / 29.459 | **+3.2%** | 04ada3a4de10 |
+
+  Acceptance identical per arm (64.7 / 64.1 ud, 65.5 / 60.2 q4): still a BI change, the same ~+2% the
+  race-free bits priced; the twins are worth about the noise on top of mask 60. The pre-mint on the branch
+  (`prodpick-sep10-fuse5-*`, all arms, both lines, mask 63) follows.
+
+**Pre-mint on the branch (`prodpick-sep10-fuse5-{ud,q4}`, a1796cb76, mask 63, all arms):** every arm canonical
+on both lines, 0 guard hits in every gate and pre-mint log. ud 23.38 / 24.29 / 24.29 (pick 300 / 600 / 600-r2) /
+12.55 b1 / 26.32 / 26.25 / 26.06 (turbo4 600 / 600-r2 / 300); q4 28.68 / 30.93 / 30.30 / 13.75 b1 / 30.63 /
+30.00 / 28.76. The pick decision: mask 60 was clean by layout luck and forfeits the twins; mask 63 on the fixed
+branch is the candidate - merge `exp/fuse-alias` into prod, re-mint there, and the manifest entry
+`GGML_FUSE_SMALL=63|BI|both` goes from `proposed` to picked on the owner's call.
+
+## Open: a drafter-side count deviation on the q4 Turbo4 600 arm under mask 63 (found 2026-09-10 late morning)
+
+The target text is canonical, but the draft counts are not always: this arm reports **396 accepted / 605
+generated** in every base run (10 of 10), every mask-60 run (2 of 2) and most mask-63 runs, and **397 / 602** in
+the pre-mint r1 (65.9%), **397 / 601** in the very first fused gate's r1 (`fusegate-0910-0021-q4-fused-r1`, canonical
+sha, before any fix) and **396 / 608** in the fuse3 r1 that was also off-sha. Three of ~14 mask-63 runs of this arm,
+zero of ~14 without the twins. The ud Turbo4 600 arm (394 / 609) and the q4 pick 600 arm (415 / 735) never move.
+A changed draft with an unchanged target argmax means either the drafter's own graphs or the injected features
+(the target's hidden state at the tap layer, via the async fused inject) differed by a rounding somewhere - a
+race that does not flip a token. The alias guard is silent (it covers the drafter's graphs too), so it is not
+the fused-group alias. Suspects, in order: the async inject reading the ring before the inject graph landed
+(timing moved by the -32% dispatch count); a fused kernel in the drafter's or the inject graph's path racing
+on something the guard does not model. Discriminator: 12 runs of this arm at mask 63 with `DFLASH_ASYNC_INJECT=0`
+against 12 with it on, counting 396/605; then the same with `DFLASH_FUSED_INJECT=0`. Not a bytes question for the
+pick (the target's sha holds), but the "acceptance identical per arm" invariant is broken by it, and it should be
+closed before the twins are called race-free.
+
+**Discriminator (2026-09-10 midday, `fuse-quick/dd*`; the q4 Turbo4 depth-3 arm, benchprompt, 600 tokens, the
+quick harness reproduces the mint arm exactly - `de24d885043f`, 396/605 - four configs interleaved x10, then
+a fifth x10):**
+
+| config | runs | draft-count deviations (target sha canonical in every run) |
+|---|---:|---|
+| base, mask 0 | 10 | none (396/605 every run; 20 of 20 with the mint history) |
+| A: mask 63, pick env | 10 | 1 (r4: 602 generated) |
+| B: mask 63 + `DFLASH_ASYNC_INJECT=0` | 10 | none |
+| C: mask 63 + async and fused inject off | 10 | 2 (r2: 398/599, r8: 608) |
+| E: mask 63 + `GGML_FA_TR=9` (the UD line's byte-identical Turbo4 form; its own lineage, 637 generated) | 10 | none, 10 identical |
+
+Settled: the inject path is not the mechanism (C deviates with both inject flags off), and the target's argmax
+survives every deviation - the perturbation is rounding-sized. Not settled: B and E each show zero in ten, but at
+the observed ~15% rate a clean ten is a one-in-five event; both are being extended to thirty runs interleaved with
+A as the live control (`drafter-disc3.sh`, `dd*_11..30`). Ruled out on the way: atomics and split-K accumulation
+(none on any compute route), the command-buffer split (fixed per graph), the fused-group alias (guard silent).
+The one kernel that exists only in this arm is the folded Turbo4 dequant `GGML_FA_TR=7` (UD keeps `=9`, the q4
+f16-cache arms never run it); a stale-padding read that enters an online-softmax max would produce exactly a
+rounding-sized, timing-dependent change - to be read against E's thirty. Per-round localization: the server's
+`accepted n/m draft tokens` line is SLT_INF and absent at the harness's verbosity; the next probe passes `LV=`
+so the first diverging round can be found and the tap-layer hidden state compared there.
+
+**Extension to 30 runs each (`dd*_11..30`, finished ~14:10):** A (mask 63, control) 2/30 (runs 4, 13: 602 generated);
+B (async inject off) **1/30** (run 25: 602); E (`GGML_FA_TR=9`) **1/30** (run 19: 634 against its 637). Base stays
+0/10 here and 0/20 in the mint history. So neither the async inject nor the folded Turbo4 dequant is the mechanism:
+the deviation is generic to mask 63 on this arm, about 1 run in 20, and its clean tens were the one-in-five events
+they were priced as. What is left: the drafter's own kernels under the q4 line's environment, or the q4 target's
+path outside FA - and the fact that the UD Turbo4 arm (14 runs) and the q4 f16-cache pick arm (8 runs) never moved
+is now the strongest constraint (both are compatible with a 1-in-20 rate at those counts, so it is weak). Next, in
+this order: (1) a per-round localization run - `LV=` on the quick harness for the `accepted n/m draft tokens` line,
+repeated until a run deviates, then the first diverging round's tap-layer hidden state and drafter logits
+compared against a clean run (`fuse-observe.cpp` OBS_DUMP for the tap tensor only, cheap per round); (2) only then a
+bit bisect on this arm, which at a 1-in-20 rate costs ~40 runs per configuration and is the last resort.
+
+## The drafter count deviation, from the drafter's side (2026-09-10 evening): an input-overwrite race in back-to-back decodes
+
+**Instrument.** `DFLASH_TRACE=1` (common/speculative.cpp): per process() call a hash of the feature rows the
+drafter receives (the target's tap, already on the host), per draft() a hash of the lattice block and the draft
+ids; with `DFLASH_CONF_LOG=1` the per-position confidence/margin. Two base runs at 600 tokens: 625 trace lines,
+identical. `perf/trace-compare.py`-style diff (scratchpad `trace-compare.py`) prints the first differing line and
+whether it is a FEATURE (target side) or a DRAFT/LATTICE (drafter side) line.
+
+**Finding.** Mask 63, 1200 tokens (`fuse-quick/tr63_*`): 2 of 6 runs deviate, and both diverge at the SAME trace
+line 18 - the first draft round after the prefill - with every feature hash before it identical (16 prefill
+chunks of 512 rows and the 4-row verify chunk): same input, different lattice (`a2a23f7fd8045284` vs
+`fbfd6c6a9a8ed677`), confidences off in the third decimal (0.9206/3.045 vs 0.9216/3.071), same three draft ids
+that round, the count difference accumulating later. So: the drafter's own state after the prefill inject burst
+differs between runs. Not the alias (guard silent), not the inject *flags* (config C deviated with both off), not
+the Turbo4 dequant (E deviated), not atomics, not the command-buffer split.
+
+**Mechanism.** `llama_context::process_ubatch` on the graph-reuse path synchronizes before `set_inputs` only
+`if (cparams.pipeline_parallel)` (off in the server). A reused graph has the same input tensors, and the Metal
+shared-buffer `set_tensor` is a plain memcpy, so the next decode's inputs land under a graph that may still be
+reading them. Every upstream caller reads an output between decodes, which synchronizes, so upstream never sees
+it. `DFLASH_ASYNC_INJECT=1` drops exactly that read on the drafter, on the recorded assumption that "llama_decode
+copies the batch into device memory before it returns" - true, and irrelevant: the NEXT llama_decode overwrites
+that device memory. The prefill issues 16 inject decodes of 512 rows, the 4-row one, then the ring re-injection
+chunks, all back to back on the drafter's context; a graph that loses the race reads part of the following
+chunk's rows as its own, and the drafter's KV for those positions is wrong by "a different row", which reaches
+the lattice as a 1e-3 change. Fewer dispatches under mask 63 shorten the CPU encode, so the overwrite arrives
+earlier relative to the GPU: the fusion exposed the race, it did not create it. The mint's Q4-only pattern is
+timing too (the UD line's inject graphs run under different routes); at a 1-in-20 rate the other arms were
+never separable from luck anyway.
+
+**Fix** (`src/llama-context.cpp`): synchronize before `set_inputs` on both paths of `process_ubatch` whenever a
+compute may be in flight - free when the backend is idle (Metal waits on a nil last command buffer), and the
+required wait when it is not. `LLAMA_SYNC_INPUTS=0` restores the pipeline-parallel-only sync (diagnostic). The
+async inject keeps its overlap with the target's verify (a different context); only drafter-to-drafter
+back-to-back decodes serialize, which is the behaviour the flag's own comment assumed. Confirmation chain
+(`sync-test.sh`, `fuse-quick/sy_*`): fix on x12, fix off + async inject off x12, fix off + async on x6, all
+traced against `tr63_1`; the ABAB gate must then be re-priced with the fix (the async inject's +0.76% may shrink).
+
+**Correction (same evening, after the confirmation runs):** the reference run of the hunt, `tr63_1`, was itself the
+corrupted one (its first-draft lattice differs from both base runs and from every other run); the two runs flagged
+as deviating matched base at that point and deviated later. Read against the consensus, EVERY mask-63 run departs
+at a random early round (trace lines 18, 21, 48, 54, 57, 60, 63 - all within the first sixteen rounds), with the
+sync fix on or off and with the async inject on or off, while three base runs agree line for line. The count
+deviations are the rare departures that flip a draft token. So the sync-before-inputs finding stands as a bug
+(kept), but it is not this one.
+
+**Bit bisect with the trace as detector** (`fuse-quick/bb*`, one 600-token run per mask, first difference against
+the base trace; identical = 625 lines equal): 0 identical (x3), **60 identical**, 3 identical, **8 identical**, 62
+(no twins) identical, 55 (no add+norm) identical, 1 identical; **9 departs at line 21**, 11 at 45, 61 (no swiglu
+twin) at 45, 63 at 123. Bits 1 and 8 together, nothing else: the f16 twin on the residual add+norm group. The
+guard is silent, the allocation fix is on. Toggle matrix on mask 9 (`tm9_*`): control, `GGML_FUSE_SMALL_TWIN_NOREAD=1`
+(twins written, every mul_mv casts), `GGML_FUSE_SMALL_NORESERVE=1`, `GGML_FUSE_SMALL_NODEP=1`, `GGML_FUSE_SMALL_NOFIX=1`.
+Mask 60 is identical to base in the trace, which is a far stronger clean than the counts were.
+
+**Toggle matrix on mask 9** (`fuse-quick/tm9_*`, one traced 600-token run each, first difference vs base): control
+departs (line 321, and 39 on the repeat); `TWIN_NOREAD=1` (twins written, every mul_mv casts) departs (51); mask 63
+with NOREAD departs (231); `NORESERVE=1`, `NODEP=1`, `NOFIX=1` all IDENTICAL - in each of those the guard fires
+(32 hits) and the aliasing groups run unfused. So: the twin READ is not the mechanism, neither half of the
+allocation fix is, and the discriminator is whether `kernel_add_rms_norm_mul_tw_f32_4` runs at all. The same
+kernel is deterministic in the target (the tap features never move), so it is a drafter site or shape. Next:
+`ADDNORM_NOTW=1` (the plain fused kernel, the twin owed by a cast after it) and `SITES=1` (the drafter's fused
+add+norm sites by name), then `ADDNORM_SKIP=<name>` per site.
+
+**Further exclusions (same evening, `fuse-quick/tm9_*`, `x9_*`, `rate63_*`, one traced run each unless noted):**
+`ADDNORM_NOTW=1` (the plain fused kernel, the twin owed by a cast after it) departs (66) - the twin variant of
+the kernel is not it; `SITES=1` lists the fused add+norm sites: all 127 are the TARGET's (`l_out`,
+`attn_residual`, `attn_post_norm`, `h_nextn`), the drafter has none - so bit 8 acts only in the target, whose tap
+features never move, yet the drafter diverges; the out-of-bounds check on every fused output (twin tail vs its
+buffer size) finds nothing; `GGML_METAL_GET_MEMCPY=0` (blit readbacks) departs (135); `LLAMA_GRAPH_REUSE_DISABLE=1`
+departs (498); three more mask-63 runs depart at 177/174/204 after two that were identical - the rate and the
+round move with the machine's state, so single clean runs prove little (the bisect's clean masks were each one run;
+the diverging ones are consistent across eleven runs). Resources are in Metal's default tracked mode, one queue,
+no untracked buffers. Every host-side channel between the two contexts is now excluded; what is left is a GPU write
+past a buffer's end (the compute buffers are separate VM regions, the drafter's mapped after the target's; the
+canary cannot look past a buffer end) or a timing-exposed race inside the drafter's own bit-1 machinery.
+Running: `GGML_METAL_BUFFER_SLACK=64M` (every Metal allocation padded; a past-the-end write lands in the pad) vs
+control, interleaved.
+
+**Where the drafter-side hunt stands (2026-09-10, end of the evening).** Excluded with traced runs: past-the-end
+writes (`GGML_METAL_BUFFER_SLACK=64M` pads every Metal allocation: still departs, at the first draft), the deferred
+readback (`GET_MEMCPY=0`: departs), graph reuse (`LLAMA_GRAPH_REUSE_DISABLE=1`: departs), the fused kernel's twin
+variant (`ADDNORM_NOTW`: departs), the twin read (`TWIN_NOREAD`: departs), the async and fused inject (config C),
+the folded Turbo4 dequant (E), the sync-before-inputs bug (real, fixed, not this). Found: the bit-8 lifetime
+rewrite is a structural pass and also lands on the DRAFTER's residual-norm sites (`ffn_inp = add(attn_conv_out,
+l_out)`, `l_out = add(ffn_conv_out, ffn_inp)`, layer 0 with `inp_noise_embd`), 34 of them, which the encoder never
+fuses there - even after moving the rewrite behind the reorder and giving it the encoder's exact structural
+predicate (`ggml_metal_addnorm_shape_ok`, now shared), it still applies to those 34 and the encoder still refuses
+them: the two decisions are made on different graph objects (the encoder sees the scheduler's split view; use
+counts and node adjacency can differ there). The drafter therefore runs plain RMS_NORM nodes carrying two
+lifetime sources under bits 1+8, and that is the only thing bits 1+8 change inside the drafter. With bit 8 alone
+(mask 8, mask 60) the same stray sources are present and the trace is identical, so the sources alone are not it;
+with bit 1 alone (masks 1, 3) the twins alone are not it; both together in the drafter, the trace departs at a
+random early round in nine of eleven runs. The mechanism connecting a stray lifetime and a twin tail in the
+drafter's allocation to a nondeterministic kernel is not identified. The rate and the round move with the
+machine's state (two of two identical runs followed by three of three departing, same binary).
+
+**Instruments left in the tree** (all env-gated, off by default): `DFLASH_TRACE=1` (feature/lattice/draft hashes),
+`GGML_FUSE_SMALL_SITES=1` (`fuse-site`, `fuse-dep`), `GGML_FUSE_SMALL_ADDNORM_SKIP=<name>`, `ADDNORM_NOTW`,
+`TWIN_NOREAD`, `NORESERVE`, `NODEP`, `NOFIX`, `GGML_FUSE_SMALL_ALIAS` (guard + `fuse-oob` check),
+`GGML_METAL_BUFFER_SLACK`, `LLAMA_SYNC_INPUTS`; `scratchpad/trace-compare.py` (copy into perf/ when picked up).
+
+**Decision for the pick, as of tonight.** Mask 60 (no twins) plus the two real fixes (allocation alias, sync
+before inputs): identical trace to base, canonical in every count run, gate ud +1.9/+1.8%. The ABAB gate must be
+re-run on the final binary, because the sync-before-inputs wait can take back part of the async inject's +0.76%.
+Mask 63 stays off until the drafter interaction is understood; the twins are worth about the noise on top of 60.
+Next session, in order: (1) make the encoder's add+norm decision and the rewrite agree by construction - the
+rewrite marks the norm (op_params) and the encoder fuses on the marker, so no graph ever carries a lifetime
+without the kernel; if the drafter's 34 sites then fuse, re-run the mask-9 trace; (2) if it still departs, watch
+the drafter's own tensors with `LLAMA_TRACE_WATCH` across the target's graphs (cross-context corruption) and hash
+the drafter's KV per round; (3) the drafter's twin tails: `ROPE` in place over a twin-bearing MUL frees the tail
+(`ggml_gallocr_free_extra_space`) to a later tensor while the norm kernel still writes it - ordered by the
+hazard table on paper, worth a canary at that exact spot.
+
+## Mask 60 + both fixes, priced on the final binary (2026-09-11, `exp/fuse-alias` 7559abd03)
+
+ABAB x2 gate (`run-fuse-gate.sh`, Turbo4 arms, one binary, base = manifest picks, fused = `GGML_FUSE_SMALL=60`;
+`fusegate-0911-*`): every sha canonical, acceptance identical per arm (64.7 / 64.1 ud, 65.5 / 60.2 q4); the q4
+base arms held within 0.15% this time, so the q4 delta is priced for the first time.
+
+| line | arm | base r1 / r2 | mask 60 r1 / r2 | delta |
+|---|---|---:|---:|---:|
+| ud | 600 | 25.756 / 25.798 | 26.161 / 26.236 | **+1.6%** |
+| ud | 300 | 25.538 / 25.557 | 26.003 / 26.005 | **+1.8%** |
+| q4 | 600 | 29.745 / 29.727 | 30.381 / 30.321 | **+2.1%** |
+| q4 | 300 | 28.040 / 28.082 | 28.611 / 28.660 | **+2.0%** |
+
+The sync-before-inputs fix is in both arms; its own cost, mask 60 with `LLAMA_SYNC_INPUTS=0` vs on, interleaved x3
+on the 600 arm (`synccost-*`): ud 25.707 vs 25.727, q4 29.724 vs 29.701 - zero within noise (the wait is free when
+the drafter's previous graph is done, which it is by the time the target's verify has run). Absolute numbers on
+this day are ~2% under yesterday's (machine state); deltas are what the gate prices.

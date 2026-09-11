@@ -1676,10 +1676,15 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
     if (!graph_reuse_disable && res->can_reuse(gparams)) {
         //LLAMA_LOG_DEBUG("%s: reusing previous graph\n", __func__);
 
-        // with pipeline parallelism, the previous graph_compute_async may still be running
-        // on the GPU. we must synchronize before set_inputs to avoid overwriting input tensors
-        // that the previous compute is still reading.
-        if (cparams.pipeline_parallel) {
+        // the previous graph_compute_async may still be running on the GPU (pipeline parallelism, or any
+        // caller that issues decodes back to back without reading an output in between - the drafter's
+        // async inject does exactly that): a reused graph has the same input tensors, so set_inputs below
+        // would overwrite what the running graph is still reading. Synchronize first; it is free when the
+        // backend is idle. LLAMA_SYNC_INPUTS=0 restores the pipeline-parallel-only sync (diagnostic:
+        // the drafter's first draft after a prefill then diverges in about one run in three,
+        // perf/small-op-fusion.md 'drafter count deviation').
+        static const bool sync_inputs = !getenv("LLAMA_SYNC_INPUTS") || atoi(getenv("LLAMA_SYNC_INPUTS")) != 0;
+        if (cparams.pipeline_parallel || sync_inputs) {
             ggml_backend_sched_synchronize(sched.get());
         }
 
@@ -1687,6 +1692,14 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         trace_was_reused = true;
     } else {
         trace_was_reused = false;
+        // same hazard on a fresh allocation: the new graph's tensors may be placed over memory the
+        // previous (still running) graph uses, and set_inputs writes into it
+        {
+            static const bool sync_inputs = !getenv("LLAMA_SYNC_INPUTS") || atoi(getenv("LLAMA_SYNC_INPUTS")) != 0;
+            if (sync_inputs) {
+                ggml_backend_sched_synchronize(sched.get());
+            }
+        }
         res->reset();
 
         ggml_backend_sched_reset(sched.get());

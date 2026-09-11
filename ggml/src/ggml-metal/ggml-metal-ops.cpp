@@ -165,6 +165,32 @@ size_t ggml_metal_op_extra_f16_twin(const ggml_tensor * t) {
     return ok ? GGML_PAD(ggml_nelements(t)*sizeof(ggml_fp16_t), 32) : 0;
 }
 
+// GGML_FUSE_SMALL_NOFIX=1: the allocation fix off (diagnostic - reproduces the twin race, the alias guard logs it)
+static bool ggml_metal_fuse_small_nofix(void) {
+    static const bool v = getenv("GGML_FUSE_SMALL_NOFIX") != nullptr;
+    return v;
+}
+
+// The norm output ahead of a twin-bearing MUL reserves the same tail, so the MUL takes the norm's block
+// in place (ggml-alloc refuses a reuse that needs more space than the parent has). Without it the MUL's
+// block is allocated at the MUL's own node, after the inputs of the group's earlier nodes were freed,
+// and the fused norm kernel writes it while other threadgroups still read those inputs: the twin race
+// of 2026-09-10 (perf/small-op-fusion.md, 'Root cause').
+size_t ggml_metal_op_extra_f16_twin_norm(const ggml_tensor * t) {
+    const int fs = ggml_metal_fuse_small();
+    static const bool noreserve = getenv("GGML_FUSE_SMALL_NORESERVE") != nullptr; // diagnostic: the fix's reservation half off
+    if (!(fs & GGML_METAL_FUSE_SMALL_TWIN) || ggml_metal_fuse_small_nofix() || noreserve || t->op != GGML_OP_RMS_NORM) {
+        return 0;
+    }
+    if (t->type != GGML_TYPE_F32 || t->view_src || !ggml_is_contiguous(t)) {
+        return 0;
+    }
+    if (t->ne[0] % 8 != 0 || ggml_nelements(t) > 8*32768) {
+        return 0;
+    }
+    return GGML_PAD(ggml_nelements(t)*sizeof(ggml_fp16_t), 32);
+}
+
 // the tensor whose f16 twin holds src1 (src1 itself, or the tensor it is a contiguous full view of)
 static const ggml_tensor * ggml_metal_f16_twin_src(const ggml_tensor * src1) {
     const ggml_tensor * p = src1->view_src ? src1->view_src : src1;
@@ -351,9 +377,66 @@ static void ggml_metal_fuse_small_rewrite_gnorm(ggml_cgraph * gf, ggml_tensor * 
     if (ggml_metal_use_count(gf, norm) != 1 || ggml_metal_use_count(gf, wmul) != 1 || ggml_metal_use_count(gf, silu) != 1) {
         return;
     }
+    if (ggml_metal_use_count(gf, z) != 1) {
+        return; // the encoder-boundary fallback writes silu(z) over z
+    }
     gmul->src[1] = z;
     ggml_set_op_params_i32(gmul, 0, GGML_METAL_FUSE_SMALL_GS_MARK);
     silu->op = GGML_OP_NONE;
+}
+
+// bit 8, the residual add + norm + mul group. Whichever add operand the sum does not take in place is
+// dead after the add (the residual, `ggml_add(cur, inpSA)`; or the layer output when it is a view the
+// allocator cannot reuse - the partial env's linear_attn_out), and the norm's block is allocated one node
+// later: it can land over that operand, which the fused kernel still reads from other threadgroups while
+// it writes the block. Both operands become dependencies of the norm, so they stay allocated until the
+// norm's block exists; the MUL then takes the norm's block in place (ggml_metal_op_extra_f16_twin_norm
+// sizes the norm for it). The norm kernels read src[0] only: the extra sources are lifetimes, not data.
+// (The sum is then no longer in place over src0 - src0 has two children at the add - which costs one
+// decode-width block per layer and nothing else; the kernel reads x and writes the sum wherever it is.)
+// the structural half of the encoder's add+norm match (ggml_metal_addnorm_match): ONE predicate for the
+// encoder and for the lifetime rewrite, so the rewrite never touches a group the encoder will not fuse
+static bool ggml_metal_addnorm_shape_ok(const ggml_cgraph * gf, const ggml_tensor * add, const ggml_tensor * norm, const ggml_tensor * wmul) {
+    if (add->op != GGML_OP_ADD || norm->op != GGML_OP_RMS_NORM || wmul->op != GGML_OP_MUL) {
+        return false;
+    }
+    if (!add->src[0] || !add->src[1] || add->view_src || add->type != GGML_TYPE_F32 || add->src[0]->type != GGML_TYPE_F32 || add->src[1]->type != GGML_TYPE_F32) {
+        return false;
+    }
+    if (!ggml_are_same_shape(add, add->src[0]) || !ggml_are_same_shape(add, add->src[1]) ||
+        !ggml_is_contiguous(add) || !ggml_is_contiguous(add->src[0]) || !ggml_is_contiguous(add->src[1])) {
+        return false;
+    }
+    if (norm->src[0] != add || norm->type != GGML_TYPE_F32 || ggml_metal_use_count(gf, norm) != 1 || norm->view_src) {
+        return false;
+    }
+    if (wmul->src[0] != norm || !wmul->src[1] || wmul->src[1]->ne[0] != add->ne[0] || !ggml_is_contiguous_rows(wmul->src[1]) ||
+        wmul->type != GGML_TYPE_F32 || !ggml_is_contiguous(wmul) || !ggml_are_same_shape(wmul, add) || wmul->view_src) {
+        return false;
+    }
+    if (add->ne[0] % 4 != 0) {
+        return false;
+    }
+    return true;
+}
+
+static void ggml_metal_fuse_small_rewrite_addnorm(ggml_cgraph * gf, int iadd, int inorm, int imul) {
+    ggml_tensor * add  = gf->nodes[iadd];
+    ggml_tensor * norm = gf->nodes[inorm];
+    ggml_tensor * wmul = gf->nodes[imul];
+    if (norm->src[1] || !ggml_metal_addnorm_shape_ok(gf, add, norm, wmul)) {
+        return;
+    }
+    norm->src[1] = add->src[1];
+    norm->src[2] = add->src[0];
+    static const bool sites = getenv("GGML_FUSE_SMALL_SITES") != nullptr;
+    if (sites) {
+        static std::set<std::string> seen;
+        const std::string key = std::string(add->name) + "|" + norm->name + "|" + std::to_string(add->ne[0]) + "x" + std::to_string(add->ne[1]);
+        if (seen.insert(key).second) {
+            GGML_LOG_WARN("fuse-dep: rewrite add=%s [%lld,%lld] src0=%s src1=%s norm=%s\n", add->name, (long long) add->ne[0], (long long) add->ne[1], add->src[0]->name, add->src[1]->name, norm->name);
+        }
+    }
 }
 
 void ggml_metal_op_fuse_small_rewrite(ggml_cgraph * gf) {
@@ -372,6 +455,41 @@ void ggml_metal_op_fuse_small_rewrite(ggml_cgraph * gf) {
         if ((fs & GGML_METAL_FUSE_SMALL_GNORM) && n->op == GGML_OP_MUL && ggml_get_op_params_i32(n, 0) != GGML_METAL_FUSE_SMALL_GS_MARK) {
             ggml_metal_fuse_small_rewrite_gnorm(gf, n);
         }
+    }
+}
+
+// After the reorder: the add+norm dependency only where the encoder will fuse - the ADD, the RMS_NORM and
+// the MUL adjacent (view nodes skipped, as the encoder does). A graph where they are not adjacent (the
+// drafter's conv layers) keeps its plain nodes untouched: the first cut applied the dependency to every
+// structural match, and a stray lifetime on an unfused norm changed the drafter's allocation enough to
+// expose a race the fused sites never showed (2026-09-10, 'from the drafter's side').
+void ggml_metal_op_fuse_small_rewrite_post(ggml_cgraph * gf) {
+    const int fs = ggml_metal_fuse_small();
+    static const bool nodep = getenv("GGML_FUSE_SMALL_NODEP") != nullptr; // diagnostic: the fix's dependency half off
+    if (!(fs & GGML_METAL_FUSE_SMALL_ADDNORM) || ggml_metal_fuse_small_nofix() || nodep) {
+        return;
+    }
+    auto next = [&](int i) {
+        for (int j = i + 1; j < gf->n_nodes; j++) {
+            if (!ggml_op_is_empty(gf->nodes[j]->op)) {
+                return j;
+            }
+        }
+        return -1;
+    };
+    for (int i = 0; i < gf->n_nodes; i++) {
+        if (gf->nodes[i]->op != GGML_OP_ADD) {
+            continue;
+        }
+        const int j = next(i);
+        if (j < 0 || gf->nodes[j]->op != GGML_OP_RMS_NORM || gf->nodes[j]->src[0] != gf->nodes[i]) {
+            continue;
+        }
+        const int k = next(j);
+        if (k < 0 || gf->nodes[k]->op != GGML_OP_MUL || gf->nodes[k]->src[0] != gf->nodes[j]) {
+            continue;
+        }
+        ggml_metal_fuse_small_rewrite_addnorm(gf, i, j, k);
     }
 }
 
@@ -595,6 +713,74 @@ int ggml_metal_op_node_idx(ggml_metal_op_t ctx, int i) {
     return ctx->node_idx(i);
 }
 
+// Alias guard for the fused groups (perf/small-op-fusion.md, 'Root cause'). A group's outputs are
+// allocated at their own nodes, after inputs of the group's earlier nodes may have been freed, so an
+// output block can overlap an input the kernel still reads from other threadgroups. Exact in-place
+// (same address, same layout) is safe by the per-thread read-before-write rule; any other overlap, and
+// any overlap of an output's f16 twin tail, is a race. The allocation fix makes this unreachable; the
+// guard stays as the tripwire: it logs the first hits and does not fuse the group (the unfused path is
+// safe). GGML_FUSE_SMALL_ALIAS=0 disables it, =2 aborts on a hit.
+static bool ggml_metal_fuse_small_alias_ok(const char * what, const ggml_tensor * const * ins, int n_in, const ggml_tensor * const * outs, int n_out) {
+    static const int mode = getenv("GGML_FUSE_SMALL_ALIAS") ? atoi(getenv("GGML_FUSE_SMALL_ALIAS")) : 1;
+    static int n_logged = 0;
+    if (mode == 0) {
+        return true;
+    }
+    for (int o = 0; o < n_out; o++) {
+        const ggml_tensor * to = outs[o];
+        const ggml_metal_buffer_id bo = ggml_metal_get_buffer_id(to);
+        const size_t o0 = bo.offs;
+        const size_t o1 = o0 + ggml_nbytes(to);
+        const size_t o2 = o1 + ggml_metal_op_extra_f16_twin(to);
+        // an output range (twin tail included) past the end of its ggml buffer is a write into whatever
+        // buffer follows in the address space
+        if (to->buffer) {
+            const size_t bsz = ggml_backend_buffer_get_size(to->buffer);
+            const size_t off = (const char *) to->data - (const char *) ggml_backend_buffer_get_base(to->buffer);
+            if (off + (o2 - o0) > bsz) {
+                if (n_logged < 32) {
+                    n_logged++;
+                    GGML_LOG_WARN("fuse-oob: %s: output %s at %zu + %zu exceeds its buffer (%zu bytes)\n", what, to->name, off, o2 - o0, bsz);
+                }
+                if (mode == 2) {
+                    GGML_ABORT("fuse-oob");
+                }
+                return false;
+            }
+        }
+        for (int i = 0; i < n_in; i++) {
+            const ggml_tensor * ti = ins[i];
+            if (!ti) {
+                continue;
+            }
+            const ggml_metal_buffer_id bi = ggml_metal_get_buffer_id(ti);
+            if (bi.metal != bo.metal) {
+                continue;
+            }
+            const size_t i0 = bi.offs;
+            const size_t i1 = i0 + ggml_nbytes(ti);
+            const bool body = o0 < i1 && i0 < o1;
+            const bool tail = o1 < i1 && i0 < o2;
+            bool exact = body && i0 == o0 && ti->type == to->type;
+            for (int d = 0; d < GGML_MAX_DIMS && exact; d++) {
+                exact = ti->ne[d] == to->ne[d] && ti->nb[d] == to->nb[d];
+            }
+            if ((body && !exact) || tail) {
+                if (n_logged < 32) {
+                    n_logged++;
+                    GGML_LOG_WARN("fuse-alias: %s: output %s [%zu, %zu, twin to %zu) overlaps input %s [%zu, %zu) - not fused\n",
+                            what, to->name, o0, o1, o2, ti->name, i0, i1);
+                }
+                if (mode == 2) {
+                    GGML_ABORT("fuse-alias: a fused group's output aliases an input");
+                }
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 // residual add + rms_norm + mul(w) at encoder index i: node(i) = ADD(a, b) (its sum feeds the next
 // residual too, so it is still written), node(i + 1) = RMS_NORM(add), node(i + 2) = MUL(norm, w)
 static bool ggml_metal_addnorm_match(ggml_metal_op_t ctx, int i) {
@@ -605,25 +791,33 @@ static bool ggml_metal_addnorm_match(ggml_metal_op_t ctx, int i) {
     const ggml_tensor * add  = ctx->node(i);
     const ggml_tensor * norm = ctx->node(i + 1);
     const ggml_tensor * wmul = ctx->node(i + 2);
-    if (add->op != GGML_OP_ADD || norm->op != GGML_OP_RMS_NORM || wmul->op != GGML_OP_MUL) {
+    if (!ggml_metal_addnorm_shape_ok(gf, add, norm, wmul)) {
         return false;
     }
-    if (add->view_src || add->type != GGML_TYPE_F32 || add->src[0]->type != GGML_TYPE_F32 || add->src[1]->type != GGML_TYPE_F32) {
-        return false;
+    // diagnostics: GGML_FUSE_SMALL_ADDNORM_SKIP=<substring> leaves groups whose add or mul name contains it
+    // unfused; GGML_FUSE_SMALL_SITES=1 logs each distinct site once
+    {
+        static const char * skip = getenv("GGML_FUSE_SMALL_ADDNORM_SKIP");
+        if (skip && (strstr(add->name, skip) || strstr(wmul->name, skip))) {
+            return false;
+        }
+        static const bool sites = getenv("GGML_FUSE_SMALL_SITES") != nullptr;
+        if (sites) {
+            static std::set<std::string> seen;
+            const std::string key = std::string(add->name) + "|" + wmul->name;
+            if (seen.insert(key).second) {
+                GGML_LOG_WARN("fuse-site: add+norm add=%s [%lld,%lld,%lld] src0=%s src1=%s norm=%s mul=%s twin=%zu\n",
+                        add->name, (long long) add->ne[0], (long long) add->ne[1], (long long) add->ne[2],
+                        add->src[0]->name, add->src[1]->name, norm->name, wmul->name, ggml_metal_op_extra_f16_twin(wmul));
+            }
+        }
     }
-    if (!ggml_are_same_shape(add, add->src[0]) || !ggml_are_same_shape(add, add->src[1]) ||
-        !ggml_is_contiguous(add) || !ggml_is_contiguous(add->src[0]) || !ggml_is_contiguous(add->src[1])) {
-        return false;
-    }
-    if (norm->src[0] != add || norm->type != GGML_TYPE_F32 || ggml_metal_use_count(gf, norm) != 1 || norm->view_src) {
-        return false;
-    }
-    if (wmul->src[0] != norm || wmul->src[1]->ne[0] != add->ne[0] || !ggml_is_contiguous_rows(wmul->src[1]) ||
-        wmul->type != GGML_TYPE_F32 || !ggml_is_contiguous(wmul) || !ggml_are_same_shape(wmul, add) || wmul->view_src) {
-        return false;
-    }
-    if (add->ne[0] % 4 != 0) {
-        return false;
+    {
+        const ggml_tensor * ins[3]  = { add->src[0], add->src[1], add };
+        const ggml_tensor * outs[2] = { add, wmul };
+        if (!ggml_metal_fuse_small_alias_ok("add+norm", ins, 3, outs, 2)) {
+            return false;
+        }
     }
     return true;
 }
@@ -4027,7 +4221,9 @@ static int ggml_metal_op_mul_mat_impl(ggml_metal_op_t ctx, int idx, ggml_tensor 
         ggml_metal_buffer_id bid_src1 = ggml_metal_get_buffer_id(op->src[1]);
 
         // small-op fusion (GGML_FUSE_SMALL bit 1): src1's producer wrote an f16 twin right after it
-        const ggml_tensor * twin_src = ggml_metal_f16_twin_src(op->src[1]);
+        // (GGML_FUSE_SMALL_TWIN_NOREAD=1: diagnostic, twins are written but every mul_mv casts as before)
+        static const bool twin_noread = getenv("GGML_FUSE_SMALL_TWIN_NOREAD") != nullptr;
+        const ggml_tensor * twin_src = twin_noread ? nullptr : ggml_metal_f16_twin_src(op->src[1]);
 
         static const int env_ilp = getenv("GGML_MV_EXT_ILP") ? atoi(getenv("GGML_MV_EXT_ILP")) : 1;
         static const int env_di_v2 = getenv("GGML_MV_EXT_DI_V2") ? atoi(getenv("GGML_MV_EXT_DI_V2")) : 0;
@@ -4106,17 +4302,11 @@ static int ggml_metal_op_mul_mat_impl(ggml_metal_op_t ctx, int idx, ggml_tensor 
                               ny % 4 == 0;
 
         if (copy_y16 && twin_src) {
-            // no cast dispatch and no barrier of our own: the twin's range is the producer's allocation,
-            // so the graph's hazard tracking orders this op behind it like any other read of src1.
-            // A twin read here raced with the fused residual add+norm that follows the matmul (2026-09-10
-            // reproducer: 3 of 6 long runs off-sha without a barrier, 0 of 6 with one; a barrier for the
-            // swiglu's twin alone left 3 of 8, the gated norm's twin races the same way). The overlap the
-            // hazard table misses is not identified: keep the barrier the cast path always had, the cast
-            // dispatch is still saved. GGML_FUSE_SMALL_TWIN_NORESET=1 drops it (diagnostic only).
-            static const bool twin_noreset = getenv("GGML_FUSE_SMALL_TWIN_NORESET") != nullptr;
-            if (!twin_noreset) {
-                ggml_metal_op_concurrency_reset(ctx);
-            }
+            // no cast dispatch and no barrier of our own: the twin's range is the producer's allocation
+            // (alloc size, twin included), so the encode loop's check already put the barrier between
+            // the producer and this op. The extra reset of 2026-09-10 was a second back-to-back barrier,
+            // a no-op; the race it seemed to reduce was the fused groups' allocation aliasing (see
+            // ggml_metal_fuse_small_alias_ok) and is fixed at the allocation.
             bid_src1 = ggml_metal_get_buffer_id(twin_src);
             bid_src1.offs += ggml_nbytes(twin_src);
         } else if (copy_y16 && cvt_cont) {
@@ -5445,8 +5635,9 @@ int ggml_metal_op_bin(ggml_metal_op_t ctx, int idx) {
 
     ggml_tensor * op = ctx->node(idx);
 
-    // the rewritten gated norm's MUL that its norm did not fuse (encoder boundary): silu(z) into dst, then the
-    // multiply in place - the two dispatches the graph had
+    // the rewritten gated norm's MUL that its norm did not fuse (encoder boundary, or the alias guard):
+    // silu(z) over z (its only use - the rewrite checks that), then dst = wmul * z - the two dispatches
+    // the graph had. Not silu into dst: dst is wmul's block in place, and staging there wiped wmul.
     if (op->op == GGML_OP_MUL && ggml_get_op_params_i32(op, 0) == GGML_METAL_FUSE_SMALL_GS_MARK) {
         ggml_metal_library_t lib = ctx->lib;
         ggml_metal_encoder_t enc = ctx->enc;
@@ -5470,7 +5661,7 @@ int ggml_metal_op_bin(ggml_metal_op_t ctx, int idx) {
         ggml_metal_encoder_set_pipeline(enc, pipeline_silu);
         ggml_metal_encoder_set_bytes   (enc, &uargs, sizeof(uargs), 0);
         ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(z),  1);
-        ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op), 2);
+        ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(z),  2);
         if (pipeline_silu.cnt) {
             ggml_metal_encoder_dispatch_threadgroups(enc, pipeline_silu.c4 ? ggml_nelements(op)/4 : ggml_nelements(op), 1, 1, 1, 1, 1);
         } else {
@@ -5482,7 +5673,7 @@ int ggml_metal_op_bin(ggml_metal_op_t ctx, int idx) {
         ggml_metal_op_concurrency_reset(ctx);
         ggml_tensor mul = *op;
         ggml_set_op_params_i32(&mul, 0, 0);
-        mul.src[1] = &mul; // src1 is dst now: the bin kernel reads and writes each element once
+        // src1 stays z (silu(z) now); dst may be src0's block (in place): the bin kernel reads and writes each element once
         ggml_metal_library_t lib2 = lib;
         GGML_TENSOR_LOCALS( int32_t, mne0, mul.src[0], ne);
         GGML_TENSOR_LOCALS(uint64_t, mnb0, mul.src[0], nb);
@@ -5509,7 +5700,7 @@ int ggml_metal_op_bin(ggml_metal_op_t ctx, int idx) {
         ggml_metal_encoder_set_pipeline(enc, pipeline_mul);
         ggml_metal_encoder_set_bytes   (enc, &margs, sizeof(margs), 0);
         ggml_metal_encoder_set_buffer  (enc, mb_src0, 1);
-        ggml_metal_encoder_set_buffer  (enc, mb_dst,  2);
+        ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(z), 2);
         ggml_metal_encoder_set_buffer  (enc, mb_dst,  3);
         if (pipeline_mul.cnt) {
             ggml_metal_encoder_dispatch_threadgroups(enc, margs.ne0, ggml_nrows(op), 1, 1, 1, 1);
@@ -5750,7 +5941,10 @@ static int ggml_metal_op_add_rms_norm(ggml_metal_op_t ctx, int idx) {
         /*.nbf3   =*/ { nb03, w->nb[3], b->nb[3] },
     };
 
-    const size_t twin = ggml_metal_op_extra_f16_twin(wmul);
+    const size_t twin_owed = ggml_metal_op_extra_f16_twin(wmul);
+    // GGML_FUSE_SMALL_ADDNORM_NOTW=1 (diagnostic): the plain fused kernel, the twin written by a cast after it
+    static const bool notw = getenv("GGML_FUSE_SMALL_ADDNORM_NOTW") != nullptr;
+    const size_t twin = notw ? 0 : twin_owed;
 
     for (int i = 1; i < 3; ++i) {
         if (!ggml_metal_op_concurrency_check(ctx, ctx->node(idx + i))) {
@@ -5796,6 +5990,20 @@ static int ggml_metal_op_add_rms_norm(ggml_metal_op_t ctx, int idx) {
     ggml_metal_encoder_set_threadgroup_memory_size(enc, 32*sizeof(float), 0);
 
     ggml_metal_encoder_dispatch_threadgroups(enc, ne01, ne02, ne03, nth, 1, 1);
+
+    if (notw && twin_owed) {
+        ggml_metal_op_concurrency_reset(ctx);
+        ggml_metal_buffer_id bid_tw = bid_dst;
+        bid_tw.offs += ggml_nbytes(wmul);
+        auto pipeline_cvt = ggml_metal_library_get_pipeline_cvt_f32_f16_cont(lib);
+        ggml_metal_kargs_cvt_cont cargs = { /*.n =*/ ggml_nelements(wmul) };
+        const int64_t nthr = ggml_nelements(wmul)/8;
+        ggml_metal_encoder_set_pipeline(enc, pipeline_cvt);
+        ggml_metal_encoder_set_bytes   (enc, &cargs, sizeof(cargs), 0);
+        ggml_metal_encoder_set_buffer  (enc, bid_dst, 1);
+        ggml_metal_encoder_set_buffer  (enc, bid_tw,  2);
+        ggml_metal_encoder_dispatch_threadgroups(enc, (nthr + 255)/256, 1, 1, 256, 1, 1);
+    }
 
     return 3;
 }
@@ -6067,8 +6275,19 @@ int ggml_metal_op_norm(ggml_metal_op_t ctx, int idx) {
             GGML_LOG_DEBUG("%s: fuse: RMS_NORM + MUL + MUL(SILU) (gated norm)\n", __func__);
         }
     }
-    const size_t twin = (n_fuse == 2 || gs_silu) && op->op == GGML_OP_RMS_NORM && ne00 % 4 == 0 && ggml_is_contiguous(ctx->node(idx + n_fuse - 1))
-                      ? ggml_metal_op_extra_f16_twin(ctx->node(idx + n_fuse - 1)) : 0;
+    size_t twin = (n_fuse == 2 || gs_silu) && op->op == GGML_OP_RMS_NORM && ne00 % 4 == 0 && ggml_is_contiguous(ctx->node(idx + n_fuse - 1))
+                ? ggml_metal_op_extra_f16_twin(ctx->node(idx + n_fuse - 1)) : 0;
+    if (gs_silu || twin) {
+        const ggml_tensor * ins[2]  = { op->src[0], gs_silu ? gs_silu->src[1] : nullptr };
+        const ggml_tensor * outs[1] = { ctx->node(idx + n_fuse - 1) };
+        if (!ggml_metal_fuse_small_alias_ok(gs_silu ? "gated norm" : "norm+twin", ins, 2, outs, 1)) {
+            // unfused: the plain norm writes its output; the MULs run in the bin op (the twin by its
+            // cast, the gated MUL by its silu + multiply)
+            n_fuse  = 1;
+            gs_silu = nullptr;
+            twin    = 0;
+        }
+    }
 
     if (n_fuse > 1) {
         bid_dst = ggml_metal_get_buffer_id(ctx->node(idx + n_fuse - 1));

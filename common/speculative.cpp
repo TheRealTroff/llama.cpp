@@ -1268,6 +1268,21 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
                 }
             }
 
+            // DFLASH_TRACE=1 (perf/small-op-fusion.md, the drafter count deviation): a hash of the feature rows
+            // the drafter receives this round, so a deviating run can be split into "the target's tap changed"
+            // and "the drafter changed on the same input"
+            static const bool trace = getenv("DFLASH_TRACE") && atoi(getenv("DFLASH_TRACE"));
+            if (trace) {
+                uint64_t h = 1469598103934665603ULL;
+                const uint32_t * w = (const uint32_t *) feat_dst;
+                const size_t n = (size_t) n_chunk * n_embd_enc;
+                for (size_t q = 0; q < n; ++q) {
+                    h ^= w[q];
+                    h *= 1099511628211ULL;
+                }
+                LOG_INF("dflash-trace feat: n=%d pos0=%d hash=%016llx\n", (int) n_chunk, (int) batch_in.pos[offset], (unsigned long long) h);
+            }
+
             const int64_t t_enc0 = ggml_time_us();
             const float * inp_g = nullptr;
             if (!fused_inject) {
@@ -1499,6 +1514,23 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
 
                 if (conf_log) {
                     LOG_INF("dflash-conf seq=%d n=%d %s\n", (int) seq_id, (int) result.size(), conf.c_str());
+                }
+                {
+                    static const bool trace = getenv("DFLASH_TRACE") && atoi(getenv("DFLASH_TRACE"));
+                    if (trace) {
+                        uint64_t h = 1469598103934665603ULL;
+                        const uint32_t * w = (const uint32_t *) (lattice + (size_t) beg * n_embd_dec);
+                        const size_t n = (size_t) n_block_tokens * n_embd_dec;
+                        for (size_t q = 0; q < n; ++q) {
+                            h ^= w[q];
+                            h *= 1099511628211ULL;
+                        }
+                        std::string ids;
+                        for (const auto id : result) {
+                            ids += string_format("%s%d", ids.empty() ? "" : ",", (int) id);
+                        }
+                        LOG_INF("dflash-trace draft: seq=%d lat=%016llx ids=%s\n", (int) seq_id, (unsigned long long) h, ids.c_str());
+                    }
                 }
 
                 if (result.size() < (size_t) params.n_min) {
