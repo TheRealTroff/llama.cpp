@@ -580,3 +580,9 @@ The sync-before-inputs fix is in both arms; its own cost, mask 60 with `LLAMA_SY
 on the 600 arm (`synccost-*`): ud 25.707 vs 25.727, q4 29.724 vs 29.701 - zero within noise (the wait is free when
 the drafter's previous graph is done, which it is by the time the target's verify has run). Absolute numbers on
 this day are ~2% under yesterday's (machine state); deltas are what the gate prices.
+
+**Merged to prod 2026-09-11** (fd9564ae0 + pick 01e91ce63, owner: "bring it into prod"): manifest
+`GGML_FUSE_SMALL=60|BI|both|pick`. Mint TAG `prodpick-sep11-fuse60-{ud,q4}`, all 16 arms canonical, 0 guard hits:
+ud 23.27 / 24.29 / 24.33 (pick 300 / 600 / 600-r2), partial 20.31, b1 12.49, Turbo4 26.17 / 26.10 / 25.90; q4 28.76 /
+30.99 / 30.93, partial 24.72, b1 13.69, Turbo4 30.41 / 30.36 / 28.67. Worktree `llama.cpp-fuse` removed; branch
+`exp/fuse-alias` kept for the open drafter item.
