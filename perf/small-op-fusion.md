@@ -586,3 +586,10 @@ this day are ~2% under yesterday's (machine state); deltas are what the gate pri
 ud 23.27 / 24.29 / 24.33 (pick 300 / 600 / 600-r2), partial 20.31, b1 12.49, Turbo4 26.17 / 26.10 / 25.90; q4 28.76 /
 30.99 / 30.93, partial 24.72, b1 13.69, Turbo4 30.41 / 30.36 / 28.67. Worktree `llama.cpp-fuse` removed; branch
 `exp/fuse-alias` kept for the open drafter item.
+
+**Are the twins worth the hunt?** At one slot, no: mask 63 was never A/B'd against 60 directly, the cross-gate
+differences (0.2-0.5 pt) sit inside the day's spread, and the one same-harness attribution had mask 62 (no twins)
+0.1 t/s above 63 on both lines. The twins remove six cast dispatches and their barriers per delta-net layer, and
+dispatch count is what scales with concurrent slots - so the question is a multi-stream one: one interleaved
+60-vs-63 gate at 4-8 slots (`parallel-streams.md` harness, `LLAMA_SPEC_SLOT_BUDGET`) decides whether the drafter
+divergence is worth closing for the twins' sake. Until then 63 is off and the drafter item is its own bug.
