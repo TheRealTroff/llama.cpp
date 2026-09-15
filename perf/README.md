@@ -39,7 +39,14 @@ in flight hide the staged-table latency that 96 do not - per decode FA call -21%
 (width 4), width 5 -12%, width 3 -2..-3%, width 6 flat; **verify round -6.8% at 96K (151.9 -> 141.5 ms, 16.97 ->
 18.86 t/s on the UD line), -0.8% at 8K.** A LINEAGE MOVE on the Turbo4 line: the reduce sums the partials with
 `simd_sum`, so the Turbo4 shas move (UD 8K 300 `a409bb1b45df` -> `9128633c6cfa`); kernel numerics unchanged, the
-f16 shas and prefill untouched. Mint TAG `prodpick-sep16-nwg20` - see the note for the numbers.
+f16 shas and prefill untouched. Mint TAG `prodpick-sep16-nwg20-{ud,q4}` + `-{ud,q4}-turbo` (prod `dee5d619d`, every f16 arm canonical, the
+Turbo4 arms on the new lineage): **ud** f16 24.23 / 24.23 at 300 (`73ea53bbe98f`), 25.32 / 25.33 at 600
+(`5e76afaba36c`), partial 21.20, MTP 19.06, b1 13.30; **Turbo4 27.97 / 27.91 at 600 (`1cc5db08a744`, new),
+28.24 at 300 (`9128633c6cfa`, new)**; **q4** f16 30.21 / 30.22 at 300 (`822ce37ce2e5`), 32.39 / 32.38 at 600
+(`5f32a6b9d371`), partial 25.86 (`9ad7e023c6ab`), MTP 22.92, b1 14.67; **Turbo4 32.48 / 32.39 at 600
+(`b40a84e252af`, new), 30.51 at 300 (`04ada3a4de10` - UNCHANGED: the rounding did not bite on that
+trajectory)**. The b1 anchors sit 6-7% above the Sep 11 mint on both lines (13.30 vs 12.49, 14.67 vs 13.69), so
+absolute deltas against Sep 11 are mostly machine state; the lever's price is the interleaved per-round number.
 
 
 **2026-09-10 (owner: "merge and mint"): small-op fusion `GGML_FUSE_SMALL=63` MERGED but NOT in the pick - the mint found an intermittent sha change (~1 run in 10 on the 600-token arms, a race the 16-arm gate never hit); ROOT-CAUSED the next morning (a fused group's output allocated after the group's inputs were freed - the twin tail written over the dead residual) and FIXED (alias guard + allocation fix), plus a second real bug on the way (decode synchronized before writing a reused graph's inputs only under pipeline parallelism; the drafter's async inject wrote under a running graph), MERGED 2026-09-11 (owner: "bring it into prod") with **`GGML_FUSE_SMALL=60` PICKED on both lines: ud +1.6/+1.8%, q4 +2.1/+2.0% e2e ABAB x2, shas canonical**; the f16 twins (mask 63) stay off - a drafter-side trace divergence under twins + add+norm is documented and open, see `small-op-fusion.md` 'from the drafter's side'**. Mint TAG `prodpick-sep11-fuse60` (prod `01e91ce63`, every arm canonical on both lines, 0 guard hits): ud pick 23.27 / 24.29 / 24.33 (300 / 600 / 600-r2), partial 20.31, b1 12.49, Turbo4 26.17 / 26.10 at 600, 25.90 at 300; q4 pick 28.76 / 30.99 / 30.93, partial 24.72, b1 13.69, Turbo4 30.41 / 30.36 at 600, 28.67 at 300; the day sits ~2% under Sep 10 on every arm (machine state), the ABAB deltas are the price - the cache-resident

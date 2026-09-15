@@ -155,7 +155,16 @@ Widths under the override (Turbo4, per call): width 3 goes from the W3 route's n
 -> 2320 at 96K, 220 -> 214 at 8K), width 6 flat (346 vs 346 at 8K), widths 4/5 as in the sweep. Prefill is
 untouched (the prefill route is nwg 1).
 
-**ADOPTED 2026-09-16 (owner: "I'll take the flag"), mint TAG `prodpick-sep16-nwg20`. Was proposed as `GGML_FA_TURBO_NWG=20` (both lines, Turbo4 KV only): a lineage move on the Turbo4
+**ADOPTED 2026-09-16 (owner: "I'll take the flag").** Mint TAG `prodpick-sep16-nwg20-{ud,q4}` + `-{ud,q4}-turbo` (prod `dee5d619d`, every f16 arm canonical, the
+Turbo4 arms on the new lineage): **ud** f16 24.23 / 24.23 at 300 (`73ea53bbe98f`), 25.32 / 25.33 at 600
+(`5e76afaba36c`), partial 21.20, MTP 19.06, b1 13.30; **Turbo4 27.97 / 27.91 at 600 (`1cc5db08a744`, new),
+28.24 at 300 (`9128633c6cfa`, new)**; **q4** f16 30.21 / 30.22 at 300 (`822ce37ce2e5`), 32.39 / 32.38 at 600
+(`5f32a6b9d371`), partial 25.86 (`9ad7e023c6ab`), MTP 22.92, b1 14.67; **Turbo4 32.48 / 32.39 at 600
+(`b40a84e252af`, new), 30.51 at 300 (`04ada3a4de10` - UNCHANGED: the rounding did not bite on that
+trajectory)**. The b1 anchors sit 6-7% above the Sep 11 mint on both lines (13.30 vs 12.49, 14.67 vs 13.69), so
+absolute deltas against Sep 11 are mostly machine state; the lever's price is the interleaved per-round number.
+
+** Was proposed as `GGML_FA_TURBO_NWG=20` (both lines, Turbo4 KV only): a lineage move on the Turbo4
 line (reduction grouping in the split-K reduce), kernel numerics unchanged, -6.8% per round at 96K, -0.8% at
 8K. Adoption = owner** (it re-mints the Turbo4 shas of both lines; the f16 shas and the prefill numerics do not
 move). Not built into the host as a KV-length rule because 20 wins at every length measured.
