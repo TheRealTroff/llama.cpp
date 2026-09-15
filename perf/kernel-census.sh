@@ -37,7 +37,9 @@ for i in $(seq 0 $((n-1))); do
     if ! grep -q 'us/run' "$OUT/$id.timing.txt"; then echo "$id: NO PERF CASE for '$filt'"; python3 "$B/perf/kernel-census.py" metrics "$OUT" "$OUT/row$i.json"; continue; fi
     # a cached trace is stale when the routed kernel changed since it was captured (the timing run names the kernel)
     if [ -d "$OUT/$id.gputrace" ] && [ -f "$OUT/$id.capture.log" ]; then
-        tk=$(grep -oE 'loaded kernel_[A-Za-z0-9_]+' "$OUT/$id.timing.txt" | grep -v 'cpy\|cvt' | tail -1 | sed 's/loaded //; s/_bci.*//; s/_mask.*//')
+        # the full specialization counts: nwg/nsg/gqah/qr/soa/bci are routing, and a cached trace of another
+        # specialization is the wrong kernel (2026-09-16: an nwg change silently reused the nwg=8 capture)
+        tk=$(grep -oE 'loaded kernel_[A-Za-z0-9_=,]+' "$OUT/$id.timing.txt" | grep -v 'cpy\|cvt' | tail -1 | sed 's/loaded //')
         if [ -n "$tk" ] && ! grep -q "loaded $tk" "$OUT/$id.capture.log"; then echo "$id: kernel changed ($tk), recapturing"; rm -rf "$OUT/$id.gputrace" "$OUT/$id.replay" "$OUT/$id.instr.json"; fi
     fi
     if [ ! -d "$OUT/$id.gputrace" ]; then
