@@ -73,6 +73,7 @@ PICK_MANIFEST=(
   "GGML_FA_GQA4_NWG=6|BI|both|pick|turbo4-fa-gqa-reuse.md"
   "GGML_FA_GQA_W3_NWG=13|BI|both|pick|turbo4-fa-gqa-reuse.md"
   "GGML_FA_TR=9|BI|ud|pick|ud-model.md step 16 D (UD waits for decode-fidelity data; owner 2026-09-08)"
+  "GGML_FA_TURBO_NWG=20|BI|both|proposed|longctx-inventory-sep15.md (split-K width for every Turbo4 batched FA route: -21% per decode FA call at 96K, verify round -6.8% at 96K / -0.8% at 8K; the reduce sums the partials with simd_sum so the Turbo4 shas move = a lineage, kernel numerics unchanged; f16 routes and prefill untouched; 2026-09-15, adoption = owner)"
   "GGML_FA_TR=7|NUM-PP/TG|q4|pick|q4-fa-folded-pick.md (owner 2026-09-08: take the faster folded form for q4_0; accuracy mixed, new output lineage)"
   # --- refused / declined, listed so pick_check knows them ---
   "GGML_FA_TR=6|NUM-TG|none|refused|ud-model.md step 16 C (folded norm, KLD a wash; owner took =9)"
