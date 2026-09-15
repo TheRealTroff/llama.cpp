@@ -31,8 +31,8 @@ def mir_instructions(path):
         if l.startswith('bb.'):
             bb = l.split()[0].rstrip(':')
             continue
-        if not l.startswith('  ') or l.lstrip().startswith(('successors', 'liveins', ';', 'predecessors')):
-            continue
+        if not l.startswith('  ') or l.lstrip().startswith(('successors', 'liveins', ';', 'predecessors', 'fi#')):
+            continue  # 'fi#N: size=..' lines are the frame objects of a spilling kernel, not instructions (2026-09-15)
         s = l.strip()
         m = re.search(r'(?:^|= )(' + FLAG_WORDS + r')(\d+)\b', s)
         if not m:

@@ -1,8 +1,9 @@
 # Long-context and prefill inventory on the current pick (2026-09-15, owner: "long context is extremely important, anything prefill is super-useful")
 
-Status: **open** - the measured breakdown is in; the kernel census over these two logs (per-instruction
-issue/stall, instr/GFLOP) is running as `census-ud-96k-sep15` / `census-ud-25k-sep15` and its ranking
-goes in the section at the end when it lands.
+Status: **open** - the measured breakdown and the 96K kernel census (`census-ud-96k-sep15`) are in; the lever
+list at the end is the census-corrected one (the first draft's K-quant mul_mm item was wrong by 5x - struck
+in place). `census-ud-25k-sep15` was still running at the end of the session; its snapshot lands in
+`kvquant-experiments/census/`.
 
 The practical configuration: **UD line, Turbo4 KV, DFlash depth 3, the whole Sep 11 pick** (prod `b28853095`,
 `PICK_ENV` from `perf/pick.sh`, `GGML_FA_TR=9`), profiled (`GGML_METAL_PROFILE=1`, so absolutes carry a few
@@ -51,8 +52,12 @@ instruction economy (2.15x class best at 25K on the f16 form; the Turbo4 form is
 Ceiling if the FA prefill kernel reached the mul_mm roof: -33% of 392 s = **-130 s = -12% of the 96K
 prefill**, -4% at 25K, ~-22% at 256K. The mul_mm plane itself sits at 0.94-1.07x that roof on the UD
 formats (`kernel-census.md`), with the K-quant dequant tax on top: q5_K 1.33x and q4_K 1.08x the iq4_xs
-instruction count per GFLOP. If q5_K/q4_K reached iq4_xs's economy and the kernels are issue-bound (they
-are, 98-99% issue): **~-35 s = -3% at 96K, -6% at 25K, byte-identical**. `GGML_MM_ACC_HALF` (-6.9% on UD's
+instruction count per GFLOP. ~~If q5_K/q4_K reached iq4_xs's economy and the kernels are issue-bound (they
+are, 98-99% issue): ~-35 s = -3% at 96K, -6% at 25K, byte-identical.~~ **WRONG, corrected by the 96K census
+(below): every prefill mul_mm kernel runs at 6.9-7.2 TFLOPS whatever its instruction count (q5_K 4.77
+instr/GFLOP at 6.89 TFLOPS, iq4_xs 3.59 at 7.10, iq4_nl 3.23 at 7.07) - the dequant instructions overlap the
+MMA issue and the roof is the MMA rate itself. The K-quant dequant lever is worth ~3% of q5_K's 194 s =
+0.5% of the 96K prefill. The prefill matmul plane on UD is closed short of acch.** `GGML_MM_ACC_HALF` (-6.9% on UD's
 formats, `ud-model.md` step 4) is REFUSED on the UD line for fidelity; it is the owner's call, not a kernel item.
 
 ## Decode by bucket (serialized GPU ms per verify round, width 4)
@@ -86,13 +91,75 @@ serialization artifact (`small-ne01-routing.md`: hidden under neighbors unprofil
    K/V-chunk-major ordering so the 64 threadgroups of a head walk the cache together, the split of QK vs
    softmax vs PV instructions from the census. Realistic: -6% at 96K, -11% at 256K. Byte-identical if the
    per-row online softmax is kept.
-3. **K-quant mul_mm dequant economy** (q5_K, then q4_K) - -3% at 96K, -6% at 25K, -7% at 8K, every length,
-   byte-identical; the prefill mul_mm K-loop is 98-99% issue so instruction count is time. The n64 tiles
-   (step 8) took the first half of this; the q5_K high-bit plane is the residue named in the census.
+3. ~~**K-quant mul_mm dequant economy** (q5_K, then q4_K) - -3% at 96K, -6% at 25K, -7% at 8K, every length,
+   byte-identical; the prefill mul_mm K-loop is 98-99% issue so instruction count is time.~~ **Struck: the
+   96K census puts every mul_mm kernel at the roof regardless of instruction count (~0.5% at stake).**
 4. GDN prefill at 1.1%, the elementwise tail at 2% - closed at this order; the 8K fusion work already took
    the dispatch count. Nothing host-side.
 
 Not on the list: `GGML_MM_ACC_HALF` for UD (refused for fidelity, owner's call), the mul_mm roof itself
 (6.96 measured vs 8.1-9.2 third-party peak - no lever has moved it), the `[5120,48]` artifact.
 
-## Census (pending)
+## The 96K census (`census-ud-96k-sep15`, prod `b28853095`, 28 rows, the pick env, `CENSUS_KV=turbo4`)
+
+Snapshot `kvquant-experiments/census/census-ud-96k-sep15/snapshot.json`, table in its `census.log`. The rows
+that matter (executed instructions per useful GFLOP, TFLOPS, issue/stall from the per-instruction replay):
+
+| row | kernel | share | instr/GFLOP | TFLOPS | issue/stall | regs/spill |
+|---|---|--:|--:|--:|--:|--:|
+| decode FA width 4, kv 95744 | `flash_attn_ext_qtl4w_turbo4` nsg 4, nwg 8, gqah 6, qr 8 | 39.8 ms/rd | **10.47** | 3.18 | **68 / 32** | 96 / 16 B |
+| prefill FA 512 rows, kv 95744 | `flash_attn_ext_qt16w_turbo4` nsg 8 | 4.22 s per rung | **4.38** | 4.66 | 81 / 19 | 79 / 0 |
+| prefill mul_mm iq4_xs / q4_K / q5_K / q3_K / q6_K / iq3_s / iq4_nl | `mul_mm_n64_*_f16` | 665 s total | 3.59 / 3.72 / 4.77 / 3.90 / 4.14 / 3.81 / 3.23 | 7.10 / 7.15 / 6.89 / 7.17 / 6.97 / 7.01 / 7.07 | 98-99 / 1-2 | 83-85 / 0 |
+| prefill GDN `_nr4` | | 11.5 s | (stream) 7.6x floor | | 93 / 7 | |
+| decode iq4_xs SoA w4 | | 13.8 ms/rd | (stream) 1.3x floor | | 86 / 14 | |
+
+**The matmul plane is at the roof at every instruction count** - the correction above. **The two FA kernels
+are the same source template at two query-tile sizes and two table forms, and the decode one executes
+2.4x the instructions per FLOP of the prefill one.** The per-instruction join (the aligner needed a one-line
+fix for the spill frame line, `agx-mir-align.py`, done) splits each kernel's cycles:
+
+| share of all cycles | decode `qtl4w` (Q = 8, table staged in threadgroup memory) | prefill `qt16w` (Q = 16, constant-memory table) |
+|---|--:|--:|
+| MMA issue (opcodes 2846/2862) | 37.5% | 49% |
+| dequant chain: LUT threadgroup load (17042) issue | 9.6% | - (0 instances) |
+| dequant chain: convert/multiply (3307) issue + stall | 4.8% + **15.8%** | 3.1% + 3.4% |
+| other dequant/index ALU (10295, 17016/17015 bfe, 10282/10289/10279) issue | ~9% | ~11% |
+| add.f32 (3290) stall, 590/435 stall | 1.4% + 2.7% | 2.3% + 1.7% |
+| everything else | ~19% | ~26% |
+| two hot loops (K tier / V tier) | bb.32 31.8 + 12.5, bb.30 24.0 + 7.7 | bb.36 38.6 + 6.0, bb.29 27.6 + 2.9 |
+
+Reading: **the decode kernel spends ~30% of its cycles on the per-tile dequant and half of that is one
+stall site - the convert waiting on the staged-table load** (nsg 4 at 96 registers hides less latency
+than the prefill form's nsg 8 at 79). The prefill kernel spends ~15% there. Why decode dequantizes twice as
+often per FLOP is in the source (`kernel_flash_attn_ext_impl`, the `TR_PAIR` block at ~13990-14040): each K
+and V tile is dequantized once per threadgroup and fed to `NQT = Q/8` query tiles; the GQA decode route
+flattens the 6 heads x 4 tokens into 24 rows and runs them as **three 8-row threadgroups (NQT = 1) that each
+stream and dequantize the whole KV split**, while the prefill tile feeds two (NQT = 2).
+
+### The lever this names: a 24-row decode tile (NQT = 3) for the GQA6 route
+
+One threadgroup per KV head streams its KV split once, dequantizes each tile once and feeds three query
+tiles (24 = 6 heads x 4 tokens, nothing padded): the dequant chain and the K/V byte loads drop 3x per FLOP,
+the per-chunk softmax and O-rescale run once per 24 rows instead of per 8, cache passes per KV head go 3 -> 1
+(the GQA note's own metric). Byte-identical by construction if the per-row math and the k order are kept (as
+the Q = 16 prefill form was). Sized from the join: dequant chain 30% -> ~10%, plus the per-chunk fixed cost -
+**-25..-35% per call = -8..-11% of the 96K round, ~-4% at 25K, nothing at 8K** (FA is 3% of the round there).
+Grid: 32 threadgroups at nwg 8 (was 96) - raise `GGML_FA_MM_NWG` to 16-24 for this route; the split-K reduce
+is one small dispatch. Registers: 3 score accumulators per key column, 6 Q tiles per dim pair, 3 x 32 / NSG
+output tiles per simdgroup (12 at nsg 8) - the prescreen (`agx-spill-probe.py`) answers whether nsg 8 holds
+it without spilling before anything is timed.
+
+**Read `ud-model.md` step 16 B's Q16-at-decode refutation first (+27% at 96K, "do not retry on the
+amortization hunch")**: that form put 24 rows into two 16-row threadgroups (the second two-thirds empty =
++33% wasted MMAs) AND dropped the staged table. The 24-row tile does neither, and the amortization claim here
+is not a hunch: it is the measured 10.47 vs 4.38 instr/GFLOP of the same template at NQT 1 vs 2, with the join
+naming the dequant chain as the difference. If the prescreen spills or the per-call timing at kv 98304
+(`run-turbo4-fa-timing.sh` shapes) does not beat 2958 us by > 15%, it joins the refutation.
+
+Second on the same kernel, independent of the tile: hide the staged-table latency (issue the next tile's
+byte + table loads before the current tile's MMAs; the 3307 stall is 16% of cycles) - worth up to ~-15% per
+call on its own, byte-identical.
+
+The prefill FA kernel's analogous move is Q = 32 (NQT = 4): dequant 15% -> ~8% of cycles and the K/V
+stream halved again - ~-8% per call = -3% of the 96K prefill, -5% at 256K; register budget is the question
+(Q = 16 needed nsg 8 to hold 0 spill). Smaller than the decode item; do it second.
