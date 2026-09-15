@@ -662,6 +662,8 @@ must be a separate checkout. Two arms that agree to the microsecond are a routin
 
 ## File map
 
+- **`longctx-inventory-sep15.md` - OPEN 2026-09-15, START HERE for long context / prefill:** the current pick (UD, Turbo4, depth 3) profiled at 25K and 96K, prefill and decode by op, the FA ladder, the byte floors and roof ratios, the ranked lever list (Turbo4 decode FA 31% of the 96K round at 45% of roof; prefill FA 36% of 96K prefill at 65% of roof; K-quant mul_mm dequant economy ~3-7%); harness `run-longctx-pick.sh` (manifest-driven, supersedes `run-longctx.sh`).
+
 Current state:
 
 - **prod-pick: this file** + `run-prod-pick.sh`
