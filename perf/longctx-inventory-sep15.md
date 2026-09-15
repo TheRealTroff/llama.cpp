@@ -155,7 +155,7 @@ Widths under the override (Turbo4, per call): width 3 goes from the W3 route's n
 -> 2320 at 96K, 220 -> 214 at 8K), width 6 flat (346 vs 346 at 8K), widths 4/5 as in the sweep. Prefill is
 untouched (the prefill route is nwg 1).
 
-**Proposed in the manifest as `GGML_FA_TURBO_NWG=20` (both lines, Turbo4 KV only): a lineage move on the Turbo4
+**ADOPTED 2026-09-16 (owner: "I'll take the flag"), mint TAG `prodpick-sep16-nwg20`. Was proposed as `GGML_FA_TURBO_NWG=20` (both lines, Turbo4 KV only): a lineage move on the Turbo4
 line (reduction grouping in the split-K reduce), kernel numerics unchanged, -6.8% per round at 96K, -0.8% at
 8K. Adoption = owner** (it re-mints the Turbo4 shas of both lines; the f16 shas and the prefill numerics do not
 move). Not built into the host as a KV-length rule because 20 wins at every length measured.
