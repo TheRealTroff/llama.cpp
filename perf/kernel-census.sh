@@ -39,8 +39,10 @@ for i in $(seq 0 $((n-1))); do
     if [ -d "$OUT/$id.gputrace" ] && [ -f "$OUT/$id.capture.log" ]; then
         # the full specialization counts: nwg/nsg/gqah/qr/soa/bci are routing, and a cached trace of another
         # specialization is the wrong kernel (2026-09-16: an nwg change silently reused the nwg=8 capture)
-        tk=$(grep -oE 'loaded kernel_[A-Za-z0-9_=,]+' "$OUT/$id.timing.txt" | grep -v 'cpy\|cvt' | tail -1 | sed 's/loaded //')
-        if [ -n "$tk" ] && ! grep -q "loaded $tk" "$OUT/$id.capture.log"; then echo "$id: kernel changed ($tk), recapturing"; rm -rf "$OUT/$id.gputrace" "$OUT/$id.replay" "$OUT/$id.instr.json"; fi
+        # every pipeline the timing run loaded (the main kernel and its reduce/aux) must be in the capture log
+        for tk in $(grep -oE 'loaded kernel_[A-Za-z0-9_=,]+' "$OUT/$id.timing.txt" | grep -v 'cpy\|cvt' | sed 's/loaded //' | sort -u); do
+            if ! grep -q "loaded $tk" "$OUT/$id.capture.log"; then echo "$id: kernel changed ($tk), recapturing"; rm -rf "$OUT/$id.gputrace" "$OUT/$id.replay" "$OUT/$id.instr.json"; break; fi
+        done
     fi
     if [ ! -d "$OUT/$id.gputrace" ]; then
         (cd "$B" && env MTL_CAPTURE_ENABLED=1 GGML_METAL_CAPTURE_COMPUTE=2 GGML_MV_REPACK=2 $ENVS "$BIN" perf -o "$op" -b MTL0 -p "$filt") > "$OUT/$id.capture.log" 2>&1
