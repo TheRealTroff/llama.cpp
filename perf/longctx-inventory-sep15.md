@@ -84,6 +84,7 @@ serialization artifact (`small-ne01-routing.md`: hidden under neighbors unprofil
 
 0. **DONE the same afternoon: `GGML_FA_TURBO_NWG=20`** (the section 'Found on the way' below) - -21% per decode FA
    call at 96K, -6.8% per round at 96K, -0.8% at 8K, a lineage move, proposed; the owner's call.
+1'. The 24-row tile after the split: -5..-6% of the 96K round (re-sized from the nwg-20 profile, item 1 below).
 
 1. **Turbo4 decode FA kernel at long context** - 31% of the round at 96K (15% at 25K, ~3% at 8K), 45% of the
    roof, 7.4x byte floor, issue-bound. Where the per-tile work goes (dequant vs MMA vs softmax vs the
@@ -209,9 +210,27 @@ threadgroup memory every chunk (`so`, rescaled by the online softmax between the
 scratch is Q x (DK + 2 PV + 4 C) halfs = 48 KB at Q = 24 against the 32 KB threadgroup limit (Q = 16 is exactly
 32 KB). A 24-row tile therefore needs the O accumulator fully register-resident (the `GGML_FA_OR=1` form of
 `fa-long-context.md`, speed-refuted at Q = 8 and buggy as written), with the per-row rescale applied in
-registers - a kernel project of a day or two, not an instantiation. After the split-K fix the kernel's stall
-share is presumably lower (the extra threadgroups hide the same latency); re-profile at nwg 20 before sizing
-the tile again.** The experiment worktree `llama.cpp-fa24` (branch `exp/fa-decode-tile` off prod) is
+registers - a kernel project of a day or two, not an instantiation.** **Re-profiled at nwg 20 (2026-09-16,
+owner: "if you think nwg 20 might be as good as what we already found, try it"; `census-ud-96k-sep15-nwg20`,
+the decode FA row recaptured - the census's cached-trace rule had to be forced, see below):**
+
+| decode FA, kv 95744, width 4 | nwg 8 | nwg 20 |
+|---|--:|--:|
+| us/call, TFLOPS | 2958, 3.18 | 2376, 3.96 |
+| instr/GFLOP | 10.47 | 10.52 (same code, same count) |
+| issue / stall | 68 / 32 | **80 / 20** |
+| MMA issue share of cycles | 37.5% | 44.2% |
+| LUT threadgroup load (17042) issue | 9.5% | 11.2% |
+| convert (3307) issue + stall | 4.8% + **15.8%** | 5.6% + **9.4%** |
+| other issue + stall | 15.8% + 12.2% | 18.9% + 7.7% |
+| regs / spill | 96 / 16 B | 96 / 32 B |
+
+The split took the latency half of the tile's case (the convert stall 15.8 -> 9.4% of cycles, other stalls
+12 -> 8%) and none of the instruction half: the kernel still executes 2.4x the prefill tile's instructions
+per FLOP, and the dequant chain (LUT loads + convert + their index math) is ~25-30% of the remaining cycles
+with 9.4% still stalled on it. **The 24-row tile's remaining worth, re-sized: the chain cut 3x = -15..-20% per
+call on top of nwg 20, i.e. -5..-6% of the 96K round** (was -8..-11% before the split), for the OR-form kernel
+project above. Still the largest decode item at long context; no longer a same-day one. The experiment worktree `llama.cpp-fa24` (branch `exp/fa-decode-tile` off prod) is
 created and empty. Registers: 3 score accumulators per key column, 6 Q tiles per dim pair, 3 x 32 / NSG
 output tiles per simdgroup (12 at nsg 8) - the prescreen (`agx-spill-probe.py`) answers whether nsg 8 holds
 it without spilling before anything is timed.
