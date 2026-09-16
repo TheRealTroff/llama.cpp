@@ -63,11 +63,31 @@ routes ne11 6-8 only - widths 2-5 keep their SoA kernels (the width-4 refutation
 | arm | decode t/s | acc | sha |
 |---|--:|--:|---|
 | base (the ext SoA reader, r1_3 x 2 passes) | 15.84 / 15.85 | 49.5% | `a409bb1b45df` |
-| `GGML_MM_SKINNY_GEN=6` | **19.56 / 20.06 (+24..27%)** | 49.5% | **`a409bb1b45df`** (byte-identical) |
+| `GGML_MM_SKINNY_GEN=6` | **19.56 / 20.06 (+24..27%)** | 49.5% | `a409bb1b45df` (~~byte-identical~~ the sha held at 8K only - it moves at 96K, see below: NUM-TG) |
 
 One weight pass with the MMA tile against two passes of the dequant-once reader: the same tile that lost 13.6% at
 width 4 (where the incumbent was one pass) wins 24-27% at width 6. Depth 5 still trails depth 3 (27.8 at 8K) - this
 is a widths lever for adaptive speculation, not a depth change. Not yet: widths 7-8 timed (same route), the 96K
 number, the per-call table (`test-backend-ops` MUL_MAT cases for the `*_SOA` types), the q4 line (its skinny SoA
-kernel already covers 6-8). Status: **built, gated by sha, priced at 8K; adoption = owner** (manifest entry to
+kernel already covers 6-8). Status: **built, priced at 8K and 96K, NOT byte-identical (96K sha moved); a NUM-TG lever needing the decode-path KLD before a pick; adoption = owner** (manifest entry to
 follow as proposed if the owner wants it in a pick).
+
+### Probe 1 at 96K (owner's ask, in this order: 96K, then widths 7-8) - the sha moves
+
+`perf/run-longctx-pick.sh`, UD, Turbo4, `-c 102400`, `longprompt-96k.txt` (95508 tokens), depth 5, 300 tokens, one
+pair, the fa24 build (`repo` line checked). Round time = predicted_ms / rounds with rounds = n / (1 + depth x acc):
+
+| arm | prefill | decode t/s | acc | rounds | **verify round** | sha |
+|---|--:|--:|--:|--:|--:|---|
+| base (ext SoA reader, r1_3 x 2) | 1100.8 s | 11.20 | 37.7% | 104.0 | **257.6 ms** | `e867940fe47f` |
+| `GGML_MM_SKINNY_GEN=6` | 1101.0 s | 14.16 | 41.7% | 97.2 | **217.9 ms (-15.4%)** | `12b7e25d7a6d` |
+
+-15% per round at 96K (the matmul share of a depth-5 round is smaller there, as sized), +26% t/s of which part is the
+forked text's better acceptance. **The sha moved: the tile is NOT byte-identical.** It held at 8K over 300 tokens
+(`a409bb1b45df` in both arms, twice) and forks at 96K - the MMA tile sums the K dimension in a different order
+from the scalar ext reader (half products into a float 8x8 accumulate, 64-wide slices), so it is a decode-numerics
+change of the same kind as the skinny kernel on the Q4_0 line, not a routing change. **Class: NUM-TG**, which on
+the UD line means the decode-path pairwise KLD (`-b 4 -ub 4` against the kept V1 decode base, `kld-reference-limits`)
+before any pick, and the owner's explicit take. The 8K sha match was a 300-token coincidence, and this note's
+"byte-identical" above is struck to "sha held at 8K only". Depth 5 at 96K itself is far off the depth-3 pick (11-14
+vs ~20 t/s, acceptance 38-42% vs 57%): the lever's value is the width-6..8 rounds of adaptive speculation.
