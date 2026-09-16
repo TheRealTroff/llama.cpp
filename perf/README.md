@@ -49,7 +49,11 @@ silently swapped the line's numerics for the exact ones (2e-6 from an f64 refere
 and not sanctioned). Fixed the same night (merge `4bc9c44c8`): `qtnw24` for TR 7, class-aware route, q4 gates back
 to `b40a84e252af` / `04ada3a4de10`; on the q4 class the tile is -12.7% per call at 96K. Rule: a sha gate on one line
 gates nothing on the other - the lines run different FA numerics forms.** Mint TAG `prodpick-sep16-q24` (UD arms,
-first pass, canonical) + `prodpick-sep16-q24-q4b` (q4 arms after the fix).
+first pass, canonical) + `prodpick-sep16-q24-q4b` (q4 arms after the fix): **ud Turbo4 27.45 / 27.54 at 600
+(`1cc5db08a744`), 27.91 at 300 (`9128633c6cfa`); q4 Turbo4 31.92 / 32.01 at 600 (`b40a84e252af`), 29.86 at 300
+(`04ada3a4de10`)** - every sha canonical, no lineage move; the b1 anchors read 13.06 ud / 14.06 q4 against 13.30 /
+14.67 at the morning mint (the machine 2-4% slow after a day of GPU runs), which is the whole of the t/s gap to the
+morning's Turbo4 numbers; the tile's own e2e price is the 96K pair in `fa-decode-tile24.md` (round -5.0%).
 
 **2026-09-16 (owner: "I'll take the flag"): + `GGML_FA_TURBO_NWG=20`** - the split-K width of every Turbo4
 batched FA route (the pick's `GGML_FA_MM_NWG=8` stays for the f16 routes). Found on the way to the long-context
