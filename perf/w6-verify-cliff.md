@@ -30,8 +30,20 @@ A width-6..8 form for the K-quant SoA kernels, two candidate shapes (both measur
 1. the column-group form the remaining formats use (`w4cg`: ceil(ne11/4) groups of the 4-column body) applied to
    Q4_K / Q5_K / IQ4_XS - the cheapest port, expected at the w4 kernel's per-column cost x 2 groups (i.e. width 6 at
    ~2x width 4's matmul time, against the mul_mm cliff's ~4x);
-2. a skinny SoA MMA tile for the K-quant SoA layouts (the Q4_0_SOA skinny kernel's form, `skinny-soa.md`), the
-   real width-6..8 kernel, a bigger build.
+2. a skinny MMA tile for the K-quant SoA layouts (the Q4_0_SOA skinny kernel's form, `skinny-soa.md`), the real
+   width-6..8 kernel, a bigger build. **Prior art (owner's question, 2026-09-16): a K-quant skinny tile WAS built -
+   2026-09-04, branch `ud-skinny-generic`, commit `c881ba34a`, `kernel_mul_mm_skinny_t<block_q, nl, dequantize_func>`
+   over the AoS block dequantizers for q8_0/q3_K/q4_K/q5_K/q6_K/iq3_s/iq4_nl/iq4_xs, `GGML_MM_SKINNY_GEN=N`
+   (`ud-model.md` step 5). Byte-identical, zero spill, REFUTED at width 4: e2e 17.82 -> 15.40 (-13.6%), q5_K
+   [5120,17408] 455 -> 582 us/call - the incumbent there (the ext r1_4 mv family) already dequantizes once per pass,
+   so the tile removed nothing and added the threadgroup round trip plus the generic dequant form. Not merged;
+   not in prod.** Two things that verdict does not cover: (a) width 6-8, where the incumbent is the mul_mm cliff, not
+   the ext family - the generic tile at ~1.25x the ext kernel's per-call time would still be well under the cliff
+   (never timed at width 6: the measurement was depth 3); (b) the SoA planar layouts (Q4_K_SOA / Q5_K_SOA /
+   IQ4_XS_SOA, built Sep 5-9 after the refutation) - the generic tile read AoS blocks through the 16-element
+   `dequantize_*` form, which was half of what it lost. So the cheap first probe on this branch is to cherry-pick
+   `c881ba34a`, route it at ne11 6-8 only (`GGML_MM_SKINNY_GEN=6`), and time depth 5; the SoA-reading tile is the
+   real form if that probe lands short of the w4cg port.
 
 Gate: depth-5 e2e sha `a409bb1b45df` must hold (the route is a BI change if the per-column arithmetic is the w4
 kernel's); price = the depth-5 round at 8K and 96K, and whether depth 5 then beats depth 3 anywhere (the depth
