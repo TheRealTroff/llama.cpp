@@ -57,9 +57,14 @@ cross-target another chip.
 
 ```sh
 xcrun metal -c ggml/src/ggml-metal/ggml-metal.metal -o /tmp/x.air \
-    -I ggml/src/ggml-metal -I ggml/src
+    -I ggml/src/ggml-metal -I ggml/src -DTURBO_USE_PAIR_LUT=1
 xcrun metallib /tmp/x.air -o /tmp/x.metallib
 ```
+
+`-DTURBO_USE_PAIR_LUT=1` mirrors the runtime's preprocessor macro (`ggml-metal-device.m` sets it before
+compiling the embedded source): without it the Turbo4 FA forms fail with "use of undeclared identifier
+'turbo_pairs_4bit'" and no `.air` is written (2026-09-16, macOS 27 / Xcode 26.6). Check for other macros in
+that file's `preprocessorMacros` block when a new define appears there.
 
 About 7.6 s for the whole ggml shader file. This is the only slow step, and you pay it
 once per source variant, not once per kernel.
