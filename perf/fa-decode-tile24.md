@@ -1,6 +1,6 @@
 # The 24-row Turbo4 decode FA tile (2026-09-16, branch `exp/fa-decode-tile`, worktree `llama.cpp-fa24`)
 
-Status: **built and priced, adoption = owner** (2026-09-16): -19.5% per decode FA call at 96K, verify round -4.6% at 96K on a mirrored pair, byte-identical per partial, the 40-way split a lineage move.
+Status: **built and priced, adoption = owner** (2026-09-16): `GGML_FA_Q24=1 GGML_FA_Q24_QR=0` at the inherited split width is BYTE-IDENTICAL end to end (canonical shas at 8K and 96K), -18.3% per decode FA call at 96K, verify round 139.8 -> 132.8 ms (-5.0%) and decode 19.10 -> 20.10 t/s (+5.2%) at 96K on the same text; the nwg-40 form is a lineage move that gains nothing e2e.
 Starts from `longctx-inventory-sep15.md` (the lever: the GQA6 decode route ran 24 rows as three 8-row
 threadgroups, each streaming and dequantizing the whole KV split - 10.5 instr/GFLOP against the prefill
 tile's 4.4; the dequant chain ~25-30% of cycles after the nwg-20 split took the latency half; re-sized worth
@@ -143,7 +143,19 @@ At the pick's width the tile keeps 93% of the 96K per-call gain and is better th
 lineage move buys ~1.5% per call at 96K only. **The recommendation moves to the byte-identical form:
 `GGML_FA_Q24=1 GGML_FA_Q24_QR=0` with the split width left at the pick's 20** - no reduce change in play, no
 new sha, `GGML_FA_NWG_MAX` and `GGML_FA_Q24_NWG` stay in the code as knobs (the code default of `Q24_NWG` is now
-"inherit the route's width"). The manifest carries two proposed flags. 96K e2e of this form: below.
+"inherit the route's width"). The manifest carries two proposed flags.
+
+**96K e2e of this form (same prompt, config and build as the pair above):**
+
+| arm | prefill | decode t/s | acc | **verify round** | sha |
+|---|--:|--:|--:|--:|---|
+| base (139.79 / 139.83 above) | 1095.6 s | 19.10 / 19.09 | 57.0% | 139.8 ms | `98f184a20a9c` |
+| **tile, width inherited (nwg 20)** | 1095.7 s | **20.10 (+5.2%)** | 57.0% | **132.79 ms (-5.0%)** | **`98f184a20a9c`** |
+| tile, nwg 40 (the lineage move) | 1096 s | 19.33 / 19.31 | 53.5% | 133.4 ms (-4.6%) | `e867940fe47f` |
+
+Same sha, same acceptance, same text: the t/s compares directly for once, +5.2% at 96K, and the round is
+-5.0% - the byte-identical form is the better e2e number as well (the nwg-40 form's extra 1.5% per call did
+not survive the larger reduce). Nothing changes at 8K beyond noise (FA is 3% of the round there).
 
 
 Built, gated, priced. **Adoption = owner**: a lineage move on the Turbo4 arms (the 40-way reduce; the tile
