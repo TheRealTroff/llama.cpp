@@ -1965,7 +1965,13 @@ int ggml_metal_flash_attn_ext_q24(const ggml_tensor * op, int32_t gqa_heads) {
     if (op->src[0]->ne[0] != 256 || op->src[2]->ne[0] != 256) {
         return 0;
     }
-    if (gqa_heads <= 1 || op->src[0]->ne[1]*gqa_heads != 24 || op->src[1]->ne[1] < fa_q24_kvmin) {
+    // GGML_FA_Q24_ROWS: 0 (default) = the width-4 shape only (ne01 x gqa_heads == 24, one full tile); N > 0 = every
+    // GQA shape of at least N rows takes 24-row tiles, ceil-divided (width 3 = 18 rows in one tile instead of three
+    // 8-row threadgroups streaming the split each; width 5 = 24 + 6, width 6 = 24 + 12 instead of four / five) - the
+    // row guards pad the last tile, so a row's arithmetic does not depend on which tile it sits in
+    static const int fa_q24_rows = getenv("GGML_FA_Q24_ROWS") != nullptr ? atoi(getenv("GGML_FA_Q24_ROWS")) : 0;
+    const int rows = (int) op->src[0]->ne[1]*gqa_heads;
+    if (gqa_heads <= 1 || (fa_q24_rows > 0 ? rows < fa_q24_rows : rows != 24) || op->src[1]->ne[1] < fa_q24_kvmin) {
         return 0;
     }
     return fa_q24;
@@ -1988,7 +1994,8 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext(
         bool    has_kvpad,
         int32_t nsg,
         int32_t nwg,
-        int32_t gqa_heads) {
+        int32_t gqa_heads,
+        int32_t nqptg) {
     assert(op->op == GGML_OP_FLASH_ATTN_EXT);
 
     char base[256];
@@ -2051,11 +2058,14 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext(
         if (ggml_metal_flash_attn_ext_q16(op, gqa_heads)) {
             form = fa_tr == 7 ? "qtnw16" : (fa_tr == 6 || fa_tr == 8) ? "qtn16" : (fa_tr == 4 || fa_tr == 5) ? "qth16" : fa_tr == 9 ? "qt16w" : "qt16"; // the 16-row tile: constant or half table (no scratch for the staged one)
         }
-        const int q24 = ggml_metal_flash_attn_ext_q24(op, gqa_heads);
-        if (q24 > 0) {
+        const int q24 = (nqptg == 24 || nqptg == 16) ? ggml_metal_flash_attn_ext_q24(op, gqa_heads) : 0;
+        if (q24 > 0 && nqptg == 24) {
             // the 24-row decode tile in the line's numerics class: TR 7 -> qtnw24 (TRN), TR 9 -> qtl4w24 (staged
             // float table) or qt24w (constant table, GGML_FA_Q24=2)
             form = fa_tr == 7 ? "qtnw24" : q24 == 2 ? "qt24w" : "qtl4w24";
+        } else if (q24 > 0) {
+            // the 16-row O-resident tile of the mixed dispatch (GGML_FA_Q24_REM=16 / GGML_FA_Q24_TILE=16), same classes
+            form = fa_tr == 7 ? "qtnw16o" : "qtl4w16o";
         }
         snprintf(base, 256, "kernel_flash_attn_ext_%s_turbo4_dk%d_dv%d", form, dk, dv);
     }
@@ -2069,7 +2079,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext(
     int qr = (fa_qr > 0 && qr_len_ok && strstr(base, "_qt") != nullptr) ? std::min(fa_qr, dk/8) : 0;
     // the 24-row tile's register head is its own knob (three query tiles per dim tile): GGML_FA_Q24_QR
     static const int fa_q24_qr = getenv("GGML_FA_Q24_QR") != nullptr ? atoi(getenv("GGML_FA_Q24_QR")) : -1;
-    if (fa_q24_qr >= 0 && ggml_metal_flash_attn_ext_q24(op, gqa_heads) > 0) {
+    if (fa_q24_qr >= 0 && (nqptg == 24 || nqptg == 16) && ggml_metal_flash_attn_ext_q24(op, gqa_heads) > 0) {
         qr = std::min(fa_q24_qr, dk/8);
     }
 

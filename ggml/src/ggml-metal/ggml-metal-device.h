@@ -254,6 +254,8 @@ int  ggml_metal_flash_attn_ext_tr(const struct ggml_tensor * op);
 int  ggml_metal_flash_attn_ext_q24(const struct ggml_tensor * op, int32_t gqa_heads);
 int  ggml_metal_flash_attn_ext_nwg_max(void);
 
+// nqptg: the query-row tile the caller dispatches (24 selects the 24-row decode tile; the 8-row remainder grid of the
+// mixed dispatch asks for the 8-row route of the same op)
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext(
         ggml_metal_library_t lib,
         const struct ggml_tensor * op,
@@ -264,7 +266,8 @@ struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_att
         bool    has_kvpad,
         int32_t nsg,
         int32_t nwg,
-        int32_t gqa_heads);
+        int32_t gqa_heads,
+        int32_t nqptg);
 
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext_vec(
         ggml_metal_library_t lib,

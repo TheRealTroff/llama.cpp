@@ -5259,6 +5259,7 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
             /*.m1            =*/ m1,
             /*.n_head_log2   =*/ n_head_log2,
             /*.logit_softcap =*/ logit_softcap,
+            /*.iqr_off       =*/ 0,
         };
 
         // GGML_FA_MM_NWG splits the KV cache across workgroups for this kernel.
@@ -5322,7 +5323,7 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
         }
 
         auto pipeline = ggml_metal_library_get_pipeline_flash_attn_ext(
-                lib, op, has_mask, has_sinks, has_bias, has_scap, has_kvpad, nsg, nwg, gqa_heads);
+                lib, op, has_mask, has_sinks, has_bias, has_scap, has_kvpad, nsg, nwg, gqa_heads, nqptg);
 
         ggml_metal_encoder_set_pipeline(enc, pipeline);
         ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);
@@ -5337,9 +5338,67 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
 
         ggml_metal_encoder_set_threadgroup_memory_size(enc, smem, 0);
 
-        ggml_metal_encoder_dispatch_threadgroups(enc,
-                (ne01*gqa_heads + nqptg - 1)/nqptg, (ne02 + gqa_heads - 1)/gqa_heads, ne03*nwg,
-                32, nsg, 1);
+        // the 24-row tile with a remainder (GGML_FA_Q24_ROWS: width 5 = 30 GQA rows, width 6 = 36): the full tiles go
+        // to the 24-row kernel and the remainder rows to a smaller tile of the same op at the same split width, all
+        // partials into the one reduce. A padded 24-row tile costs a full one (24 + 6 rows measured +16% over four
+        // 8-row tiles at 96K), an 18-row remainder (width 3) is one 24-row tile (-17%). perf/fa-decode-tile24.md
+        //   GGML_FA_Q24_TILE (24 default, 16): the main tile;  GGML_FA_Q24_REM (8 default, 16): the remainder tile
+        //   above 8 rows (the 16-row O-resident tile, qtl4w16o / qtnw16o)
+        if (!is_or) {
+            ggml_metal_encoder_dispatch_threadgroups(enc,
+                    (ne01*gqa_heads + nqptg - 1)/nqptg, (ne02 + gqa_heads - 1)/gqa_heads, ne03*nwg,
+                    32, nsg, 1);
+        } else {
+            // the plan (measured per tile at 96K, one threadgroup per core: 24-row 1.0, 16-row 0.66, a lone 8-row grid
+            // 0.55 of the 24-row tile's time): greedy 24-row tiles; a remainder above 16 rows is another 24 (18 = width
+            // 3: 1.0 vs 16 + 8 = 1.21), above 8 a 16-row tile (36 = width 6: 24 + 16 = 1.66 vs 16 + 16 + 8 = 1.87), of
+            // 1-8 rows the last 24 + 8 becomes 16 + 16 (30 = width 5: 1.31 vs 1.55). GGML_FA_Q24_REM=8 keeps the 8-row
+            // remainder, GGML_FA_Q24_TILE=16 makes every tile 16-row (the probe arms of the widths section).
+            static const int env_fa_q24_tile = getenv("GGML_FA_Q24_TILE") ? atoi(getenv("GGML_FA_Q24_TILE")) : 24;
+            static const int env_fa_q24_rem  = getenv("GGML_FA_Q24_REM")  ? atoi(getenv("GGML_FA_Q24_REM"))  : 0;
+            const int32_t rows = ne01*gqa_heads;
+            int32_t n24 = 0, n16 = 0, n8 = 0, rem = rows;
+            if (env_fa_q24_tile == 16) {
+                n16 = rows/16; rem = rows%16;
+                if (rem > 8) { n16++; rem = 0; }
+            } else {
+                n24 = rows/24; rem = rows%24;
+                if (rem > 16) { n24++; rem = 0; }
+                if (env_fa_q24_rem != 8) {
+                    if (rem > 8) { n16 = 1; rem = 0; }
+                    else if (rem > 0 && n24 >= 1) { n24--; n16 = 2; rem = 0; }
+                }
+            }
+            n8 = (rem + OP_FLASH_ATTN_EXT_NQPSG - 1)/OP_FLASH_ATTN_EXT_NQPSG;
+
+            const int32_t kinds[3] = { 24, 16, OP_FLASH_ATTN_EXT_NQPSG };
+            const int32_t counts[3] = { n24, n16, n8 };
+            int32_t row0 = 0;
+            for (int t = 0; t < 3; ++t) {
+                if (counts[t] == 0) {
+                    continue;
+                }
+                const int32_t q_t   = kinds[t];
+                const int32_t nsg_t = q_t == 24 ? nsg : q_t == 16 ? 8 : 4;
+                const int     or_t  = q_t != OP_FLASH_ATTN_EXT_NQPSG ? 1 : 0;
+                const size_t smem_t = GGML_PAD((q_t*(ne00 + (or_t ? 0 : 2*GGML_PAD(ne20, 64)) + 2*(2*ncpsg)) + is_q*(16*32*nsg_t))*(sizeof(float)/2), 16);
+
+                args.iqr_off = row0;
+
+                auto pipeline_t = ggml_metal_library_get_pipeline_flash_attn_ext(
+                        lib, op, has_mask, has_sinks, has_bias, has_scap, has_kvpad, nsg_t, nwg, gqa_heads, q_t);
+
+                ggml_metal_encoder_set_pipeline(enc, pipeline_t);
+                ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);
+                ggml_metal_encoder_set_threadgroup_memory_size(enc, smem_t, 0);
+
+                ggml_metal_encoder_dispatch_threadgroups(enc,
+                        counts[t], (ne02 + gqa_heads - 1)/gqa_heads, ne03*nwg,
+                        32, nsg_t, 1);
+
+                row0 += counts[t]*q_t;
+            }
+        }
 
         if (nwg > 1) {
             // sanity checks

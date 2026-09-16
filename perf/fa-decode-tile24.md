@@ -216,3 +216,88 @@ kernel question was settled by the server-side dumps, so it was not chased.
 **The lesson, for every future routing flag: the two lines run different FA numerics forms (TR 7 vs TR 9), so a
 sha gate on one line gates nothing on the other, and a new kernel form must be instantiated in each line's class
 or refuse the other class.**
+
+## Generalizing the tile to the other GQA6 widths (2026-09-16 evening, branch `exp/fa-q24-widths`, macOS 27)
+
+The pick's tile engages at `ne01 x gqa_heads == 24` only (verify width 4). The kernel's row guards already pad a
+partial tile (the 8-row route ran width 3 as 8 + 8 + 2), so the other widths are a routing question, not a kernel
+one. **`GGML_FA_Q24_ROWS=<n>`** (default 0 = the width-4 rule) routes every GQA6 Turbo4 decode shape of at least n
+rows to 24-row tiles; a 24-row tile is dispatched per 24 rows and the remainder rows go to a second grid of the op's
+8-row route at the same split width (`args.iqr_off` = the grid's first GQA row, one reduce over all partials).
+
+**macOS 27 first** (the OS upgrade landed before this session; the kernels are embedded source compiled by the OS's
+Metal compiler): the UD line re-gated on the prod binary - f16 300 `73ea53bbe98f` (23.50 t/s), Turbo4 300
+`9128633c6cfa` (28.31 t/s), both canonical; the width-4 per-call numbers below match the 2026-09-16 sweep within
+1% (1895 vs 1907 at 96K), so the new compiler moved neither the FA numerics nor its speed. The b1 anchor read 11.97
+against 13.06 the night before - see the close-out below.
+
+### Per call (`perf/run-fa24-timing.sh`, GQA6, interleaved reps, us per call; pick = the 24-row tile at width 4 only)
+
+A padded 24-row tile costs a full one: 24 + 6 rows (width 5, both grids 24-row) measured 3578 vs 3090 at 96K (+16%),
+24 + 12 (width 6) 3735 vs 3868 (-3.5%). So the remainder takes the 8-row route (`rows12` below = `GGML_FA_Q24_ROWS=12`):
+
+| width (rows) | tiles | kv 8448 pick -> rows12 | 24576 | 98304 | 102400 |
+|---|---|--:|--:|--:|--:|
+| 3 (18) | one 24-row (was 8+8+2) | 213 -> 182 (**-14%**) | 594 -> 490 (**-18%**) | 2297 -> 1894 (**-17.5%**) | 2394 -> 1951 (-18.5%) |
+| 4 (24) | one 24-row (the pick) | 187 | 497 | 1895 | 1979 |
+| 5 (30) | 24 + 8-row (was 4 x 8) | 279 -> 286 (+2.5%) | 779 -> 779 (flat) | 3025 -> 2964 (-2%) | 3154 -> 3095 (-2%) |
+| 6 (36) | 24 + 2 x 8-row (was 5 x 8) | 343 -> 337 (-1.7%) | | | 3865 -> 3810 (-1.4%) |
+
+Width 3 takes the whole tile gain (one KV stream instead of three). Widths 5/6 are flat: the 24-row tile fills a
+core's 32 KB of threadgroup memory (one threadgroup of 8 simdgroups per core), so the 8-row remainder grid does not
+co-reside with it - the sum is close to serial (1900 + ~1000 for the 8-row grid alone at low occupancy), the same
+as four 8-row tiles in flight. The 8-row grid is 20 KB per threadgroup, also one per core.
+
+### Numerics
+
+`test-backend-ops` under both classes (TR 9 `qtl4w24`, TR 7 `qtnw24`), widths 3-6 at kv 512 / 8448: 8/8 vs CPU, and
+**bitwise identical** to the pick's routes (`GGML_TEST_SEED=7`, `GGML_TEST_DUMP`, 8/8 files per class). A row's
+arithmetic does not depend on which tile it sits in (same key order, same per-row softmax, same split width).
+
+### E2e (UD line, Turbo4, 300 tokens, benchprompt at 8K, `perf/run-prod-pick.sh` with `PICK_DEPTH` overridden, ABAB)
+
+| depth (verify width) | arm | decode t/s | acc | sha |
+|---|---|--:|--:|---|
+| 2 (3) | pick | 24.32 / 25.14 | 76.6% | `9128633c6cfa` (= the depth-3 canonical text: the greedy chain is depth-independent when the rows' numerics match) |
+| 2 (3) | `GGML_FA_Q24_ROWS=12` | 25.22 / 25.30 | 76.6% | `9128633c6cfa` |
+| 4 (5) | pick | 24.39 / 24.52 | 53.4% | `7e9e464feffb` |
+| 4 (5) | `GGML_FA_Q24_ROWS=12` | 24.50 / 24.51 | 53.4% | `7e9e464feffb` |
+
+Byte-identical in the server at both widths (the first depth-2 base run was the cold one). At 8K the FA call is
+~3% of the round, so the t/s is noise by construction; the per-call table is the price. Width 3 at 96K is a depth-2
+round -5% by the same arithmetic as the width-4 tile (the tile's 24% share x -17.5%).
+
+### The 16-row O-resident tile as the remainder (`qtl4w16o` / `qtnw16o`, NQT = 2, nsg 8; prescreen 0 B spill in both classes)
+
+Added as the tile the remainder rows go to (`GGML_FA_Q24_REM=16`: 24 + 16 above an 8-row remainder) and as the
+main tile (`GGML_FA_Q24_TILE=16`: every tile 16-row). Same harness, interleaved, us per call; `rows12` = 24 + 8-row:
+
+| width (rows) | kv | pick | rows12 (24 + 8) | rem16 (24 + 16) | tile16 (16 + ...) |
+|---|--:|--:|--:|--:|--:|
+| 3 (18) | 98304 | 2300 | **1880** | 1881 | 2352 (16 + 8) |
+| 3 | 24576 | 594 | **491** | 491 | 617 |
+| 3 | 8448 | 213 | **182** | 183 | 224 |
+| 5 (30) | 98304 | 3022 | 2967 | 2962 | **2473 (16 + 16, -18.2%)** |
+| 5 | 24576 | 779 | 781 | 783 | **643 (-17.5%)** |
+| 5 | 8448 | 280 | 287 | 286 | **236 (-15.4%)** |
+| 6 (36) | 102400 | 3868 | 3807 | **3523 (24 + 16, -8.9%)** | 3667 (16 + 16 + 8) |
+| 6 | 8448 | 343 | 339 | **307 (-10.6%)** | 330 |
+
+Per tile at 96K, each one threadgroup per core: a 24-row tile 1.0, a 16-row tile 0.66, a lone 8-row grid ~0.55 of
+the 24-row time - the tiles add up nearly serially (threadgroup memory: 32 / 24 / 20 KB, one resident per core), so
+the plan is the cheapest cover of the rows: **3 and 4 = one 24; 5 = 16 + 16; 6 = 24 + 16**, the default rule under
+`GGML_FA_Q24_ROWS` (greedy 24s; a remainder above 16 rows is another 24, above 8 a 16, of 1-8 rows the last 24 + 8
+becomes 16 + 16). Bitwise identical to the pick's routes in both classes for every form (`rem16`, `tile16`: 32/32
+dump files; the default rule re-checked below).
+
+### The default rule, re-timed (`GGML_FA_Q24_ROWS=12` alone, interleaved against the pick, us per call)
+
+| width | kv 8448 | 24576 | 98304 | 102400 |
+|---|--:|--:|--:|--:|
+| 3 | 212 -> 182 (**-14%**) | 592 -> 494 (**-16.5%**) | 2302 -> 1879 (**-18.4%**) | 2400 -> 1951 (-18.7%) |
+| 4 (the pick's tile, unchanged route) | 185 -> 188 | 493 -> 494 | 1890 -> 1888 | 1964 -> 1965 |
+| 5 | 279 -> 237 (**-15%**) | 780 -> 647 (**-17%**) | 3023 -> 2470 (**-18.3%**) | 3152 -> 2580 (-18.1%) |
+| 6 | 342 -> 305 (**-11%**) | | | 3865 -> 3528 (**-8.7%**) |
+
+Bitwise identical to the pick's routes under the rule in both classes (16/16 dump files, widths 3-6, kv 512 / 8448),
+8/8 vs CPU per class. Width 4 is untouched by construction (one 24-row tile, the pick's own dispatch).
