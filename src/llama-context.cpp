@@ -262,13 +262,13 @@ static bool llama_fa_dump_cb_eval(struct ggml_tensor * t, bool ask, void * user_
 }
 
 // LLAMA_MM_DUMP=<dir>: the same for MUL_MAT nodes with LLAMA_MM_DUMP_NT (default 6) columns and a src0 of type
-// LLAMA_MM_DUMP_TYPE (default q4_K_SOA), the first LLAMA_MM_DUMP_N (default 4) of them: <dir>/mm<i>.<a|b|dst>.bin +
+// LLAMA_MM_DUMP_TYPE (default q4_K_soa), the first LLAMA_MM_DUMP_N (default 4) of them: <dir>/mm<i>.<a|b|dst>.bin +
 // manifest.txt - the op-level comparison of two matmul routes against an f64 reference (perf/w6-verify-cliff.md)
 static bool llama_mm_dump_cb_eval(struct ggml_tensor * t, bool ask, void * user_data) {
     GGML_UNUSED(user_data);
     static const char * dir  = getenv("LLAMA_MM_DUMP");
     static const int    nt   = getenv("LLAMA_MM_DUMP_NT") ? atoi(getenv("LLAMA_MM_DUMP_NT")) : 6;
-    static const char * tyn  = getenv("LLAMA_MM_DUMP_TYPE") ? getenv("LLAMA_MM_DUMP_TYPE") : "q4_K_SOA";
+    static const char * tyn  = getenv("LLAMA_MM_DUMP_TYPE") ? getenv("LLAMA_MM_DUMP_TYPE") : "q4_K_soa";
     static const int    nmax = getenv("LLAMA_MM_DUMP_N") ? atoi(getenv("LLAMA_MM_DUMP_N")) : 4;
     static int  n_dumped = 0;
     static bool done = false;

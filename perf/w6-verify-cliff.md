@@ -302,3 +302,36 @@ positions further, one big flip lost and one won. Speed: round -24% at widths 6-
 24K positions, the kernel view says it is a real 3x-amplitude deviation with an unknown cause). If wanted on the
 pick's numerics instead: find the mechanism (an op-level dump of one real matmul under both routes) - the fix may
 be one line.
+
+## The mechanism, found (op-level dump, 22:12-22:25; owner: "do the op-level dump")
+
+Reading the stored-row reader for the dump tool turned it up before the dump ran: `dequantize_kq_soa_mm` selects its
+q4_K scale form by a function constant, `FC_kq_soa_exact` (FC_MUL_MM + 7) - **the exact `d*sc` form that every pick
+kernel runs (the mul_mm prefill bodies set it, the ext readers and the width-3..5 kernels have it built in; owner
+2026-09-06: "I think I want the exact version", `weight-quant-kld.md`), or, when the constant is left UNSET,
+upstream's `(d/16 in half)*16` quotient for the high-nibble tiles, which rounds or flushes `d` below ~2^-10.** The
+skinny pipeline getter never set it. Deterministic, q4_K only, in the reader both tile forms share, invisible to
+the 8K sha for 300 tokens: every fingerprint of the night.
+
+**Proof at the op level** (`LLAMA_MM_DUMP=<dir>`, the eval-callback dump of MUL_MAT nodes mirroring `LLAMA_FA_DUMP`;
+`perf/mm-dump-compare.py` builds the f64 reference from the dumped rows' own header plane - the original d, dmin,
+scales - and pack plane, in both scale forms, with the activations rounded through half as the f16y kernels do;
+`llama-perplexity -b 6 -ub 6 --chunks 1`, the first four `q4_K_soa` matmuls at width 6 = blk.1/2 attn_qkv and
+attn_gate [5120 x 10240 / 6144], 1024 rows each):
+
+| arm | vs the exact reference (rms rel / max abs) | vs the quotient reference |
+|---|---:|---:|
+| the ext reader (the pick) | **1.6e-7** / 1e-6 | 2.5e-3 / 0.008 |
+| the tile as built (constant unset, `GGML_MM_SKINNY_GEN_EXACT=0`) | 2.5e-3 / 0.012 | **2.8e-4** / 0.004 |
+| the tile with the constant set (`GEN=6`, now the default) | **2.8e-4** / 0.0016 | 2.5e-3 / 0.008 |
+
+(The exact and quotient references differ by 2.5e-3 rms relative on these ops; every row has superblocks with
+d < 2^-10, so the quotient's rounding was live on all of them.) The unset tile tracked the quotient form, the reader
+the exact form at f32 rounding. **The fixed tile's residual, 2.8e-4 rms relative, is exactly the RMS of rounding a
+value to half (2^-11 / sqrt(3)): the A tile held in half**, which the pick's prefill mul_mm tiles do as well - the
+prefill path priced at 2.6e-5 mean / 1e-6 median from the decode kernels is the precedent for what that costs.
+
+Fix (commit `1ede661fb`): the getter sets FC_MUL_MM + 7 for the stored types (`_ex` in the pipeline name;
+`GGML_MM_SKINNY_GEN_EXACT=0` reproduces the unset form for the record). Gates queued: the exact tile vs the width-4
+decode base at -b 6 (the number that says whether it now sits in the pick's class), and depth 5 at 8K (speed
+unchanged by construction, the sha).

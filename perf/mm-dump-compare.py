@@ -21,11 +21,11 @@ def scale_min(j, scales):
         return scales[j] & 63, scales[j + 4] & 63
     return (scales[j + 4] & 0xF) | ((scales[j - 4] >> 6) << 4), (scales[j + 4] >> 4) | ((scales[j] >> 6) << 4)
 
-def dequant_rows(raw, ne00, ne01, nb01, exact):
+def dequant_rows(raw, ne00, ne01, nb01, exact, nrows):
     nsb = ne00 // 256
-    W = np.zeros((ne01, ne00), dtype=np.float64)
+    W = np.zeros((nrows, ne00), dtype=np.float64)
     rows = np.frombuffer(raw, dtype=np.uint8).reshape(ne01, nb01)
-    for r in range(ne01):
+    for r in range(nrows):
         row = rows[r]
         packs = row[32*nsb:32*nsb + 128*nsb].view(np.uint32)
         hdr = row[160*nsb:160*nsb + 16*nsb]
@@ -53,8 +53,8 @@ def main():
         print(f"== {key} {a['name']} A {a['type']} [{ne00} x {ne01}] nb01 {a['nb'][1]}  B [{b['ne'][0]} x {n}]  ({ne00//256} superblocks/row)")
         raw = open(os.path.join(root, arms[0], f'{key}.a.bin'), 'rb').read()
         rows = min(ne01, int(os.environ.get('MM_ROWS', '4096')))   # the dequant is python-slow: a row subset
-        W_ex = dequant_rows(raw, ne00, rows, a['nb'][1], True)
-        W_un = dequant_rows(raw, ne00, rows, a['nb'][1], False)
+        W_ex = dequant_rows(raw, ne00, ne01, a['nb'][1], True, rows)
+        W_un = dequant_rows(raw, ne00, ne01, a['nb'][1], False, rows)
         x = np.frombuffer(open(os.path.join(root, arms[0], f'{key}.b.bin'), 'rb').read(), dtype=np.float32).reshape(n, ne00).astype(np.float64)
         xh = np.float16(x).astype(np.float64)
         y_ex = W_ex @ xh.T; y_un = W_un @ xh.T           # [rows x n]
