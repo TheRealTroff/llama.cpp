@@ -8,15 +8,18 @@ at depths 2-4; the q4 line at depth 5 runs 26.3.
 
 | line | depth 5 t/s | acc | sha | the width-6 matmul route (`LV=5` pipeline names) |
 |---|--:|--:|---|---|
-| ud | 15.85 | 49.5% | `a409bb1b45df` | `kernel_mul_mm_q4_K_f16_bci`, `mul_mm_q5_K_f16_bci`, `mul_mm_q6_K_f16_bci`, `mul_mm_q4_0_f16_bci` (the prefill tile kernel at N = 6) |
+| ud | 15.85 | 49.5% | `a409bb1b45df` | ~~the mul_mm prefill tile kernels~~ **`kernel_mul_mv_ext_{q4_K,q5_K,iq4_xs}_soa_f16_r1_3` (nr0 2): the ext SoA reader at three columns per pass, two weight passes for the six columns** |
 | q4 | 26.29 | 46.4% | `04ada3a4de10` | the skinny SoA MMA kernel (`GGML_MM_SKINNY=6`, Q4_0_SOA widths 6-8) |
 
 Why: the UD line's stored-SoA decode kernels (`kernel_mul_mv_{q4_K,q5_K}_soa_w{3,4}_v2`, `iq4_xs_soa_w{3,4}_v5`, the
 w5 forms) cover widths 3-5 (`kq_soa_shape`: `ne11 >= 3 && ne11 <= 5`, ggml-metal-ops.cpp); the "remaining" formats
 (q6_K / q3_K / iq4_nl / iq3_s) take the kq body as column groups at 6-8 (`w4cg`, `ud-remaining-quants.md`), but the
-bulk of the UD tensors are Q4_K / Q5_K / IQ4_XS, and at width 6 those fall through to the mul_mm tile kernels - a
-64-column MMA tile with 6 live columns, the kernel built for prefill. The skinny SoA route (`stored_soa_skinny`) is
-Q4_0_SOA only.
+bulk of the UD tensors are Q4_K / Q5_K / IQ4_XS, and at width 6 those fall through to the ext SoA readers
+(`kernel_mul_mv_ext_soa_q4x4`, r1ptg 3: the six columns as two passes of three, each streaming the weights and
+dequantizing them again). The skinny SoA route (`stored_soa_skinny`) is Q4_0_SOA only. **Correction (same night):
+the first write-up named the mul_mm prefill tile kernels as the width-6 route, read off a pipeline list that also
+carried the prefill pipelines of the 8K prompt - the `verify-before-generalizing` trap; the r1_3 ext pipelines
+above are the ones that disappear when the skinny route engages.**
 
 **It is context-independent**: the weight matmuls cost the same at 96K as at 8K, so the absolute penalty per round
 (~20 ms of a ~50 ms round at 8K) does not shrink at long context; only its share does, as the FA call grows. The FA
@@ -48,3 +51,23 @@ A width-6..8 form for the K-quant SoA kernels, two candidate shapes (both measur
 Gate: depth-5 e2e sha `a409bb1b45df` must hold (the route is a BI change if the per-column arithmetic is the w4
 kernel's); price = the depth-5 round at 8K and 96K, and whether depth 5 then beats depth 3 anywhere (the depth
 sweep at long context favoured depth 3 with width 4's tile; adaptive speculation makes every width live).
+
+## Probe 1: the generic skinny tile over the stored SoA rows at widths 6-8 (2026-09-16 night, commits `bb54320ea` + `0b4bfac46`)
+
+`c881ba34a` cherry-picked; `kernel_mul_mm_skinny_t` reads the stored rows through the mul_mm bodies' `dequantize_soa_mm`
+under `FC_mul_mm_soa` (the host names the base type's kernel and sets the constant for `*_SOA`), `GGML_MM_SKINNY_GEN=6`
+routes ne11 6-8 only - widths 2-5 keep their SoA kernels (the width-4 refutation stands). UD line, Turbo4, depth 5,
+300 tokens, benchprompt at 8K, ABAB, `LV=5` (the r1_3 ext pipelines are gone in the tile arm; the
+`kernel_mul_mm_skinny_{q4_K,q5_K,iq4_xs,q6_K,q3_K,iq4_nl,iq3_s}_f32_soa` pipelines are present):
+
+| arm | decode t/s | acc | sha |
+|---|--:|--:|---|
+| base (the ext SoA reader, r1_3 x 2 passes) | 15.84 / 15.85 | 49.5% | `a409bb1b45df` |
+| `GGML_MM_SKINNY_GEN=6` | **19.56 / 20.06 (+24..27%)** | 49.5% | **`a409bb1b45df`** (byte-identical) |
+
+One weight pass with the MMA tile against two passes of the dequant-once reader: the same tile that lost 13.6% at
+width 4 (where the incumbent was one pass) wins 24-27% at width 6. Depth 5 still trails depth 3 (27.8 at 8K) - this
+is a widths lever for adaptive speculation, not a depth change. Not yet: widths 7-8 timed (same route), the 96K
+number, the per-call table (`test-backend-ops` MUL_MAT cases for the `*_SOA` types), the q4 line (its skinny SoA
+kernel already covers 6-8). Status: **built, gated by sha, priced at 8K; adoption = owner** (manifest entry to
+follow as proposed if the owner wants it in a pick).
