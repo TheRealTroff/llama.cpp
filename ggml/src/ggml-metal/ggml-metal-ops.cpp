@@ -4006,12 +4006,15 @@ static int ggml_metal_op_mul_mat_impl(ggml_metal_op_t ctx, int idx, ggml_tensor 
     // (kernel_mul_mm_skinny_t) for the UD-Q4_K_M formats, which have no SoA/repack path and
     // otherwise run the per-column mul_mv at these widths (perf/ud-model.md step 5)
     static const int env_mm_skinny_gen = getenv("GGML_MM_SKINNY_GEN") ? atoi(getenv("GGML_MM_SKINNY_GEN")) : 0;
+    // the stored SoA rows (*_SOA, the UD file) take the same tile with FC_mul_mm_soa (perf/w6-verify-cliff.md: the
+    // width-6..8 probe against the mul_mm cliff; Q4_0_SOA keeps its own skinny SoA kernel)
+    const ggml_type t0base = ggml_metal_soa_base_type(op->src[0]->type);
     const bool generic_skinny = env_mm_skinny_gen > 0 && ne11 >= std::max(2, env_mm_skinny_gen) && ne11 <= 8 &&
                                 ne00 % 64 == 0 && ne00 % ggml_blck_size(op->src[0]->type) == 0 &&
-                                (op->src[0]->type == GGML_TYPE_Q8_0  || op->src[0]->type == GGML_TYPE_Q3_K  ||
-                                 op->src[0]->type == GGML_TYPE_Q4_K  || op->src[0]->type == GGML_TYPE_Q5_K  ||
-                                 op->src[0]->type == GGML_TYPE_Q6_K  || op->src[0]->type == GGML_TYPE_IQ3_S ||
-                                 op->src[0]->type == GGML_TYPE_IQ4_NL || op->src[0]->type == GGML_TYPE_IQ4_XS);
+                                (t0base == GGML_TYPE_Q8_0  || t0base == GGML_TYPE_Q3_K  ||
+                                 t0base == GGML_TYPE_Q4_K  || t0base == GGML_TYPE_Q5_K  ||
+                                 t0base == GGML_TYPE_Q6_K  || t0base == GGML_TYPE_IQ3_S ||
+                                 t0base == GGML_TYPE_IQ4_NL || t0base == GGML_TYPE_IQ4_XS);
 
     if ((stored_soa_skinny || runtime_repack_skinny || generic_skinny) &&
         op->src[1]->type == GGML_TYPE_F32 &&

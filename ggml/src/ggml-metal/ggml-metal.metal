@@ -18792,7 +18792,13 @@ kernel void kernel_mul_mm_skinny_t(
     const uint64_t offset0 = (i12/FC_mul_mm_r2)*args.nb02 + (i13/FC_mul_mm_r3)*args.nb03;
 
     device const block_q * xrow = (device const block_q *)(src0 + args.nb01*(r0 + lr0) + offset0);
+    // stored SoA rows (GGML_TYPE_*_SOA, FC_mul_mm_soa): the row is addressed by (row pointer, block, 16-element
+    // tile) through the mul_mm bodies' dequantize_soa_mm instead of a block pointer (perf/w6-verify-cliff.md)
+    device const char * xrowc = src0 + args.nb01*(r0 + lr0) + offset0;
     int kx = 32*il0; // this thread's first A element of the current slice
+#define SKINNY_DEQ(KX, OFF, REG) \
+    if (FC_mul_mm_soa) { dequantize_soa_mm((device const block_q *) nullptr, xrowc, args.ne00, (KX)/(16*nl), (short) (((KX)/16)%nl + (OFF)), REG); } \
+    else               { dequantize_func(xrow + (KX)/(16*nl), ((KX)/16)%nl + (OFF), REG); }
 
     const short bcol = (short)(tiitg/4) < nr1 ? (short)(tiitg/4) : nr1 - 1;
     const short bsx  = tiitg%4;
@@ -18813,8 +18819,8 @@ kernel void kernel_mul_mm_skinny_t(
     // prefetch slice 0
     half4x4 ta0;
     half4x4 ta1;
-    dequantize_func(xrow + kx/(16*nl), (kx/16)%nl,     ta0);
-    dequantize_func(xrow + kx/(16*nl), (kx/16)%nl + 1, ta1);
+    SKINNY_DEQ(kx, 0, ta0);
+    SKINNY_DEQ(kx, 1, ta1);
     kx += NK;
 
     for (int loop_k = 0; loop_k < args.ne00; loop_k += NK) {
@@ -18842,10 +18848,11 @@ kernel void kernel_mul_mm_skinny_t(
 
         // prefetch slice t+1 while the MACs below run
         if (loop_k + NK < args.ne00) {
-            dequantize_func(xrow + kx/(16*nl), (kx/16)%nl,     ta0);
-            dequantize_func(xrow + kx/(16*nl), (kx/16)%nl + 1, ta1);
+            SKINNY_DEQ(kx, 0, ta0);
+            SKINNY_DEQ(kx, 1, ta1);
             kx += NK;
         }
+#undef SKINNY_DEQ
 
         threadgroup const half * lsma = sa + 16*sgitg*NK;
 

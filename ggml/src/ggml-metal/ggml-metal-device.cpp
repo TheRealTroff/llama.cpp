@@ -745,13 +745,16 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm_skinny(gg
 
     GGML_ASSERT(ne12 <= INT16_MAX && r2 <= INT16_MAX && r3 <= INT16_MAX);
 
-    snprintf(base, 256, "kernel_mul_mm_skinny_%s%s_%s", ggml_type_name(op->src[0]->type), di ? "_di" : "", ggml_type_name(op->src[1]->type));
-    snprintf(name, 256, "%s_ne12=%d_r2=%d_r3=%d", base, ne12, r2, r3);
+    // stored SoA rows (the generic skinny tile over *_SOA): the base type's kernel with FC_mul_mm_soa
+    const bool soa = ggml_metal_is_soa_type(op->src[0]->type);
+    snprintf(base, 256, "kernel_mul_mm_skinny_%s%s_%s", ggml_type_name(ggml_metal_soa_base_type(op->src[0]->type)), di ? "_di" : "", ggml_type_name(op->src[1]->type));
+    snprintf(name, 256, "%s%s_ne12=%d_r2=%d_r3=%d", base, soa ? "_soa" : "", ne12, r2, r3);
 
     ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
     if (!res.pipeline) {
         ggml_metal_cv_t cv = ggml_metal_cv_init();
 
+        ggml_metal_cv_set_bool (cv, soa, FC_MUL_MM + 6);
         ggml_metal_cv_set_int16(cv, (int16_t) ne12, FC_MUL_MM + 2);
         ggml_metal_cv_set_int16(cv, (int16_t) ne13, FC_MUL_MM + 3);
         ggml_metal_cv_set_int16(cv, (int16_t) r2,   FC_MUL_MM + 4);
