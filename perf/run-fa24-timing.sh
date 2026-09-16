@@ -2,7 +2,8 @@
 # The 24-row Turbo4 decode FA tile (perf/longctx-inventory-sep15.md, branch exp/fa-decode-tile): per-call timing
 # of the GQA6 width-4 decode shape, the pick's 8-row route (GGML_FA_TR=9, GGML_FA_TURBO_NWG=20) against the
 # 24-row forms (GGML_FA_Q24=1 staged table / 2 constant table) over their split width and register head,
-# interleaved reps. Run under bash (zsh does not word-split the env strings).
+# interleaved reps. Run under bash (zsh does not word-split the env strings). NB="3|5|6" times the other widths
+# (the widths section: GGML_FA_Q24_ROWS=12 with GGML_FA_Q24_REM / GGML_FA_Q24_TILE as the plan knobs).
 #   ARMS="label:envs ..." KVS="98304 24576 8448" REPS=2 perf/run-fa24-timing.sh
 set -u
 B=${B:-/Users/troff/play/llama.cpp-fa24}

@@ -412,6 +412,7 @@ typedef struct {
     float    m1;
     int32_t  n_head_log2;
     float    logit_softcap;
+    int32_t  iqr_off;       // first GQA row of this grid (the 8-row remainder tiles behind the 24-row tiles, perf/fa-decode-tile24.md)
 } ggml_metal_kargs_flash_attn_ext;
 
 typedef struct {

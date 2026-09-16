@@ -13534,7 +13534,7 @@ void kernel_flash_attn_ext_impl(
     const ushort iq2 = tgpig[1];
     const ushort iq1 = tgpig[0]*Q;
     const ushort iqh0 = tgpig[1]*GQAH;
-    const uint   iqr0 = tgpig[0]*Q;
+    const uint   iqr0 = tgpig[0]*Q + args.iqr_off; // GQA rows: the 8-row remainder grid behind the 24-row tiles starts at iqr_off
 
 #define NS10 (FC_flash_attn_ext_ns10)
 #define NS20 (FC_flash_attn_ext_ns20)
@@ -14961,6 +14961,10 @@ template [[host_name("kernel_flash_attn_ext_qtl4w_turbo4_dk256_dv256")]] kernel 
 template [[host_name("kernel_flash_attn_ext_qtl4w24_turbo4_dk256_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo4_0, 8, dequantize_turbo4_0, block_turbo4_0, 8, dequantize_turbo4_0, 256, 256, 24, OP_FLASH_ATTN_EXT_NCPSG, true, 1, 4, 1, true>;
 template [[host_name("kernel_flash_attn_ext_qtnw24_turbo4_dk256_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo4_0, 8, dequantize_turbo4_0, block_turbo4_0, 8, dequantize_turbo4_0, 256, 256, 24, OP_FLASH_ATTN_EXT_NCPSG, true, 3, 4, 1, true>; // the TRN class (GGML_FA_TR=7, the q4 line)
 template [[host_name("kernel_flash_attn_ext_qt24w_turbo4_dk256_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo4_0, 8, dequantize_turbo4_0, block_turbo4_0, 8, dequantize_turbo4_0, 256, 256, 24, OP_FLASH_ATTN_EXT_NCPSG, true, 0, 4, 1, true>;
+// the 16-row O-resident decode tile (probe, perf/fa-decode-tile24.md widths section): NQT = 2, the remainder tile of the mixed
+// dispatch at widths 5/6, in both numerics classes (qtl4w16o: TR 9, qtnw16o: TR 7)
+template [[host_name("kernel_flash_attn_ext_qtl4w16o_turbo4_dk256_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo4_0, 8, dequantize_turbo4_0, block_turbo4_0, 8, dequantize_turbo4_0, 256, 256, 16, OP_FLASH_ATTN_EXT_NCPSG, true, 1, 4, 1, true>;
+template [[host_name("kernel_flash_attn_ext_qtnw16o_turbo4_dk256_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo4_0, 8, dequantize_turbo4_0, block_turbo4_0, 8, dequantize_turbo4_0, 256, 256, 16, OP_FLASH_ATTN_EXT_NCPSG, true, 3, 4, 1, true>;
 template [[host_name("kernel_flash_attn_ext_qtnw16_turbo4_dk256_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo4_0, 8, dequantize_turbo4_0, block_turbo4_0, 8, dequantize_turbo4_0, 256, 256, 16, OP_FLASH_ATTN_EXT_NCPSG, true, 4, 2, 1>;
 template [[host_name("kernel_flash_attn_ext_qt16w_turbo4_dk256_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo4_0, 8, dequantize_turbo4_0, block_turbo4_0, 8, dequantize_turbo4_0, 256, 256, 16, OP_FLASH_ATTN_EXT_NCPSG, true, 0, 2, 1>;
 template [[host_name("kernel_flash_attn_ext_qtn16_turbo4_dk256_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo4_0, 8, dequantize_turbo4_0, block_turbo4_0, 8, dequantize_turbo4_0, 256, 256, 16, OP_FLASH_ATTN_EXT_NCPSG, true, 4, 2>;
