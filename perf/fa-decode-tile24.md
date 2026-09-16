@@ -229,7 +229,8 @@ rows to 24-row tiles; a 24-row tile is dispatched per 24 rows and the remainder 
 Metal compiler): the UD line re-gated on the prod binary - f16 300 `73ea53bbe98f` (23.50 t/s), Turbo4 300
 `9128633c6cfa` (28.31 t/s), both canonical; the width-4 per-call numbers below match the 2026-09-16 sweep within
 1% (1895 vs 1907 at 96K), so the new compiler moved neither the FA numerics nor its speed. The b1 anchor read 11.97
-against 13.06 the night before - see the close-out below.
+against 13.06 the night before, then **13.35 re-measured after the session's runs** (13.30 at the morning mint of the
+16th): the low reading was the machine 35 minutes after the upgrade, not the compiler. macOS 27 is clean for the pick.
 
 ### Per call (`perf/run-fa24-timing.sh`, GQA6, interleaved reps, us per call; pick = the 24-row tile at width 4 only)
 
