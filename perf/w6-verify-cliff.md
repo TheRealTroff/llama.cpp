@@ -1,6 +1,6 @@
 # The width-6 verify cliff on the UD line (2026-09-16 night, branch `exp/w6-verify-cliff`, worktree `llama.cpp-fa24`) - OPEN
 
-Status: **opened on the owner's ask, nothing built yet.** Found by the depth-5 e2e sha gate of the FA tile widths
+Status (2026-09-16 22:30): **mechanism FOUND and fixed on the branch** (the skinny pipeline left the stored q4_K reader's exact-scale constant unset: upstream's half-quotient form; see 'The mechanism, found' at the end; the earlier sections' 'mechanism unidentified' are superseded) - the fixed tile's KLD gate and depth-5 sha are running. Was: opened on the owner's ask. Found by the depth-5 e2e sha gate of the FA tile widths
 (`fa-decode-tile24.md` widths section): depth 5 (verify width 6) on the UD line runs at 16 t/s at 8K against 24-25
 at depths 2-4; the q4 line at depth 5 runs 26.3.
 
