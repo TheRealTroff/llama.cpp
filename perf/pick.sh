@@ -79,6 +79,7 @@ PICK_MANIFEST=(
   "GGML_FA_TURBO_NWG=20|BI|both|pick|longctx-inventory-sep15.md (split-K width for every Turbo4 batched FA route: -21% per decode FA call at 96K, verify round -6.8% at 96K / -0.8% at 8K; the reduce sums the partials with simd_sum so the Turbo4 shas move = a lineage, kernel numerics unchanged; f16 routes and prefill untouched; 2026-09-15; owner 2026-09-16: 'I'll take the flag' - in the pick, mint prodpick-sep16-nwg20)"
   "GGML_FA_TR=7|NUM-PP/TG|q4|pick|q4-fa-folded-pick.md (owner 2026-09-08: take the faster folded form for q4_0; accuracy mixed, new output lineage)"
   # --- refused / declined, listed so pick_check knows them ---
+  "GGML_MM_SKINNY_GEN=6|NUM-TG|ud|proposed|w6-verify-cliff.md (the generic skinny MMA tile over the stored SoA rows at verify widths 6-8: round -24% at 8K, -15% at 96K; FIXED 2026-09-16 night - the pipeline had left the stored q4_K reader's exact-scale constant unset (upstream's half-quotient form, 5e-4 pairwise); with it set the tile is the pick's own decode class: 2.5e-5 mean / 99.910% same-top vs the width-4 base = the reader's 99.914; not byte-identical (the half A tile); paired bf16 a wash; OWNER decides)"
   "GGML_FA_TR=6|NUM-TG|none|refused|ud-model.md step 16 C (folded norm, KLD a wash; owner took =9)"
   "GGML_KQ_SOA_EXACT=0|NUM-PP|none|refused|ud-model.md step 15 (=0 is the upstream half-division tile; the exact tile is the default, owner)"
 )

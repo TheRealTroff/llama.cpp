@@ -18748,6 +18748,176 @@ kernel void kernel_mul_mm_skinny_q4_0_f32(
     }
 }
 
+// generic skinny simdgroup-matrix matmul over any 16*nl-element block format (perf/ud-model.md
+// step 5, GGML_MM_SKINNY_GEN=N). Same tile and pipeline as kernel_mul_mm_skinny_q4_0_f32 above
+// (32 rows x 8 cols, K-slice 64, 64 threads / 2 simdgroups, slice t+1 dequantized in registers
+// while slice t's MACs run); the only format-specific piece is the dequant of this thread's 32
+// A elements per slice, done with the same block dequantizer the generic mul_mm uses. nl is
+// even for every instantiated format, so a 32-element chunk never straddles a block.
+// a_t = the A/B operand type of the MMA: half (the original form: dequantized weights and the activations rounded
+// to half, half x half products) or float (the float-product form, perf/w6-verify-cliff.md: the exact dequant as a
+// float A operand, the activations rounded through half as the f16y readers do, float x float products - the ext
+// reader's per-product arithmetic, only the K-sum order differs)
+template<typename block_q, short nl, typename a_t, void (*dequantize_func)(device const block_q *, short, thread matrix<a_t, 4, 4> &)>
+kernel void kernel_mul_mm_skinny_t(
+        constant ggml_metal_kargs_mul_mm & args,
+        device const char * src0,
+        device const char * src1,
+        device       char * dst,
+        threadgroup  char * shmem [[threadgroup(0)]],
+        uint3  tgpig[[threadgroup_position_in_grid]],
+        ushort tiitg[[thread_index_in_threadgroup]],
+        ushort sgitg[[simdgroup_index_in_threadgroup]]) {
+
+    // A tile row-major [row][k]; B tile [k][col]; mc = ma x mb -> [row][col]
+    // software-pipelined: slice t+1 is loaded+dequantized into registers while
+    // the simdgroup MACs of slice t run
+    constexpr int NR0 = 32;
+    constexpr int NR1 = 8;
+    constexpr int NK  = 64;
+
+    using a4x4_t = matrix<a_t, 4, 4>;
+    using a4_t   = vec<a_t, 4>;
+    using a8x8_t = simdgroup_matrix<a_t, 8, 8>;
+
+    threadgroup a_t * sa = (threadgroup a_t *)(shmem);                           // NR0 x NK: 4096 B (half) / 8192 B (float)
+    threadgroup a_t * sb = (threadgroup a_t *)(shmem + NR0*NK*sizeof(a_t));      // NK x 8: 1024 B (half) / 2048 B (float)
+
+    const int im = tgpig.z;
+    const int r0 = tgpig.y*NR0;
+    const int r1 = tgpig.x*NR1;
+
+    const short nr0 = (args.ne0 - r0 < NR0) ? (args.ne0 - r0) : NR0;
+    const short nr1 = (args.ne1 - r1 < NR1) ? (args.ne1 - r1) : NR1;
+
+    const short ar  = tiitg/2;
+    const short il0 = tiitg%2;
+    const short lr0 = ar < nr0 ? ar : nr0 - 1;
+
+    const int i12 = im % FC_mul_mm_ne12;
+    const int i13 = im / FC_mul_mm_ne12;
+
+    const uint64_t offset0 = (i12/FC_mul_mm_r2)*args.nb02 + (i13/FC_mul_mm_r3)*args.nb03;
+
+    device const block_q * xrow = (device const block_q *)(src0 + args.nb01*(r0 + lr0) + offset0);
+    // stored SoA rows (GGML_TYPE_*_SOA, FC_mul_mm_soa): the row is addressed by (row pointer, block, 16-element
+    // tile) through the mul_mm bodies' dequantize_soa_mm instead of a block pointer (perf/w6-verify-cliff.md)
+    device const char * xrowc = src0 + args.nb01*(r0 + lr0) + offset0;
+    int kx = 32*il0; // this thread's first A element of the current slice
+#define SKINNY_DEQ(KX, OFF, REG) \
+    if (FC_mul_mm_soa) { dequantize_soa_mm((device const block_q *) nullptr, xrowc, args.ne00, (KX)/(16*nl), (short) (((KX)/16)%nl + (OFF)), REG); } \
+    else               { dequantize_func(xrow + (KX)/(16*nl), ((KX)/16)%nl + (OFF), REG); }
+
+    const short bcol = (short)(tiitg/4) < nr1 ? (short)(tiitg/4) : nr1 - 1;
+    const short bsx  = tiitg%4;
+
+    device const float * y = (device const float *)(src1
+        + args.nb13*i13
+        + args.nb12*i12
+        + args.nb11*(r1 + bcol)
+        + args.nb10*(16*bsx));
+
+    a8x8_t ma[2];
+    a8x8_t mb;
+
+    simdgroup_float8x8 mc[2];
+    mc[0] = make_filled_simdgroup_matrix<float, 8>(0.f);
+    mc[1] = make_filled_simdgroup_matrix<float, 8>(0.f);
+
+    // prefetch slice 0
+    a4x4_t ta0;
+    a4x4_t ta1;
+    SKINNY_DEQ(kx, 0, ta0);
+    SKINNY_DEQ(kx, 1, ta1);
+    kx += NK;
+
+    for (int loop_k = 0; loop_k < args.ne00; loop_k += NK) {
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        threadgroup a4_t * pa = (threadgroup a4_t *)(sa + ar*NK + 32*il0);
+        pa[0] = ta0[0];
+        pa[1] = ta0[1];
+        pa[2] = ta0[2];
+        pa[3] = ta0[3];
+        pa[4] = ta1[0];
+        pa[5] = ta1[1];
+        pa[6] = ta1[2];
+        pa[7] = ta1[3];
+
+        if (tiitg < 4*NR1) {
+            FOR_UNROLL (short j = 0; j < 16; ++j) {
+                sb[(16*bsx + j)*NR1 + tiitg/4] = (a_t) (half) y[j]; // the activations rounded through half in both forms (f16y)
+            }
+        }
+
+        y += NK;
+
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        // prefetch slice t+1 while the MACs below run
+        if (loop_k + NK < args.ne00) {
+            SKINNY_DEQ(kx, 0, ta0);
+            SKINNY_DEQ(kx, 1, ta1);
+            kx += NK;
+        }
+#undef SKINNY_DEQ
+
+        threadgroup const a_t * lsma = sa + 16*sgitg*NK;
+
+        FOR_UNROLL (short ik = 0; ik < NK/8; ik++) {
+            simdgroup_barrier(mem_flags::mem_none);
+
+            simdgroup_load(ma[0], lsma + 8*ik,        NK,  0, false);
+            simdgroup_load(ma[1], lsma + 8*NK + 8*ik, NK,  0, false);
+            simdgroup_load(mb,    sb + 8*ik*NR1,      NR1, 0, false);
+
+            simdgroup_barrier(mem_flags::mem_none);
+
+            simdgroup_multiply_accumulate(mc[0], ma[0], mb, mc[0]);
+            simdgroup_multiply_accumulate(mc[1], ma[1], mb, mc[1]);
+        }
+    }
+
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    threadgroup float * temp_all = (threadgroup float *) shmem;
+
+    simdgroup_store(mc[0], temp_all + (16*sgitg + 0)*NR1, NR1, 0, false);
+    simdgroup_store(mc[1], temp_all + (16*sgitg + 8)*NR1, NR1, 0, false);
+
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    if (sgitg == 0) {
+        for (short j = tiitg; j < nr1; j += 32) {
+            device float * D = (device float *) dst + r0 + (r1 + j)*args.ne0 + im*args.ne1*args.ne0;
+
+            for (short i = 0; i < nr0; ++i) {
+                D[i] = temp_all[i*NR1 + j];
+            }
+        }
+    }
+}
+
+typedef decltype(kernel_mul_mm_skinny_t<block_q8_0, 2, half, dequantize_q8_0>) mul_mm_skinny_t;
+
+template [[host_name("kernel_mul_mm_skinny_q8_0_f32")]]   kernel mul_mm_skinny_t kernel_mul_mm_skinny_t<block_q8_0,   2,     half, dequantize_q8_0>;
+template [[host_name("kernel_mul_mm_skinny_q3_K_f32")]]   kernel mul_mm_skinny_t kernel_mul_mm_skinny_t<block_q3_K,   QK_NL, half, dequantize_q3_K>;
+template [[host_name("kernel_mul_mm_skinny_q4_K_f32")]]   kernel mul_mm_skinny_t kernel_mul_mm_skinny_t<block_q4_K,   QK_NL, half, dequantize_q4_K>;
+template [[host_name("kernel_mul_mm_skinny_q5_K_f32")]]   kernel mul_mm_skinny_t kernel_mul_mm_skinny_t<block_q5_K,   QK_NL, half, dequantize_q5_K>;
+template [[host_name("kernel_mul_mm_skinny_q6_K_f32")]]   kernel mul_mm_skinny_t kernel_mul_mm_skinny_t<block_q6_K,   QK_NL, half, dequantize_q6_K>;
+template [[host_name("kernel_mul_mm_skinny_iq3_s_f32")]]  kernel mul_mm_skinny_t kernel_mul_mm_skinny_t<block_iq3_s,  QK_NL, half, dequantize_iq3_s>;
+template [[host_name("kernel_mul_mm_skinny_iq4_nl_f32")]] kernel mul_mm_skinny_t kernel_mul_mm_skinny_t<block_iq4_nl, 2,     half, dequantize_iq4_nl>;
+template [[host_name("kernel_mul_mm_skinny_iq4_xs_f32")]] kernel mul_mm_skinny_t kernel_mul_mm_skinny_t<block_iq4_xs, QK_NL, half, dequantize_iq4_xs>;
+// the float-product form (GGML_MM_SKINNY_GEN_FP=1): float A/B operands, float MMA (perf/w6-verify-cliff.md)
+template [[host_name("kernel_mul_mm_skinny_q8_0_f32_fp")]]   kernel mul_mm_skinny_t kernel_mul_mm_skinny_t<block_q8_0,   2,     float, dequantize_q8_0>;
+template [[host_name("kernel_mul_mm_skinny_q3_K_f32_fp")]]   kernel mul_mm_skinny_t kernel_mul_mm_skinny_t<block_q3_K,   QK_NL, float, dequantize_q3_K>;
+template [[host_name("kernel_mul_mm_skinny_q4_K_f32_fp")]]   kernel mul_mm_skinny_t kernel_mul_mm_skinny_t<block_q4_K,   QK_NL, float, dequantize_q4_K>;
+template [[host_name("kernel_mul_mm_skinny_q5_K_f32_fp")]]   kernel mul_mm_skinny_t kernel_mul_mm_skinny_t<block_q5_K,   QK_NL, float, dequantize_q5_K>;
+template [[host_name("kernel_mul_mm_skinny_q6_K_f32_fp")]]   kernel mul_mm_skinny_t kernel_mul_mm_skinny_t<block_q6_K,   QK_NL, float, dequantize_q6_K>;
+template [[host_name("kernel_mul_mm_skinny_iq3_s_f32_fp")]]  kernel mul_mm_skinny_t kernel_mul_mm_skinny_t<block_iq3_s,  QK_NL, float, dequantize_iq3_s>;
+template [[host_name("kernel_mul_mm_skinny_iq4_nl_f32_fp")]] kernel mul_mm_skinny_t kernel_mul_mm_skinny_t<block_iq4_nl, 2,     float, dequantize_iq4_nl>;
+template [[host_name("kernel_mul_mm_skinny_iq4_xs_f32_fp")]] kernel mul_mm_skinny_t kernel_mul_mm_skinny_t<block_iq4_xs, QK_NL, float, dequantize_iq4_xs>;
+
 // skinny mm over deinterleaved q4_0 weights (GGML_MM_SKINNY=1 + GGML_MV_REPACK=1):
 // per-row layout [d x nblk][pad16][qs x nblk]; qs loads are two aligned 8-byte ushort4s
 inline void dequantize_q4_0_reg(thread const ushort * qs, half dh, short il, thread half4x4 & reg) {

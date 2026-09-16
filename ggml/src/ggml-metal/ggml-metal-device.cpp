@@ -745,13 +745,28 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm_skinny(gg
 
     GGML_ASSERT(ne12 <= INT16_MAX && r2 <= INT16_MAX && r3 <= INT16_MAX);
 
-    snprintf(base, 256, "kernel_mul_mm_skinny_%s%s_%s", ggml_type_name(op->src[0]->type), di ? "_di" : "", ggml_type_name(op->src[1]->type));
-    snprintf(name, 256, "%s_ne12=%d_r2=%d_r3=%d", base, ne12, r2, r3);
+    // stored SoA rows (the generic skinny tile over *_SOA): the base type's kernel with FC_mul_mm_soa
+    const bool soa = ggml_metal_is_soa_type(op->src[0]->type);
+    // GGML_MM_SKINNY_GEN_FP=1: the float-product form of the generic tile (every base type but q4_0, whose skinny
+    // kernels are their own); float A/B tiles: 8192 + 2048 B of threadgroup memory
+    static const bool gen_fp = getenv("GGML_MM_SKINNY_GEN_FP") != nullptr && atoi(getenv("GGML_MM_SKINNY_GEN_FP")) != 0;
+    const bool fp = gen_fp && ggml_metal_soa_base_type(op->src[0]->type) != GGML_TYPE_Q4_0;
+    // the stored q4_K reader's scale form (FC_MUL_MM + 7): exact d*sc as every pick kernel (the mul_mm bodies, the
+    // ext readers, the width-3..5 kernels), or upstream's half d/16 quotient for the high-nibble tiles when the
+    // constant is left unset - which is what the tile did until 2026-09-16 (perf/w6-verify-cliff.md: the
+    // deterministic 1e-5-median deviation). GGML_MM_SKINNY_GEN_EXACT=0 reproduces the unset form for the A/B.
+    static const bool gen_exact = !getenv("GGML_MM_SKINNY_GEN_EXACT") || atoi(getenv("GGML_MM_SKINNY_GEN_EXACT")) != 0;
+    snprintf(base, 256, "kernel_mul_mm_skinny_%s%s_%s%s", ggml_type_name(ggml_metal_soa_base_type(op->src[0]->type)), di ? "_di" : "", ggml_type_name(op->src[1]->type), fp ? "_fp" : "");
+    snprintf(name, 256, "%s%s%s_ne12=%d_r2=%d_r3=%d", base, soa ? "_soa" : "", soa && gen_exact ? "_ex" : "", ne12, r2, r3);
 
     ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
     if (!res.pipeline) {
         ggml_metal_cv_t cv = ggml_metal_cv_init();
 
+        ggml_metal_cv_set_bool (cv, soa, FC_MUL_MM + 6);
+        if (soa && gen_exact) {
+            ggml_metal_cv_set_bool(cv, true, FC_MUL_MM + 7);
+        }
         ggml_metal_cv_set_int16(cv, (int16_t) ne12, FC_MUL_MM + 2);
         ggml_metal_cv_set_int16(cv, (int16_t) ne13, FC_MUL_MM + 3);
         ggml_metal_cv_set_int16(cv, (int16_t) r2,   FC_MUL_MM + 4);
@@ -765,7 +780,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm_skinny(gg
     res.nr0  = 32;
     res.nr1  = 8;
     res.nsg  = 2;
-    res.smem = 4096 + 1024;
+    res.smem = fp ? 8192 + 2048 : 4096 + 1024;
 
     return res;
 }
