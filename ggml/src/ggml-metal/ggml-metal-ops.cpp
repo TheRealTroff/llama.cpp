@@ -4953,7 +4953,7 @@ size_t ggml_metal_op_flash_attn_ext_extra_tmp(const ggml_tensor * op) {
     // note: always reserve the temp buffer to avoid graph reallocations
     //if (ggml_metal_op_flash_attn_ext_use_vec(op)) {
     if (true) {
-        const int64_t nwg = 32;
+        const int64_t nwg = ggml_metal_flash_attn_ext_nwg_max();
         const int64_t ne01_max = std::min(ne01, 32);
 
         // temp buffer for writing the results from each workgroup
@@ -5099,7 +5099,9 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
 
     if (!use_vec) {
         // half8x8 kernel
-        const int nqptg = ggml_metal_flash_attn_ext_q16(op, use_gqa_reuse ? gqa_ratio : 1) ? 16 : OP_FLASH_ATTN_EXT_NQPSG; // queries per threadgroup
+        // the 24-row decode tile (GGML_FA_Q24, O register-resident) before the 16-row prefill tile
+        const int is_or = ggml_metal_flash_attn_ext_q24(op, use_gqa_reuse ? gqa_ratio : 1) > 0 ? 1 : 0;
+        const int nqptg = is_or ? 24 : ggml_metal_flash_attn_ext_q16(op, use_gqa_reuse ? gqa_ratio : 1) ? 16 : OP_FLASH_ATTN_EXT_NQPSG; // queries per threadgroup
         const int ncpsg = OP_FLASH_ATTN_EXT_NCPSG; // cache values per simdgroup
 
         GGML_ASSERT(nqptg <= 32);
@@ -5195,7 +5197,9 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
         // the shared memory needed for the simdgroups to load the KV cache
         // each thread loads (dequantizes) 16 head elements, there are 32 threads in th SG
         //
-#define FATTN_SMEM(nsg) (GGML_PAD((nqptg*(ne00 + 2*GGML_PAD(ne20, 64) + 2*(2*ncpsg)) + is_q*(16*32*(nsg)))*(sizeof(float)/2), 16))
+        // the OR form keeps O in registers: no O scratch; its K scratch (is_q) holds the staged pair table and
+        // the per-row softmax factors (24 x (256 + 4 x 64) halves + 16 x 32 x 8 = exactly 32 KB at nsg 8)
+#define FATTN_SMEM(nsg) (GGML_PAD((nqptg*(ne00 + (is_or ? 0 : 2*GGML_PAD(ne20, 64)) + 2*(2*ncpsg)) + is_q*(16*32*(nsg)))*(sizeof(float)/2), 16))
 
         //int64_t nsgmax = 4;
         //
@@ -5216,7 +5220,8 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
         // the 16-row query tile runs 8 simdgroups (one score tile and 4 output tiles per simdgroup: zero
         // spill where 4 simdgroups spill 32 B, perf/fa-long-context.md); GGML_FA_Q16_NSG overrides
         static const int env_fa_q16_nsg = getenv("GGML_FA_Q16_NSG") ? atoi(getenv("GGML_FA_Q16_NSG")) : 8;
-        int32_t nsg = ne00 >= 512 ? 8 : (nqptg == 16 ? env_fa_q16_nsg : 4);
+        static const int env_fa_q24_nsg = getenv("GGML_FA_Q24_NSG") ? atoi(getenv("GGML_FA_Q24_NSG")) : 8;
+        int32_t nsg = ne00 >= 512 ? 8 : (nqptg == 24 ? env_fa_q24_nsg : nqptg == 16 ? env_fa_q16_nsg : 4);
 
         const size_t smem = FATTN_SMEM(nsg);
 
@@ -5274,14 +5279,21 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
         // Width three and GQA4 have different grid shapes from the GQA6 target path and
         // benefit from their own occupancy settings.  Keep them opt-in so untuned GPUs
         // inherit the general setting.
-        const int requested_nwg = is_turbo4_kv && env_fa_turbo_nwg > 0 ? env_fa_turbo_nwg :
+        const int requested_nwg0 = is_turbo4_kv && env_fa_turbo_nwg > 0 ? env_fa_turbo_nwg :
                                   use_gqa_reuse && gqa_ratio == 4 && env_fa_gqa4_nwg > 0 ? env_fa_gqa4_nwg :
                                   use_gqa_reuse && ne01 == 3 && env_fa_gqa_w3_nwg > 0 ? env_fa_gqa_w3_nwg :
                                   env_fa_mm_nwg;
 
+        // the 24-row tile's grid is one threadgroup per KV head per split; GGML_FA_Q24_NWG gives it its own split
+        // width (capped by GGML_FA_NWG_MAX, 64 max: two partials per reduce lane), default 0 = the route's width
+        // (the pick's 20): byte-identical end to end; 40 is -1.5% per call at 96K and worse at 8K/24K, and a
+        // lineage move (perf/fa-decode-tile24.md)
+        static const int env_fa_q24_nwg = getenv("GGML_FA_Q24_NWG") ? atoi(getenv("GGML_FA_Q24_NWG")) : 0;
+        const int requested_nwg = is_or && env_fa_q24_nwg > 0 ? env_fa_q24_nwg : requested_nwg0;
+
         int32_t nwg = 1;
         if (requested_nwg > 1 && ne01 <= 32) {
-            nwg = std::min<int32_t>(requested_nwg, 32);
+            nwg = std::min<int32_t>(requested_nwg, ggml_metal_flash_attn_ext_nwg_max());
 
             // never launch more workgroups than there are cache chunks
             nwg = std::min<int32_t>(nwg, (ne11 + ncpsg - 1)/ncpsg);
@@ -5352,7 +5364,7 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
             ggml_metal_encoder_set_buffer  (enc, bid_tmp, 1);
             ggml_metal_encoder_set_buffer  (enc, bid_dst, 2);
 
-            ggml_metal_encoder_dispatch_threadgroups(enc, nrows, 1, 1, 32*nwg, 1, 1);
+            ggml_metal_encoder_dispatch_threadgroups(enc, nrows, 1, 1, 32*std::min<int32_t>(nwg, 32), 1, 1);
         }
 #undef FATTN_SMEM
     } else {

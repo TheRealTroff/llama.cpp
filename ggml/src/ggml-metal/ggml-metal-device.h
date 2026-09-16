@@ -251,6 +251,8 @@ struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_att
 
 bool ggml_metal_flash_attn_ext_q16(const struct ggml_tensor * op, int32_t gqa_heads);
 int  ggml_metal_flash_attn_ext_tr(const struct ggml_tensor * op);
+int  ggml_metal_flash_attn_ext_q24(const struct ggml_tensor * op, int32_t gqa_heads);
+int  ggml_metal_flash_attn_ext_nwg_max(void);
 
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext(
         ggml_metal_library_t lib,

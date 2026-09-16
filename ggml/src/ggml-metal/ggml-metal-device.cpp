@@ -1947,6 +1947,32 @@ bool ggml_metal_flash_attn_ext_q16(const ggml_tensor * op, int32_t gqa_heads) {
     return fa_q16_dec && tr16 && op->src[0]->ne[1]*gqa_heads >= 16;
 }
 
+// GGML_FA_Q24: the 24-row decode tile of the Turbo4 TR form (perf/longctx-inventory-sep15.md): the GQA route's
+// query rows x heads (4 x 6) in one threadgroup, each dequantized K/V tile feeding three query tiles, O
+// register-resident. 1 = staged pair table (qtl4w24), 2 = constant table (qt24w); "=0" off.
+// GGML_FA_Q24_KVMIN gates it to caches of at least that many entries (default 0 = every length).
+int ggml_metal_flash_attn_ext_q24(const ggml_tensor * op, int32_t gqa_heads) {
+    static const int fa_q24 = getenv("GGML_FA_Q24") != nullptr ? atoi(getenv("GGML_FA_Q24")) : 0;
+    static const int fa_q24_kvmin = getenv("GGML_FA_Q24_KVMIN") != nullptr ? atoi(getenv("GGML_FA_Q24_KVMIN")) : 0;
+    if (fa_q24 <= 0 || ggml_metal_flash_attn_ext_tr(op) <= 0) {
+        return 0;
+    }
+    if (op->src[0]->ne[0] != 256 || op->src[2]->ne[0] != 256) {
+        return 0;
+    }
+    if (gqa_heads <= 1 || op->src[0]->ne[1]*gqa_heads != 24 || op->src[1]->ne[1] < fa_q24_kvmin) {
+        return 0;
+    }
+    return fa_q24;
+}
+
+// GGML_FA_NWG_MAX: the split-K width cap of the batched FA kernels (default 32 = one partial per reduce lane;
+// up to 64, where the reduce sums two partials per lane - the 24-row tile's grid needs it)
+int ggml_metal_flash_attn_ext_nwg_max(void) {
+    static const int fa_nwg_max = getenv("GGML_FA_NWG_MAX") != nullptr ? std::max(1, std::min(64, atoi(getenv("GGML_FA_NWG_MAX")))) : 32;
+    return fa_nwg_max;
+}
+
 ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext(
         ggml_metal_library_t lib,
         const ggml_tensor * op,
@@ -2020,6 +2046,10 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext(
         if (ggml_metal_flash_attn_ext_q16(op, gqa_heads)) {
             form = fa_tr == 7 ? "qtnw16" : (fa_tr == 6 || fa_tr == 8) ? "qtn16" : (fa_tr == 4 || fa_tr == 5) ? "qth16" : fa_tr == 9 ? "qt16w" : "qt16"; // the 16-row tile: constant or half table (no scratch for the staged one)
         }
+        const int q24 = ggml_metal_flash_attn_ext_q24(op, gqa_heads);
+        if (q24 > 0) {
+            form = q24 == 2 ? "qt24w" : "qtl4w24"; // the 24-row decode tile (byte-identical forms only)
+        }
         snprintf(base, 256, "kernel_flash_attn_ext_%s_turbo4_dk%d_dv%d", form, dk, dv);
     }
     // QT form only: Q^T tiles held in registers across the KV loop (perf/fa-long-context.md); "=0" off
@@ -2029,7 +2059,12 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext(
     // every length (perf/fa-long-context.md). GGML_FA_QR_KVMAX overrides the prefill cutoff.
     static const int fa_qr_kvmax = getenv("GGML_FA_QR_KVMAX") != nullptr ? atoi(getenv("GGML_FA_QR_KVMAX")) : 65536;
     const bool qr_len_ok = nwg > 1 || op->src[1]->ne[1] <= fa_qr_kvmax;
-    const int qr = (fa_qr > 0 && qr_len_ok && strstr(base, "_qt") != nullptr) ? std::min(fa_qr, dk/8) : 0;
+    int qr = (fa_qr > 0 && qr_len_ok && strstr(base, "_qt") != nullptr) ? std::min(fa_qr, dk/8) : 0;
+    // the 24-row tile's register head is its own knob (three query tiles per dim tile): GGML_FA_Q24_QR
+    static const int fa_q24_qr = getenv("GGML_FA_Q24_QR") != nullptr ? atoi(getenv("GGML_FA_Q24_QR")) : -1;
+    if (fa_q24_qr >= 0 && ggml_metal_flash_attn_ext_q24(op, gqa_heads) > 0) {
+        qr = std::min(fa_q24_qr, dk/8);
+    }
 
     snprintf(name, 256, "%s_mask=%d_sinks=%d_bias=%d_scap=%d_kvpad=%d_bcm=%d_ns10=%d_ns20=%d_nsg=%d_nwg=%d_gqah=%d%s%s",
             base,
