@@ -91,3 +91,26 @@ the UD line means the decode-path pairwise KLD (`-b 4 -ub 4` against the kept V1
 before any pick, and the owner's explicit take. The 8K sha match was a 300-token coincidence, and this note's
 "byte-identical" above is struck to "sha held at 8K only". Depth 5 at 96K itself is far off the depth-3 pick (11-14
 vs ~20 t/s, acceptance 38-42% vs 57%): the lever's value is the width-6..8 rounds of adaptive speculation.
+
+### Probe 1 at widths 7 and 8 (depth 6 and 7, UD, Turbo4, 300 tokens, benchprompt at 8K, ABAB, fa24 build)
+
+| depth (width) | arm | decode t/s | acc | rounds | **verify round** | sha |
+|---|---|--:|--:|--:|--:|---|
+| 6 (7) | base | 15.75 / 16.00 | 46.7% | 78.9 | 239.4 ms | `9128633c6cfa` |
+| 6 (7) | `GGML_MM_SKINNY_GEN=6` | **20.70 / 20.69 (+30%)** | 45.7% | 80.2 | **180.8 ms (-24.5%)** | `a409bb1b45df` |
+| 7 (8) | base | 15.63 / 15.78 | 39.6% | 79.5 | 240.2 ms | `9128633c6cfa` |
+| 7 (8) | `GGML_MM_SKINNY_GEN=6` | **20.70 / 20.65 (+31%)** | 39.9% | 79.1 | **183.5 ms (-23.6%)** | `a409bb1b45df` |
+
+The same -24% per round as width 6 at 8K: the ext reader at widths 7-8 runs r1_4 x 2 passes, the tile one pass.
+The sha moves here at 8K already (base = the depth-3 canonical text `9128633c6cfa`, the tile = the width-6 text
+`a409bb1b45df`), which settles the class: **NUM-TG on the UD line at every width it touches**; at widths 7-8 the FA
+runs the plain batched route in both arms (the GQA tile plan covers widths 3-6 only), so this is the matmul alone.
+Depths 6-7 at 8K (16 -> 20.7 t/s) stay below depth 3 (27.8), as expected - the lever is per-round, for the wide
+rounds of adaptive speculation.
+
+**Status (2026-09-16 night): probe 1 priced at 8K (widths 6/7/8: round -24..-25%) and 96K (width 6: -15%); NOT
+byte-identical (NUM-TG). Owner: "wait for that until picking". The pick prerequisite is the UD line's decode-path
+pairwise KLD (`-b 4 -ub 4` vs the kept V1 decode base) at widths 6-8, then the owner's take; manifest entry
+`GGML_MM_SKINNY_GEN=6` proposed, class NUM-TG, ud line (the q4 line's Q4_0 tensors keep their own skinny SoA
+kernel; the route would touch only its q6_K/q8_0 tensors at widths 6-8, unmeasured there).** The SoA-layout-native
+tile (candidate 2) stays open only if the KLD refuses this form.
