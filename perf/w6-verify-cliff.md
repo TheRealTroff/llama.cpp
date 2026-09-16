@@ -245,3 +245,26 @@ So the fidelity statement for the owner is two numbers, not one: **the tile's ow
 chaotic position.** Which side of that position is "right" is not a kernel question - against bf16 both arms read
 0.0128 +/- 0.0015 there - but it is answerable per position with the bf16 file in a paired design (which arm the
 trained model agrees with at 6326 and its cascade).
+
+### Attribution and the tile-vs-tile correlation (20:32-21:22)
+
+| arm vs the width-4 pick base | mean KLD | median | 99.9% | max | same-top |
+|---|---:|---:|---:|---:|---:|
+| the tile on every format (`GEN=6`) | 0.000505 | 0.000013 | 0.012099 | 9.76 | 99.699 |
+| the tile on q4_K / q5_K / iq4_xs only (`GEN_TYPES=kq`; q6_K head, q3_K, iq4_nl, iq3_s, q8_0 keep their routes) | see log | | 0.011983 | 17.7 | 99.690 |
+
+The deviation lives in the three bulk formats' path, not in the remaining formats' reader or the lm_head (the
+restricted arm has the same profile, and its chaotic position flips harder). And the two tiles' deviations from
+the pick base are **the same vector**: Fisher corr(half tile, float tile) pooled **0.989**, median 0.987 at every
+margin (ties 0.986, confident 0.989), the same 70/71 tie flips, KL medians 1.3e-5 both, both flipping position
+6326 (to different tokens, 15 vs 73090, at 8.9 / 8.2 nats: a position where the model has no stable answer).
+
+So the mechanism is **deterministic and shared by the half and float forms**: not the MMA operand precision, not
+the half rounding of weights, not rounding noise. What the two forms share and the pick's kernels do not: the
+tile's data path - the stored-row reader called per (block, 16-element tile) from the tile, the activations
+rounded through half inside the tile, the 64-wide K slices summed by 8x8 MMA blocks. The Sep 4 refutation ran the
+same tile through the AoS dequantizers on the plain file and was sha-identical to the pick at width 4 over
+300/600 tokens, which points at the SoA-row path as the suspect; the prefill `mul_mm` bodies use the same
+`dequantize_soa_mm` and price as exact, so it is the tile's use of it (indexing, `ne00`, the row pointer) or the
+B side, not the reader itself. Unresolved tonight; an op-level dump of one real matmul under both routes (the
+eval-callback dump, as `LLAMA_FA_DUMP` does for FA) is the tool that would settle it in one run.
