@@ -154,3 +154,38 @@ the MMA (the ext reader multiplies in float) and sums K in 64-wide 8x8 slices.
 explicit take is the gate. If refused: the SoA-native tile with float products (candidate 2, exact dequant into the
 A tile as float, or a float8x8 A operand at half the MMA rate) is the form that would keep the width-6 speed on
 the pick's numerics - unbuilt. The width-6 base (12.2 GB) stays at `logits/kld-base-kld-pair-v2dec6-sep16.dat`.
+
+## Probe 2: the float-product form (owner: "investigate the float-product SoA tile"; commit `451bb6032`)
+
+`GGML_MM_SKINNY_GEN_FP=1`: the same tile with `a_t = float` - the exact dequant lands in a float A tile, the
+activations are rounded through half as the f16y readers do and held as float, float x float products into the
+float 8x8 accumulate. Per product this is the ext reader's arithmetic; only the K-sum order (64-wide 8x8 slices)
+differs. Prescreen: 48 B spill on every float instance (the doubled prefetch pair), the half form 0.
+
+| depth 5, UD, Turbo4, 8K | decode t/s | acc | sha |
+|---|--:|--:|---|
+| base (ext SoA reader, r1_3 x 2) | 15.72 | 49.5% | `a409bb1b45df` |
+| half tile (`GEN=6`) | 20.06 | 49.5% | `a409bb1b45df` |
+| **float tile (`GEN=6 GEN_FP=1`)** | **14.67 / 14.95** | 50.5% | **`9128633c6cfa`** |
+
+| vs the width-6 decode base (the ext reader) | mean KLD | median | 99.0% | 99.9% | max | same-top | overlap |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| half tile | 0.000488 | 0.000012 | 0.000535 | 0.012607 | 9.05 | 99.670 | 99.707 |
+| **float tile** | **0.000462 +/- 0.000347** | 0.000012 | 0.000521 | 0.012797 | 8.49 | 99.666 | 99.709 |
+
+Two findings, both against the hypothesis:
+
+1. **Speed: the float tile is slower than the two-pass reader** (14.8 vs 15.7 t/s; the half tile 20.1). The float
+   MMA runs at a fraction of the half rate on this GPU and the skinny tile at K = 5120-17408 turns out to be MMA-issue
+   bound, not stream-bound; plus the spill. Dead as a form.
+2. **Numerics: the float products change nothing** - the float tile sits at the same 4.6e-4 / 99.67% from the ext
+   reader as the half tile. So the half rounding of the dequantized weights was NOT the mechanism of the 4.9e-4;
+   the K-sum order (or something else shared by both tiles) is - OR the ext reader is the one that sits off, and
+   both tiles are near the pick's numerics. The sha says the latter is worth checking: **the float tile at depth 5
+   reproduces the depth-3 canonical text `9128633c6cfa`, which the width-6 base does not** (`a409bb1b45df`).
+
+So the question moved: which width-6 kernel is closer to the pick's own decode numerics (the width-4 SoA kernels,
+KLD-priced at 2.6e-5 from the prefill path)? Both width-6 arms are being scored at `-b 6 -ub 6` against the standing
+V1 width-4 decode base of 2026-09-09 (`logits/kld-base-kld-pair-v1dec4-sep09.dat`, same positions; V2 vs V1 at
+width 4 = 5e-6): if the ext reader reads ~4e-4 there and the tile ~3e-5, the "NUM-TG cost" of the tile is really
+the removal of the ext reader's own deviation, and the pairwise table above had the sign backwards.
