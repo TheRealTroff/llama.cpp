@@ -268,3 +268,37 @@ same tile through the AoS dequantizers on the plain file and was sha-identical t
 `dequantize_soa_mm` and price as exact, so it is the tile's use of it (indexing, `ne00`, the row pointer) or the
 B side, not the reader itself. Unresolved tonight; an op-level dump of one real matmul under both routes (the
 eval-callback dump, as `LLAMA_FA_DUMP` does for FA) is the tool that would settle it in one run.
+
+### The paired run against the trained model (bf16 reference on `/Volumes/offload`, 21:47-22:01)
+
+Reader and tile scored per position against the bf16 as-trained file (the reader's width-6 logits regenerated
+first; the same 24,552 positions; `LLAMA_KLD_FLOOR`-class 32-nat window on the reference side):
+
+| arm vs bf16 | mean KLD | median | 99.9% | max | same-top | ties (n 3563) | margin 0.3-2 (n 10800) | confident (n 10189) |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| the ext reader (the pick) | 0.010904 | 0.002636 | 0.793 | 13.27 | 96.583 | 79.905 | 98.972 | 99.882 |
+| the tile | 0.011152 | 0.002647 | 0.870 | 12.09 | 96.546 | 79.736 | 98.917 | 99.912 |
+
+Paired per position, KL(bf16||tile) - KL(bf16||reader): **mean +0.000247 +/- 0.000452 (sem), median 4e-7; without
+chunk 6: -0.000026 +/- 0.000032**; the tile is the further arm at 52.7% of positions (a real but tiny tilt: the
+excess over 50% is 8 sigma of a sign test, worth ~1e-5 per position, 1/1000 of the weights' distance). Fisher
+corr(reader, tile) under bf16 = 0.988 pooled, 0.998 median: against the trained model the two arms are the same
+kernel to three digits - both carry the Q4_K_M quantization's 0.011, and that is the whole picture; the tile's own
+1.3e-5 rides on top of it at the 1/1000 level.
+
+**At the chaotic positions the flips go both ways** - position 6326: bf16 says 6278 (margin 1.53), the reader
+agrees (0.54), the tile flips to 15 (11.3 nats): the tile lost that one. Position 6494: bf16 says 67, the tile
+agrees (0.70), the reader says 16 (2.12): the reader lost. 7066: both wrong. And the largest positions of chunk 6
+(6863: 13.3 nats for BOTH arms, 6824: 11.5 both, 15418: 11.7 both) are the quantized weights' own catastrophes,
+identical in both arms - chunk 6 is where the Q4 model is already wrong, and the kernel-level noise decides
+which wrong answer.
+
+**Status (2026-09-16 22:00): PRICED THREE WAYS.** (1) Pairwise vs the pick's width-6 route: 4.9e-4 mean, one
+position; (2) vs the pick's width-4 decode base: the reader 2.5e-5 = the pick, the tile 5e-4 = 3x the reader's
+amplitude (median 1.3e-5), deterministic, shared by the float form, in the bulk formats' tile path, mechanism
+unidentified; (3) paired vs the trained model: +2.5e-4 +/- 4.5e-4 (not significant), same-top -0.04 pt, 52.7% of
+positions further, one big flip lost and one won. Speed: round -24% at widths 6-8 (8K), -15% at 96K (width 6).
+**Adoption = owner** (NUM-TG on the UD line; the trained-model view says the cost is below the resolution of
+24K positions, the kernel view says it is a real 3x-amplitude deviation with an unknown cause). If wanted on the
+pick's numerics instead: find the mechanism (an op-level dump of one real matmul under both routes) - the fix may
+be one line.
