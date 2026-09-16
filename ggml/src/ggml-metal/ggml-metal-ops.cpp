@@ -5285,8 +5285,9 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
                                   env_fa_mm_nwg;
 
         // the 24-row tile's grid is one threadgroup per KV head per split: its own split width (GGML_FA_Q24_NWG,
-        // default 48 = 192 threadgroups on 4 KV heads), capped by GGML_FA_NWG_MAX (64 max: two partials per reduce lane)
-        static const int env_fa_q24_nwg = getenv("GGML_FA_Q24_NWG") ? atoi(getenv("GGML_FA_Q24_NWG")) : 48;
+        // default 40 = the measured best at 8K/24K/96K, 160 threadgroups on 4 KV heads; perf/fa-decode-tile24.md),
+        // capped by GGML_FA_NWG_MAX (64 max: two partials per reduce lane)
+        static const int env_fa_q24_nwg = getenv("GGML_FA_Q24_NWG") ? atoi(getenv("GGML_FA_Q24_NWG")) : 40;
         const int requested_nwg = is_or && env_fa_q24_nwg > 0 ? env_fa_q24_nwg : requested_nwg0;
 
         int32_t nwg = 1;

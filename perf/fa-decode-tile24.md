@@ -1,6 +1,6 @@
 # The 24-row Turbo4 decode FA tile (2026-09-16, branch `exp/fa-decode-tile`, worktree `llama.cpp-fa24`)
 
-Status: **open** - built, per-call timed, the 8K sha gate and the 96K e2e pair are below as they land.
+Status: **built and priced, adoption = owner** (2026-09-16): -19.5% per decode FA call at 96K, verify round -4.6% at 96K on a mirrored pair, byte-identical per partial, the 40-way split a lineage move.
 Starts from `longctx-inventory-sep15.md` (the lever: the GQA6 decode route ran 24 rows as three 8-row
 threadgroups, each streaming and dequantizing the whole KV split - 10.5 instr/GFLOP against the prefill
 tile's 4.4; the dequant chain ~25-30% of cycles after the nwg-20 split took the latency half; re-sized worth
@@ -124,4 +124,19 @@ Round time = predicted_ms / (n_predict - accepted), the trajectory-free number: 
 against the -5.5% sized from the per-call gain (the profiled share was taken with profiler overhead on the FA
 call; -19.5% x ~24% real share = -4.7%). The t/s moves less (+1.2%) because the forked text drafts worse (2.59
 vs 2.68 tokens per round) - trajectory, not kernel. Prefill untouched (the prefill route is nwg 1, Q = 16).
-The mirror arms (n40b, baseb) follow.
+Mirror arms (same session, same build): tile again 19.31 t/s, acc 53.5%, **133.48 ms/round**, sha `e867940fe47f`
+(deterministic); base again 19.09 t/s, acc 57.0%, **139.83 ms/round**, sha `98f184a20a9c`. Prefill 1095.6 s in
+both. **The pair holds: 139.8 -> 133.4 ms per verify round at 96K, -4.6%, on both orderings.**
+
+## Where it stands (2026-09-16 evening)
+
+Built, gated, priced. **Adoption = owner**: a lineage move on the Turbo4 arms (the 40-way reduce; the tile
+itself byte-identical, proven at nwg 20), f16 arms and prefill untouched; if picked, the four flags go from
+`proposed` to `pick` and the Turbo4 shas re-mint as for nwg 20. The code default of `GGML_FA_Q24_NWG` is 40.
+Width-specific: the tile engages at ne01 x gqa_heads == 24 only (verify width 4 on GQA6); widths 3/5/6 keep
+their routes - width 3 could take the same tile padded (18 of 24 rows, one KV stream instead of three),
+width 5 needs a 32-row tile (fits the budget only with the constant table; prescreen first).
+
+Next on the kernel, from the census join (MMA issue 59% of cycles, issue 85%, 4.97 TFLOPS = 71% of the
+mul_mm roof): the staged-table convert stall (~3%), the per-chunk softmax / P round trip / barriers
+(~11% issued), the 64 B spill (where it lands is in the MIR join). Each a few percent, none a 20% item.
