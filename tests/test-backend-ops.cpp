@@ -53,6 +53,14 @@
 #   define N_THREADS std::thread::hardware_concurrency()
 #endif
 
+
+// GGML_TEST_SEED=<n>: seed every input generator deterministically (bitwise comparison of two routings of the
+// same case across two processes, perf/fa-decode-tile24.md); unset = std::random_device as before
+static unsigned int test_seed() {
+    static const char * env = getenv("GGML_TEST_SEED");
+    if (env) { return (unsigned int) atoi(env); }
+    return std::random_device{}();
+}
 static void init_tensor_uniform(ggml_tensor * tensor, float min = -1.0f, float max = 1.0f) {
     size_t nels = ggml_nelements(tensor);
     std::vector<float> data(nels);
@@ -61,7 +69,7 @@ static void init_tensor_uniform(ggml_tensor * tensor, float min = -1.0f, float m
         static const size_t n_threads = N_THREADS;
 
         auto init_thread = [&](size_t start, size_t end) {
-            thread_local std::default_random_engine gen(std::random_device{}());
+            thread_local std::default_random_engine gen(test_seed());
             std::uniform_real_distribution<float> distribution(min, max);
             for (size_t i = start; i < end; i++) {
                 data[i] = distribution(gen);
@@ -162,8 +170,7 @@ static void init_tensor_kq_mask(ggml_tensor * tensor, float min = -1.0f, float m
     std::vector<float>       data_f32(ne0*ne1*ne2*ne3);
     std::vector<ggml_fp16_t> data_f16(ne0*ne1*ne2*ne3);
 
-    std::random_device rd;
-    std::mt19937 gen(rd());
+    std::mt19937 gen(test_seed());
     std::uniform_real_distribution<float> dis(min, max);
 
     for (size_t i = 0; i < data_f32.size(); i++) {
@@ -178,12 +185,12 @@ static void init_tensor_kq_mask(ggml_tensor * tensor, float min = -1.0f, float m
     const int n_inf_zero_blocks = 0.2*(ne0*ne1*ne2*ne3)/(blck0*blck1);
 
     for (int b = 0; b < n_inf_zero_blocks; b++) {
-        const int p3 = (rd() % ne3);
-        const int p2 = (rd() % ne2);
-        const int p1 = (rd() % ne1);
-        const int p0 = (rd() % ne0);
+        const int p3 = (gen() % ne3);
+        const int p2 = (gen() % ne2);
+        const int p1 = (gen() % ne1);
+        const int p0 = (gen() % ne0);
 
-        bool inf = rd() & 1;
+        bool inf = gen() & 1;
 
         for (int i1 = 0; i1 < blck1 && p1 + i1 < ne1; i1++) {
             const int idx = p3*ne2*ne1*ne0 + p2*ne1*ne0 + (p1 + i1)*ne0 + p0;
@@ -209,8 +216,7 @@ static void init_tensor_tril(ggml_tensor * tensor, float min = -1.0f, float max 
 
     std::vector<float> data_f32(ne0*ne1*ne2*ne3);
 
-    std::random_device rd;
-    std::mt19937 gen(rd());
+    std::mt19937 gen(test_seed());
     std::uniform_real_distribution<float> dis(min, max);
 
     for (int64_t i3 = 0; i3 < ne3; i3++) {
@@ -1457,6 +1463,19 @@ struct test_case {
 
             std::vector<float> f1 = tensor_to_float(t1);
             std::vector<float> f2 = tensor_to_float(t2);
+
+            // GGML_TEST_DUMP=<dir>: the tested backend's op outputs as raw floats, one file per op in
+            // encounter order, for bitwise comparison of two routings of the same case (perf/fa-decode-tile24.md)
+            {
+                static const char * dump_dir = getenv("GGML_TEST_DUMP");
+                static int dump_n = 0;
+                if (dump_dir && t2->op != GGML_OP_NONE) {
+                    char fn[1024];
+                    snprintf(fn, sizeof(fn), "%s/%04d-%s.bin", dump_dir, dump_n++, ggml_op_name(t2->op));
+                    FILE * f = fopen(fn, "wb");
+                    if (f) { fwrite(f2.data(), sizeof(float), f2.size(), f); fclose(f); }
+                }
+            }
 
             for (size_t i = 0; i < f1.size(); i++) {
                 // check for nans
@@ -7305,7 +7324,7 @@ struct test_flash_attn_ext : public test_case {
 
         ggml_tensor * m = nullptr;
         if (mask) {
-            m = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, kv, nb, 1, nr23[1]);
+            m = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, kv, getenv("GGML_TEST_MASK_PAD") ? GGML_PAD(nb, 64) : nb, 1, nr23[1]);
             ggml_set_name(m, "m");
         }
 
@@ -7323,13 +7342,57 @@ struct test_flash_attn_ext : public test_case {
         return out;
     }
 
+    // GGML_FA_LOAD=<dir>/<prefix>: replay one FA call dumped by the Metal backend (GGML_FA_DUMP, ggml-metal-ops.cpp):
+    // q/k/v/mask spans + their strides from the manifest, copied element-wise into this case's tensors when the
+    // logical shapes match (perf/fa-decode-tile24.md). Returns false when the files or shapes do not match.
+    static bool load_dumped(ggml_tensor * t, const char * what) {
+        static const char * base = getenv("GGML_FA_LOAD");
+        if (!base) return false;
+        char fn[1024]; snprintf(fn, sizeof(fn), "%s.%s.bin", base, what);
+        FILE * f = fopen(fn, "rb"); if (!f) return false;
+        std::vector<uint8_t> src; { fseek(f, 0, SEEK_END); src.resize(ftell(f)); fseek(f, 0, SEEK_SET); if (fread(src.data(), 1, src.size(), f) != src.size()) { fclose(f); return false; } fclose(f); }
+        // the manifest line for this tensor
+        std::string mpath = std::string(base); mpath = mpath.substr(0, mpath.rfind('/')) + "/manifest.txt";
+        std::string pfx = std::string(base).substr(std::string(base).rfind('/') + 1) + " " + what + " ";
+        FILE * mf = fopen(mpath.c_str(), "r"); if (!mf) return false;
+        char line[2048]; long long ne[4] = {0,0,0,0}; size_t nb[4] = {0,0,0,0}; bool found = false;
+        while (fgets(line, sizeof(line), mf)) {
+            if (strncmp(line, pfx.c_str(), pfx.size()) == 0) {
+                const char * p1 = strstr(line, "ne="); const char * p2 = strstr(line, "nb=");
+                if (p1 && p2 && sscanf(p1, "ne=%lld,%lld,%lld,%lld", &ne[0], &ne[1], &ne[2], &ne[3]) == 4 && sscanf(p2, "nb=%zu,%zu,%zu,%zu", &nb[0], &nb[1], &nb[2], &nb[3]) == 4) found = true;
+                break;
+            }
+        }
+        fclose(mf);
+        if (!found) return false;
+        const int64_t bs = ggml_blck_size(t->type); const size_t ts = ggml_type_size(t->type);
+        const int64_t nb0 = t->ne[0]/bs; // blocks along ne0
+        if (ne[0]/bs != nb0 || (what[0] != 'm' && (ne[1] != t->ne[1] || ne[2] != t->ne[2])) || (what[0] == 'm' && (ne[0] != t->ne[0] || ne[1] > t->ne[1]))) {
+            fprintf(stderr, "GGML_FA_LOAD: %s shape mismatch (dump %lld,%lld,%lld vs case %lld,%lld,%lld)\n", what, ne[0], ne[1], ne[2], (long long) t->ne[0], (long long) t->ne[1], (long long) t->ne[2]);
+            return false;
+        }
+        std::vector<uint8_t> dst(ggml_nbytes(t), 0);
+        const int64_t n1 = ne[1], n2 = ne[2], n3 = ne[3];
+        for (int64_t i3 = 0; i3 < n3; ++i3) for (int64_t i2 = 0; i2 < n2; ++i2) for (int64_t i1 = 0; i1 < n1; ++i1) for (int64_t b = 0; b < nb0; ++b) {
+            const size_t so = b*ts + i1*nb[1] + i2*nb[2] + i3*nb[3];
+            const size_t dofs = b*t->nb[0] + i1*t->nb[1] + i2*t->nb[2] + i3*t->nb[3];
+            if (so + ts > src.size() || dofs + ts > dst.size()) { fprintf(stderr, "GGML_FA_LOAD: %s out of range\n", what); return false; }
+            memcpy(dst.data() + dofs, src.data() + so, ts);
+        }
+        ggml_backend_tensor_set(t, dst.data(), 0, dst.size());
+        fprintf(stderr, "GGML_FA_LOAD: %s loaded from %s\n", what, fn);
+        return true;
+    }
+
     void initialize_tensors(ggml_context * ctx) override {
         for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
             if (strcmp(t->name, "s") == 0) {
                 // make the sink values more noticeable in order to trigger a test failure when the implementation is wrong
                 init_tensor_uniform(t, -10.0f, 10.0f);
             } else if (strcmp(t->name, "m") == 0) {
-                init_tensor_kq_mask(t);
+                if (!load_dumped(t, "mask")) init_tensor_kq_mask(t);
+            } else if (strcmp(t->name, "q") == 0 || strcmp(t->name, "k") == 0 || strcmp(t->name, "v") == 0) {
+                if (!load_dumped(t, t->name)) init_tensor_uniform(t);
             } else {
                 init_tensor_uniform(t);
             }

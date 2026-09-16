@@ -4936,6 +4936,7 @@ size_t ggml_metal_op_flash_attn_ext_extra_blk(const ggml_tensor * op) {
     return res;
 }
 
+
 size_t ggml_metal_op_flash_attn_ext_extra_tmp(const ggml_tensor * op) {
     assert(op->op == GGML_OP_FLASH_ATTN_EXT);
 

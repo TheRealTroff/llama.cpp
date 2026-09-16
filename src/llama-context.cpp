@@ -219,6 +219,48 @@ static int llama_trace_layer(const ggml_tensor * t, int depth = 0) {
     return -1;
 }
 
+
+// LLAMA_FA_DUMP=<dir>: dump the inputs and output of every FLASH_ATTN_EXT node of the first graph whose FA nodes
+// have LLAMA_FA_DUMP_NT (default 4) query tokens, from the scheduler's eval callback (the node's sources are
+// still live there; a post-graph read sees the allocator's reuse). Files <dir>/fa<i>.<q|k|v|mask|dst>.bin +
+// manifest.txt, replayable by test-backend-ops GGML_FA_LOAD (perf/fa-decode-tile24.md).
+static bool llama_fa_dump_cb_eval(struct ggml_tensor * t, bool ask, void * user_data) {
+    GGML_UNUSED(user_data);
+    static const char * dir = getenv("LLAMA_FA_DUMP");
+    static const int   nt  = getenv("LLAMA_FA_DUMP_NT") ? atoi(getenv("LLAMA_FA_DUMP_NT")) : 4;
+    static int  n_dumped = 0;
+    static bool done = false;
+    if (!dir || done) return false;
+    const bool match = t->op == GGML_OP_FLASH_ATTN_EXT && t->ne[2] == nt;
+    if (ask) return match;
+    if (!match) return true;
+    char fn[1024];
+    snprintf(fn, sizeof(fn), "%s/manifest.txt", dir);
+    FILE * mf = fopen(fn, n_dumped == 0 ? "w" : "a");
+    ggml_tensor * ts[5] = { t->src[0], t->src[1], t->src[2], t->src[3], t };
+    const char * nm[5] = { "q", "k", "v", "mask", "dst" };
+    for (int j = 0; j < 5; ++j) {
+        ggml_tensor * x = ts[j];
+        if (!x) continue;
+        const size_t nb = ggml_nbytes(x);
+        std::vector<uint8_t> buf(nb);
+        ggml_backend_tensor_get(x, buf.data(), 0, nb);
+        snprintf(fn, sizeof(fn), "%s/fa%02d.%s.bin", dir, n_dumped, nm[j]);
+        FILE * f = fopen(fn, "wb");
+        if (f) { fwrite(buf.data(), 1, nb, f); fclose(f); }
+        if (mf) {
+            fprintf(mf, "fa%02d %s type=%s ne=%lld,%lld,%lld,%lld nb=%zu,%zu,%zu,%zu nbytes=%zu name=%s\n", n_dumped, nm[j], ggml_type_name(x->type),
+                (long long) x->ne[0], (long long) x->ne[1], (long long) x->ne[2], (long long) x->ne[3],
+                (size_t) x->nb[0], (size_t) x->nb[1], (size_t) x->nb[2], (size_t) x->nb[3], nb, x->name);
+        }
+    }
+    if (mf) fclose(mf);
+    ++n_dumped;
+    static const int n_max = getenv("LLAMA_FA_DUMP_N") ? atoi(getenv("LLAMA_FA_DUMP_N")) : 16;
+    if (n_dumped >= n_max) { done = true; fprintf(stderr, "llama_fa_dump: wrote %d FA nodes to %s\n", n_dumped, dir); }
+    return true;
+}
+
 static bool llama_trace_cb_eval(struct ggml_tensor * t, bool ask, void * user_data) {
     GGML_UNUSED(user_data);
     auto & st = llama_trace();
@@ -453,6 +495,10 @@ llama_context::llama_context(
     cparams.cb_eval           = params.cb_eval;
     cparams.cb_eval_user_data = params.cb_eval_user_data;
 
+    if (getenv("LLAMA_FA_DUMP") && cparams.cb_eval == nullptr) {
+        cparams.cb_eval           = llama_fa_dump_cb_eval;
+        cparams.cb_eval_user_data = nullptr;
+    }
     if (llama_trace().enabled && cparams.cb_eval == nullptr) {
         LLAMA_LOG_WARN("%s: LLAMA_TRACE_DUMP active - dumping activations to %s\n", __func__, llama_trace().dir.c_str());
         cparams.cb_eval           = llama_trace_cb_eval;
