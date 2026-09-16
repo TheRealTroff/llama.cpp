@@ -32,6 +32,23 @@ one level down, and it bit the `GGML_MV_EXT_V2` work on 2026-08-22.
 
 ## The prod pick
 
+**2026-09-16 late (owner: "Pick it"): + `GGML_MM_SKINNY_GEN=6` on the UD line** - the generic skinny MMA tile over the
+stored SoA rows at verify widths 6-8 (`w6-verify-cliff.md`, merge `148aaa294`): the UD line's Q4_K/Q5_K/IQ4_XS decode
+kernels covered widths 3-5 and widths 6-8 ran the ext SoA reader as two weight passes (depth 5/6/7 at 8K = 16 t/s vs
+27.8 at depth 3); the tile is one pass: **verify round -24% at widths 6-8 (8K), -15% at 96K (width 6); depth 5 at 8K
+16.2 -> 20.5-20.8 t/s.** Numerics: the first form ran the stored q4_K reader with its exact-scale function constant
+UNSET (upstream's half d/16 quotient, a deterministic 5e-4 pairwise KLD - one chaotic position - found by the
+Fisher-metric analysis `perf/kld-fisher.py` and proven at the op level by `LLAMA_MM_DUMP` + `perf/mm-dump-compare.py`
+against an f64 reference from the rows' own header plane: reader 1.6e-7, unset tile 2.5e-3, fixed tile 2.8e-4 = the
+half A tile); **with the constant set the tile is the pick's own decode class: 2.7e-5 mean / 99.910% same-top vs
+the width-4 decode base (the reader 99.914), paired bf16 a wash; NUM-TG in name only (not byte-identical).** Inert
+at depth 3: the gate on prod - ud f16 300 `73ea53bbe98f`, ud Turbo4 300 `9128633c6cfa`, q4 Turbo4 300
+`04ada3a4de10`, and the UD depth-5 arm on the manifest alone 20.49 t/s at `9128633c6cfa` (= the depth-3 canonical
+text: depths 2, 3 and 5 now share it; depth 4's width-5 kernels are the odd text `7e9e464feffb`). Pays under
+variable-width speculation (`LLAMA_SPEC_EV`). The float-product form was refuted (slower than the reader, same
+deviation). Owner on the sha ladder: "it won't matter once we go variable width" - the KLD/Fisher view, not shas,
+gates that pick.
+
 **2026-09-16 night (owner: "bring this to prod", for adaptive speculation): + `GGML_FA_Q24_ROWS=12`** - the 24-row
 decode FA tile at every GQA6 verify width (`fa-decode-tile24.md` widths section, merge `a5fb03c17`): a per-width tile
 plan dispatched as up to three grids into the one reduce - width 3 = one 24-row tile (-18% per call at 96K, -14% at
