@@ -43,7 +43,9 @@ post-merge gate on prod - ud f16 300 `73ea53bbe98f`, ud Turbo4 300 `9128633c6cfa
 macOS 27 arrived the same day: the embedded kernels compile under the new OS compiler with every sha canonical and
 the FA per-call numbers within 1%; b1 13.35 (the 11.97 read at 35 minutes uptime was machine state). Open on branch
 `exp/w6-verify-cliff`: depth 5 on the UD line runs at 16 t/s at 8K against 24-25 at depths 2-4 - the UD SoA
-matmul kernels (Q4_K / IQ4_XS / Q5_K) exist at widths 3-5 only, width 6 falls to the generic readers.
+matmul kernels (Q4_K / IQ4_XS / Q5_K) exist at widths 3-5 only, width 6 runs the ext SoA reader as two passes of three
+columns; probe 1 on the branch (the generic skinny tile over the stored rows, `GGML_MM_SKINNY_GEN=6`) = depth 5
+15.85 -> 19.6-20.1 t/s, byte-identical, adoption = owner.
 
 **2026-09-16 evening (owner: "Of course I'll pick it"): + `GGML_FA_Q24=1 GGML_FA_Q24_QR=0`** - the 24-row Turbo4
 decode FA tile (`fa-decode-tile24.md`, merge `fd92a4421`): the GQA6 route's 6 heads x 4 tokens in one threadgroup,
