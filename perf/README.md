@@ -32,6 +32,19 @@ one level down, and it bit the `GGML_MV_EXT_V2` work on 2026-08-22.
 
 ## The prod pick
 
+**2026-09-16 evening (owner: "Of course I'll pick it"): + `GGML_FA_Q24=1 GGML_FA_Q24_QR=0`** - the 24-row Turbo4
+decode FA tile (`fa-decode-tile24.md`, merge `fd92a4421`): the GQA6 route's 6 heads x 4 tokens in one threadgroup,
+each dequantized K/V tile feeding three query tiles instead of one (instr/GFLOP 10.5 -> 6.5, MMA issue 44 -> 59% of
+cycles), with the O accumulator register-resident (the scratch form's O round trip does not fit 32 KB at 24
+rows) and the split width inherited from the route (`GGML_FA_TURBO_NWG=20`). **BYTE-IDENTICAL end to end** - the
+canonical Turbo4 shas hold at 8K (`9128633c6cfa`) and 96K (`98f184a20a9c`), so no re-mint of shas, only the t/s
+record. Per decode FA call -18.3% at 96K, -17% at 24K, -13.5% at 8K (verify width 4 only; widths 3/5/6 keep their
+routes); **verify round 139.8 -> 132.8 ms (-5.0%), decode 19.10 -> 20.10 t/s (+5.2%) at 96K on the same text**,
+flat at 8K. The 40-way split (`GGML_FA_Q24_NWG=40`, `GGML_FA_NWG_MAX=64`: the reduce now takes up to 64
+partials) is -1.5% more per call at 96K but a lineage move that gained nothing e2e - a dormant knob. Also merged:
+the GQA-reuse route gated below head size 512 (a latent bug of the f16 GQA route at head sizes no model in use
+has, found by the FA suite under the Turbo4 env). Mint TAG `prodpick-sep16-q24` follows.
+
 **2026-09-16 (owner: "I'll take the flag"): + `GGML_FA_TURBO_NWG=20`** - the split-K width of every Turbo4
 batched FA route (the pick's `GGML_FA_MM_NWG=8` stays for the f16 routes). Found on the way to the long-context
 inventory (`longctx-inventory-sep15.md`): the grid of the GQA6 decode route is 3 x 4 x nwg threadgroups, and 240
@@ -334,6 +347,8 @@ routing flag in this table is value-based.
 | `GGML_FA_GQA_F16=1` | off | the gqah=6 GQA-reuse batched FA tile for f16 KV at decode widths 3-6 (was Turbo4-only): -43% per FA call at width 4, decode +2.8% UD, byte-identical. **In the pick since 2026-09-06** | ud-model.md step 11 |
 | `GGML_MM_F16B=1` | off | f16 activations into the prefill mul_mm (one contiguous cast, the `_f16` tiles): -2.9% UD prefill, inert on the acch q4_0 route, byte-identical. **In the pick since 2026-09-06** | ud-model.md step 10 |
 | `GGML_MM_N64_KMAX=20000` | 8192 | lifts the K guard of the 64-column mul_mm tiles so the K=17408 ffn_down takes them. **In the pick since 2026-09-06** | ud-model.md step 8 |
+| `GGML_FA_Q24=1` | 0 (off; **in both picks since 2026-09-16**) | the 24-row Turbo4 decode FA tile for the GQA6 width-4 route (ne01 x gqa_heads == 24, dk = dv = 256, TR form): three query tiles per dequantized K/V tile, O register-resident, nsg 8; byte-identical end to end at the inherited split width; -18.3% per call at 96K, verify round -5.0% at 96K. `=2` = constant-table form (slower). Knobs: `GGML_FA_Q24_QR` (register head, 0 in the pick), `GGML_FA_Q24_NWG` (own split width, 0 = inherit; 40 = a lineage move worth nothing e2e), `GGML_FA_NWG_MAX` (split cap 32 -> up to 64, the reduce sums two partials per lane above 32), `GGML_FA_Q24_NSG`, `GGML_FA_Q24_KVMIN` | fa-decode-tile24.md |
+| `GGML_FA_Q24_QR=0` | -1 (inherit `GGML_FA_QR`; **in both picks since 2026-09-16**) | no register head on the 24-row tile (three query tiles per dim tile: qr 8 spills 144 B and is slower) | fa-decode-tile24.md |
 | `GGML_FA_TURBO_NWG=20` | 0 (inherit `GGML_FA_MM_NWG`; **in both picks since 2026-09-16**) | split-K workgroups for every Turbo4 batched FA route (precedence over the GQA4/W3 values; the drafter's f16 KV keeps its 6): threadgroups in flight, not core multiples (10/15 lose to 16, 20 best, 24-40 flat); -21% per decode FA call at 96K, verify round -6.8% at 96K / -0.8% at 8K; a lineage move (the reduce's `simd_sum` over the partials), kernel numerics unchanged | longctx-inventory-sep15.md |
 | `GGML_FA_GQA_HEADS=4,6` | **auto: 6 on pre-M5 with Turbo4 KV, off on tensor hw** (Turbo4 line only) | Turbo4 FA flattens the query heads sharing a KV head into the Q8 tile; widths 3-6, GQA 4/6. Width 4: 5.3x kernel, -22.9% round. Default-on is a departure from the opt-in convention; the pick sets it explicitly | turbo4-fa-gqa-reuse.md |
 | `GGML_FA_GQA4_NWG=6` | 0 (inherit MM_NWG) | KV split for the drafter's GQA4 reuse route | turbo4-fa-gqa-reuse.md |
