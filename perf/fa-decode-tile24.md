@@ -111,3 +111,17 @@ canonical one while the nwg-20 arm's equals it - the route engaged in both (same
 
 The kernel at 96K is ~30% of the verify round after nwg 20 (48.6 -> ~38 ms of ~141); -19.5% per call is
 ~-5.5% of the round (141.5 -> ~134 ms). 8K: FA is 3% of the round, the tile is -5% per call there = noise.
+
+**96K (`longprompt-96k.txt`, 95508 tokens, UD, Turbo4, depth 3, 300 tokens, `-c 102400`, first pair, unprofiled,
+the fa24 build for both):**
+
+| arm | prefill | decode t/s | acc | tokens/round | **verify round** | sha |
+|---|--:|--:|--:|--:|--:|---|
+| base (the pick's env) | 1095.1 s | 19.10 | 57.0% | 2.68 | **139.79 ms** | `98f184a20a9c` (= the nwg-20 record of 2026-09-16) |
+| 24-row tile, nwg 40 | 1096.2 s | 19.33 | 53.5% | 2.59 | **133.36 ms (-4.6%)** | `e867940fe47f` (= the text of the pre-nwg-20 lineage) |
+
+Round time = predicted_ms / (n_predict - accepted), the trajectory-free number: **-4.6% per round at 96K**
+against the -5.5% sized from the per-call gain (the profiled share was taken with profiler overhead on the FA
+call; -19.5% x ~24% real share = -4.7%). The t/s moves less (+1.2%) because the forked text drafts worse (2.59
+vs 2.68 tokens per round) - trajectory, not kernel. Prefill untouched (the prefill route is nwg 1, Q = 16).
+The mirror arms (n40b, baseb) follow.
