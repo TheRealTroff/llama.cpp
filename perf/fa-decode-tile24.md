@@ -168,3 +168,51 @@ width 5 needs a 32-row tile (fits the budget only with the constant table; presc
 Next on the kernel, from the census join (MMA issue 59% of cycles, issue 85%, 4.97 TFLOPS = 71% of the
 mul_mm roof): the staged-table convert stall (~3%), the per-chunk softmax / P round trip / barriers
 (~11% issued), the 64 B spill (where it lands is in the MIR join). Each a few percent, none a 20% item.
+
+## The numerics-class trap: the q4 line's sha moved (2026-09-16 night, found by the prod mint)
+
+The prod mint after adoption returned the q4 line's Turbo4 600-token arm at `de24d885043f` instead of the
+canonical `b40a84e252af` (300 unchanged, both UD arms canonical). The route print (`GGML_FA_DEBUG=1` now writes
+`fa-route:` lines to stderr - the server suppresses the ggml info log) named it: **the q4 line's decode FA is
+`qtnw`, the TR=7 form (norms folded out of the dequant, half table - the KLD-priced numerics the Q4_0 pick chose
+on 2026-09-08), and the tile only existed in the TR=9 numerics (`qtl4w24`, the staged float table).** On the q4
+line the tile silently swapped the line's approximate form for the exact one; on the UD line (TR=9) the classes
+matched, which is why every UD sha held. The tests could not see it: the pipeline getter answered TR=7 with the
+TR=9 tile, and the test env sets TR=9.
+
+How it was proven, because the first three tools said the opposite:
+
+- `test-backend-ops` bitwise comparison of the two routes (new `GGML_TEST_SEED`, `GGML_TEST_DUMP`): identical on
+  all 36 Turbo4 head-256 cases, with the server's 4-row mask and its padded twin.
+- A post-completion dump of the FA tensors inside the Metal backend: **invalid** - the graph allocator reuses a
+  dead tensor's memory within the same graph, so Q and the FA output read back as later nodes' data. Only the
+  persistent K/V cache views were trustworthy (layer 3 identical, layer 4+ different: the finger pointed at the
+  layer-3 attention). Removed.
+- An eval-callback dump (`LLAMA_FA_DUMP=<dir>`, `llama-context.cpp`: the scheduler syncs at the node, its sources
+  are live): the first width-4 call of the run (the last 4 prompt tokens, `kv 8448`) with identical inputs in both
+  runs and outputs 5e-4 apart. An f64 reference of that call (`faref.py` in the session scratchpad: half-rounded
+  Q, dequantized K/V, exact softmax) ranked them: **the tile 2.1e-6 from exact, the q4 line's `qtnw` 5.1e-4** -
+  the tile was the more accurate kernel, and it was not the line's kernel.
+- The control: `GGML_FA_Q24_KVMIN=1000000` restores the canonical sha.
+
+**Fix (this commit):** a `qtnw24` instantiation (TRM 3, the TRN class) and a class-aware route: TR 9 -> `qtl4w24`
+(or `qt24w`), TR 7 -> `qtnw24`, any other TR form keeps the 8-row route. Prescreen: `qtnw24` nsg 8 spills 64 B at
+qr 0 (112 at qr 4; its 8-row form 32). Per call on the q4 line's own class (TR 7, interleaved):
+
+| kv | `qtnw` (q4 pick) | `qtnw24` | |
+|---|--:|--:|--:|
+| 98304 | 2132 / 2131 | 1860 / 1861 | **-12.7%** |
+| 24576 | 553 / 556 | 491 / 490 | -11.6% |
+| 8448 | 201 / 202 | 186 / 185 | -8.0% |
+
+Smaller than on the UD class because `qtnw` starts 8% faster than `qtl4w` (the folded norm). **Gates: q4 Turbo4
+600 `b40a84e252af`, 300 `04ada3a4de10` - both canonical with the class-aware tile**; the UD path is untouched
+(`qtl4w24` unchanged). 36/36 Turbo4 FA cases under TR 7 with the tile.
+
+An unresolved side note: the harness replay of the dumped call (`GGML_FA_LOAD`) lands 4.3e-4 from the reference
+for all four forms, i.e. it does not feed the server's inputs exactly (the loader or the case's op params) - the
+kernel question was settled by the server-side dumps, so it was not chased.
+
+**The lesson, for every future routing flag: the two lines run different FA numerics forms (TR 7 vs TR 9), so a
+sha gate on one line gates nothing on the other, and a new kernel form must be instantiated in each line's class
+or refuse the other class.**

@@ -7,6 +7,7 @@
 #include <cassert>
 #include <memory>
 #include <string>
+#include <set>
 #include <unordered_map>
 
 struct ggml_metal_device_deleter {
@@ -1954,7 +1955,11 @@ bool ggml_metal_flash_attn_ext_q16(const ggml_tensor * op, int32_t gqa_heads) {
 int ggml_metal_flash_attn_ext_q24(const ggml_tensor * op, int32_t gqa_heads) {
     static const int fa_q24 = getenv("GGML_FA_Q24") != nullptr ? atoi(getenv("GGML_FA_Q24")) : 0;
     static const int fa_q24_kvmin = getenv("GGML_FA_Q24_KVMIN") != nullptr ? atoi(getenv("GGML_FA_Q24_KVMIN")) : 0;
-    if (fa_q24 <= 0 || ggml_metal_flash_attn_ext_tr(op) <= 0) {
+    // the tile exists in two numerics classes and must stay in the line's: TR 9 (qtl4w, the byte-identical staged
+    // table: UD line) and TR 7 (qtnw, the TRN folded-norm form: the Q4_0 line); other TR forms keep the 8-row route
+    // (2026-09-16: the q4 line's sha moved because the tile answered TR 7 with the TR 9 numerics)
+    const int tr = ggml_metal_flash_attn_ext_tr(op);
+    if (fa_q24 <= 0 || !(tr == 9 || tr == 7)) {
         return 0;
     }
     if (op->src[0]->ne[0] != 256 || op->src[2]->ne[0] != 256) {
@@ -2048,7 +2053,9 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext(
         }
         const int q24 = ggml_metal_flash_attn_ext_q24(op, gqa_heads);
         if (q24 > 0) {
-            form = q24 == 2 ? "qt24w" : "qtl4w24"; // the 24-row decode tile (byte-identical forms only)
+            // the 24-row decode tile in the line's numerics class: TR 7 -> qtnw24 (TRN), TR 9 -> qtl4w24 (staged
+            // float table) or qt24w (constant table, GGML_FA_Q24=2)
+            form = fa_tr == 7 ? "qtnw24" : q24 == 2 ? "qt24w" : "qtl4w24";
         }
         snprintf(base, 256, "kernel_flash_attn_ext_%s_turbo4_dk%d_dv%d", form, dk, dv);
     }
@@ -2079,6 +2086,13 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext(
             nsg, nwg, gqa_heads, qr ? "_qr=" : "", qr ? std::to_string(qr).c_str() : "");
 
     ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
+    {
+        static const bool fa_debug = getenv("GGML_FA_DEBUG") != nullptr;
+        if (fa_debug) {
+            static std::set<std::string> seen;
+            if (seen.insert(name).second) fprintf(stderr, "fa-route: %s\n", name);
+        }
+    }
     if (!res.pipeline) {
         ggml_metal_cv_t cv = ggml_metal_cv_init();
 
