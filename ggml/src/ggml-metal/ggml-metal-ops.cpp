@@ -5067,7 +5067,10 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
     // K/V streamed once per 4 rows). The GQA-reuse tile fixes both and was only ever routed for Turbo4 KV.
     static const bool env_fa_gqa_f16 = getenv("GGML_FA_GQA_F16") != nullptr && atoi(getenv("GGML_FA_GQA_F16")) != 0;
     const bool is_f16_kv = op->src[1]->type == GGML_TYPE_F16 && op->src[2]->type == GGML_TYPE_F16;
-    const bool use_gqa_reuse = gqa_ratio_enabled && (is_turbo4_kv || (env_fa_gqa_f16 && is_f16_kv)) &&
+    // head sizes >= 512 run the batched kernel at nsg 8, whose dispatch instantiates the GQA row tile only for
+    // the Turbo4 TR forms (dk 128/256): the flattened grid would run as GQAH = 1 there (wrong output; the f16
+    // hsk 512/576 GQA4 width-3 test cases, found 2026-09-16 - no model in use has such heads)
+    const bool use_gqa_reuse = gqa_ratio_enabled && (is_turbo4_kv || (env_fa_gqa_f16 && is_f16_kv)) && ne00 < 512 &&
                                ne01 >= 3 && ne01 <= 6 && (gqa_ratio == 4 || gqa_ratio == 6) &&
                                !has_sinks && !has_bias &&
                                ne11 % OP_FLASH_ATTN_EXT_NCPSG == 0;

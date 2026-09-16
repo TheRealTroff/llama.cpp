@@ -94,7 +94,20 @@ The manifest carries the four flags as `proposed` (`GGML_FA_Q24=1`, `GGML_FA_NWG
 `GGML_FA_Q24_NWG=40`, `GGML_FA_Q24_QR=0`, `PICK_PROPOSED=1` takes them all); the code default for
 `GGML_FA_Q24_NWG` is 48 and should move to 40 if picked.
 
-## E2e (pending as written; results below as they land)
+## E2e
+
+8K, clean pair on the fa24 build (UD, Turbo4, depth 3, 300 tokens, benchprompt), round time = predicted_ms /
+(n_predict - accepted):
+
+| arm | decode t/s | acc | ms/round | sha |
+|---|--:|--:|--:|---|
+| base (the pick's env) | 27.66 | 66.0% | 105.97 | `9128633c6cfa` (canonical) |
+| 24-row tile, nwg 40 | 26.45 | 62.0% | 106.64 | `7e9e464feffb` |
+
+Flat at 8K, as sized (FA is 3% of the round there; the t/s gap is the forked text's acceptance, 62 vs 66%).
+Route proof by construction: the server log does not carry the ggml pipeline lines even at `-lv 1`, but
+`GGML_FA_Q24_NWG` applies only when the 24-row route is taken, and the nwg-40 arm's sha differs from the
+canonical one while the nwg-20 arm's equals it - the route engaged in both (same env but the width).
 
 The kernel at 96K is ~30% of the verify round after nwg 20 (48.6 -> ~38 ms of ~141); -19.5% per call is
 ~-5.5% of the round (141.5 -> ~134 ms). 8K: FA is 3% of the round, the tile is -5% per call there = noise.
