@@ -189,3 +189,26 @@ KLD-priced at 2.6e-5 from the prefill path)? Both width-6 arms are being scored 
 V1 width-4 decode base of 2026-09-09 (`logits/kld-base-kld-pair-v1dec4-sep09.dat`, same positions; V2 vs V1 at
 width 4 = 5e-6): if the ext reader reads ~4e-4 there and the tile ~3e-5, the "NUM-TG cost" of the tile is really
 the removal of the ext reader's own deviation, and the pairwise table above had the sign backwards.
+
+### Which side is off: both width-6 arms against the pick's own width-4 decode base (20:08)
+
+Scored at `-b 6 -ub 6` against `logits/kld-base-kld-pair-v1dec4-sep09.dat` (the V1 file under the pick at width 4,
+the decode base every later decode kernel is priced against; V2 vs V1 at width 4 = 5e-6):
+
+| width-6 arm vs the width-4 pick base | mean KLD | median | 99.9% | max | same-top | overlap |
+|---|---:|---:|---:|---:|---:|---:|
+| the ext SoA reader (the pick's width-6 route) | **0.000025 +/- 0.000009** | 0.000001 | 0.001352 | 0.192 | 99.914 | 99.859 |
+| the skinny tile (`GEN=6`) | 0.000505 +/- 0.000398 | 0.000013 | 0.012099 | 9.76 | 99.699 | 99.704 |
+| scale: the pick's decode path vs its prefill path | 0.000026 | 0.000001 | 0.001866 | 0.177 | 99.914 | 99.861 |
+
+Settled: **the ext reader at width 6 IS the pick's numerics** (2.5e-5 from the width-4 kernels = exactly the
+decode-vs-prefill class, same-top 99.914 both), and **the tile is the outlier** at 5e-4 from both. The float-product
+form deviating identically says the mechanism is neither the half rounding of the weights nor the MMA operand
+type; the two candidates left are (a) something shared by both tiles' path - the K-slice summation, or the
+remaining formats' reader (`dequantize_ud_soa_mm`, q6_K incl. the lm_head, q3_K, iq4_nl, iq3_s: a deviation in the
+head's matmul lands on the logits unattenuated) - and (b) a plain bug at some shape. `test-backend-ops` MUL_MAT at
+n = 6/7/8 passes vs the CPU (11/11) but only at m 16, k 256/1024 on the AoS types; the stored SoA types have no
+test cases. Queued: the tile restricted to q4_K / q5_K / iq4_xs (`GGML_MM_SKINNY_GEN_TYPES=kq`) against the same
+base - if that reads ~2.5e-5, the remaining formats' path carries the 5e-4; then the Fisher correlation of the two
+tiles' deviations (`perf/kld-fisher.py`, D = the width-4 base; T, F = the tiles' logits written as base files) -
+corr ~1 = one deterministic mechanism, ~0 = independent rounding.
