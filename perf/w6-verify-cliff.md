@@ -127,3 +127,30 @@ mean KLD / 99.08% same-top from the trained model; the four new UD formats' widt
 Widths 7-8 run the same tile with the same per-column arithmetic (the column count only sets the B tile), so the
 width-6 pair is the gate; a -b 8 pair can follow if the owner wants it stated. Driver: the session scratchpad's
 `kld-w6.sh` (`run-quant-kld.sh` twice with the same TAG: the base is reused, LABEL distinguishes the test logs).
+
+**Result (17:22-18:30, base 49 min, tests ~19 min each; logs `kld-pair-v2dec6-sep16-*-{self,gen6}.log`):**
+
+| test arm vs the width-6 decode base (the pick's ext SoA reader) | mean KLD | median | 99.0% | 99.9% | max | same-top | overlap (1-TV) |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| the same file and env (the logits file's floor) | 0.000000 | 0.000000 | 0.000037 | 0.000051 | 0.000073 | 100.000 | 99.936 |
+| **`GGML_MM_SKINNY_GEN=6` (the skinny SoA tile)** | **0.000488 +/- 0.000370** | 0.000012 | 0.000535 | 0.012607 | **9.05** | **99.670 +/- 0.037** | 99.707 |
+| scale: the four new UD formats' width-4 kernels vs V1 (`ud-remaining-quants.md`) | 0.000005 | 0.000000 | 0.000042 | 0.000247 | 0.032 | 99.935 | 99.900 |
+| scale: the pick's decode path vs its prefill path | 0.000026 | 0.000001 | 0.000069 | 0.001866 | 0.177 | 99.914 | 99.861 |
+| scale: the fork's native width-4 kernels vs the pick | 0.000445 | 0.000013 | 0.000570 | 0.011329 | 8.43 | 99.678 | 99.706 |
+| scale: q8_0 vs the bf16 model | 0.0012 | 0.00018 | | 0.105 | 5.4 | 99.08 | |
+
+Reading: **the tile is a real numerics perturbation, not a quality-free routing change.** Mean 4.9e-4 = 20x the
+pick's own decode-vs-prefill gap and 100x the last decode kernel that was priced, 0.4x q8_0's distance from the
+trained model; the mean is carried by the tail (median 1.2e-5, one position at 9 nats - an argmax flip at a
+confident position, the same shape and size as the native-kernels arm's 8.4); same-top -0.33 pt = 81 of 24,552
+positions, overlap -0.23 pt. It sits in the same class as "the fork's native width-4 kernels vs the pick" (4.5e-4,
+99.68%), i.e. two different-but-legitimate decode arithmetics of the same weights - the pairwise cannot say which
+side is closer to the model (against bf16 both would read ~0.0128 inside a 0.0015 error bar; the bf16 file lives on
+the unmounted offload volume). What differs mechanically: the tile rounds the dequantized weights to half before
+the MMA (the ext reader multiplies in float) and sums K in 64-wide 8x8 slices.
+
+**Status: priced. Class NUM-TG at 4.9e-4 / 99.67% same-top pairwise; speed -24% per round at widths 6-8 (8K),
+-15% at 96K (width 6). Adoption = owner** - this is above the UD line's "BI/SPEC only" standard and the owner's
+explicit take is the gate. If refused: the SoA-native tile with float products (candidate 2, exact dequant into the
+A tile as float, or a float8x8 A operand at half the MMA rate) is the form that would keep the width-6 speed on
+the pick's numerics - unbuilt. The width-6 base (12.2 GB) stays at `logits/kld-base-kld-pair-v2dec6-sep16.dat`.
