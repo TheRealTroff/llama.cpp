@@ -356,3 +356,65 @@ verify widths 6-8, exact scale form: round -24% at widths 6-8 (8K), -15% at 96K;
 class (NUM-TG in name only: not byte-identical, 2.5e-5 / 99.91% from the width-4 kernels, the paired bf16 view a
 wash even before the fix). Manifest re-priced; adoption = owner.** Files kept: the width-4 base, the reader's and
 the unset tile's width-6 files (20 GB free); the Fisher run of the fixed tile is one more 12 GB base if wanted.
+
+
+## Width 5 gated the same way (2026-09-17 00:05-00:40; owner: "I would, yes. You found a bug in the w6 last time")
+
+The question: depth 4 (verify width 5) on the UD line is the one depth whose 300-token Turbo4 text is not the
+canonical one (`7e9e464feffb` against `9128633c6cfa` at depths 2, 3 and 5, `fa-decode-tile24.md` widths section;
+the README pick record). The width-5 kernels (`kernel_mul_mv_{q4_K,q5_K}_soa_w5_v2`, `iq4_xs_soa_w5_v5`, the four
+remaining formats' `_w5_v1`) are the one geometry that differs from widths 3/4: one simdgroup over the full K
+(the q4_0 w5r4h form) instead of two simdgroups splitting K with a threadgroup partial reduce
+(`ggml-metal.metal`, the comment above `IQ4XS_SOA_KERNEL`). A different summation order, never priced beyond
+the sha (README "OPEN, both lines: the half-product width-4/5 scalar kernels ... only ever sha-gated").
+
+**Routing proof** (`llama-perplexity -b 5 -ub 5 --chunks 1 -v`, ud f16 pick env, prod `31b9f9893`): every stored
+format's width-5 kernel loads - `q4_K_soa_w5_v2`, `q5_K_soa_w5_v2`, `iq4_xs_soa_w5_v5`, `q6_K/q3_K/iq4_nl/iq3_s_soa_w5_v1`
+- plus the ext `r1_5` forms for the plain tensors (the 5120x1024 attn_k/v, q8_0); no mul_mm, no skinny tile at
+width 5 (`GGML_MM_SKINNY_GEN=6` takes ne11 >= 6 only). Batch 5 in the perplexity driver is the server's depth-4
+verify shape (5 rows through ne11 = 5 on every projection and the head).
+
+**Op level first** (`LLAMA_MM_DUMP`, `LLAMA_MM_DUMP_NT=5|4`, `perf/mm-dump-compare.py`, the same first four
+`q4_K_soa` matmuls - blk.1/2 attn_qkv and attn_gate, 1024 rows each - at widths 5 and 4, one chunk):
+
+| arm | vs the exact reference (rms rel / max abs) | vs the quotient reference |
+|---|---:|---:|
+| width 4 (`q4_K_soa_w4_v2`, the pick's decode base kernel) | 6.2-6.9e-4 / 0.0027 | 2.6-2.8e-3 / 0.008 |
+| **width 5 (`q4_K_soa_w5_v2`)** | **6.3-7.0e-4 / 0.0027** | 2.7-3.1e-3 / 0.009 |
+
+Both widths track the exact `d*sc` form at the same residual on every op (the half-product kernels' price: the
+half planar scale planes plus half products, ~2.3x the tile's half-A residual of 2.8e-4), neither follows the
+quotient form. **No width-5 analog of the unset constant.** The two widths share the weights' rounding
+(same planes, same products); what differs is only the order the 5120 products are summed in.
+
+**The pairwise decode-path KLD** (`-b 5 -ub 5` against the kept width-4 base
+`logits/kld-base-kld-pair-v1dec4-sep09.dat`, the V2 file, ud f16 pick env, 24 chunks, ~19 min; log
+`kld-pair-v1dec4-sep09-Qwen3.8-27B-UD-Q4_K_M-SOA-V2-w5pick-dec5.log`; driver: the session scratchpad's
+`kld-w5.sh` = `run-quant-kld.sh` with `PPL_EXTRA="-b 5 -ub 5"`, `LABEL=-w5pick-dec5`):
+
+| arm vs the width-4 pick base | mean KLD | median | 99.0% | 99.9% | max | same-top | overlap (1-TV) |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| **the pick at width 5 (V2, `-b 5`)** | **0.000005 +/- 0.000001** | 0.000000 | 0.000042 | 0.000170 | 0.025 | **99.943 +/- 0.015** | 99.901 |
+| scale: V2 at width 4 vs the V1 base (the four new formats' w4 kernels, `ud-remaining-quants.md`) | 0.000005 +/- 0.000002 | 0.000000 | 0.000042 | 0.000247 | 0.032 | 99.935 | 99.900 |
+| scale: the ext reader at width 6 (the old width-6 route) | 0.000025 | 0.000001 | 0.000075 | 0.001352 | 0.192 | 99.914 | 99.859 |
+| scale: the skinny tile at width 6 (`GEN=6`, exact form, the pick now) | 0.000027 | 0.000001 | 0.000066 | 0.001322 | 0.304 | 99.910 | 99.862 |
+
+Reading: **width 5 is indistinguishable from width 4 at this gate's resolution** - the same mean, median, 99.0%
+and overlap as V2-at-width-4 (which is the V2-vs-V1 file delta, already inside the base's own floor), a tighter
+tail (99.9% 1.7e-4 vs 2.5e-4, max 0.025 vs 0.032), same-top 99.943 = 14 of 24,552 positions, the size of top-2
+ties. Five times closer to the width-4 kernels than either width-6 form, as the op-level view predicts: widths 4
+and 5 share the half-rounded weights and differ only in summation order, whereas both width-6 forms round the
+weights differently from the width-4 kernels (the reader in f32, the tile in half A) and so sit at 2.5e-5.
+
+**So the depth-4 text is summation-order noise, not a numerics gap.** The `7e9e464feffb` fork is one near-tie in
+the benchprompt trajectory tipped by ~1e-6-class logit differences (the same alternate text the width-4 nwg-40
+FA lineage lands on - two unrelated rounding perturbations, one tie). Consistent with 2026-09-05, when the same
+width-5 kernels gave the canonical f16 sha `5e76afaba36c` at depths 2, 3 and 4 over 600 tokens
+(`ud-model.md`, "Widths 3 and 5, same body"): the sha at width 5 is a coin flip at a tie, the KLD is the gate.
+
+**Status: PRICED, in class. The UD line's half-product width-5 kernels (`GGML_MV_SOA_W5=4 GGML_MV_SOA_W5_HALF=1`
+routes on the Q4_0 line; the stored-type kernels on UD) = 5e-6 / 99.943% same-top pairwise vs the width-4 decode
+base - the README's open "agreement line" row for the UD side is closed; the width-4 kernels themselves are the
+base of every pairwise number and were priced against bf16 at +0.0003 mean KLD (`ud-remaining-quants.md`, the
+decode-path table). Still open: the q4 line's w4r4kp / w5r4h half-product kernels have no width-4 decode base
+of their own (a Q4_0 pairwise base is one 49-min run).** Nothing changes in the pick.

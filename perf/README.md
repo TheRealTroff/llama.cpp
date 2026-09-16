@@ -44,7 +44,7 @@ half A tile); **with the constant set the tile is the pick's own decode class: 2
 the width-4 decode base (the reader 99.914), paired bf16 a wash; NUM-TG in name only (not byte-identical).** Inert
 at depth 3: the gate on prod - ud f16 300 `73ea53bbe98f`, ud Turbo4 300 `9128633c6cfa`, q4 Turbo4 300
 `04ada3a4de10`, and the UD depth-5 arm on the manifest alone 20.49 t/s at `9128633c6cfa` (= the depth-3 canonical
-text: depths 2, 3 and 5 now share it; depth 4's width-5 kernels are the odd text `7e9e464feffb`). Pays under
+text: depths 2, 3 and 5 now share it; depth 4's width-5 kernels are the odd text `7e9e464feffb` - PRICED 2026-09-17 at 5e-6 / 99.943% same-top vs the width-4 decode base, i.e. a summation-order tie, `w6-verify-cliff.md` last section). Pays under
 variable-width speculation (`LLAMA_SPEC_EV`). The float-product form was refuted (slower than the reader, same
 deviation). Owner on the sha ladder: "it won't matter once we go variable width" - the KLD/Fisher view, not shas,
 gates that pick.
@@ -292,10 +292,14 @@ fidelity class - what it CAN change, not how fast it is:
   overrides. The proposed-but-unadopted flag (`LLAMA_SPEC_EV=1`) joins with `PICK_PROPOSED=1`.
   `GGML_MM_SKINNY_BSPLIT=2` (BI) is in both picks since 2026-09-07; inert at the pick's width, it
   pays on every width-6..8 verify (multi-slot skinny points, a future controller's deep rounds).
-- **OPEN, both lines: the half-product width-4/5 scalar kernels (`GGML_MV_SOA_W4_R4KP=3`,
-  `GGML_MV_SOA_W5_HALF=1`) are class NUM-TG and were only ever sha-gated** - the KLD line scores
-  prefill-shaped logits and never saw them; an agreement/same-top run of the pick against its
-  f32-product arms is the missing row, and the UD line should have it first.
+- **The half-product width-4/5 scalar kernels (`GGML_MV_SOA_W4_R4KP=3`, `GGML_MV_SOA_W5_HALF=1`) are class
+  NUM-TG and were only ever sha-gated** - the KLD line scores prefill-shaped logits and never saw them.
+  **UD line: CLOSED 2026-09-17** - the width-4 kernels are the decode-path base (priced vs bf16 at +0.0003 mean
+  KLD, `ud-remaining-quants.md`), and the width-5 kernels scored 5e-6 / 99.943% same-top pairwise against that
+  base at `-b 5` (`w6-verify-cliff.md`, "Width 5 gated the same way": = the width-4 kernels to the gate's
+  resolution, 5x closer than either width-6 form; op-level both widths track the exact scale form at the same
+  6.5e-4 residual - the depth-4 text `7e9e464feffb` is a summation-order tie, not a numerics gap). **q4 line
+  still OPEN**: no Q4_0 width-4 decode base exists (one 49-min run), so w4r4kp / w5r4h are sha-only there.
 - The 22 older `perf/run-*.sh` harnesses still carry copies of the env of their day; they are
   records of their experiments, not picks. The live ones (`run-prod-pick.sh` with `LINE=q4|ud`,
   `run-depth-corpus.sh`, `run-spec-ev-ab.sh`, `run-corpus-acceptance.sh PICK=1`, the two UD A/Bs)
