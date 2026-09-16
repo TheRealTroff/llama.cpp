@@ -212,3 +212,36 @@ test cases. Queued: the tile restricted to q4_K / q5_K / iq4_xs (`GGML_MM_SKINNY
 base - if that reads ~2.5e-5, the remaining formats' path carries the 5e-4; then the Fisher correlation of the two
 tiles' deviations (`perf/kld-fisher.py`, D = the width-4 base; T, F = the tiles' logits written as base files) -
 corr ~1 = one deterministic mechanism, ~0 = independent rounding.
+
+### The geometry (`perf/kld-fisher.py`, 20:28-20:31; D = the width-4 pick base, E = the ext reader at width 6, T = the tile)
+
+The script reproduces the tool's numbers from the files (E 2.5e-5 / 99.914%, T 4.67e-4 / 99.699% - the mean differs
+from the tool's 5.05e-4 by the window renormalization) and its check holds: sum 1/2 Var_pD(d) / sum KL = 0.88-1.00,
+i.e. KL is the Fisher norm of the deviation at these scales.
+
+| Fisher correlation corr_pD(d_E, d_T) | median | mean | var-weighted | pooled | 10/25/75/90% |
+|---|--:|--:|--:|--:|---|
+| all 24,552 positions | 0.27 | 0.22 | 0.33 | **0.15** | -0.44 / -0.07 / 0.56 / 0.79 |
+| ties (margin < 0.3 nat, n 3541) | 0.24 | | | | flips E 21, T 70 |
+| margin 0.3-2 (n 10854) | 0.25 | | | | flips E 0, T 4 |
+| confident (margin > 2, n 10157) | 0.30 | | | | flips E 0, T 0 |
+
+**The two deviations are nearly independent** (pooled 0.15): the tile's deviation is not the reader's deviation
+scaled up, it is its own noise. In amplitude the tile's per-position deviation is **3x the reader's** (median
+Var_T / Var_E = 9.4, i.e. 9x in KL; medians 1.3e-5 vs 1e-6) at every margin, and ties flip 3x as often (70 vs 21
+of 3541).
+
+**The mean is one position.** Tile mean 4.67e-4 -> 1.06e-4 without position 6326 (chunk 6, offset 188: a 0.89-nat
+margin the tile flips to a near-certain other token, 8.87 nats) -> 5.4e-5 without chunk 6 at all (the reader 9e-6
+without it, 6x). Chunk 6 is a sensitive region for BOTH arms (E's mean there is 40x its other chunks, its own max
+0.19 sits there too), and the tile's large positions in it are a cascade behind offset 188 (207, 211, 227, 240, 248,
+356 ...: the teacher-forced cache carries the deviated K/V to every later position of the chunk). The Sep 9
+native-kernels arm (median 1.3e-5, max 8.4, same-top 99.68 - the same profile as the tile to two digits) jumps at
+the same chunk in its per-chunk record: chunk 6 flips under any kernel change of the ~1e-5-median class, and the
+2.5e-5-class reader shows it as a 0.02 bump, not a flip.
+
+So the fidelity statement for the owner is two numbers, not one: **the tile's own noise is ~1e-5 per position
+(3x the reader's amplitude, the class of the fork's native kernels), and the 5e-4 mean is that noise meeting one
+chaotic position.** Which side of that position is "right" is not a kernel question - against bf16 both arms read
+0.0128 +/- 0.0015 there - but it is answerable per position with the bf16 file in a paired design (which arm the
+trained model agrees with at 6326 and its cascade).
