@@ -32,6 +32,19 @@ one level down, and it bit the `GGML_MV_EXT_V2` work on 2026-08-22.
 
 ## The prod pick
 
+**2026-09-16 night (owner: "bring this to prod", for adaptive speculation): + `GGML_FA_Q24_ROWS=12`** - the 24-row
+decode FA tile at every GQA6 verify width (`fa-decode-tile24.md` widths section, merge `a5fb03c17`): a per-width tile
+plan dispatched as up to three grids into the one reduce - width 3 = one 24-row tile (-18% per call at 96K, -14% at
+8K), width 5 = two 16-row O-resident tiles (`qtl4w16o` / `qtnw16o`, -18% / -15%), width 6 = 24 + 16 (-9% / -11%);
+a padded 24-row tile costs a full one and the tiles add nearly serially (one threadgroup per core), so the plan is
+the cheapest cover. Bitwise identical to the pick's routes in both numerics classes, e2e shas equal at depths 2/4/5.
+**Inert at the pick's depth 3** (width 4 keeps its own dispatch): the shas do not move and there is no re-mint; the
+post-merge gate on prod - ud f16 300 `73ea53bbe98f`, ud Turbo4 300 `9128633c6cfa`, q4 Turbo4 300 `04ada3a4de10`.
+macOS 27 arrived the same day: the embedded kernels compile under the new OS compiler with every sha canonical and
+the FA per-call numbers within 1%; b1 13.35 (the 11.97 read at 35 minutes uptime was machine state). Open on branch
+`exp/w6-verify-cliff`: depth 5 on the UD line runs at 16 t/s at 8K against 24-25 at depths 2-4 - the UD SoA
+matmul kernels (Q4_K / IQ4_XS / Q5_K) exist at widths 3-5 only, width 6 falls to the generic readers.
+
 **2026-09-16 evening (owner: "Of course I'll pick it"): + `GGML_FA_Q24=1 GGML_FA_Q24_QR=0`** - the 24-row Turbo4
 decode FA tile (`fa-decode-tile24.md`, merge `fd92a4421`): the GQA6 route's 6 heads x 4 tokens in one threadgroup,
 each dequantized K/V tile feeding three query tiles instead of one (instr/GFLOP 10.5 -> 6.5, MMA issue 44 -> 59% of
