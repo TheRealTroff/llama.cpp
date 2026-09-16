@@ -114,3 +114,16 @@ pairwise KLD (`-b 4 -ub 4` vs the kept V1 decode base) at widths 6-8, then the o
 `GGML_MM_SKINNY_GEN=6` proposed, class NUM-TG, ud line (the q4 line's Q4_0 tensors keep their own skinny SoA
 kernel; the route would touch only its q6_K/q8_0 tensors at widths 6-8, unmeasured there).** The SoA-layout-native
 tile (candidate 2) stays open only if the KLD refuses this form.
+
+### The pick prerequisite: pairwise decode-path KLD at width 6 (owner 2026-09-16: "we need the KLD"; launched 17:22)
+
+Design (`kld-reference-limits`, `ud-remaining-quants.md` "Pairwise"): the same UD SOA-V2 file on both sides, the ud
+f16 pick env, `-b 6 -ub 6` on both (every position's logits through the width-6 decode kernels: 342 six-token
+steps per 2048-token chunk, 24 chunks, the wikitext positions of every KLD table), f16 cache. Base = the pick as
+it runs today at width 6 (the ext SoA reader at r1_3), written with `--kl-divergence-base` (12.2 GB,
+`logits/kld-base-kld-pair-v2dec6-sep16.dat`, kept as the width-6 decode base). Test 1 = the same file and env
+(the self-score floor of the logits file). Test 2 = `GGML_MM_SKINNY_GEN=6` (the tile). Scale: q8_0 sits 0.0012
+mean KLD / 99.08% same-top from the trained model; the four new UD formats' width-4 kernels cost 5e-6 pairwise.
+Widths 7-8 run the same tile with the same per-column arithmetic (the column count only sets the B tile), so the
+width-6 pair is the gate; a -b 8 pair can follow if the owner wants it stated. Driver: the session scratchpad's
+`kld-w6.sh` (`run-quant-kld.sh` twice with the same TAG: the base is reused, LABEL distinguishes the test logs).
