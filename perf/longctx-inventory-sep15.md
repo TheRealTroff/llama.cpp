@@ -239,8 +239,8 @@ The split took the latency half of the tile's case (the convert stall 15.8 -> 9.
 per FLOP, and the dequant chain (LUT loads + convert + their index math) is ~25-30% of the remaining cycles
 with 9.4% still stalled on it. **The 24-row tile's remaining worth, re-sized: the chain cut 3x = -15..-20% per
 call on top of nwg 20, i.e. -5..-6% of the 96K round** (was -8..-11% before the split), for the OR-form kernel
-project above. Still the largest decode item at long context; no longer a same-day one. The experiment worktree `llama.cpp-fa24` (branch `exp/fa-decode-tile` off prod) is
-created and empty. Registers: 3 score accumulators per key column, 6 Q tiles per dim pair, 3 x 32 / NSG
+project above. Still the largest decode item at long context; no longer a same-day one. ~~The experiment worktree `llama.cpp-fa24` (branch `exp/fa-decode-tile` off prod) is
+created and empty.~~ **BUILT AND PRICED the same day (2026-09-16): `perf/fa-decode-tile24.md` - -19.5% per call at 96K, verify round 139.8 -> 133.4 ms (-4.6%) on a mirrored pair, byte-identical per partial; adoption = owner.** Registers: 3 score accumulators per key column, 6 Q tiles per dim pair, 3 x 32 / NSG
 output tiles per simdgroup (12 at nsg 8) - the prescreen (`agx-spill-probe.py`) answers whether nsg 8 holds
 it without spilling before anything is timed.
 
