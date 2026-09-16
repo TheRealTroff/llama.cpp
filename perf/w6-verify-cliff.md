@@ -251,7 +251,7 @@ trained model agrees with at 6326 and its cascade).
 | arm vs the width-4 pick base | mean KLD | median | 99.9% | max | same-top |
 |---|---:|---:|---:|---:|---:|
 | the tile on every format (`GEN=6`) | 0.000505 | 0.000013 | 0.012099 | 9.76 | 99.699 |
-| the tile on q4_K / q5_K / iq4_xs only (`GEN_TYPES=kq`; q6_K head, q3_K, iq4_nl, iq3_s, q8_0 keep their routes) | see log | | 0.011983 | 17.7 | 99.690 |
+| the tile on q4_K / q5_K / iq4_xs only (`GEN_TYPES=kq`; q6_K head, q3_K, iq4_nl, iq3_s, q8_0 keep their routes) | 0.000835 +/- 0.000722 | 0.000013 | 0.011983 | 17.7 | 99.690 |
 
 The deviation lives in the three bulk formats' path, not in the remaining formats' reader or the lm_head (the
 restricted arm has the same profile, and its chaotic position flips harder). And the two tiles' deviations from
