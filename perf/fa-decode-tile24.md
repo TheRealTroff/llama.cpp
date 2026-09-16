@@ -301,3 +301,22 @@ dump files; the default rule re-checked below).
 
 Bitwise identical to the pick's routes under the rule in both classes (16/16 dump files, widths 3-6, kv 512 / 8448),
 8/8 vs CPU per class. Width 4 is untouched by construction (one 24-row tile, the pick's own dispatch).
+
+### E2e sha gate of the default rule at the other depths (UD, Turbo4, 300 tokens, benchprompt, the fa24 build - `repo :` line checked)
+
+| depth (verify width, plan) | pick | `GGML_FA_Q24_ROWS=12` |
+|---|---|---|
+| 2 (3: one 24) | 25.14 t/s, `9128633c6cfa` | 25.30, `9128633c6cfa` |
+| 4 (5: 16 + 16) | 24.43, `7e9e464feffb` | 24.71, `7e9e464feffb` |
+| 5 (6: 24 + 16) | 15.99, `a409bb1b45df` | 16.23, `a409bb1b45df` |
+
+Same sha and acceptance in every pair: byte-identical in the server at widths 3, 5 and 6 (8K, where the FA call is
+~3% of the round - the t/s deltas are noise). Aside, not this branch's: depth 5 on the UD line runs at 16 t/s in both
+arms against 24-25 at depths 2-4 - a width-6 routing cliff on the verify side (the UD line's skinny/SoA width-6
+kernels), worth its own look if depth 5 is ever wanted. A first attempt at this gate had measured the prod tree at
+depth 3 in all four arms (the wrapper set `B` without exporting it; the harness header's `repo :` line is the check).
+
+**Status: built, gated, priced on the branch; adoption = owner.** Manifest: `GGML_FA_Q24_ROWS=12` proposed (BI, both
+lines). Inert at the pick's width 4; it pays at the widths the pick does not run today - `LLAMA_SPEC_EV=1` rounds
+(widths 1-8), other depths, multi-slot budgets. Not built: a 32-row tile (over 32 KB at C = 64; would need a C = 32
+instantiation and a host-side chunk size per route) and any change to the f16 routes.
