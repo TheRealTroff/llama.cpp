@@ -335,3 +335,24 @@ Fix (commit `1ede661fb`): the getter sets FC_MUL_MM + 7 for the stored types (`_
 `GGML_MM_SKINNY_GEN_EXACT=0` reproduces the unset form for the record). Gates queued: the exact tile vs the width-4
 decode base at -b 6 (the number that says whether it now sits in the pick's class), and depth 5 at 8K (speed
 unchanged by construction, the sha).
+
+### The fixed tile, gated (22:19-22:43)
+
+| arm vs the width-4 pick base (-b 6 -ub 6) | mean KLD | median | 99.0% | 99.9% | max | same-top |
+|---|---:|---:|---:|---:|---:|---:|
+| the ext reader (the pick's width-6 route) | 0.000025 | 0.000001 | 0.000075 | 0.001352 | 0.192 | 99.914 |
+| the tile as built (constant unset) | 0.000505 | 0.000013 | 0.000557 | 0.012099 | 9.76 | 99.699 |
+| **the tile with the exact form (`GEN=6`, the default now)** | **0.000027 ± 0.000013** | **0.000001** | 0.000066 | 0.001322 | 0.304 | **99.910** |
+
+**The fixed tile sits in the pick's own decode class** - the same numbers as the reader to two digits on every
+column (the pick's decode-vs-prefill gap is 2.6e-5 / 99.914); the half A tile costs what it costs the prefill
+tiles. Depth 5 at 8K on the fixed build: base 16.23 t/s, tile **20.77 / 20.77 (+28%)**, acceptance 50.5%, sha
+`9128633c6cfa` (the depth-3 canonical text; the reader's width-6 text is `a409bb1b45df` - a tie-sensitive
+trajectory either way, both arms are 2.5e-5 from the pick's kernels). Speed unchanged by the fix, as it must be
+(one select per tile).
+
+**Status: FOUND, FIXED, PRICED. `GGML_MM_SKINNY_GEN=6` = the generic skinny MMA tile over the stored SoA rows at
+verify widths 6-8, exact scale form: round -24% at widths 6-8 (8K), -15% at 96K; numerics = the pick's decode
+class (NUM-TG in name only: not byte-identical, 2.5e-5 / 99.91% from the width-4 kernels, the paired bf16 view a
+wash even before the fix). Manifest re-priced; adoption = owner.** Files kept: the width-4 base, the reader's and
+the unset tile's width-6 files (20 GB free); the Fisher run of the fixed tile is one more 12 GB base if wanted.
