@@ -128,7 +128,23 @@ Mirror arms (same session, same build): tile again 19.31 t/s, acc 53.5%, **133.4
 (deterministic); base again 19.09 t/s, acc 57.0%, **139.83 ms/round**, sha `98f184a20a9c`. Prefill 1095.6 s in
 both. **The pair holds: 139.8 -> 133.4 ms per verify round at 96K, -4.6%, on both orderings.**
 
-## Where it stands (2026-09-16 evening)
+## The byte-identical form: the tile at the pick's own split width (measured after the pair)
+
+The width sweep started at 24; nwg 20 - the width the pick already runs, so the reduce groups the partials
+exactly as today and the output is byte-identical end to end - was never timed. Same harness, interleaved:
+
+| kv | base (nwg 20) | **tile, nwg 20** | tile, nwg 40 |
+|---|--:|--:|--:|
+| 98304 | 2327 / 2334 | **1907 / 1898 (-18.3%)** | 1870 / 1873 (-19.7%) |
+| 24576 | 604 / 601 | **499 / 501 (-17.0%)** | 507 / 508 (-15.8%) |
+| 8448 | 217 / 218 | **189 / 188 (-13.5%)** | 205 / 206 (-5.5%) |
+
+At the pick's width the tile keeps 93% of the 96K per-call gain and is better than nwg 40 at 24K and 8K. So the
+lineage move buys ~1.5% per call at 96K only. **The recommendation moves to the byte-identical form:
+`GGML_FA_Q24=1 GGML_FA_Q24_QR=0` with the split width left at the pick's 20** - no reduce change in play, no
+new sha, `GGML_FA_NWG_MAX` and `GGML_FA_Q24_NWG` stay in the code as knobs (the code default of `Q24_NWG` is now
+"inherit the route's width"). The manifest carries two proposed flags. 96K e2e of this form: below.
+
 
 Built, gated, priced. **Adoption = owner**: a lineage move on the Turbo4 arms (the 40-way reduce; the tile
 itself byte-identical, proven at nwg 20), f16 arms and prefill untouched; if picked, the four flags go from

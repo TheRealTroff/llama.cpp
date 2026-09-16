@@ -5284,10 +5284,11 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
                                   use_gqa_reuse && ne01 == 3 && env_fa_gqa_w3_nwg > 0 ? env_fa_gqa_w3_nwg :
                                   env_fa_mm_nwg;
 
-        // the 24-row tile's grid is one threadgroup per KV head per split: its own split width (GGML_FA_Q24_NWG,
-        // default 40 = the measured best at 8K/24K/96K, 160 threadgroups on 4 KV heads; perf/fa-decode-tile24.md),
-        // capped by GGML_FA_NWG_MAX (64 max: two partials per reduce lane)
-        static const int env_fa_q24_nwg = getenv("GGML_FA_Q24_NWG") ? atoi(getenv("GGML_FA_Q24_NWG")) : 40;
+        // the 24-row tile's grid is one threadgroup per KV head per split; GGML_FA_Q24_NWG gives it its own split
+        // width (capped by GGML_FA_NWG_MAX, 64 max: two partials per reduce lane), default 0 = the route's width
+        // (the pick's 20): byte-identical end to end; 40 is -1.5% per call at 96K and worse at 8K/24K, and a
+        // lineage move (perf/fa-decode-tile24.md)
+        static const int env_fa_q24_nwg = getenv("GGML_FA_Q24_NWG") ? atoi(getenv("GGML_FA_Q24_NWG")) : 0;
         const int requested_nwg = is_or && env_fa_q24_nwg > 0 ? env_fa_q24_nwg : requested_nwg0;
 
         int32_t nwg = 1;
