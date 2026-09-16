@@ -747,7 +747,11 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm_skinny(gg
 
     // stored SoA rows (the generic skinny tile over *_SOA): the base type's kernel with FC_mul_mm_soa
     const bool soa = ggml_metal_is_soa_type(op->src[0]->type);
-    snprintf(base, 256, "kernel_mul_mm_skinny_%s%s_%s", ggml_type_name(ggml_metal_soa_base_type(op->src[0]->type)), di ? "_di" : "", ggml_type_name(op->src[1]->type));
+    // GGML_MM_SKINNY_GEN_FP=1: the float-product form of the generic tile (every base type but q4_0, whose skinny
+    // kernels are their own); float A/B tiles: 8192 + 2048 B of threadgroup memory
+    static const bool gen_fp = getenv("GGML_MM_SKINNY_GEN_FP") != nullptr && atoi(getenv("GGML_MM_SKINNY_GEN_FP")) != 0;
+    const bool fp = gen_fp && ggml_metal_soa_base_type(op->src[0]->type) != GGML_TYPE_Q4_0;
+    snprintf(base, 256, "kernel_mul_mm_skinny_%s%s_%s%s", ggml_type_name(ggml_metal_soa_base_type(op->src[0]->type)), di ? "_di" : "", ggml_type_name(op->src[1]->type), fp ? "_fp" : "");
     snprintf(name, 256, "%s%s_ne12=%d_r2=%d_r3=%d", base, soa ? "_soa" : "", ne12, r2, r3);
 
     ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
@@ -768,7 +772,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm_skinny(gg
     res.nr0  = 32;
     res.nr1  = 8;
     res.nsg  = 2;
-    res.smem = 4096 + 1024;
+    res.smem = fp ? 8192 + 2048 : 4096 + 1024;
 
     return res;
 }
