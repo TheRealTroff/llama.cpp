@@ -4,10 +4,11 @@
 # "KLD + agreement of its text vs the fixed-depth pick before any pick - its rounds verify at widths 1-8 and
 # carry the union of the width families' decode numerics; then a new lineage."
 #
-# Runs with the manifest AS IS (LLAMA_SPEC_EV still `proposed`, PICK_PROPOSED unset): every hybrid arm passes the
-# flag explicitly, every fixed arm runs the pick at depth 3. Sequential, one GPU. STEPS= selects (default all):
-#   ab      8K corpus A/B per line: fixed 3 | ev hybrid | fixed 3 again (run-spec-ev-ab.sh on the PROD build, LV=1
-#           so the controller's k/block histograms are in the logs; specev-ab-report.py reads them)
+# Every controller arm passes its flags explicitly (EV_ENV); every fixed arm opts out of the picked controller with
+# PICK_SPEC_EV=0 and runs depth 3 (the q4 manifest picks LLAMA_SPEC_EV since 2026-09-17 afternoon). Sequential, one GPU. STEPS= selects (default all):
+#   ab      8K corpus A/B per line: fixed 3 | ev hybrid | fixed 3 again (run-spec-ev-ab.sh on the PROD build, LV=3
+#           = INFO: the spec-ev summary line per request is in the log, the per-round DBG lines are not - LV 1 is
+#           errors only and left the first run without them; AB_ARMS= reruns a subset under the same TAG)
 #   kldq4   the q4 line's width-6..8 route (Q4_0 skinny SoA tile, GGML_MM_SKINNY=6) priced pairwise vs the q4 width-4
 #           decode base at -b 6 -ub 6 (q4-decode-kld.md method; routing proof from a 1-chunk -v run first). The ud
 #           side of the union is priced already: width 4 = base, width 5 (w6-verify-cliff.md last section), widths
@@ -31,8 +32,9 @@ WIKI=/Users/troff/play/kvquant-experiments/data/wikitext-2-raw/wiki.test.raw
 REF_Q8=/Users/troff/play/Qwen3.8-27B-conv-q8_0.gguf
 STEPS=${STEPS:-"ab kldq4 agree longctx"}
 LINES=${LINES:-"ud q4"}
+AB_ARMS=${AB_ARMS:-"n3 hybrid n3b"}
 DATE=sep17
-EV_ENV="LLAMA_SPEC_EV=1 LLAMA_SPEC_EV_BLOCK=hybrid"
+EV_ENV="LLAMA_SPEC_EV=1 LLAMA_SPEC_EV_BLOCK=hybrid LLAMA_SPEC_EV_WIDTHS=3,7"  # the picked form since the tax diagnosis (section 10); fixed arms opt out with PICK_SPEC_EV=0
 export B
 cd "$B"
 source perf/pick.sh
@@ -44,7 +46,7 @@ stamp() { echo "--- $(date '+%T') $* ---"; }
 if has ab; then
   for line in $LINES; do
     stamp "ab $line"
-    LINE=$line LV=1 ARMS="n3 hybrid n3b" TAG=specev-gate-$DATE-$line perf/run-spec-ev-ab.sh 2>&1 | grep -v '^$'
+    LINE=$line LV=3 ARMS="$AB_ARMS" TAG=specev-gate-$DATE-$line perf/run-spec-ev-ab.sh 2>&1 | grep -v '^$'
     python3 perf/specev-ab-report.py specev-gate-$DATE-$line "n3 hybrid n3b" 2>&1 | tail -20
   done
 fi
@@ -82,10 +84,10 @@ if has agree; then
       tag=specev-agree-$DATE-$line-$arm
       stamp "agree generate $tag (2048 tokens x 6 prompts, Turbo4 pick)"
       if [ $arm = n3 ]; then
-        LINE=$line KV=turbo4 NPRED=2048 LV=1 DEPTHS=3 PROMPTS="$AGREE_PROMPTS" TAG=$tag perf/run-depth-corpus.sh 2>&1 | grep -E '^\[n|ABORT|died'
+        PICK_SPEC_EV=0 LINE=$line KV=turbo4 NPRED=2048 LV=3 DEPTHS=3 PROMPTS="$AGREE_PROMPTS" TAG=$tag perf/run-depth-corpus.sh 2>&1 | grep -E '^\[n|ABORT|died'
         d=3
       else
-        env $EV_ENV LINE=$line KV=turbo4 NPRED=2048 LV=1 DEPTHS=7 PROMPTS="$AGREE_PROMPTS" TAG=$tag perf/run-depth-corpus.sh 2>&1 | grep -E '^\[n|ABORT|died'
+        env $EV_ENV LINE=$line KV=turbo4 NPRED=2048 LV=3 DEPTHS=7 PROMPTS="$AGREE_PROMPTS" TAG=$tag perf/run-depth-corpus.sh 2>&1 | grep -E '^\[n|ABORT|died'
         d=7
       fi
       corpus=/Users/troff/play/kvquant-experiments/data/generated-$tag.txt
@@ -115,9 +117,9 @@ fi
 if has longctx; then
   for line in $LINES; do
     stamp "longctx $line fixed 3"
-    LINE=$line KV=turbo4 CTX=102400 NPRED=600 DEPTH=3 LV=1 TAG=specev-96k-$DATE-$line-n3 perf/run-longctx-pick.sh 2>&1 | grep -E '^\[|wall|spec-prof|ABORT|died|ERROR'
+    PICK_SPEC_EV=0 LINE=$line KV=turbo4 CTX=102400 NPRED=600 DEPTH=3 LV=3 TAG=specev-96k-$DATE-$line-n3 perf/run-longctx-pick.sh 2>&1 | grep -E '^\[|wall|spec-prof|ABORT|died|ERROR'
     stamp "longctx $line hybrid"
-    LINE=$line KV=turbo4 CTX=102400 NPRED=600 DEPTH=7 LV=1 EXTRA_ENV="$EV_ENV" TAG=specev-96k-$DATE-$line-hybrid perf/run-longctx-pick.sh 2>&1 | grep -E '^\[|wall|spec-prof|ABORT|died|ERROR'
+    LINE=$line KV=turbo4 CTX=102400 NPRED=600 DEPTH=7 LV=3 EXTRA_ENV="$EV_ENV" TAG=specev-96k-$DATE-$line-hybrid perf/run-longctx-pick.sh 2>&1 | grep -E '^\[|wall|spec-prof|ABORT|died|ERROR'
     grep -h 'spec-ev:' "$OUT/specev-96k-$DATE-$line-hybrid.server.log" | tail -1 | cut -c1-300
   done
 fi

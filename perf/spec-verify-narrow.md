@@ -1,7 +1,7 @@
 # Variable speculation depth: draft deep, verify narrow (2026-09-07)
 
-Status: **OPEN - measuring.** Owner: "let's see what we can uncover." Branch `spec-verify-narrow`
-(worktree `llama.cpp-active`), no code change yet; this file prices the policy first.
+Status: **PICKED on the q4 line 2026-09-17 (`LLAMA_SPEC_EV=1 LLAMA_SPEC_EV_WIDTHS=3,7`, block cap 7), proposed on ud -
+section 10.** Sections 1-9: the pricing (Sep 7), the build, three A/B rounds, the width-8 hunt.
 
 ## The question
 
@@ -374,3 +374,109 @@ two-dispatch design the owner put on hold at width 4 (1.09 ms then).
 - Trajectory noise: free-form per-prompt cells fork sha and swing +/-10%; a corpus-level number
   needs more prompts or longer completions to tighten below the ~3% the mean carries now.
 - 07-shell-script emits EOS first on raw `/completion` at temperature 0; excluded throughout.
+
+### 10. The pick gate (2026-09-17, owner: "time we flipped the switch on adaptive depth spec")
+
+Prod `9b5dd3c7f` (binary 12:09; every 2026-09-16 item in: the 24-row FA tile at all GQA6 widths, the UD width-6..8
+skinny tile, split width 20), harness `run-specev-pick-gate.sh` (A/B on the corpus per line with the manifest as is,
+the q4 width-6..8 pairwise KLD, agreement corpora, a 96K pair), diagnosis `run-specev-tax.sh`. TAGs
+`specev-gate-sep17-{q4,ud}`, `specev-tax-sep17-{q4,ud}`, `specev-w37-sep17-{q4,ud}`. 01-code-explain emits EOS
+first on raw `/completion` on today's pick (all arms, both lines) and is excluded like 07; the means are over 7 prompts.
+
+**The decode-kernel union is priced on both lines.** The controller's rounds verify at widths 1-8; every width's
+kernels now have a pairwise decode-path row against the line's width-4 decode base: ud width 5 5e-6 / 99.943%,
+widths 6-8 (the `GEN=6` tile) 2.7e-5 / 99.910% (`w6-verify-cliff.md`), widths 1-3 the exact-product readers; q4
+width 5 8e-6 / 99.976% (`q4-decode-kld.md`) and, new today, **the q4 width-6..8 route (`GGML_MM_SKINNY=6`, the Q4_0
+skinny SoA tile; routing proof `kernel_mul_mm_skinny_q4_0_soa_f32*` at ne11 6) at -b 6: mean 9e-6, median 0,
+99.9% 6.0e-4, max 0.081, same-top 99.976 +/- 0.010, overlap 99.899** - the width-5 class. The composite itself has no
+direct pairwise number (llama-perplexity scores one width per run; the controller's width per position depends on
+the trajectory), so its deviation from the base is bounded by the worst row: 2.7e-5 / 99.91% on ud, 9e-6 / 99.98%
+on q4.
+
+**8K corpus A/B on prod, fixed 3 vs the hybrid controller as built (LV 3, 300 tokens, `n3` = mean of the two fixed arms):**
+
+| prompt | q4 fixed 3 | q4 hybrid | | ud fixed 3 | ud hybrid (2 runs) | |
+|---|--:|--:|--:|--:|--:|--:|
+| benchprompt | 30.76 | 30.16 | -2.0% | 28.57 | 26.32 / 26.68 | -7.3% |
+| 02-prose-creative | 28.48 | 26.79 | -5.9% | 28.52 | 25.02 / 26.84 | -9.1% |
+| 03-chat-support | 28.44 | 28.46 | +0.1% | 22.76 | 22.04 / 21.89 | -3.5% |
+| 04-math-derivation | 44.64 | 53.37 | **+19.6%** | 36.68 | 35.35 / 35.81 | -3.0% |
+| 05-json-boilerplate | 45.38 | 60.79 | **+34.0%** | 39.38 | 43.43 / 43.65 | **+10.5%** |
+| 06-algorithms | 34.15 | 33.81 | -1.0% | 28.63 | 26.97 / 27.07 | -5.6% |
+| 08-story | 32.35 | 30.01 | -7.2% | 26.74 | 23.43 / 24.56 | -10.3% |
+| **mean** | 34.89 | **37.63** | **+7.9%** | 30.18 | 28.93 / 29.50 | **-4.1 / -2.3%** |
+
+q4 keeps the Sep 7 shape at half the margin (+7.9% vs +14.4%); ud loses on every prompt but JSON.
+
+**Why the margin halved on q4 - the round classes moved unequally, not a new tax.** `run-specev-tax.sh` on
+benchprompt (LV 5 + `LLAMA_SPEC_EV_DBG=1` + `LLAMA_DECODE_PROF=1`; the profiled arms attribute, the unprofiled A/B
+rows decide; fixed 3 repeated first and last = drift check, 30.75 / 30.63 q4, 28.41 / 28.43 ud):
+
+| arm (q4, benchprompt) | t/s | tok/rd | ms/rd | draft_call | dec_sub_tg | dec_syn_tg | note |
+|---|--:|--:|--:|--:|--:|--:|---|
+| fixed 3 | 30.75 | 2.78 | 90.0 | 11.6 | 2.9 | 76.0 | graph reuse 34 |
+| hybrid | 31.10 | 3.00 | 96.1 | 13.4 | 3.0 | 80.8 | k 3 on 83/99, 4 on 8, 7 on 6; block 8 on 44% |
+| forced block 8, verify 3 | 29.45 | 2.86 | 96.7 | 16.1 | 2.4 | 80.0 | **the block-8 tax: +6.7 ms/rd = drafter +4.4 (Sep 7's number) + target wait +4.0** |
+| forced block 4, verify 3 | 30.50 | 2.80 | 91.6 | 13.0 | 3.0 | 76.2 | block 4 costs +1.6 ms/rd |
+| tiered | 30.14 | 3.00 | 99.2 | 13.8 | 2.9 | 81.9 | k 4 on 31/98: width 5 does not pay on free-form |
+| **widths {3,7}** (`LLAMA_SPEC_EV_WIDTHS=3,7`) | **31.48** | 3.06 | 96.9 | 13.3 | 2.8 | 80.4 | k 7 on 10/96, no widths 4-6 |
+| widths {3,7}, block 8 always | 30.42 | 3.06 | 100.3 | 15.8 | 2.9 | 80.8 | the tax on every round |
+| hybrid, `DFLASH_ASYNC_INJECT=0` | 31.20 | 3.03 | 96.8 | 13.3 | 2.9 | 80.7 | async inject is not a factor |
+
+- The target's submit (`dec_sub_tg`) and the decode profiler's reuse phase are the same in every arm: a verify-width
+  change does NOT rebuild anything expensive (the 7.6 ms `dec_sub_tg` in the gate's hybrid window was the 64-decode
+  window trap again). The rebuild hypothesis is refuted.
+- Per (block, k) class (`specev-dbg-account.py`, q4 hybrid): (3,3) 92.0 ms / 2.73 tok = 29.7 t/s; (7,3) 95.5 / 2.67
+  (the tax); (7,4) 104 / 4.00 = 38; **(7,7) 131 / 6.17 = 47 t/s**. The deep picks pay when they fire; the whole cost is
+  the block-8 draft on rounds that then verify 3 (30 of 98 rounds, +4 ms each).
+- Against Sep 7: the (7,7) class is unchanged (131 vs 136-141 then, JSON 114 vs 116-121) while the fixed-3 round
+  went 94 -> 90 ms (the width-4 stack of Sep 9-16). The controller's alternative got 5% faster, its wins did not.
+- The +4 ms on the target's wait under a block-8 draft the target never sees is real and unexplained (not the async
+  inject); it is paid on every block-8 round. Open.
+
+| arm (ud, benchprompt) | t/s | tok/rd | ms/rd | draft_call | dec_syn_tg | note |
+|---|--:|--:|--:|--:|--:|---|
+| fixed 3 | 28.41 | 2.94 | 103.2 | 13.9 | 87.4 | |
+| hybrid | 26.71 | 3.16 | 117.8 | 16.3 | 99.7 | k 1-2 on 17/93, 4-6 on 15, 7 on 7; sha -> 73ea53bbe98f (a tie) |
+| forced block 8, verify 3 | 27.07 | 2.97 | 109.4 | 18.5 | 89.0 | the tax: +6.2 ms/rd (drafter +4.6, wait +1.7) |
+| forced block 4, verify 3 | 26.81 | 2.94 | 109.3 | 19.2 | 87.6 | block 4 costs +6 ms/rd on ud (+1.6 on q4) |
+| tiered | 26.34 | 3.13 | 118.3 | 19.3 | 96.3 | k 1-2 on 18/94 |
+| widths {3,7} | 26.36 | 3.00 | 113.4 | 15.5 | 95.7 | k 7 on 10/98; learned cost[7] 161 ms |
+| widths {3,7}, block 8 always | 27.14 | 3.30 | 121.1 | 18.6 | 100.5 | |
+| hybrid, no async inject | 26.99 | 3.16 | 116.6 | 16.0 | 98.3 | |
+
+- **ud's deep round is 1.72x its width-4 round; q4's is 1.42x.** Per class (ud hybrid): (3,3) 105.8 / 2.62; (7,4)
+  128 / 4.00 = 31 t/s (width 5 pays on ud); (7,6) 172 / 6.25 = 36; **(7,7) 180 / 7.71 = 43 t/s** - against q4's
+  (7,7) at 131 ms. The 48 ms gap between the lines' width-8 rounds (13 ms at width 4) is the UD width-6..8 verify
+  path (the `GEN=6` tile was -24% vs the two-pass reader and is still here; widths 7-8 also leave the GQA FA plan
+  for the plain batched route). A UD cost seed (`LLAMA_SPEC_EV_COST`) would only make the controller pick deep less
+  often, i.e. converge to fixed 3; the lever on ud is the deep round's kernels, not the controller.
+- The narrow picks (k 1-2 on ~18% of rounds) are the EV model reading the learned cost[1..2] (92-104 ms) against an
+  inflated cost[3] (107-111, which carries the block-8 tax rounds) - they realize 13-25 t/s. `WIDTHS=3,7` removes them.
+
+**The picked form, 8K corpus (`specev-w37-sep17-{q4,ud}`, fixed 3 = mean of the two fixed arms, LV 3):**
+
+| prompt | q4 fixed 3 | q4 widths {3,7} | | ud fixed 3 | ud widths {3,7} | | sha |
+|---|--:|--:|--:|--:|--:|--:|---|
+| benchprompt | 30.76 | 31.62 | +2.8% | 28.59 | 27.59 | -3.5% | same / same |
+| 02-prose-creative | 28.70 | 27.77 | -3.3% | 28.78 | 28.04 | -2.6% | forks / same |
+| 03-chat-support | 28.03 | 28.37 | +1.2% | 22.76 | 23.01 | +1.1% | forks / same |
+| 04-math-derivation | 44.57 | 55.76 | **+25.1%** | 36.59 | 38.58 | +5.4% | same / same |
+| 05-json-boilerplate | 45.37 | 61.30 | **+35.1%** | 39.33 | 44.33 | **+12.7%** | same / same |
+| 06-algorithms | 34.13 | 34.98 | +2.5% | 29.03 | 27.84 | -4.1% | forks / same |
+| 08-story | 32.23 | 29.99 | -7.0% | 26.70 | 24.72 | -7.4% | forks / forks |
+| **mean** | 34.83 | **38.54** | **+10.7%** | 30.25 | 30.59 | **+1.1%** |
+
+**Decision (2026-09-17 afternoon): picked on q4 - `LLAMA_SPEC_EV=1|SPEC|q4|pick`, `LLAMA_SPEC_EV_WIDTHS=3,7|SPEC|q4|pick`,
+`PICK_DEPTH_EV=7` (pick_args uses it for a line that picks the controller; `PICK_SPEC_EV=0` opts a fixed-depth arm
+out). On ud the entry stays `proposed` with these numbers: +1.1% mean is a free-form cost of 3-7% bought back on
+saturated text, and the owner's UD standard is conservative; picking it there is the same two manifest lines.**
+The remaining gate steps for the q4 form (agreement corpora fixed 3 vs the controller scored against q8_0, the 96K
+pair, the mint `prodpick-sep17-specev-q4`) follow below.
+
+Open after this: (1) the +4 ms on the target's wait under a block-8 draft (`forced83` vs `forced43`: the drafter's
++4.4 ms is the Sep 7 number, the wait's +4.0 is new to the accounting and not the async inject); (2) the UD width-8
+round at 178 ms vs q4's 131 - the width-6..8 tile and the plain FA route at widths 7-8 on ud; (3) a block rule that
+escalates on the drafter's confidence instead of the last round's acceptance would cut the (7,3) tax rounds
+(30 of 98 on free-form); (4) 2-8 slots under the controller (never measured); (5) the f16 line runs the controller in
+the q4 pick untested beyond the mint's own f16 arms.

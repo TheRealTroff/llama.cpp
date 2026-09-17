@@ -29,12 +29,18 @@ saw them; no Q4_0 decode-path base existed.
 
 ## Pairwise: the kernels against the pick's own width-4 decode base
 
+2026-09-17 addendum (the adaptive-depth gate, `spec-verify-narrow.md` section 10): the width-6..8 route of the q4
+line - the Q4_0 skinny SoA MMA tile that `LLAMA_SPEC_EV`'s deep rounds run - is priced in the same table below
+(the `-b 6` row): 9e-6 / 99.976%, the width-5 class. With it every verify width the controller can pick is priced
+pairwise on both lines (ud: width 5 5e-6, widths 6-8 2.7e-5, `w6-verify-cliff.md`).
+
 | arm vs the q4 width-4 decode base (-b as stated) | mean KLD | median | 99.0% | 99.9% | max | same-top | overlap (1-TV) |
 |---|---:|---:|---:|---:|---:|---:|---:|
 | plain twin, half product, -b 4 (the self-check: the base's numerics through the runtime repack) | 0.000000 | 0.000000 | 0.000037 | 0.000051 | 0.00006 | 99.988 +/- 0.007 | 99.934 |
 | **plain twin, f32 product w4 (`R4KP=2`), -b 4** | **0.000005 +/- 0.000002** | 0.000000 | 0.000042 | 0.000334 | 0.037 | **99.971 +/- 0.011** | 99.901 |
 | **the pick at width 5 (`w5_r4h`), -b 5** | **0.000008 +/- 0.000004** | 0.000000 | 0.000042 | 0.000527 | 0.091 | **99.976 +/- 0.010** | 99.900 |
 | plain twin, f32 product w5 (`W5_HALF=0`), -b 5 | 0.000013 +/- 0.000007 | 0.000000 | 0.000042 | 0.000379 | 0.163 | 99.967 +/- 0.012 | 99.898 |
+| **the pick at width 6 (`GGML_MM_SKINNY=6` Q4_0 skinny SoA tile, the widths 6-8 route), -b 6** (2026-09-17, `run-specev-pick-gate.sh` kldq4; routing proof: `kernel_mul_mm_skinny_q4_0_soa_f32*` at ne11 6) | **0.000009 +/- 0.000004** | 0.000000 | 0.000043 | 0.000602 | 0.081 | **99.976 +/- 0.010** | 99.899 |
 | scale: UD width 5 vs the UD width-4 base (`w6-verify-cliff.md`) | 0.000005 | 0.000000 | 0.000042 | 0.000170 | 0.025 | 99.943 | 99.901 |
 | scale: UD width-6 forms vs the UD width-4 base | 0.000025 | 0.000001 | 0.000075 | 0.001352 | 0.19-0.30 | 99.910-99.914 | 99.86 |
 

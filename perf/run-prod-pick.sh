@@ -86,7 +86,12 @@ MD_TURBO=${MD_TURBO:-$PICK_DRAFTER}
 # What the older harnesses set, kept to show the delta is the missing flags.
 PART_ENV=(GGML_MV_NC=2 GGML_MM_SKINNY=5)
 
-PICK_SPEC=(-md "$MD" --spec-type draft-dflash --spec-draft-n-max 4)
+# Depths: the f16 pick is dflash n4 (verify width 5, m4-width5-crossover.md), the Turbo4 pick is the manifest's
+# PICK_DEPTH (3). When the line's manifest carries the LLAMA_SPEC_EV controller (2026-09-17, q4), both arms run its
+# block cap PICK_DEPTH_EV (7): the controller picks the verify width per round from that block.
+F16_DEPTH=4
+if printf '%s\n' "${TURBO_PICK_ENV[@]}" | grep -qx 'LLAMA_SPEC_EV=1'; then F16_DEPTH=$PICK_DEPTH; fi
+PICK_SPEC=(-md "$MD" --spec-type draft-dflash --spec-draft-n-max "$F16_DEPTH")
 TURBO_SPEC=(-md "$MD_TURBO" --spec-type draft-dflash --spec-draft-n-max "$PICK_DEPTH")
 MTP_SPEC=(--spec-type draft-mtp --spec-draft-n-max 1)
 BASE_SPEC=(--spec-type none)

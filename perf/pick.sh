@@ -3,7 +3,8 @@
 # (2026-09-07, owner: "do the split" - the Q4 and UD lines carry different fidelity standards).
 #
 #   pick_env  <q4|ud> [f16]   -> PICK_ENV  (routing + numerics + cache flags of the line)
-#   pick_args <q4|ud> [f16]   -> PICK_ARGS (model, context, cache types), PICK_SPEC (drafter, depth), PICK_MODEL
+#   pick_args <q4|ud> [f16]   -> PICK_ARGS (model, context, cache types), PICK_SPEC (drafter, depth: PICK_DEPTH, or
+#                                PICK_DEPTH_EV when the line picks the LLAMA_SPEC_EV controller), PICK_DEPTH_LINE, PICK_MODEL
 #   pick_check <q4|ud>        -> refuses a NUM/KV-class flag in the process environment that is not in the
 #                                line's manifest (PICK_ALLOW_EXTRA=1 downgrades to a warning for experiments)
 #   pick_print <q4|ud>        -> the manifest with classes and records, for a harness header
@@ -69,7 +70,9 @@ PICK_MANIFEST=(
   "GGML_MM_ACC_HALF=1|NUM-PP|q4|pick|kldacch-aug28: mean KLD 0.054->0.060 (+11.8%), same-top -0.86 pt; ON UD -2.51 pt (ud-model.md step 4) - q4 only"
   # --- speculation side ---
   "LLAMA_DRAFT_WINDOW=1024|SPEC|both|pick|draft-sink-window.md (acceptance improves; sha canonical)"
-  "LLAMA_SPEC_EV=1|SPEC|both|proposed|spec-verify-narrow.md section 7 (+14.4% corpus mean). OWNER: KLD + agreement of its text vs the fixed-depth pick BEFORE any pick - its rounds verify at widths 1-8 and carry the union of the width families' decode numerics; then a new lineage"
+  "LLAMA_SPEC_EV=1|SPEC|q4|pick|spec-verify-narrow.md section 10 (owner 2026-09-17: 'time we flipped the switch'): the expected-value verify-depth controller, hybrid block rule, verify widths {3,7} only (the width-4..6 picks returned nothing on free-form and the width-1..2 picks lose; run-specev-tax.sh); q4 corpus +10.7% (math +25%, JSON +35%, free-form -7..+3%), the decode-kernel union priced pairwise at every width (q4 widths 6-8 = 9e-6 / 99.976%, q4-decode-kld.md); block cap PICK_DEPTH_EV=7; a SPEC lineage: free-form shas fork at the width crossings"
+  "LLAMA_SPEC_EV_WIDTHS=3,7|SPEC|q4|pick|spec-verify-narrow.md section 10 (the tax diagnosis: hybrid +7.9% -> widths {3,7} +10.7% on the q4 corpus)"
+  "LLAMA_SPEC_EV=1|SPEC|ud|proposed|spec-verify-narrow.md section 10: on the UD line the controller is a wash (widths {3,7}: corpus +1.1%, JSON +13%, math +5%, free-form -3..-7%; hybrid -2..-4%) because the UD width-8 round is 1.72x its width-4 round (178 vs 103 ms; q4 1.42x) - the lever on ud is the width-6..8 verify path, not the controller; owner decides (with LLAMA_SPEC_EV_WIDTHS=3,7)"
   # --- Turbo4 cache line (KV) + its byte-identical FA forms ---
   "TURBO_AUTO_ASYMMETRIC=0|KV|both|pick|turbo4-fa-gqa-reuse.md (symmetric pick)"
   "GGML_FA_GQA_HEADS=4,6|BI|both|pick|turbo4-fa-gqa-reuse.md (Turbo4 GQA tile; hash moved at widths 3-4 = a lineage, not a numerics call)"
@@ -93,7 +96,10 @@ PICK_MANIFEST=(
 PICK_MODEL_Q4=/Users/troff/play/Qwen3.8-27B-uniform-Q4_0-SOA-V1.gguf
 PICK_MODEL_UD=/Users/troff/play/Qwen3.8-27B-UD-Q4_K_M-SOA-V2.gguf
 PICK_DRAFTER=/Users/troff/play/Qwen3.8-27B-DFlash2-pureQ4_0-SOA-V1.gguf
-PICK_DEPTH=${PICK_DEPTH:-3}  # DFlash depth of both lines (verify width 4, Turbo4's best width)
+PICK_DEPTH=${PICK_DEPTH:-3}  # DFlash depth of a fixed-depth line (verify width 4, Turbo4's best width)
+PICK_DEPTH_EV=${PICK_DEPTH_EV:-7}  # the block cap of a line that picks the LLAMA_SPEC_EV controller (verify widths up to 8)
+# PICK_SPEC_EV=0 leaves the controller's flags out of PICK_ENV and keeps PICK_DEPTH: the fixed-depth arm of a
+# controller experiment (run-spec-ev-ab.sh, run-specev-tax.sh, the gate's fixed arms), never a pick measurement.
 PICK_CTX_TURBO4=102400
 PICK_CTX_F16=10240
 
@@ -108,6 +114,7 @@ pick_env() {  # pick_env <q4|ud> [f16]  -> PICK_ENV
     IFS='|' read -r flag cls lines status _ <<<"$e"
     [ "$status" = pick ] || { [ "$status" = proposed ] && [ "${PICK_PROPOSED:-0}" = 1 ]; } || continue
     _pick_line_has "$lines" "$line" || continue
+    case "$flag" in LLAMA_SPEC_EV=*|LLAMA_SPEC_EV_*) [ "${PICK_SPEC_EV:-1}" = 0 ] && continue ;; esac
     if [ "$kv" = f16 ]; then
       case "$flag" in TURBO_AUTO_ASYMMETRIC=*|GGML_FA_GQA_HEADS=*|GGML_FA_GQA4_NWG=*|GGML_FA_GQA_W3_NWG=*|GGML_FA_TR=*) continue ;; esac
     fi
@@ -123,7 +130,15 @@ pick_args() {  # pick_args <q4|ud> [f16] -> PICK_MODEL, PICK_ARGS, PICK_SPEC
   else
     PICK_ARGS=(-c "$PICK_CTX_TURBO4" -fa on -ctk turbo4 -ctv turbo4 -ctkd f16 -ctvd f16)
   fi
-  PICK_SPEC=(-md "$PICK_DRAFTER" --spec-type draft-dflash --spec-draft-n-max "$PICK_DEPTH")
+  local depth=$PICK_DEPTH e flag cls lines status
+  if [ "${PICK_SPEC_EV:-1}" != 0 ]; then
+    for e in "${PICK_MANIFEST[@]}"; do
+      IFS='|' read -r flag cls lines status _ <<<"$e"
+      [ "$flag" = LLAMA_SPEC_EV=1 ] && [ "$status" = pick ] && _pick_line_has "$lines" "$line" && depth=$PICK_DEPTH_EV
+    done
+  fi
+  PICK_SPEC=(-md "$PICK_DRAFTER" --spec-type draft-dflash --spec-draft-n-max "$depth")
+  PICK_DEPTH_LINE=$depth
 }
 
 pick_check() {  # pick_check <q4|ud> : the process environment must not carry a NUM/KV flag outside the line's manifest
