@@ -103,6 +103,24 @@ PICK_DEPTH_EV=${PICK_DEPTH_EV:-7}  # the block cap of a line that picks the LLAM
 PICK_CTX_TURBO4=102400
 PICK_CTX_F16=10240
 
+# Benchmark prompts are chat-templated since 2026-09-17 evening (owner: "the benchprompt is a clear question and what
+# we want is its answer"; perf/benchprompt-framing.md): raw greedy completion of an instruction + material is the
+# regime where the instruct model restarts and loops, and the prompt's own positions score as unlikely text.
+# pick_prompt <raw file> renders one user turn, thinking off, exactly as the server's /apply-template does for this
+# model's template (verified byte-identical, the rendered file through /completion reproduces the chat endpoint's
+# text), into $PICK_CHAT_DIR/<basename>, and echoes that path. PICK_CHAT=0 echoes the raw path (the pre-Sep-17 lineage).
+PICK_CHAT=${PICK_CHAT:-1}
+PICK_CHAT_DIR=${PICK_CHAT_DIR:-/Users/troff/play/kvquant-experiments/data/chat}
+pick_prompt() {  # pick_prompt <raw prompt file> -> path of the prompt to send (rendered, or raw under PICK_CHAT=0)
+  local raw=$1
+  if [ "$PICK_CHAT" = 0 ]; then echo "$raw"; return 0; fi
+  mkdir -p "$PICK_CHAT_DIR"
+  local out="$PICK_CHAT_DIR/$(basename "$raw")"
+  # the template trims the message content (Jinja trim = strip both ends); a file's trailing newline must go too
+  { printf '<|im_start|>user\n'; python3 -c "import sys; sys.stdout.write(open(sys.argv[1]).read().strip())" "$raw"; printf '<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n'; } > "$out"
+  echo "$out"
+}
+
 _pick_line_has() {  # $1 = entry lines field, $2 = line
   case "$1" in both|"$2") return 0 ;; esac; return 1
 }

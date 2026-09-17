@@ -42,10 +42,10 @@ pick_env  "$LINE" "$KV"; ENVV=("${PICK_ENV[@]}")
 pick_args "$LINE" "$KV"; M=${M:-$PICK_MODEL}; KVARGS=("${PICK_ARGS[@]}"); MD=${MD:-$PICK_DRAFTER}
 
 PROMPTS=${PROMPTS:-"benchprompt 01-code-explain 02-prose-creative 03-chat-support 04-math-derivation 05-json-boilerplate 06-algorithms 07-shell-script 08-story"}
-prompt_path() {
+prompt_path() {  # chat-templated since 2026-09-17 evening (pick_prompt); PICK_CHAT=0 = the raw lineage
     case "$1" in
-        benchprompt) echo /Users/troff/play/benchprompt.txt ;;
-        *) echo "$B/perf/prompts/$1.txt" ;;
+        benchprompt) pick_prompt /Users/troff/play/benchprompt.txt ;;
+        *) pick_prompt "$B/perf/prompts/$1.txt" ;;
     esac
 }
 
@@ -53,6 +53,7 @@ echo "=== depth corpus sweep: $TAG ==="
 echo "line=$LINE kv=$KV depths=[$DEPTHS] lv=$LV npred=$NPRED reps=$REPS model=$M"
 echo "commit : $(cd "$B" && git rev-parse --short HEAD) on $(cd "$B" && git rev-parse --abbrev-ref HEAD) ($(cd "$B" && git status --porcelain | wc -l | tr -d ' ') dirty)"
 echo "env    : ${ENVV[*]}"
+echo "prompts: PICK_CHAT=$PICK_CHAT (1 = chat-templated, the lineage since 2026-09-17 evening)"
 echo
 # append when the TSV exists so wrappers can call this per prompt under one TAG
 [ -s "$TSV" ] || printf 'kv\tdepth\tprompt\trep\tprompt_n\tprompt_ms\tpredicted_n\tpredicted_ms\ttps\tdraft_n\tdraft_acc\trounds\tcommitted_rd\tround_ms\tsurvival\tdrafter_ms\tsha1\n' > "$TSV"

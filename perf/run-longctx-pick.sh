@@ -24,6 +24,7 @@ slog="$OUT/$TAG.server.log"
 
 source "$B/perf/pick.sh"
 pick_check "$LINE" || exit 1
+PROMPT=$(pick_prompt "$PROMPT")  # chat-templated since 2026-09-17 evening; PICK_CHAT=0 = the raw lineage
 pick_env "$LINE" "$KV"
 pick_args "$LINE" "$KV"
 # context is the caller's, not the manifest's default
@@ -38,6 +39,7 @@ if [ "$DEPTH" = 0 ]; then spec=(--spec-type none); else spec=("${PICK_SPEC[@]:0:
 echo "=== longctx-pick $TAG: line=$LINE kv=$KV ctx=$CTX depth=$DEPTH n_predict=$NPRED prompt=$(wc -c < "$PROMPT" | tr -d ' ') bytes"
 echo "commit : $(cd "$B" && git rev-parse --short HEAD) on $(cd "$B" && git rev-parse --abbrev-ref HEAD); extra: $EXTRA_ENV"
 echo "model  : $PICK_MODEL"
+echo "prompt : $PROMPT (PICK_CHAT=$PICK_CHAT)"
 echo "env    : ${PICK_ENV[*]}"
 for i in $(seq 1 90); do lsof -ti :$PORT >/dev/null 2>&1 || break; sleep 2; done
 if lsof -ti :$PORT >/dev/null 2>&1; then echo "ABORT: port $PORT busy"; exit 1; fi

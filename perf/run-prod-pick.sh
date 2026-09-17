@@ -100,6 +100,7 @@ fi
 PICK_SPEC=(-md "$MD" --spec-type draft-dflash --spec-draft-n-max "$F16_DEPTH")
 TURBO_SPEC=(-md "$MD_TURBO" --spec-type draft-dflash --spec-draft-n-max "$PICK_DEPTH_LINE")
 MTP_SPEC=(--spec-type draft-mtp --spec-draft-n-max 1)
+PROMPT_FILE=$(pick_prompt /Users/troff/play/benchprompt.txt)  # chat-templated since 2026-09-17 evening; PICK_CHAT=0 = the raw lineage
 BASE_SPEC=(--spec-type none)
 
 echo "=== prod pick benchmark: $TAG ==="
@@ -110,6 +111,7 @@ echo "commit : $(cd "$B" && git rev-parse --short HEAD) on $(cd "$B" && git rev-
 echo "binary : $(date -r "$BIN/llama-server" '+%Y-%m-%d %H:%M')"
 echo "env    : ${PICK_ENV[*]}"
 echo "spec   : ${PICK_SPEC[*]}"
+echo "prompt : $PROMPT_FILE (PICK_CHAT=$PICK_CHAT)"
 echo
 
 # label, n_predict, env-array-name, spec-array-name, [kv: f16 (default) | turbo4]
@@ -152,7 +154,7 @@ run_one() {
 
   python3 -c "
 import json
-p = open('/Users/troff/play/benchprompt.txt').read()
+p = open('$PROMPT_FILE').read()
 print(json.dumps({'prompt': p, 'n_predict': $npred, 'temperature': 0}))" \
   | curl -s -H "Content-Type: application/json" -X POST "http://127.0.0.1:$PORT/completion" -d @- | python3 -c "
 import json,sys,hashlib
