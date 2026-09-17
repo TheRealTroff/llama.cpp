@@ -9,9 +9,10 @@
 #   - the drafter's own cost per block size (dflash-prof lattice sync);
 #   - the output sha per (depth, prompt) = the byte-identity map across kernel families.
 # The pick env is read from run-prod-pick.sh (single source of truth; do not copy it here).
-# LV=5 logs per-round lines (default); LV=0 is the quiet timing arm (NOTE: -lv 0 also drops INFO,
-# so the dflash-prof and spec-ev summary lines are absent there; LV=1 keeps them) - compare the two on a
-# few points before trusting verbose-arm timing.
+# LV=5 logs per-round lines (default); LV=0 is the quiet timing arm. -lv is a level threshold: 0 generic, 1 error,
+# 2 warning, 3 info, 4 trace, 5 debug - so LV=0 and LV=1 drop INFO (no dflash-prof / spec-prof / spec-ev summary
+# lines; the first sep17 gate run lost its histograms to LV=1), LV=3 keeps the summaries without the per-round DBG
+# lines, LV=5 has everything. Compare LV=5 and LV=3 timing on a few points before trusting verbose-arm timing.
 set -u
 if [ -z "${CAFFEINATED:-}" ]; then
     exec env CAFFEINATED=1 caffeinate -dimsu "$0" "$@"

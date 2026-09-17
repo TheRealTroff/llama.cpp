@@ -78,7 +78,9 @@ score_corpus() {  # score_corpus <line> <corpus> <tag>
   rm -f "$base"
 }
 if has agree; then
-  AGREE_PROMPTS="benchprompt 01-code-explain 02-prose-creative 03-chat-support 06-algorithms 08-story"
+  # no benchprompt: its 8K-token code prompt would be ~70% of the scored positions (shared by both corpora, and it scores
+# PPL ~1000 under q8_0 and the pick alike - chunk 1 of the first sep17 corpora); the completions must carry the statistic
+AGREE_PROMPTS=${AGREE_PROMPTS:-"02-prose-creative 03-chat-support 06-algorithms 08-story"}
   for line in $LINES; do
     for arm in n3 hybrid; do
       tag=specev-agree-$DATE-$line-$arm

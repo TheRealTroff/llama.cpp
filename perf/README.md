@@ -49,7 +49,19 @@ intermediate widths returned nothing on free-form, the narrow ones lose. Rebuild
 were both refuted as costs (`dec_sub_tg` and the decode profiler's reuse phase identical in every arm). A SPEC
 lineage on q4: math/JSON shas hold, free-form shas fork at the width crossings; the fixed-depth arms of every
 controller harness opt out with `PICK_SPEC_EV=0`. 01-code-explain emits EOS first on raw `/completion` on today's
-pick and is excluded like 07. Mint TAG `prodpick-sep17-specev-q4` (see the section for the numbers).
+pick and is excluded like 07. Own-text agreement (four free-form prompts, each corpus vs fresh q8_0 logits): the
+controller's text 0.0606 / 90.9% same-top vs the fixed-3 text 0.0566 / 91.8%, within 1 sigma of ~2000 positions, the
+weights' own price dominating both (do not put benchprompt in an agreement corpus: its code prompt scores PPL ~1000
+under q8_0 and the pick alike). 96K: 21.06 vs 20.82 t/s (+1.2%) on the long prompt's free-form summary, prefill
+identical. **Mint TAG `prodpick-sep17-specev-q4b`** (prod `40ba3dc50`+, every sha canonical - benchprompt's text
+holds under the controller at both lengths; k 7 on 3-27 rounds per arm, block 8 drafted on ~40% of rounds): **f16
+30.47 / 30.37 at 300 (`822ce37ce2e5`), 32.97 / 32.30 at 600 (`5f32a6b9d371`); Turbo4 33.43 / 33.53 at 600
+(`b40a84e252af`, was 32.48 / 32.39 on Sep 16), 31.45 at 300 (`04ada3a4de10`, was 30.51); b1 14.66 (14.67 on Sep 16,
+same machine state); MTP 23.06; the partial arm now runs fixed depth 7 (22.36, no longer comparable).** The first
+mint under this tag (`prodpick-sep17-specev-q4`) ran the controller with block cap 3 by a harness bug (the global
+`PICK_DEPTH` instead of the line's `PICK_DEPTH_LINE`; every arm = the controller confined to width 3, shas canonical,
+t/s = Sep 16) and is void; the harness now refuses a cap below 7 on a line that picks the controller. The UD pick is
+unchanged (no re-mint).
 
 **2026-09-16 late (owner: "Pick it"): + `GGML_MM_SKINNY_GEN=6` on the UD line** - the generic skinny MMA tile over the
 stored SoA rows at verify widths 6-8 (`w6-verify-cliff.md`, merge `148aaa294`): the UD line's Q4_K/Q5_K/IQ4_XS decode

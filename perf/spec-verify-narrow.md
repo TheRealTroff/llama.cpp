@@ -480,3 +480,42 @@ round at 178 ms vs q4's 131 - the width-6..8 tile and the plain FA route at widt
 escalates on the drafter's confidence instead of the last round's acceptance would cut the (7,3) tax rounds
 (30 of 98 on free-form); (4) 2-8 slots under the controller (never measured); (5) the f16 line runs the controller in
 the q4 pick untested beyond the mint's own f16 arms.
+
+**Agreement corpora (q4, `specev-agree-sep17-q4-{n3,hybrid}[-nobench]`): the controller's own greedy text vs
+the fixed-depth pick's, each scored against fresh q8_0 reference logits through the q4 f16 pick (prefill path).**
+First pass with benchprompt in the corpus: same-top 92.42 vs 92.39 +/- 0.31, mean KLD 0.2813 vs 0.2810 - but 70% of
+the scored positions were the shared 8K-token benchprompt code, which scores PPL ~1000 under q8_0 AND the pick alike
+(chunk 1: 1362 / 985; wikitext chunk 1 = 5.2, earlier self-text corpora 1.0-1.3; no special-token text in the file;
+unexplained, identical in both arms, an aside). Rescored without it (four free-form prompts, ~2 chunks of
+completions each; the gate harness now defaults to that set):
+
+| corpus vs q8_0 (q4 f16 pick, prefill) | ref PPL | mean KLD | median | 99.0% | max | same-top | overlap |
+|---|--:|--:|--:|--:|--:|--:|--:|
+| fixed 3 text (2048-token cap, EOS-ended) | 1.648 | 0.0566 +/- 0.0031 | 0.0150 | 0.45 | 3.7 | 91.84 +/- 0.61 | 91.96 +/- 0.22 |
+| controller text (widths {3,7}) | 1.528 | 0.0606 +/- 0.0035 | 0.0151 | 0.51 | 4.2 | 90.91 +/- 0.64 | 91.72 +/- 0.23 |
+
+Different trajectories, so the rows are two samples of "the model on its own text", not a paired test: every
+difference is within ~1 sigma of ~2000 positions (mean +0.004, same-top -0.9 pt, overlap -0.2 pt), the controller's
+text is the more predictable of the two (PPL 1.53 vs 1.65), and the weights' own price (mean 0.057-0.061 here vs
+0.054-0.060 on wikitext) dominates both. No sign of a systematic shift; a longer corpus would tighten it. The
+per-width pairwise rows (5e-6..2.7e-5 mean, 99.91-99.98% same-top) remain the numerics argument.
+
+**96K (q4, `specev-96k-sep17-q4-{n3,hybrid}`, 600 tokens, the 95,508-token prompt):** fixed 3 20.82 t/s (acc
+48.2%, sha 150e496843a0) vs the controller 21.06 (acc 49.9%, sha 480c80ef7c69, k 7 on 12 of 230 rounds; learned
+cost[3] 120 ms, cost[7] 171 = 1.42x, the 8K ratio) = +1.2% on the long prompt's free-form summary; prefill identical
+(1030 s). No loss at long context; the controller's cost EMA relearns the 96K curve within the request.
+
+**Mint trap (14:33): the first mint `prodpick-sep17-specev-q4` ran the controller with block cap 3** - run-prod-pick.sh
+took the global fixed-depth `PICK_DEPTH` instead of the per-line `PICK_DEPTH_LINE`, so every arm was the controller
+confined to width 3 (the server log's spec-ev summary shows a 3-entry cost table and `k hist [3:N]`): all shas
+canonical, t/s = the Sep 16 mint (f16 30.37/30.72 at 300, 32.52/32.35 at 600; Turbo4 32.44/32.47 at 600, 30.57 at
+300; b1 14.71). Invalid as a controller mint, kept on disk as the record of the trap; the harness now takes
+`PICK_DEPTH_LINE` and refuses a cap below 7 on a line that picks the controller. Re-minted as `prodpick-sep17-specev-q4b`.
+
+**Mint `prodpick-sep17-specev-q4b` (15:04, cap 7 verified in every arm's spec-ev summary): f16 30.47 / 30.37 at 300
+(`822ce37ce2e5`), 32.97 / 32.30 at 600 (`5f32a6b9d371`); Turbo4 33.43 / 33.53 at 600 (`b40a84e252af`), 31.45 at 300
+(`04ada3a4de10`); b1 14.66 (= Sep 16's 14.67); MTP 23.06; partial (fixed depth 7 now) 22.36. Every sha canonical:
+benchprompt's greedy text is the same under the controller at 300 and 600 on both cache lines (the width-8 rounds
+reproduce the width-4 argmax chain on this prompt), so the q4 lineage did not move at the mint - it moves on the
+free-form prompts where the sha map forks (section 4). Turbo4 +3% at both lengths on benchprompt vs the Sep 16 mint at
+the same b1 anchor; the corpus number is the +10.7% above.**

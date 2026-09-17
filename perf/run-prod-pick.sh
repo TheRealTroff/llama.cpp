@@ -89,10 +89,16 @@ PART_ENV=(GGML_MV_NC=2 GGML_MM_SKINNY=5)
 # Depths: the f16 pick is dflash n4 (verify width 5, m4-width5-crossover.md), the Turbo4 pick is the manifest's
 # PICK_DEPTH (3). When the line's manifest carries the LLAMA_SPEC_EV controller (2026-09-17, q4), both arms run its
 # block cap PICK_DEPTH_EV (7): the controller picks the verify width per round from that block.
+# pick_args set PICK_DEPTH_LINE (PICK_DEPTH_EV for such a line). TRAP (the first sep17 mint): the global PICK_DEPTH is
+# the fixed-depth default and confines the controller to width 3 silently - the server log's spec-ev summary shows a
+# 3-entry cost table; the guard below refuses that.
 F16_DEPTH=4
-if printf '%s\n' "${TURBO_PICK_ENV[@]}" | grep -qx 'LLAMA_SPEC_EV=1'; then F16_DEPTH=$PICK_DEPTH; fi
+if printf '%s\n' "${TURBO_PICK_ENV[@]}" | grep -qx 'LLAMA_SPEC_EV=1'; then
+  F16_DEPTH=$PICK_DEPTH_LINE
+  [ "$PICK_DEPTH_LINE" -ge 7 ] || { echo "ABORT: the $LINE line picks LLAMA_SPEC_EV but the block cap is $PICK_DEPTH_LINE (PICK_DEPTH_EV=7 expected)"; exit 1; }
+fi
 PICK_SPEC=(-md "$MD" --spec-type draft-dflash --spec-draft-n-max "$F16_DEPTH")
-TURBO_SPEC=(-md "$MD_TURBO" --spec-type draft-dflash --spec-draft-n-max "$PICK_DEPTH")
+TURBO_SPEC=(-md "$MD_TURBO" --spec-type draft-dflash --spec-draft-n-max "$PICK_DEPTH_LINE")
 MTP_SPEC=(--spec-type draft-mtp --spec-draft-n-max 1)
 BASE_SPEC=(--spec-type none)
 
