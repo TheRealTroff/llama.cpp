@@ -23,7 +23,7 @@ BIN=$B/build/bin
 # read as a greedy acceptance rate rather than a teacher-forced wikitext statistic.
 W=${W:-/Users/troff/play/kvquant-experiments/data/wikitext-2-raw/wiki.test.raw}
 REF=${REF:-/Users/troff/play/Qwen3.8-27B-conv-q8_0.gguf}
-CHUNKS=${CHUNKS:-24}
+CHUNKS=${CHUNKS:-24}   # NB: only the reference arm honours it - in --kl-divergence mode the tool scores the base file's own chunk count
 CTX=${CTX:-2048}
 # KV cache types. REF_KV/KV default to f16 so the ONLY variable is the weights; set KV=turbo4
 # (and REF=<same model as the test>) to price the CACHE instead: same weights both sides,

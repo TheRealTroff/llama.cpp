@@ -304,7 +304,7 @@ fidelity class - what it CAN change, not how fast it is:
   99.971% same-top, width 5 (half) 8e-6 / 99.976%, w5 f32 1.3e-5; against bf16 the half product costs +0.00009
   mean KLD / -0.008 pt (25x inside the error bar), and the q4 DECODE path (0.0536 / 90.71%) is closer to the
   model than its PREFILL path (0.0598 / 89.92%, the acch mul_mm). Both bases now live compressed (15x) on the
-  offload volume, fed to the scorer through a FIFO - see the note's "Where the bases live".
+  offload volume, fed to the scorer through a FIFO: an arm from the archive over WiFi = an arm from local disk to the second (349 s), raw over the same link 720 s - see the note's "Where the bases live" and "Base source timing".
 - The 22 older `perf/run-*.sh` harnesses still carry copies of the env of their day; they are
   records of their experiments, not picks. The live ones (`run-prod-pick.sh` with `LINE=q4|ud`,
   `run-depth-corpus.sh`, `run-spec-ev-ab.sh`, `run-corpus-acceptance.sh PICK=1`, the two UD A/Bs)

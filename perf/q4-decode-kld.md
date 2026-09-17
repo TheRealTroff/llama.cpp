@@ -89,8 +89,39 @@ deleted:
 The scorer reads a base with one `ifstream`, sequentially (header, token table, then one ~508 MB block per chunk, no seek), so
 an archive can be fed through a FIFO (`mkfifo` + `zstd -dc x.zst > fifo &`, or `<(zstd -dc x.zst)`) without landing on disk.
 `run-quant-kld.sh` does this when the raw base is absent and `$ARCHIVE/<base>.zst` exists (`KLD_BASE_MODE=fifo`, default;
-`=local` decompresses into `$SCRATCH` first). Timing of the three sources (raw local disk / raw over SMB / archive via FIFO):
-see the "Base source timing" section once the run lands.
+`=local` decompresses into `$SCRATCH` first, 23 s). Trap met on the way: the feeder must not be started inside a `$(...)` -
+its `open()` of the FIFO blocks until the reader exists, and the substitution cannot return while a child holds its stdout
+(the first form deadlocked; `base_open` sets a variable instead). Note the bf16 reference does NOT compress (94% of raw:
+it was written with a wider window, so its codes are dense) - it stays raw on the share.
 
-Wall times this session (per 24-chunk arm): pairwise arms on a local raw base 12-15 min; the bf16 arms on the raw base over
-SMB 21-24 min (decode path) / 12.5 min (prefill path) - the sequential read is not overlapped with the GPU work.
+### Base source timing (2026-09-17 07:09-08:10, owner: "time it and tell me the difference vs raw from disk")
+
+One identical arm - the q4 f16 pick, prefill path, 24 chunks, scored against the q4 width-4 decode base - from every source.
+Every arm printed the same statistics to every digit (mean KLD 0.010974, same-top 95.247%: the q4 line's prefill-vs-decode
+pairwise row, see below). Wall seconds per arm, model load included:
+
+| base source | arm 1 | arm 2 | traffic per arm |
+|---|---:|---:|---:|
+| raw on local disk (page cache warm after the first read: `cat` 12.2 GB = 1.2 s) | 349 | 349 | 0 |
+| **zstd archive on the offload share, through a FIFO** | **349** | **350** | 0.84 GB |
+| zstd archive on local disk, through a FIFO | 349 | | 0 |
+| FIFO fed by `cat` of the local raw (the scorer's compute floor) | 349 | | 0 |
+| raw on the offload share (a temporary 12.2 GB copy) | **720** | 495 (partly cached) | 12.2 GB |
+
+Without the GPU: `zstd -dc` of the local archive 4.5 s (2.7 GB/s of output); of the archive on the share 33 s (= the link);
+a cold 2 GB read of an untouched file on the share 83.6 s = **25.7 MB/s**, the same 2 GB again 0.4 s (the SMB client caches
+what it has read once, which is the second net-raw arm's 495). The link is WiFi and this is its point-to-point rate at the
+time (owner) - read the seconds as a snapshot and the ratios as the result.
+
+Reading: **the archive through a FIFO costs nothing over local disk, and beats raw-over-network by 2x at tonight's link
+rate.** The scorer reads one ~508 MB block per chunk and then computes ~14.5 s on it, so a source hides completely when its
+transfer for the arm fits inside the compute: the archive needs 0.84 GB / 349 s = 2.4 MB/s average and the kernel's
+read-ahead on the feeder's sequential input keeps it fed between blocks; the raw file needs 12.2 GB / 349 s = 35 MB/s,
+above the link, so its read is exposed in full (349 + 12.2 GB / 25.7 MB/s = 824 predicted, 720 measured with some
+read-ahead overlap). Break-even: the FIFO arm starts to slow only below ~2.5 MB/s; the raw path is exposed at any link
+below ~35 MB/s. Decompression is never the bottleneck (4.5 s of CPU per arm, on a core the GPU-bound scorer leaves idle).
+The default in `run-quant-kld.sh` stays `KLD_BASE_MODE=fifo`; `local` buys nothing at the measured rate.
+
+Side row from the same arms: **the q4 pick's prefill path vs its decode path = 0.010974 mean KLD / 95.247% same-top** - the
+acch mul_mm's distance from the decode kernels on this line (the UD line's prefill-vs-decode row is 2.6e-5 / 99.914%), the
+pairwise face of the +0.006 mean KLD / -0.86 pt acch price against the reference.
