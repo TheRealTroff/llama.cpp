@@ -51,8 +51,8 @@ lineage on q4: math/JSON shas hold, free-form shas fork at the width crossings; 
 controller harness opt out with `PICK_SPEC_EV=0`. 01-code-explain emits EOS first on raw `/completion` on today's
 pick and is excluded like 07. Own-text agreement (four free-form prompts, each corpus vs fresh q8_0 logits): the
 controller's text 0.0606 / 90.9% same-top vs the fixed-3 text 0.0566 / 91.8%, within 1 sigma of ~2000 positions, the
-weights' own price dominating both (do not put benchprompt in an agreement corpus: its code prompt scores PPL ~1000
-under q8_0 and the pick alike). 96K: 21.06 vs 20.82 t/s (+1.2%) on the long prompt's free-form summary, prefill
+weights' own price dominating both (do not put prompts in an agreement corpus: under an instruction line the model scores
+the code that follows at PPL ~1000, 1.26 without it - the instruction tokens, not the code; section 10). 96K: 21.06 vs 20.82 t/s (+1.2%) on the long prompt's free-form summary, prefill
 identical. **Mint TAG `prodpick-sep17-specev-q4b`** (prod `40ba3dc50`+, every sha canonical - benchprompt's text
 holds under the controller at both lengths; k 7 on 3-27 rounds per arm, block 8 drafted on ~40% of rounds): **f16
 30.47 / 30.37 at 300 (`822ce37ce2e5`), 32.97 / 32.30 at 600 (`5f32a6b9d371`); Turbo4 33.43 / 33.53 at 600

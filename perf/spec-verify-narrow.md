@@ -479,14 +479,22 @@ Open after this: (1) the +4 ms on the target's wait under a block-8 draft (`forc
 round at 178 ms vs q4's 131 - the width-6..8 tile and the plain FA route at widths 7-8 on ud; (3) a block rule that
 escalates on the drafter's confidence instead of the last round's acceptance would cut the (7,3) tax rounds
 (30 of 98 on free-form); (4) 2-8 slots under the controller (never measured); (5) the f16 line runs the controller in
-the q4 pick untested beyond the mint's own f16 arms.
+the q4 pick untested beyond the mint's own f16 arms. (01-code-explain's EOS-first is not open: owner - it hinges on
+a trailing newline at the end of the prompt.)
 
 **Agreement corpora (q4, `specev-agree-sep17-q4-{n3,hybrid}[-nobench]`): the controller's own greedy text vs
 the fixed-depth pick's, each scored against fresh q8_0 reference logits through the q4 f16 pick (prefill path).**
 First pass with benchprompt in the corpus: same-top 92.42 vs 92.39 +/- 0.31, mean KLD 0.2813 vs 0.2810 - but 70% of
 the scored positions were the shared 8K-token benchprompt code, which scores PPL ~1000 under q8_0 AND the pick alike
-(chunk 1: 1362 / 985; wikitext chunk 1 = 5.2, earlier self-text corpora 1.0-1.3; no special-token text in the file;
-unexplained, identical in both arms, an aside). Rescored without it (four free-form prompts, ~2 chunks of
+(chunk 1: 1362 / 985; wikitext chunk 1 = 5.2, earlier self-text corpora 1.0-1.3; identical in both arms).
+EXPLAINED (15:20): it is the instruction line, not the code. The same file with its first line removed, or with a
+neutral `// file: ...` comment in front, scores the code at PPL 1.26 (the model knows whisper.cpp's command.cpp
+nearly verbatim); with `Explain the following code in detail.` in front 238, `Summarize what this does:` 359, the
+actual benchprompt's `Summarize what this does: ` (trailing space) 985. Under an instruction the model does not
+treat the code as the document to continue - at every position most of its mass is on ending the code and starting
+the answer - and the exact instruction tokens move it 3x (the owner's EOS-first finding on 01-code-explain is the
+same sensitivity: it hinges on a trailing newline). A raw-completion prompt is unlikely text under the model; keep
+prompts out of agreement corpora. Rescored without it (four free-form prompts, ~2 chunks of
 completions each; the gate harness now defaults to that set):
 
 | corpus vs q8_0 (q4 f16 pick, prefill) | ref PPL | mean KLD | median | 99.0% | max | same-top | overlap |
