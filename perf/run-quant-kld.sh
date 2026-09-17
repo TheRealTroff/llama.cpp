@@ -47,6 +47,34 @@ TESTS=("$@")
 [ ${#TESTS[@]} -eq 0 ] && TESTS=(/Users/troff/play/Qwen3.8-27B-uniform-Q4_0-SOA-V1.gguf)
 
 BASE="$SCRATCH/kld-base-$TAG.dat"
+# Archived bases (2026-09-17, q4-decode-kld.md "Where the bases live"): the .dat files compress 15x with zstd and the
+# kept ones live on the offload volume as $ARCHIVE/<base>.zst. When the raw base is absent and the archive exists,
+# KLD_BASE_MODE=fifo (default) streams it through a FIFO into every test run (the scorer reads the base strictly
+# sequentially - one ifstream, no seek), KLD_BASE_MODE=local decompresses it into $SCRATCH first (12 GB, ~10 s).
+ARCHIVE=${ARCHIVE:-/Volumes/offload/kld-references}
+KLD_BASE_MODE=${KLD_BASE_MODE:-fifo}
+BASE_ZST=""
+if [ ! -s "$BASE" ] && [ -s "$ARCHIVE/$(basename "$BASE").zst" ]; then
+  if [ "$KLD_BASE_MODE" = local ]; then
+    echo "base   : decompressing $ARCHIVE/$(basename "$BASE").zst -> $BASE"
+    zstd -d -q -f "$ARCHIVE/$(basename "$BASE").zst" -o "$BASE" || { echo "ABORT: zstd -d failed"; exit 1; }
+  else
+    BASE_ZST="$ARCHIVE/$(basename "$BASE").zst"
+  fi
+fi
+# base_open <tag>: sets BASE_ARG, the path to pass as --kl-divergence-base (the raw file, or a FIFO fed by zstd -dc);
+# base_close reaps the feeder. NOT a command substitution: the feeder's open() of the FIFO blocks until the reader
+# opens it, and a $(...) subshell cannot return while a child still holds its stdout - that deadlocked the first form.
+base_open() {
+  if [ -n "$BASE_ZST" ]; then
+    BASE_FIFO="$SCRATCH/.fifo-$TAG-$1-$$"; rm -f "$BASE_FIFO"; mkfifo "$BASE_FIFO"
+    zstd -dc "$BASE_ZST" > "$BASE_FIFO" & BASE_FEED=$!
+    BASE_ARG="$BASE_FIFO"
+  else
+    BASE_ARG="$BASE"
+  fi
+}
+base_close() { [ -n "${BASE_FEED:-}" ] && { wait "$BASE_FEED" 2>/dev/null; rm -f "$BASE_FIFO"; BASE_FEED=""; }; return 0; }
 NEED=$(python3 -c "print(int(248320*$CTX*2*$CHUNKS/1e9)+2)")
 FREE=$(df -g "$SCRATCH" | tail -1 | awk '{print $4}')
 echo "=== weight-quant KLD: $TAG ==="
@@ -57,6 +85,8 @@ echo "commit : $(cd "$B" && git rev-parse --short HEAD) on $(cd "$B" && git rev-
 echo "binary : $(date -r "$BIN/llama-perplexity" '+%Y-%m-%d %H:%M')"
 if [ -s "$BASE" ]; then
   echo "logits : $BASE (reusing, $(du -g "$BASE" | cut -f1) GB on disk)"
+elif [ -n "$BASE_ZST" ]; then
+  echo "logits : $BASE_ZST (archived, $(du -m "$BASE_ZST" | cut -f1) MB, streamed through a FIFO)"
 else
   echo "logits : $BASE  (to generate, need ~${NEED} GB, ${FREE} GB free)"
 fi
@@ -65,7 +95,7 @@ echo
 # 1. reference logits. -fa on with f16 KV both sides so the ONLY variable is the weights.
 # The space check belongs HERE, not above: an existing base file is reused and needs no
 # room, and hoisting the check aborted a legitimate reuse run at 14 GB free on 2026-08-23.
-if [ ! -s "$BASE" ]; then
+if [ ! -s "$BASE" ] && [ -z "$BASE_ZST" ]; then
   [ "$FREE" -lt "$NEED" ] && { echo "ABORT: not enough space for the base logits"; exit 1; }
   echo "--- generating reference logits from $(basename "$REF") ---"
   "$BIN/llama-perplexity" -m "$REF" -f "$W" -c "$CTX" --chunks "$CHUNKS" -fa on \
@@ -79,13 +109,15 @@ for M in "${TESTS[@]}"; do
   n=$(basename "$M" .gguf)$LABEL
   echo
   echo "--- $n vs reference ---"
+  base_open "$n"
   "$BIN/llama-perplexity" -m "$M" -f "$W" -c "$CTX" --chunks "$CHUNKS" -fa on \
-    -ctk "$KV" -ctv "$KV" --kl-divergence --kl-divergence-base "$BASE" $PPL_EXTRA \
+    -ctk "$KV" -ctv "$KV" --kl-divergence --kl-divergence-base "$BASE_ARG" $PPL_EXTRA \
     >"$OUT/$TAG-$n.log" 2>&1 \
-    || { echo "FAILED, see $OUT/$TAG-$n.log"; tail -5 "$OUT/$TAG-$n.log"; continue; }
+    || { base_close; echo "FAILED, see $OUT/$TAG-$n.log"; tail -5 "$OUT/$TAG-$n.log"; continue; }
+  base_close
   grep -E 'Mean KLD|Maximum KLD|99.0%|99.9%|Median KLD|Mean Delta|top token|Same top|RMS|PPL ratio|Final estimate' \
     "$OUT/$TAG-$n.log" | sed 's/^/  /'
 done
 
 echo
-echo "logits file kept at $BASE - delete it when done (~${NEED} GB)"
+[ -n "$BASE_ZST" ] && echo "base streamed from $BASE_ZST" || echo "logits file kept at $BASE - delete it when done (~${NEED} GB); zstd -3 it into $ARCHIVE to keep it (15x)"

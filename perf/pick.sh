@@ -59,11 +59,12 @@ PICK_MANIFEST=(
   "GGML_MV_SOA_KQ=2|BI|ud|pick|ud-model.md step 6/13"
   # --- decode numerics: half products in the width-4/5 scalar kernels. Same sha as the f32-product arms
   #     on the pick texts. UD line PRICED 2026-09-17 (w6-verify-cliff.md last section): width 4 = the decode-path
-  #     base (+0.0003 mean KLD vs bf16), width 5 = 5e-6 / 99.943% same-top pairwise vs it at -b 5. q4 line: OPEN
-  #     (no Q4_0 width-4 decode base yet) - the KLD line (prefill-shaped) and the agreement harness never saw them
-  "GGML_MV_SOA_W4_R4KP=3|NUM-TG|both|pick|m4-width4-r4kp.md v3 (half product; ud: the decode base, priced vs bf16; q4: sha-only, OPEN)"
-  "GGML_MV_SOA_W5=4|NUM-TG|both|pick|m4-width5-crossover.md w5r4h (ud: 5e-6 / 99.943% pairwise vs the width-4 base 2026-09-17; q4: sha-only, OPEN)"
-  "GGML_MV_SOA_W5_HALF=1|NUM-TG|both|pick|m4-width5-crossover.md w5r4h (ud: 5e-6 / 99.943% pairwise vs the width-4 base 2026-09-17; q4: sha-only, OPEN)"
+  #     base (+0.0003 mean KLD vs bf16), width 5 = 5e-6 / 99.943% same-top pairwise vs it at -b 5. q4 line PRICED
+  #     2026-09-17 (q4-decode-kld.md): f32-product w4 vs the half-product base 5e-6 / 99.971%, w5 8e-6 / 99.976%,
+  #     +0.00009 mean KLD vs bf16 - the KLD line (prefill-shaped) never saw them; the pairwise decode bases do
+  "GGML_MV_SOA_W4_R4KP=3|NUM-TG|both|pick|m4-width4-r4kp.md v3 (half product; ud: the decode base, priced vs bf16; q4: 5e-6 / 99.971% vs its f32 form, +0.00009 vs bf16, q4-decode-kld.md)"
+  "GGML_MV_SOA_W5=4|NUM-TG|both|pick|m4-width5-crossover.md w5r4h (ud: 5e-6 / 99.943% pairwise vs the width-4 base 2026-09-17; q4: 8e-6 / 99.976% vs the width-4 base, f32 form 1.3e-5, q4-decode-kld.md)"
+  "GGML_MV_SOA_W5_HALF=1|NUM-TG|both|pick|m4-width5-crossover.md w5r4h (ud: 5e-6 / 99.943% pairwise vs the width-4 base 2026-09-17; q4: 8e-6 / 99.976% vs the width-4 base, f32 form 1.3e-5, q4-decode-kld.md)"
   # --- prefill numerics ---
   "GGML_MM_ACC_HALF=1|NUM-PP|q4|pick|kldacch-aug28: mean KLD 0.054->0.060 (+11.8%), same-top -0.86 pt; ON UD -2.51 pt (ud-model.md step 4) - q4 only"
   # --- speculation side ---

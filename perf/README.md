@@ -298,8 +298,13 @@ fidelity class - what it CAN change, not how fast it is:
   KLD, `ud-remaining-quants.md`), and the width-5 kernels scored 5e-6 / 99.943% same-top pairwise against that
   base at `-b 5` (`w6-verify-cliff.md`, "Width 5 gated the same way": = the width-4 kernels to the gate's
   resolution, 5x closer than either width-6 form; op-level both widths track the exact scale form at the same
-  6.5e-4 residual - the depth-4 text `7e9e464feffb` is a summation-order tie, not a numerics gap). **q4 line
-  still OPEN**: no Q4_0 width-4 decode base exists (one 49-min run), so w4r4kp / w5r4h are sha-only there.
+  6.5e-4 residual - the depth-4 text `7e9e464feffb` is a summation-order tie, not a numerics gap). **q4 line:
+  CLOSED 2026-09-17 too** (`q4-decode-kld.md`): a q4 width-4 decode base of the pick was minted (14.5 min) and the
+  f32-product forms scored against it from the regenerated plain twin - w4 f32 vs the half-product base 5e-6 /
+  99.971% same-top, width 5 (half) 8e-6 / 99.976%, w5 f32 1.3e-5; against bf16 the half product costs +0.00009
+  mean KLD / -0.008 pt (25x inside the error bar), and the q4 DECODE path (0.0536 / 90.71%) is closer to the
+  model than its PREFILL path (0.0598 / 89.92%, the acch mul_mm). Both bases now live compressed (15x) on the
+  offload volume, fed to the scorer through a FIFO - see the note's "Where the bases live".
 - The 22 older `perf/run-*.sh` harnesses still carry copies of the env of their day; they are
   records of their experiments, not picks. The live ones (`run-prod-pick.sh` with `LINE=q4|ud`,
   `run-depth-corpus.sh`, `run-spec-ev-ab.sh`, `run-corpus-acceptance.sh PICK=1`, the two UD A/Bs)
@@ -659,9 +664,11 @@ must be a separate checkout. Two arms that agree to the microsecond are a routin
   numerics gate; a decode-path KLD is the same harness with `-b 4 -ub 4` on the same reference logits. **Run
   2026-09-09 (`ud-remaining-quants.md` on `exp/ud-remaining-quants`): the pick's decode path sits 2.6e-5 mean
   KLD from its prefill path (pairwise, 1/46 of q8_0's distance from bf16), the fork's native decode kernels
-  4.5e-4 from the pick's; a decode-path base of the UD pick is kept at
-  `kvquant-experiments/logits/kld-base-kld-pair-v1dec4-sep09.dat` (`REF_EXTRA`/`PPL_EXTRA` in that branch's
-  `run-quant-kld.sh`) - price any new decode kernel form against it, ~25 min.**
+  4.5e-4 from the pick's; a decode-path base of the UD pick is kept (`kld-base-kld-pair-v1dec4-sep09.dat`;
+  since 2026-09-17 as a zstd archive on `/Volumes/offload/kld-references/`, next to the q4 line's own
+  `kld-base-kld-pair-q4dec4-sep17.dat.zst` - `run-quant-kld.sh` streams an archived base through a FIFO when the
+  raw file is absent, `q4-decode-kld.md`) - price any new decode kernel form against it with `PPL_EXTRA="-b W -ub W"`,
+  12-25 min per arm.**
 - **A file swap is a routing change: prove the routes and re-mint (found 2026-09-07).** The f16 pick's
   2026-09-06 noon mint (60.5 s prefill, canonical `95eb7e65977e` / `6678b0507d41`) ran the PLAIN Q4_0 file;
   the stored Q4_0_SOA file that replaced it that evening was excluded from the acch, n64 and f16-B tiles
@@ -1250,6 +1257,11 @@ Superseded, kept for history - do not quote numbers from these:
   sides, the stored kernel executes 16% fewer instructions and loses on a fatter 8/12 B (address) mix; the
   wide-load probe (`exp/q6k-w1-form`, not routed) recovers half. Open: the 32K prefill pair
   (`ud-q3k-long-prefill.md`).
+- **`q4-decode-kld.md` - the q4 line's half-product width-4/5 decode kernels PRICED 2026-09-17** (a q4 width-4
+  decode base minted; f32-product arms from the regenerated plain twin: 5e-6 / 8e-6 / 1.3e-5 pairwise, +0.00009 vs
+  bf16; the decode path is closer to the model than the acch prefill path). Also: the decode bases compress 15x and
+  live on the offload volume as zstd archives fed through a FIFO; the overlap floor decomposed (95% the 16-nat
+  window, 5% code rounding).
 - **`spec-heated.md` - speculation at temperature > 0, FIRST LOOK 2026-09-07 (branch `spec-heated`,
   MERGED to prod the same evening, owner: "Kill the logits, merge the fix"; the active worktree is
   gone; owner's premise: "literally do anything, because so far we know nothing").**
