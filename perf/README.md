@@ -1329,6 +1329,11 @@ Superseded, kept for history - do not quote numbers from these:
   over the corpus (r3 math/JSON +32/+43%, free-form -3..+4% = the block-8 drafter tax); and the
   width-8 hunt's first find, `GGML_MM_SKINNY_BSPLIT=2` (the unmerged Aug-24 B-stage split + float4
   ported to the SoA skinny body): -5% per width-8 round, byte-identical. Sections 7-8.**
+- `benchprompt-framing.md` - **2026-09-17: the benchprompt's instruction line makes the code that follows unlikely text
+  (chunk-1 PPL 985 vs 1.26 without it; the model knows whisper.cpp's command.cpp verbatim), the greedy raw
+  completion has RESTARTED ONCE since the acch mint (Aug 28; without acch, no restart - a one-step bisection), a
+  question framing loops, and the chat template (thinking off) gives clean summaries under both questions at
+  62-68% acceptance.** Prompts stay out of agreement corpora; quality judgments use the chat template, never raw greedy.
 - `head-to-head-cooled.md` - superseded by `head-to-head-aug22.md`; its llama.cpp
   number (20.39) and gap (1.45x) are dead, though its dflash side reproduced.
 - `round-decomp-post-fa-split.md` - superseded by `round-decomp-fused.md`.
