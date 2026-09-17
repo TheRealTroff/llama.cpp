@@ -70,3 +70,21 @@ under greedy decoding, and the prefix only picks the failure mode. Speculation a
 - Agreement corpora exclude prompts.
 - Open (owner's): whether the q4 line's acch is worth a second look given that one greedy trajectory it tips; a
   benchmark prompt file under the chat template would be a new lineage.
+
+## 5. Controls (owner: "before the half-acc we were fine without the chat template?" - no)
+
+| arm | result |
+|---|---|
+| q4 f16 no-spec, acch UNSET, benchprompt raw, 2048-token cap | 1396 tokens then EOS, no "### 2." restart, but the finished summary is **repeated ~15 times** from ~600 tokens on (`059d3a6fd092`) |
+| q4 f16 no-spec, acch unset, question framing raw, 600 | 505 tokens then EOS, the summary repeated once (`4766ad025da3`) - milder than the x17 loop with acch |
+| q4 Turbo4 pick, acch unset, chat template "Summarize" | clean, 33.4 t/s, acc 63.4% |
+| ud f16 no-spec, benchprompt raw, 600 | **clean** (`5e76afaba36c` = the UD f16 canonical text): no restart, no repeat through 600 tokens |
+| ud f16 no-spec, question framing raw, 600 | clean, ends at EOS after 151 tokens |
+| ud Turbo4 pick, chat template, both questions | clean, 29.4 / 30.7 t/s, acc 68.9 / 72.6% |
+
+Reading: on q4 the raw greedy regime degenerates with or without acch - acch moves the first failure from a
+repeated summary after ~600 tokens to a restart at ~250 and a full loop; it does not create the fragility. On UD
+the raw greedy text is clean through 600 tokens on both framings (no acch there by design, and a different
+quantization - not a controlled pair with q4). The chat template is clean on both lines, with and without acch,
+at 63-73% acceptance. "Before acch we were fine without the template" holds only for the first 600 tokens of one
+prompt on q4; "with the template we are fine" holds everywhere measured.
