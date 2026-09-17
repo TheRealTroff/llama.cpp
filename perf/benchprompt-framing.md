@@ -1,6 +1,6 @@
 # Benchprompt: the framing line, the restart, and the chat template (2026-09-17)
 
-Status: **measured, nothing changes in the picks.** Found while scoring the adaptive-depth agreement corpora
+Status: **the benchmark lineage moved on it (section 6); the picks themselves unchanged.** Found while scoring the adaptive-depth agreement corpora
 (`spec-verify-narrow.md` section 10): the shared benchprompt made both corpora score mean KLD 0.28 with chunk-1 PPL
 ~1000 under q8_0 and the pick alike.
 
@@ -88,3 +88,18 @@ the raw greedy text is clean through 600 tokens on both framings (no acch there 
 quantization - not a controlled pair with q4). The chat template is clean on both lines, with and without acch,
 at 63-73% acceptance. "Before acch we were fine without the template" holds only for the first 600 tokens of one
 prompt on q4; "with the template we are fine" holds everywhere measured.
+
+## 6. The switch: every benchmark prompt chat-templated (owner, 2026-09-17 evening)
+
+"The benchprompt is a clear question and what we want is its answer." `pick_prompt` in `perf/pick.sh` renders
+`<|im_start|>user\n` + content.strip() + `<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n` - byte-identical
+to the server's `/apply-template` (thinking off) on benchprompt, the corpus prompts and the 96K prompt (the first
+wrapper kept the file's trailing newline and was one byte off on every file: the template trims). The rendered
+file through `/completion` reproduces the chat endpoint's text exactly (3bf7fcb7beec). For a single user turn with
+thinking off the template contributes nothing else; with thinking on it also injects a system turn ("Reasoning effort
+is set to xhigh. Please think carefully...") and ends at an open `<think>` - a different lineage if ever benchmarked.
+Harnesses: run-prod-pick.sh, run-depth-corpus.sh, run-longctx-pick.sh (`PICK_CHAT=0` = raw). First baselines
+(`run-chat-lineage-baselines.sh`): the README pick block entry of 2026-09-17 evening. Highlights: both corpus
+prompts that emitted EOS first on raw prompts (01, 07) answer; acceptance up on every arm (ud Turbo4 300 73.5%);
+the q4 controller +8.0% on the nine-prompt corpus with free-form no worse than -2.5% and 7 of 9 texts identical to
+fixed depth; ud's JSON text byte-identical to q4's (`0b9f71ff9941`, the first cross-line sha match on record).

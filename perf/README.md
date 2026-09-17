@@ -32,6 +32,27 @@ one level down, and it bit the `GGML_MV_EXT_V2` work on 2026-08-22.
 
 ## The prod pick
 
+**2026-09-17 evening, A NEW SHA LINEAGE ON BOTH LINES (owner: "the benchprompt is a clear question and what we want
+is its answer"): every benchmark prompt is chat-templated.** `perf/pick.sh` `pick_prompt` renders one user turn,
+thinking off, byte-identical to the server's `/apply-template` (verified on benchprompt, the corpus prompts and the
+96K prompt; the template trims the content, so a file's trailing newline goes); the mint, corpus and long-context
+harnesses read every prompt through it (`PICK_CHAT=1` default; `PICK_CHAT=0` = the raw lineage below, kept for
+comparison only). Why (`benchprompt-framing.md`): raw greedy completion of "instruction + material" is the regime
+where the instruct model restarts and loops (the raw q4 benchmark text had restarted once since the Aug 28 acch
+mint; two corpus prompts emitted EOS first on a trailing newline), and under the template both lines give complete
+answers on every prompt. **Mint TAGs `prodpick-sep17-chat-{q4,ud}` (prod `b3f50dc24`, machine 3% under Sep 16 on
+both batch-1 anchors): q4 (with the adaptive-depth controller) f16 31.53 / 31.40 at 300 (`d2953fccfb41`), 32.68 /
+32.62 at 600 (`441120c66064`); Turbo4 33.45 at 300 (`86213d038a29`, acc 65.7%), 32.66 / 33.12 at 600
+(`9e49b3d13b31`); b1 14.20, MTP 22.37. ud (fixed depth 3) f16 27.90 / 27.88 at 300 (`9c53aaade052`), 27.23 / 27.47 at
+600 (`86b6e9b02cf0`); Turbo4 29.69 at 300 (`ce826d8a3cbd`, acc 73.5%), 28.69 / 28.77 at 600 (`7eaeffa2a01e`); b1 12.97,
+MTP 18.60.** Every arm repeats its sha; the partial-env arm now runs fixed depth 7 (21.45 / 23.02, a reference only).
+Corpus at the pick (`chat-sep17-corpus-*`, LV 3, all nine prompts live again): **q4 controller 34.70 vs fixed 3
+32.12 (+8.0%; math +12%, JSON +35%, free-form -2.5..+4.8%, 7 of 9 texts identical between the two); ud 29.77.**
+96K (`chat-sep17-96k-*`, 600 tokens): q4 20.72 t/s, acc 50.6%, prefill 1045 s (`de1c95b50bd8`); ud 19.36, acc 53.7%,
+prefill 1101 s (`a52798bd009e`). Acceptance is up on every arm vs the raw lineage (q4 Turbo4 300: 65.7 vs 60-61%; ud
+73.5%); the UD f16 arms gain the most t/s (27.9 vs 24.2 at 300). The raw-lineage records below this entry are
+history: their shas gate `PICK_CHAT=0` runs only.
+
 **2026-09-17 (owner: "time we flipped the switch on adaptive depth spec"): + `LLAMA_SPEC_EV=1 LLAMA_SPEC_EV_WIDTHS=3,7`
 on the q4 line, block cap 7 (`PICK_DEPTH_EV`)** - the expected-value verify-depth controller of Sep 7, gated today on
 prod as `spec-verify-narrow.md` section 10 (harness `run-specev-pick-gate.sh`, diagnosis `run-specev-tax.sh`). The
