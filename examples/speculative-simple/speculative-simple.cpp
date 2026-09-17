@@ -195,6 +195,7 @@ int main(int argc, char ** argv) {
                 /* .prompt     = */ &prompt_tgt,
                 /* .result     = */ &draft, // output
                 /* .dists      = */ &dists,
+                /* .conf       = */ nullptr,
                 /* .temperature = */ params.sampling.temp,
                 /* .seed       = */ common_sampler_get_seed(smpl.get()),
             };
