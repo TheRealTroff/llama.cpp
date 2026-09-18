@@ -655,4 +655,8 @@ x N on tree B). Self-gate on the branch (`replaygate-sep18-self`, q4 Turbo4 cont
 A single-slot trace replays on whichever slot the server hands the request. Under several slots the trace is per (slot,
 request) and the picks are still the batched round's - untested there.
 
-**MERGED TO PROD 2026-09-18 with `exp/conv-carry-slots` (owner: "I am all for bringing both into prod"; mint below).**
+**MERGED TO PROD 2026-09-18 with `exp/conv-carry-slots` (owner: "I am all for bringing both into prod"; mint below).** Mint `prodpick-sep18-merge-{q4,ud}` (prod `1f8f42e2d`): every sha = the Sep 17 chat-lineage mint on both lines; q4
+Turbo4 33.51 at 300 / 33.26 / 33.12 at 600, f16 31.50 / 31.70 at 300, 32.69 / 32.72 at 600, b1 14.16; ud unchanged
+(29.70 / 28.80 / 28.71 Turbo4, 27.89 / 27.40 f16, b1 12.91). The fusion fires on prod at the q4 pick: 432 fused
+conv dispatches per 9 graphs at `-lv 5` (the fusion-debug lines are DEBUG level: a count at `-lv 3` reads 0 and means
+nothing), 0 guard hits.

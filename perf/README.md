@@ -32,6 +32,19 @@ one level down, and it bit the `GGML_MV_EXT_V2` work on 2026-08-22.
 
 ## The prod pick
 
+**2026-09-18 MERGED (owner: "I am all for bringing both into prod"): the conv+carry+silu fusion takes 8 carry copies
+(`exp/conv-carry-slots`) and the controller's pick-trace record/replay (`exp/spec-ev-replay`).** The q4 pick's block cap 7
+had silently turned the fusion off since Sep 17 (n_rs_seq = draft max -> 8 conv-state copies per layer over the 6-source
+cap; `spec-verify-narrow.md` section 11 - the "+4 ms target wait" of section 10 was this), ~1.5 ms of GPU per round;
+the fixed rewrite fires on prod at depth 7 (`GGML_METAL_FUSION_DEBUG=2` at `-lv 5`: 432 fused dispatches per 9 graphs,
+0 guard hits). Byte-identical. `LLAMA_SPEC_EV_TRACE` / `LLAMA_SPEC_EV_REPLAY` (flag table) make a controller run
+deterministic for surgery: `run-specev-replay-gate.sh`. **Mint TAGs `prodpick-sep18-merge-{q4,ud}` (prod `1f8f42e2d`):
+q4 f16 31.50 / 31.70 at 300 (`d2953fccfb41`), 32.69 / 32.72 at 600 (`441120c66064`); Turbo4 33.51 at 300 (`86213d038a29`),
+33.26 / 33.12 at 600 (`9e49b3d13b31`); b1 14.16, MTP 22.60. ud (unchanged binary paths) f16 27.89 / 27.87 at 300
+(`9c53aaade052`), 27.40 / 27.42 at 600 (`86b6e9b02cf0`); Turbo4 29.70 at 300 (`ce826d8a3cbd`), 28.80 / 28.71 at 600
+(`7eaeffa2a01e`); b1 12.91, MTP 18.75.** Every sha = the Sep 17 chat-lineage mint; q4 Turbo4 600 +1% on the day, the
+rest within noise (the controller gives part of the per-round gain back in narrower picks, section 11).
+
 **2026-09-17 evening, A NEW SHA LINEAGE ON BOTH LINES (owner: "the benchprompt is a clear question and what we want
 is its answer"): every benchmark prompt is chat-templated.** `perf/pick.sh` `pick_prompt` renders one user turn,
 thinking off, byte-identical to the server's `/apply-template` (verified on benchprompt, the corpus prompts and the
@@ -710,6 +723,14 @@ measured flat against the variant for exactly that reason (`fa-f16-spill.md`). A
 must be a separate checkout. Two arms that agree to the microsecond are a routing alarm.
 
 ## Methodology rules, learned the hard way
+
+- **A pick change is a routing change, like a file swap.** The Sep 17 block-cap-7 pick silently turned the picked
+  conv fusion off (the draft max sizes the recurrent snapshots, the snapshots size the carry copies, the copies
+  overflowed the fusion's source cap) and nobody saw it for a day because the manifest said "picked" and the shas
+  held. After a pick-config change (depth cap, slots, KV type, file) count the `fuse:` lines under
+  `GGML_METAL_FUSION_DEBUG=2` at `-lv 5` and run the kernel census on the actual pick config. And a controller
+  arm's greedy text is statistical (its width picks follow the cost EMA): gate kernel changes under the controller
+  with the pick-trace replay, `run-specev-replay-gate.sh` (2026-09-18).
 
 - **The KLD gate is a prefill-path gate (stated 2026-09-09).** `llama-perplexity --kl-divergence` scores
   chunks in 2048-token batches, so it prices the mul_mm tiles, the batched FA kernel and the GDN scan - never the
