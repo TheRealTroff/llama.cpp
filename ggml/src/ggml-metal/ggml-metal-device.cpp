@@ -769,8 +769,12 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm_skinny(gg
     // GGML_MM_SKINNY_KQ2=1: the stored q4_K/q5_K tiles' header decoded once per K-step (FC_MUL_MM + 11, lever 4)
     static const int env_kq2 = getenv("GGML_MM_SKINNY_KQ2") ? atoi(getenv("GGML_MM_SKINNY_KQ2")) : 0;
     const int kq2 = (soa && (op->src[0]->type == GGML_TYPE_Q5_K_SOA || op->src[0]->type == GGML_TYPE_Q4_K_SOA)) ? env_kq2 : 0;
+    // GGML_MM_SKINNY_Q6K=1: the q6_K tiles (block = the UD lm_head, and stored SoA) read as pairs with wide loads
+    // (FC_MUL_MM + 12, perf/w8-decomp-sep18.md the q6_K head item); the constant is set for q6_K pipelines only
+    static const int env_q6k = getenv("GGML_MM_SKINNY_Q6K") ? atoi(getenv("GGML_MM_SKINNY_Q6K")) : 0;
+    const int q6k = (ggml_metal_soa_base_type(op->src[0]->type) == GGML_TYPE_Q6_K) ? env_q6k : 0;
     snprintf(base, 256, "kernel_mul_mm_skinny_%s%s_%s%s", ggml_type_name(ggml_metal_soa_base_type(op->src[0]->type)), di ? "_di" : "", ggml_type_name(op->src[1]->type), fp ? "_fp" : "");
-    snprintf(name, 256, "%s%s%s_ne12=%d_r2=%d_r3=%d_bsp=%d%s%s", base, soa ? "_soa" : "", soa && gen_exact ? "_ex" : "", ne12, r2, r3, env_bsplit, iq4lut == 1 ? "_iq4lut=1" : iq4lut == 2 ? "_iq4lut=2" : iq4lut == 3 ? "_iq4lut=3" : iq4lut == 4 ? "_iq4lut=4" : iq4lut == 5 ? "_iq4lut=5" : iq4lut == 6 ? "_iq4lut=6" : q5k == 1 ? "_q5k=1" : "", kq2 == 1 ? "_kq2=1" : "");
+    snprintf(name, 256, "%s%s%s_ne12=%d_r2=%d_r3=%d_bsp=%d%s%s%s", base, soa ? "_soa" : "", soa && gen_exact ? "_ex" : "", ne12, r2, r3, env_bsplit, iq4lut == 1 ? "_iq4lut=1" : iq4lut == 2 ? "_iq4lut=2" : iq4lut == 3 ? "_iq4lut=3" : iq4lut == 4 ? "_iq4lut=4" : iq4lut == 5 ? "_iq4lut=5" : iq4lut == 6 ? "_iq4lut=6" : q5k == 1 ? "_q5k=1" : "", kq2 == 1 ? "_kq2=1" : "", q6k == 1 ? "_q6k=1" : "");
 
     ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
     if (!res.pipeline) {
@@ -793,6 +797,9 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm_skinny(gg
         }
         if (kq2) {
             ggml_metal_cv_set_int16(cv, (int16_t) kq2, FC_MUL_MM + 11);
+        }
+        if (q6k) {
+            ggml_metal_cv_set_int16(cv, (int16_t) q6k, FC_MUL_MM + 12);
         }
 
         res = ggml_metal_library_compile_pipeline(lib, base, name, cv);
@@ -1162,7 +1169,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_ext(ggml_
     static const bool kq_exact = !getenv("GGML_KQ_SOA_EXACT") || atoi(getenv("GGML_KQ_SOA_EXACT")) != 0;
     const bool kq_exact_here = kq_exact && tsrc0 == GGML_TYPE_Q4_K_SOA;
 
-    snprintf(base, 256, "kernel_mul_mv_ext_%s%s_%s%s_r1_%d", ggml_type_name(tsrc0), di ? "_di" : "", ggml_type_name(tsrc1), variant == 2 ? "_ilp2" : variant == 3 ? "_v2" : variant == 4 ? "_hp" : "", r1ptg);
+    snprintf(base, 256, "kernel_mul_mv_ext_%s%s_%s%s_r1_%d", ggml_type_name(tsrc0), di ? "_di" : "", ggml_type_name(tsrc1), variant == 2 ? "_ilp2" : variant == 3 ? "_v2" : variant == 4 ? "_hp" : variant == 5 ? "_w6" : "", r1ptg);
     snprintf(name, 256, "%s_nsg=%d_nxpsg=%d_nr0=%d_ne12=%d_r2=%d_r3=%d%s", base, nsg, nxpsg, nr0, ne12, r2, r3, kq_exact_here ? "_exact" : "");
 
     ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);

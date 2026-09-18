@@ -4296,7 +4296,11 @@ static int ggml_metal_op_mul_mat_impl(ggml_metal_op_t ctx, int idx, ggml_tensor 
         const int soa_w4_r4kp = stored_soa ? 3 : env_soa_w4_r4kp;
         const int soa_w5_rows = stored_soa ? 4 : env_soa_w5;
         const bool soa_w5_hp = stored_soa || env_soa_w5_hp;
-        const int variant = ne11 == 4 && use_f16y && !use_di && op->src[0]->type == GGML_TYPE_Q4_0 && env_ilp == 2 ? 2 :
+        // GGML_MV_EXT_Q6K_WIDE=1: the q6_K ext readers (the UD lm_head at widths 2-5) with four 8-byte packed loads per
+        // 16-element tile instead of sixteen ushort loads (perf/w8-decomp-sep18.md, the q6_K head item); byte-identical
+        static const int env_q6k_wide = getenv("GGML_MV_EXT_Q6K_WIDE") ? atoi(getenv("GGML_MV_EXT_Q6K_WIDE")) : 0;
+        const int variant = (op->src[0]->type == GGML_TYPE_Q6_K && env_q6k_wide == 1) ? 5 :
+                            ne11 == 4 && use_f16y && !use_di && op->src[0]->type == GGML_TYPE_Q4_0 && env_ilp == 2 ? 2 :
                             ne11 == 4 && use_di && env_di_v2 ? 3 :
                             ne11 == 4 && use_f16y && !use_di && op->src[0]->type == GGML_TYPE_Q4_0 && env_half_product ? 4 : 1;
 

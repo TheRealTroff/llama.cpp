@@ -1550,6 +1550,84 @@ void dequantize_q6_K(device const block_q6_K *xb, short il, thread type4x4 & reg
     }
 }
 
+// the single-tile form of dequantize_q6_K with wide loads: four 8-byte packed_ushort4 loads instead of sixteen
+// ushort loads (the ext r1_N readers walk tiles tx, tx+nxpsg, ... per thread, so no pair to share); same expressions
+template <typename type4x4>
+void dequantize_q6_K_wide(device const block_q6_K *xb, short il, thread type4x4 & reg) {
+    const half d_all = xb->d;
+    device const packed_ushort4 * ql = (device const packed_ushort4 *)(xb->ql + 2*(32*(il/8) + 16*((il/2)&1) + 8*(il&1)));
+    device const packed_ushort4 * qh = (device const packed_ushort4 *)(xb->qh + 2*(16*(il/8) + 8*(il&1)));
+    device const int8_t * scales = (device const int8_t *)xb->scales;
+    float sc = scales[(il%2) + 2 * ((il/2))];
+    il = (il/2) & 3;
+
+    const uint32_t kmask1 = il>1 ? (il>2 ? 0xC0C0C0C0 : 0x30303030) : (il>0 ? 0x0C0C0C0C : 0x03030303);
+    const uint32_t kmask2 = il>1 ? 0xF0F0F0F0                       : 0x0F0F0F0F;
+    const float ml = d_all * sc * 32.f;
+    const float dl0 = d_all * sc;
+    const float dl1 = dl0 / 256.f;
+    const float dl2 = dl0 / (256.f * 256.f);
+    const float dl3 = dl0 / (256.f * 256.f * 256.f);
+    const uint8_t shr_h = il>2 ? 2 : 0;
+    const uint8_t shl_h = il>1 ? 0 : (il>0 ? 2 : 4);
+    const uint8_t shr_l = il>1 ? 4 : 0;
+    const ushort4 l0 = ql[0], l1 = ql[1];
+    const ushort4 h0 = qh[0], h1 = qh[1];
+    const uint lows[4]  = { l0.x | ((uint) l0.y << 16), l0.z | ((uint) l0.w << 16), l1.x | ((uint) l1.y << 16), l1.z | ((uint) l1.w << 16) };
+    const uint highs[4] = { h0.x | ((uint) h0.y << 16), h0.z | ((uint) h0.w << 16), h1.x | ((uint) h1.y << 16), h1.z | ((uint) h1.w << 16) };
+    for (int i = 0; i < 4; ++i) {
+        const uint32_t  low = lows[i]  & kmask2;
+        const uint32_t high = highs[i] & kmask1;
+        const uint32_t q = ((high << shl_h) >> shr_h) | (low >> shr_l);
+        reg[i][0] = dl0 *  ((half)(q & 0xFF))       - ml;
+        reg[i][1] = dl1 * ((float)(q & 0xFF00))     - ml;
+        reg[i][2] = dl2 * ((float)(q & 0xFF0000))   - ml;
+        reg[i][3] = dl3 * ((float)(q & 0xFF000000)) - ml;
+    }
+}
+
+// the pair form of dequantize_q6_K: tiles il (even) and il+1 - the same per-element expressions, wide loads
+template <typename type4x4>
+inline void dequantize_q6_K_pair(device const block_q6_K *xb, short il, thread type4x4 & rega, thread type4x4 & regb) {
+    const half d_all = xb->d;
+    device const packed_ushort4 * ql = (device const packed_ushort4 *)(xb->ql + 2*(32*(il/8) + 16*((il/2)&1)));
+    device const packed_ushort4 * qh = (device const packed_ushort4 *)(xb->qh + 2*(16*(il/8)));
+    const ushort sc2 = *(device const ushort *)(xb->scales + 2*(il/2));
+    const float sc0 = (float) (char) (sc2 & 0xff);
+    const float sc1 = (float) (char) (sc2 >> 8);
+    const short ilm = (il/2) & 3;
+    const uint32_t kmask1 = ilm>1 ? (ilm>2 ? 0xC0C0C0C0 : 0x30303030) : (ilm>0 ? 0x0C0C0C0C : 0x03030303);
+    const uint32_t kmask2 = ilm>1 ? 0xF0F0F0F0                        : 0x0F0F0F0F;
+    const uint8_t shr_h = ilm>2 ? 2 : 0;
+    const uint8_t shl_h = ilm>1 ? 0 : (ilm>0 ? 2 : 4);
+    const uint8_t shr_l = ilm>1 ? 4 : 0;
+    const ushort4 l0 = ql[0], l1 = ql[1], l2 = ql[2], l3 = ql[3];   // tile il: l0 l1; tile il+1: l2 l3
+    const ushort4 h0 = qh[0], h1 = qh[1], h2 = qh[2], h3 = qh[3];
+    const uint lows[8]  = { l0.x | ((uint) l0.y << 16), l0.z | ((uint) l0.w << 16), l1.x | ((uint) l1.y << 16), l1.z | ((uint) l1.w << 16),
+                            l2.x | ((uint) l2.y << 16), l2.z | ((uint) l2.w << 16), l3.x | ((uint) l3.y << 16), l3.z | ((uint) l3.w << 16) };
+    const uint highs[8] = { h0.x | ((uint) h0.y << 16), h0.z | ((uint) h0.w << 16), h1.x | ((uint) h1.y << 16), h1.z | ((uint) h1.w << 16),
+                            h2.x | ((uint) h2.y << 16), h2.z | ((uint) h2.w << 16), h3.x | ((uint) h3.y << 16), h3.z | ((uint) h3.w << 16) };
+    for (int t = 0; t < 2; ++t) {
+        const float sc  = t == 0 ? sc0 : sc1;
+        const float ml  = d_all * sc * 32.f;
+        const float dl0 = d_all * sc;
+        const float dl1 = dl0 / 256.f;
+        const float dl2 = dl0 / (256.f * 256.f);
+        const float dl3 = dl0 / (256.f * 256.f * 256.f);
+        type4x4 r;
+        for (int i = 0; i < 4; ++i) {
+            const uint32_t  low = lows[4*t + i] & kmask2;
+            const uint32_t high = highs[4*t + i] & kmask1;
+            const uint32_t q = ((high << shl_h) >> shr_h) | (low >> shr_l);
+            r[i][0] = dl0 *  ((half)(q & 0xFF))       - ml;
+            r[i][1] = dl1 * ((float)(q & 0xFF00))     - ml;
+            r[i][2] = dl2 * ((float)(q & 0xFF0000))   - ml;
+            r[i][3] = dl3 * ((float)(q & 0xFF000000)) - ml;
+        }
+        if (t == 0) { rega = r; } else { regb = r; }
+    }
+}
+
 template <typename type4x4>
 void dequantize_iq2_xxs(device const block_iq2_xxs * xb, short il, thread type4x4 & reg) {
     // il is 0...15 for QK_K = 256 => index of block of 32 is il/2
@@ -11171,9 +11249,13 @@ template [[host_name("kernel_mul_mv_ext_q5_K_f32_r1_4")]] kernel mul_mv_ext_q4x4
 template [[host_name("kernel_mul_mv_ext_q5_K_f32_r1_5")]] kernel mul_mv_ext_q4x4_f32_t kernel_mul_mv_ext_q4x4_f32_disp<5, block_q5_K, 256, dequantize_q5_K>;
 
 template [[host_name("kernel_mul_mv_ext_q6_K_f32_r1_2")]] kernel mul_mv_ext_q4x4_f32_t kernel_mul_mv_ext_q4x4_f32_disp<2, block_q6_K, 256, dequantize_q6_K>;
+template [[host_name("kernel_mul_mv_ext_q6_K_f32_w6_r1_2")]] kernel mul_mv_ext_q4x4_f32_t kernel_mul_mv_ext_q4x4_f32_disp<2, block_q6_K, 256, dequantize_q6_K_wide>;
 template [[host_name("kernel_mul_mv_ext_q6_K_f32_r1_3")]] kernel mul_mv_ext_q4x4_f32_t kernel_mul_mv_ext_q4x4_f32_disp<3, block_q6_K, 256, dequantize_q6_K>;
+template [[host_name("kernel_mul_mv_ext_q6_K_f32_w6_r1_3")]] kernel mul_mv_ext_q4x4_f32_t kernel_mul_mv_ext_q4x4_f32_disp<3, block_q6_K, 256, dequantize_q6_K_wide>;
 template [[host_name("kernel_mul_mv_ext_q6_K_f32_r1_4")]] kernel mul_mv_ext_q4x4_f32_t kernel_mul_mv_ext_q4x4_f32_disp<4, block_q6_K, 256, dequantize_q6_K>;
+template [[host_name("kernel_mul_mv_ext_q6_K_f32_w6_r1_4")]] kernel mul_mv_ext_q4x4_f32_t kernel_mul_mv_ext_q4x4_f32_disp<4, block_q6_K, 256, dequantize_q6_K_wide>;
 template [[host_name("kernel_mul_mv_ext_q6_K_f32_r1_5")]] kernel mul_mv_ext_q4x4_f32_t kernel_mul_mv_ext_q4x4_f32_disp<5, block_q6_K, 256, dequantize_q6_K>;
+template [[host_name("kernel_mul_mv_ext_q6_K_f32_w6_r1_5")]] kernel mul_mv_ext_q4x4_f32_t kernel_mul_mv_ext_q4x4_f32_disp<5, block_q6_K, 256, dequantize_q6_K_wide>;
 
 template [[host_name("kernel_mul_mv_ext_q2_K_f32_r1_2")]] kernel mul_mv_ext_q4x4_f32_t kernel_mul_mv_ext_q4x4_f32_disp<2, block_q2_K, 256, dequantize_q2_K>;
 template [[host_name("kernel_mul_mv_ext_q2_K_f32_r1_3")]] kernel mul_mv_ext_q4x4_f32_t kernel_mul_mv_ext_q4x4_f32_disp<3, block_q2_K, 256, dequantize_q2_K>;
@@ -11261,9 +11343,13 @@ template [[host_name("kernel_mul_mv_ext_q5_K_f16_r1_3")]] kernel mul_mv_ext_q4x4
 template [[host_name("kernel_mul_mv_ext_q5_K_f16_r1_4")]] kernel mul_mv_ext_q4x4_f32_t kernel_mul_mv_ext_q4x4_f32_disp<4, block_q5_K, 256, dequantize_q5_K, half4x4>;
 template [[host_name("kernel_mul_mv_ext_q5_K_f16_r1_5")]] kernel mul_mv_ext_q4x4_f32_t kernel_mul_mv_ext_q4x4_f32_disp<5, block_q5_K, 256, dequantize_q5_K, half4x4>;
 template [[host_name("kernel_mul_mv_ext_q6_K_f16_r1_2")]] kernel mul_mv_ext_q4x4_f32_t kernel_mul_mv_ext_q4x4_f32_disp<2, block_q6_K, 256, dequantize_q6_K, half4x4>;
+template [[host_name("kernel_mul_mv_ext_q6_K_f16_w6_r1_2")]] kernel mul_mv_ext_q4x4_f32_t kernel_mul_mv_ext_q4x4_f32_disp<2, block_q6_K, 256, dequantize_q6_K_wide, half4x4>;
 template [[host_name("kernel_mul_mv_ext_q6_K_f16_r1_3")]] kernel mul_mv_ext_q4x4_f32_t kernel_mul_mv_ext_q4x4_f32_disp<3, block_q6_K, 256, dequantize_q6_K, half4x4>;
+template [[host_name("kernel_mul_mv_ext_q6_K_f16_w6_r1_3")]] kernel mul_mv_ext_q4x4_f32_t kernel_mul_mv_ext_q4x4_f32_disp<3, block_q6_K, 256, dequantize_q6_K_wide, half4x4>;
 template [[host_name("kernel_mul_mv_ext_q6_K_f16_r1_4")]] kernel mul_mv_ext_q4x4_f32_t kernel_mul_mv_ext_q4x4_f32_disp<4, block_q6_K, 256, dequantize_q6_K, half4x4>;
+template [[host_name("kernel_mul_mv_ext_q6_K_f16_w6_r1_4")]] kernel mul_mv_ext_q4x4_f32_t kernel_mul_mv_ext_q4x4_f32_disp<4, block_q6_K, 256, dequantize_q6_K_wide, half4x4>;
 template [[host_name("kernel_mul_mv_ext_q6_K_f16_r1_5")]] kernel mul_mv_ext_q4x4_f32_t kernel_mul_mv_ext_q4x4_f32_disp<5, block_q6_K, 256, dequantize_q6_K, half4x4>;
+template [[host_name("kernel_mul_mv_ext_q6_K_f16_w6_r1_5")]] kernel mul_mv_ext_q4x4_f32_t kernel_mul_mv_ext_q4x4_f32_disp<5, block_q6_K, 256, dequantize_q6_K_wide, half4x4>;
 template [[host_name("kernel_mul_mv_ext_q2_K_f16_r1_2")]] kernel mul_mv_ext_q4x4_f32_t kernel_mul_mv_ext_q4x4_f32_disp<2, block_q2_K, 256, dequantize_q2_K, half4x4>;
 template [[host_name("kernel_mul_mv_ext_q2_K_f16_r1_3")]] kernel mul_mv_ext_q4x4_f32_t kernel_mul_mv_ext_q4x4_f32_disp<3, block_q2_K, 256, dequantize_q2_K, half4x4>;
 template [[host_name("kernel_mul_mv_ext_q2_K_f16_r1_4")]] kernel mul_mv_ext_q4x4_f32_t kernel_mul_mv_ext_q4x4_f32_disp<4, block_q2_K, 256, dequantize_q2_K, half4x4>;
@@ -18191,6 +18277,14 @@ inline float iq4nl_value_poly(uint idx) {
     const float x = (float) idx;
     return rint(fma(fma(fma(fma(0.001586042823154396f, x, 0.031086439333914404f), x, -1.3719270420306529f), x, 24.17383029342025f), x, -126.56701030927982f));
 }
+// GGML_MM_SKINNY_Q6K=1 (perf/w8-decomp-sep18.md, the q6_K head): the skinny tile's two 16-element q6_K tiles per
+// K-step read as ONE pair - block form: the 32 ql and 32 qh bytes of the pair in eight 8-byte packed_ushort4 loads
+// (a 210-byte block is only 2-byte aligned, so upstream's reader takes 16 ushort loads per tile) with d and the
+// mask/shift setup shared; stored SoA form: one uint4 (lo), one uint2 (hi), one ushort (the two scales), one half.
+// Byte-identical: the per-element expressions of dequantize_q6_K / ud_soa_unpack8<2> on the same values.
+constant short FC_mul_mm_q6k [[function_constant(FC_MUL_MM + 12)]];
+constant bool  FC_mul_mm_q6k_set = is_function_constant_defined(FC_mul_mm_q6k);
+constant short FC_mul_mm_q6k_v   = FC_mul_mm_q6k_set ? FC_mul_mm_q6k : 0;
 
 template <typename type4x4>
 inline void dequantize_q4_0_soa_mm(
@@ -18471,6 +18565,33 @@ inline void dequantize_kq_soa_mm_pair(
     rf[3] = dlo * float4((uint4(pb.y >> 16) & mlo) | ((uint4((hh >> 28) & 0x0f) & hm) << hs)) - ml;
     regb = (type4x4) rf;
 }
+// FC_mul_mm_q6k: the stored q6_K row's tiles il (even) and il+1 in one call - four loads for the pair
+template <typename type4x4>
+inline void dequantize_q6_K_soa_pair(device const char * row, int K, int block_idx, short il, thread type4x4 & rega, thread type4x4 & regb) {
+    const int nsb = K/256;
+    const int p0 = 32*block_idx + 2*il;                                          // packs p0..p0+3 (multiple of 4)
+    const uint4  lo4 = *(device const uint4  *)((device const uint  *) row + p0);
+    const uint2  hi2 = *(device const uint2  *)((device const ushort *)(row + 128*nsb) + p0);
+    const ushort sc2 = *(device const ushort *)(row + 192*nsb + p0/2);
+    const float  dd  = float(((device const half *)(row + 208*nsb))[block_idx]);
+    const float  da  = dd * float((char) (sc2 & 0xff));
+    const float  db  = dd * float((char) (sc2 >> 8));
+    const uint los[4]  = { lo4.x, lo4.y, lo4.z, lo4.w };
+    const uint his[4]  = { hi2.x & 0xffff, hi2.x >> 16, hi2.y & 0xffff, hi2.y >> 16 };
+    for (int p = 0; p < 4; ++p) {
+        const float d = p < 2 ? da : db;
+        const uint lo = los[p], hi = his[p];
+        float w[8];
+        for (int i = 0; i < 8; ++i) { w[i] = d*(int(((lo >> (4*i)) & 15) | (((hi >> (2*i)) & 3) << 4)) - 32); }
+        if (p < 2) { for (int i = 0; i < 8; ++i) { rega[2*p+i/4][i%4] = w[i]; } }
+        else       { for (int i = 0; i < 8; ++i) { regb[2*(p-2)+i/4][i%4] = w[i]; } }
+    }
+}
+// the skinny tile's q6_K pair forms: block and stored; every other type never reaches them (host sets the constant for q6_K only)
+template <typename type4x4> inline void dequantize_block_pair(device const block_q6_K * xb, short il, thread type4x4 & rega, thread type4x4 & regb) { dequantize_q6_K_pair(xb, il, rega, regb); }
+template <typename block_q, typename type4x4> inline void dequantize_block_pair(device const block_q *, short, thread type4x4 & rega, thread type4x4 & regb) { rega = type4x4(0); regb = type4x4(0); }
+template <typename type4x4> inline void dequantize_soa_pair(device const block_q6_K *, device const char * row, int K, int block_idx, short il, thread type4x4 & rega, thread type4x4 & regb) { dequantize_q6_K_soa_pair(row, K, block_idx, il, rega, regb); }
+template <typename block_q, typename type4x4> inline void dequantize_soa_pair(device const block_q *, device const char *, int, int, short, thread type4x4 & rega, thread type4x4 & regb) { rega = type4x4(0); regb = type4x4(0); }
 
 // tag-dispatched: the mul_mm bodies call dequantize_soa_mm((device const block_q *) nullptr, ...)
 template <typename type4x4> inline void dequantize_soa_mm(device const block_q4_0   *, device const char * row, int ne00, int block_idx, short il, thread type4x4 & reg) { dequantize_q4_0_soa_mm(row, ne00/32, block_idx, il, reg); }
@@ -19097,7 +19218,9 @@ kernel void kernel_mul_mm_skinny_t(
     else if (FC_mul_mm_soa) { dequantize_soa_mm((device const block_q *) nullptr, xrowc, args.ne00, (KX)/(16*nl), (short) (((KX)/16)%nl + (OFF)), REG); } \
     else               { dequantize_func(xrow + (KX)/(16*nl), ((KX)/16)%nl + (OFF), REG); }
 #define SKINNY_DEQ2(KX, REGA, REGB) \
-    if (FC_mul_mm_soa && FC_mul_mm_kq2_v == 1) { dequantize_soa_mm_pair((device const block_q *) nullptr, xrowc, args.ne00, (KX)/(16*nl), (short) (((KX)/16)%nl), REGA, REGB); } \
+    if (FC_mul_mm_q6k_v == 1 && FC_mul_mm_soa)  { dequantize_soa_pair((device const block_q *) nullptr, xrowc, args.ne00, (KX)/(16*nl), (short) (((KX)/16)%nl), REGA, REGB); } \
+    else if (FC_mul_mm_q6k_v == 1)              { dequantize_block_pair(xrow + (KX)/(16*nl), (short) (((KX)/16)%nl), REGA, REGB); } \
+    else if (FC_mul_mm_soa && FC_mul_mm_kq2_v == 1) { dequantize_soa_mm_pair((device const block_q *) nullptr, xrowc, args.ne00, (KX)/(16*nl), (short) (((KX)/16)%nl), REGA, REGB); } \
     else { SKINNY_DEQ(KX, 0, REGA); SKINNY_DEQ(KX, 1, REGB); }
 
     // B stage: BPC threads per column, BVL = NK/BPC activations each (GGML_MM_SKINNY_BSPLIT, the q4_0 SoA
