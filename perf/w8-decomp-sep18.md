@@ -290,3 +290,78 @@ t/s +2.4% against the better base rep.** With lever 1 the ud (7,7) round has gon
 i.e. under the controller. **Adoption = owner**: unlike lever 1 these are NEW flags, so a merge alone does nothing - they are
 in `perf/pick.sh` as proposed (`PICK_PROPOSED=1`) and go into the ud env on the owner's word. Not touched: the iq4_xs tile
 (no shared-header saving to take: its 8-byte header is decoded in five instructions) and the width-4 kernels.
+
+## The q6_K head (2026-09-18 afternoon, owner: "Take a look at q6_K")
+
+`output.weight` [5120, 248320] is native block q6_K in the UD file (`llama-gguf-repack` excludes it by name: "remaining-UD
+experiment covers projections" - scope, not a limit); the drafter shares it, so every round pays it twice. Byte floor
+3.82 ms per call at 273 GB/s. In the (7,7) round it is 14.2 ms of ~163 (target 7.05 + drafter 7.14 ms in the morning
+profile) - the largest single item left; in the depth-3 round 10.0 ms of 107 (5.0 + 5.0).
+
+**What it runs, by width** (`test-backend-ops perf` cases added for `q6_K` and `q6_K_soa` at the head shape, branch
+`exp/q6k-head`; the stored twin priced as the conversion question):
+
+| width | native (the file today) | x floor | stored Q6_K_SOA | x floor | SoA vs native |
+|--:|---|--:|---|--:|--:|
+| 1 | `mul_mv_q6_K_f32` 3996 us | 1.05 | `q6_K_soa_w1_v1` 4202 | 1.10 | -5% |
+| 2 | `mul_mv_ext_q6_K_f16_r1_2` 4089 | 1.07 | `w2_v1` 4250 | 1.11 | -4% |
+| 4 | `mul_mv_ext_q6_K_f16_r1_4` 4916 | 1.29 | `w4_v1` 4403 | 1.15 | **+10.4%** |
+| 5 | `mul_mv_ext_q6_K_f16_r1_5` **9413** | 2.46 | `w5_v1` 4808 | 1.26 | **+49%** (the native r1_5 cliff, `ud-remaining-quants.md`) |
+| 6 / 7 / 8 | `mul_mm_skinny_q6_K_f32` (block tile) 6726 / 6780 / 6825 | 1.78 | `_soa_ex` tile 5883 / 5952 / 6026 | 1.55 | +12% |
+
+Widths 1-2 sit at the floor; the pick's width 4 has 10% on the table and the controller's width 5 a factor of two - but
+only through the stored layout, i.e. a new file (`-SOA-V3` with the head converted) = a routing change on the LOGITS
+themselves: the SoA kernels are the half-product decode class (pairwise 5e-6 on the projections), a lineage move to be
+priced by the decode-path KLD and re-minted. That is the owner's call; what follows is the byte-identical track on the
+kernels the head runs today.
+
+**Why the block tile is slow: 210-byte blocks are 2-byte aligned.** `sizeof(block_q6_K)` = 210, so upstream's
+`dequantize_q6_K` reads `ql`/`qh` as sixteen `ushort` loads per 16-element tile (a `uint` load would be misaligned on every
+odd block); the stored SoA planes are 16-byte aligned and read `uint`s. Profiles of the two width-8 tiles at the head shape
+(`prof-head-q6_K*`, the restored profiler): block 670 live / 365 hot rows / issue-stall 79/21, 53 load-class rows in the
+loop; SoA 714 / 354 / 87/13, 51 loads. Same loop length, 8 points more stall on the block form; its largest stall site is a
+6 B consumer at 4.2% of the kernel (SoA: 1.6%).
+
+**The lever: pairs with packed wide loads (`GGML_MM_SKINNY_Q6K=1`, `FC_MUL_MM + 12`, set for q6_K pipelines only, the name
+carries `_q6k=1`).** `packed_ushort4` is the 8-byte load a 2-byte-aligned stream can take (the FA byte-stream lesson,
+`ud-model.md` step 16 D): the tile's two 16-element tiles per K-step are tiles `il` (even) and `il+1`, whose `ql` and `qh`
+bytes are contiguous - `dequantize_q6_K_pair` takes the pair's 32 ql + 32 qh bytes in eight packed loads (was 32 ushort
+loads), the two int8 scales in one ushort, `d` and the mask/shift setup once, and keeps upstream's per-element expressions
+(incl. the `(half)(q & 0xFF)` quirk) so it is byte-identical. The stored SoA tile gets the same pair form
+(`dequantize_q6_K_soa_pair`: one `uint4` + one `uint2` + one `ushort` + one `half` per pair, was 16 loads). Prescreen: block
+6148 -> 5614 B, SoA 6986 -> 6596 B, 0 spill. `test-backend-ops` OK at widths 6/7/8 on both types.
+
+| head shape, us/call (interleaved x2) | form 0 | pair form | delta |
+|---|--:|--:|--:|
+| native block q6_K, width 8 | 6822 / 6822 | **6094 / 6092** | **-10.7%** (1.78x -> 1.59x floor) |
+| native block q6_K, width 6 | 6726 / 6729 | 5984 / 5980 | -11.1% |
+| stored Q6_K_SOA, width 8 | 6023 / 6013 | 5677 / 5673 | -5.7% (1.55x -> 1.49x) |
+| stored Q6_K_SOA, width 6 | 5911 / 5892 | 5605 / 5591 | -5.2% |
+
+The block head at width 8 now lands where the stored tile was; the conversion's width-8 argument is gone, its width-4/5
+argument stays. The same wide loads for the width-2..5 ext readers (`dequantize_q6_K_wide`, variant `_w6` of
+`kernel_mul_mv_ext_q6_K_{f16,f32}_r1_{2..5}`, `GGML_MV_EXT_Q6K_WIDE=1`) are built on the branch and timed below.
+
+**e2e of the block pair form** (ud, fixed depth 7, pick env, interleaved x2, TAG `q6k-0918-e2e`):
+
+| arm | t/s | dec_syn_tg | draft_call | round | sha |
+|---|--:|--:|--:|--:|---|
+| base r1 / r2 | 25.24 / 25.87 | 148.0 / 148.1 | 19.1 / 19.1 | 167.1 / 167.2 | ce826d8a3cbd |
+| Q6K=1 r1 / r2 | 26.12 / 26.02 | 147.1 / 147.8 | 18.3 / 18.4 | 165.5 / 166.2 | ce826d8a3cbd |
+
+**Round -0.8% (167.2 -> 165.9 ms), byte-identical**: the target's head call -0.6 ms in the GPU wait, the drafter's -0.75 in
+`draft_call` (its head runs in the drafter's graph) = the predicted 2 x 0.73 ms. Inert at the pick's depth 3 (the head runs
+the ext r1_4 there); pays on every width-6..8 verify and on every drafter head at those widths. Proposed for the ud env
+(`perf/pick.sh`), adoption = owner; with levers 3+4 of `exp/iq4xs-lut` the ud (7,7) round would sit at ~161 ms (1.50x its
+width-4 round).
+
+**The width-4 head is closed on the byte-identical track.** The same packed wide loads in the ext readers
+(`GGML_MV_EXT_Q6K_WIDE=1`, kept routable on the branch) are **+6% at width 4** (4915 -> 5208 us; both forms spill 16 B in
+the prescreen, r1_5 32 B), flat at widths 2 (-0.4%) and 5 (+1%): the scalar ext reader is register-bound, not
+load-bound - the wide loads only lengthen its live ranges, where the MMA tile could absorb them. The ext kernel's shape
+knobs at width 4 on the head (`GGML_MV_EXT_NR0=1` +56%, `NSG=4` flat, `NXPSG=4` +5%, `NXPSG=16` +61%) confirm the incumbent
+is at its own optimum, 1.29x the floor. What remains for the head at the pick's width is the stored layout: the `-SOA-V3`
+question above (+10% at width 4, +49% at width 5, -5% at width 1, the decode numerics class on the logits).
+
+Not touched: `TOP_K f32 [248320, 8]` at 1.7 ms/call in the drafter's graph (0.86 at width 4) - a 32 MB read that should
+take ~0.15 ms; its own item, not a q6_K one.

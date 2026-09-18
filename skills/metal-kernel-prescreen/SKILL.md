@@ -190,6 +190,12 @@ Forms measured to matter on AGX/g16s (each worth re-trying on any slow inner loo
   two 16-element tiles of ONE superblock per K-step and decoded d/dmin/the 6-bit scale pair twice; a paired reader (one
   header decode, one `uint2` pack load and one `uint` plane load per tile pair) was -6..-8% per call on q4_K and q5_K,
   byte-identical (same expressions per tile), 0 spill, text -4.4/-6.6%. The prescreen ranked this one correctly.
+- **Packed wide loads on a 2-byte-aligned block stream pay in the MMA tile and lose in the scalar ext reader** (same
+  day, the q6_K lm_head): `sizeof(block_q6_K)` = 210, so upstream reads `ql`/`qh` as 16 ushort loads per tile; eight
+  `packed_ushort4` loads per tile PAIR in the skinny tile were -10.7% per call (text -9%, 0 spill), the identical loads in
+  the ext r1_4 reader +6% (it already spills 16 B; the wider live ranges cost more than the load count saved) and the
+  ext shape knobs (nr0, nsg, nxpsg) found no better point. Prescreen the spill of the incumbent BEFORE porting a
+  load-width win between kernel families: a register-bound reader takes stream levers only.
 - **Do not write column streams as `half8 v[NC]` arrays indexed under `#pragma unroll`**
   (same day): templating a measured kernel on the column count with an array form changed
   the codegen - width-4 text shrank 3240 -> 2604, the width-5 instantiation ballooned to
