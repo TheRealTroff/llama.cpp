@@ -643,3 +643,9 @@ Design note (owner): the cost EMA is what makes the controller reactive to conte
 faster than width 3's), other slots and machine state; for surgery the right tool is a pick-trace record/replay gate,
 not a frozen table (a frozen 8K seed is the wrong table at 96K; a fitted cost model goes stale with every kernel change).
 Under several slots each slot's table measures the BATCHED round (never measured with the controller, item 4).
+
+**Determinism as an option BUILT 2026-09-18 (owner: "make determinism an option"), branch `exp/spec-ev-replay` (unmerged):**
+`LLAMA_SPEC_EV_TRACE=<file>` / `LLAMA_SPEC_EV_REPLAY=<file>` record and replay the controller's per-round (b, k) decisions -
+the same kernels on the same tokens across two builds - with harness `perf/run-specev-replay-gate.sh`; self-gate 317 picks,
+4 replays [317, 0 desync, 0 past trace], sha = the record run. The branch carries the README flag row and the section-11
+paragraph; merge = owner. The reactive cost stays the shipped behaviour.
