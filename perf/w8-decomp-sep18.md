@@ -1,7 +1,9 @@
 # The UD width-8 verify round, decomposed against the q4 line's (2026-09-18, owner: "profile away")
 
-Status: **open** - the round-level decomposition is in (this section); the kernel census of both width-8 profiles
-(`census-ud-w8-sep18`, `census-q4-w8-sep18`) is the per-instruction view and is appended below as it lands.
+Status: **open** - the round-level decomposition is in (this section); lever 1 MERGED (below); lever 2 (the iq4_xs table)
+REFUTED 2026-09-18 with the profiler back (six exact forms against a 4-9% deletion ceiling, section below); levers 3 + 4 (the q5_K
+plane fold, the K-quant header decoded once per step) BUILT + GATED the same afternoon: ud width-8 round -3.3%, byte-identical
+(last section), adoption = owner.
 
 `spec-verify-narrow.md` section 10 left the (7,7) round at ud 180 ms vs q4 131 ms with the width-4 rounds
 only 13 ms apart, and named two suspects for the ~35 ms: the generic skinny tile over the stored SoA formats
@@ -133,7 +135,7 @@ What this predicts for the controller on ud: items 1+2 (~-14 ms serialized, ~-12
 at ~167 ms vs 179 - the 1.72x becomes ~1.6x, still above q4's 1.42x; the tile would need item 3 too to close on
 q4. The controller's own gate (`run-specev-pick-gate.sh`) is the e2e arbiter after any of them.
 
-## The per-instruction profiler is down since the macOS 27 upgrade (2026-09-16 11:38)
+## ~~The per-instruction profiler is down since the macOS 27 upgrade (2026-09-16 11:38)~~ RESTORED 2026-09-18 (Xcode 27, next section)
 
 Both census passes captured every row (`*.gputrace`, timings) but no replay produced counters: the headless
 replay (`metal-gpu-profile` skill) now auto-selects `/usr/bin/gpudebug` (new in macOS 27, v1.0), whose
@@ -178,3 +180,113 @@ verify on ud, i.e. under the controller. Adoption = owner: the flag is ALREADY i
 branch makes the ud line take it without a manifest change; the manifest record for `GGML_MM_SKINNY_BSPLIT=2` is
 corrected on the branch (it claimed the flag was live on ud). Next in the order: lever 2 (iq4_xs LUT), lever 3 (q5_K
 plane).
+
+## The profiler is back (2026-09-18 midday, Xcode 27 + the Metal Toolchain) and the width-8 census rows re-run
+
+Xcode 27 (license accepted by the owner) plus `xcodebuild -downloadComponent MetalToolchain` (839 MB, a separate download now)
+brought the per-instruction profiler back through Apple's `gpudebug`: `profile run --exec serial --embed` replays the trace in
+8-30 s and embeds the shader-profiler bundle into it (`<trace>/emb_stream_0.gpuprofiler_raw/`: `streamData` + 20 each of
+`Counters/Timeline/Profiling_f_N.raw`), byte-for-byte the `raw/` contract `perf/shaderprof-table.py` decodes. The headless
+wrapper (`metal-gpu-profile` skill) now runs that and moves the bundle to `<outdir>/raw`; `kernel-census.sh` needed no change
+(its translator-metallib compile gained `-mmacosx-version-min=26.0`: Xcode 27's `metal` emits AIR 2.9, `applegpu-nt` targets
+2.8). Still down: the private `dy` path and the lldb machine-IR route (`agx-nt-opt.py mir`, "cannot emit pipeline" from the
+re-signed debug copy) - the census rows say "no join", so sites are read by encoding size (14 B = loads) for now.
+
+Both width-8 censuses re-run on the merged prod (`4218c11a2`, the tile at `bsp=2`), decode rows, `PHASE=decode`:
+
+| kernel (width 8) | shape | us/call (perf loop) | issue/stall | regs | hot-loop instr | of which 14 B (loads) |
+|---|---|--:|--:|--:|--:|--:|
+| q4_0_soa skinny (q4 line) | [5120,17408] / [17408,5120] | 303 / 364 | 91/9 / 82/18 | 54 | 228 | - |
+| q4_K tile | [5120,17408] / [17408,5120] | 410 / 487 | 86/14 / 75/25 | 65 | 257 | - |
+| iq4_xs tile | [5120,17408] / [17408,5120] | 450 / 492 | 76/24 / 69/31 | 65 | 267 (254 hot rows) | 69 |
+| q5_K tile | [5120,17408] / [17408,5120] | 483 / 565 | 85/15 / 76/24 | 90 | 391 (378 hot rows) | 42 |
+
+(The perf-loop rows are flagged CACHE by the census - the tensor is cache-resident across iterations - so these are ranking
+numbers; the in-graph per-call figures of the first section are the round's truth.) The read that matters for lever 2: **the
+iq4_xs tile executes the same hot-loop instruction count as the q4_K tile (254 vs 257 rows) and runs 10% slower on
+ffn_down with 10 points more stall**; its largest stall sites are 10 B arithmetic (`#351` 4.65%, `#321` 2.86% of issue+stall),
+i.e. consumers, and its hot loop carries 69 load-class instructions to q5_K's 42 - the 32 `kvalues_iq4nl_f` lookups per step.
+
+## Lever 2 REFUTED (2026-09-18 afternoon): the iq4_xs table lookups - six exact forms against a deletion ceiling
+
+Branch `exp/iq4xs-lut` (worktree `llama.cpp-iq4lut`), `GGML_MM_SKINNY_IQ4LUT=<form>` on the stored-iq4_xs generic tile
+(`FC_MUL_MM + 9`, set in `ggml_metal_library_get_pipeline_mul_mm_skinny` for `IQ4_XS_SOA` only; the pipeline name carries
+`_iq4lut=N` - the first run had the constant on the wrong getter and timed three arms identical to the microsecond with no
+suffix: the routing alarm, again). Harness `perf/run-iq4xs-lut.sh` (test / perf / e2e). Every form reproduces the same f32
+constants, so every one is byte-identical by construction (`test-backend-ops` OK at widths 6/7/8); form 5 is a deletion
+probe with WRONG values that prices the table (`ceiling-probe-vs-replacement-cost`).
+
+| form | what | text (offline) | 14 B | [17408,5120] n8 | [5120,17408] n8 | [17408,5120] n6 |
+|---|---|--:|--:|--:|--:|--:|
+| 0 | `constant float[16]` indexed per nibble (32 device loads/step/thread) | 5502 | 120 | 438-445 | 472-486 | 430-438 |
+| 1 | the same 16 floats staged in threadgroup memory (64 B, one barrier at kernel start) | 5524 | 123 | 0% | **+1.8%** | +0.4% |
+| 2 | exact arithmetic: minimax quartic in the nibble + `rint` (float32 Horner verified on all 16, margin 0.067) | 7794 | 56 | **+10%** | **+17%** | +11% |
+| 3 | `constant float2[256]` indexed by BYTE (two values per lookup, 16 loads/step) | 4780 | 88 | **+11%** | **+9%** | +11% |
+| 4 | the byte pair table staged in threadgroup memory (2 KB) | 4856 | 96 | +2% | +0.8% | +1.7% |
+| 5 | CEILING: lookup deleted, nibble used linearly (wrong values) | - | - | **-9.5%** | **-3.8%** | -9% |
+| 6 | `constant half2[256]` by byte (1 KB; the values are half-exact, the convert folds into the product) | 4776 | 88 | +4% | +2.3% | +4% |
+
+(Per-call `test-backend-ops perf`, forms interleaved, two reps each; deltas vs form 0 in the same run.)
+
+**The table costs 4-9% of the call (form 5) and no exact replacement recovers any of it.** What the seven arms say about
+the machine: a 16-entry `constant` gather is served cheaply (the small constant footprint), and every bigger constant
+table loses in proportion to its footprint even with half the loads (2 KB float2 +9..11%, 1 KB half2 +2..4%) - a
+constant-cache effect, not an instruction-count one (form 3 had 32 fewer load instructions and -13% text); threadgroup
+gathers pay bank conflicts (form 1 flat to +1.8%, form 4 +1..2%); the arithmetic form pays issue (+320 8 B instructions,
++10..17%). The `metal-gpu-profile` skill's "256-entry float2 table staged in threadgroup memory was -15%" (the Turbo4 FA
+case) was a win against a 2 KB CONSTANT table, i.e. against form 3, not against form 0 - a 64 B table is already in
+the best place. What is left of the iq4_xs-vs-q4_K gap is not the table: on ffn_down the gap is 10% and the table's whole
+price there is 3.8%; the rest is stall (24 vs 14 points) at equal instruction counts, and naming the site needs the
+machine-IR join (down under Xcode 27). Lever 2 is closed; the branch keeps forms 1-6 routable for reference.
+
+## Levers 3 + 4 BUILT and gated (2026-09-18 afternoon): the q5_K plane folded, the K-quant header decoded once per K-step
+
+Same branch `exp/iq4xs-lut` (worktree `llama.cpp-iq4lut`), two new constants on the generic tile's pipeline getter, both
+carried in the pipeline name and both byte-identical by construction (the same expressions on the same values, per tile):
+
+- **`GGML_MM_SKINNY_Q5K=1`** (`FC_MUL_MM + 10`, the `Q5_K_SOA` tile only, lever 3): the select form
+  `dl * (qe + ((h >> c) & 1 ? qh_val : 0)) - ml` per element becomes the q4_K path's in-place masked integer with the plane
+  bit shifted into place - `(v + 16*bit) * 16^c`, ONE convert, power-of-two per-position scales (they commute with the
+  rounding, so `fl(dl' * e) - ml` is the block reader's value bit for bit) - and the two plane bytes in one 16-bit load. The
+  odd groups are shifted down 16 rather than scaled up like the q4_K path: the top nibble's plane bit in place would sit at
+  bit 32, and the first build failed the width-6..8 test on exactly that element. Text 7784 -> 7334 B, 0 spill.
+- **`GGML_MM_SKINNY_KQ2=1`** (`FC_MUL_MM + 11`, the `Q4_K_SOA` and `Q5_K_SOA` tiles, lever 4): the tile's two `SKINNY_DEQ`
+  calls per K-step are tiles `il` and `il+1` of ONE superblock (`il` even: same `il/2`, same side of the `ilm < 2` split),
+  so `dequantize_kq_soa_mm_pair` decodes d, dmin, the 6-bit scale/min pair, the tile scale and `ml` once for both, takes the
+  packs in two `uint2` loads and the four plane bytes in one `uint`. Text q5_K 7560 -> 7226 B, q4_K 5294 -> 4946 B, 0 spill.
+  (The prefill n64 bodies keep the single-tile reader: at the roof, not a lever there.)
+
+Per call (`test-backend-ops perf`, arms interleaved x2, the names carry `_q5k=1` / `_kq2=1`; `test` OK at widths 6/7/8):
+
+| width-8 shape | q5_K base | + Q5K | + Q5K + KQ2 | q4_K base | + KQ2 |
+|---|--:|--:|--:|--:|--:|
+| [17408,5120] (ffn_gate/up) | 470 / 471 | 460 / 462 (-2.0%) | **435 / 436 (-7.4%)** | 400 / 399 | **369 / 369 (-7.7%)** |
+| [5120,17408] (ffn_down) | 547 / 546 | 537 / 537 (-1.8%) | **511 / 513 (-6.3%)** | 475 / 475 | **446 / 448 (-5.9%)** |
+
+The plane fold alone is worth 2%; the shared header decode 5-6% on both K-quant formats - the note's item 4 ("a smaller item")
+was the larger of the two: the scale/min decode + the tile-scale arithmetic + the header loads were paid twice per step.
+
+What the profiler says the forms removed (`[5120,17408]` n8 captures, `prof-*` in the session scratch; the hot loop = rows at
+>= 0.9x the max executed): q5_K hot rows 391 (base) -> 365 (plane fold) -> 339 (+ pair), q4_K 257 -> 230; issue/stall
+unchanged within a point (74-76 / 24-26) and the largest stall sites the same two consumers (`#402/#379` and their shifted
+twins) - the forms took instructions out of the loop at a constant stall share, which is exactly the per-call delta. Per op
+instance every hot row executes 308992 times in every arm (the same trip count x simdgroups); the raw per-row counts differ
+5/6/8/9-fold between arms because `test-backend-ops perf` puts a speed-dependent number of op copies into the captured graph -
+**normalize a perf capture per op instance, not per the tool's "dispatches" count** (71 in every arm here).
+
+**e2e** (ud, fixed depth 7 = every verify at width 8, the pick env, interleaved x2, chat benchprompt, 300 tokens, TAG
+`kq2-0918-e2e`; the `-lv 5` route run `kq2-0918-route` names both pipelines - the anchors' `-lv 3` drops them):
+
+| arm | t/s | acc | dec_syn_tg | draft_call | round | sha |
+|---|--:|--:|--:|--:|--:|---|
+| base r1 | 24.05 | 50.1% | 147.5 | 22.0 | 169.5 | ce826d8a3cbd |
+| Q5K+KQ2 r1 | 26.51 | 50.1% | 143.9 | 19.0 | 162.9 | ce826d8a3cbd |
+| base r2 | 25.90 | 50.1% | 147.9 | 19.1 | 167.0 | ce826d8a3cbd |
+| Q5K+KQ2 r2 | 26.51 | 50.1% | 143.5 | 19.1 | 162.7 | ce826d8a3cbd |
+
+**GPU wait -2.7% (147.7 -> 143.7 ms), round -3.3% (168.3 -> 162.8), byte-identical (the canonical ud text on every arm);
+t/s +2.4% against the better base rep.** With lever 1 the ud (7,7) round has gone 179 -> 169.5 -> 162.8 ms today, 1.68x ->
+1.52x its width-4 round (q4: 1.40x). Inert at the pick's depth 3 (the scalar SoA kernels), pays on every width-6..8 verify,
+i.e. under the controller. **Adoption = owner**: unlike lever 1 these are NEW flags, so a merge alone does nothing - they are
+in `perf/pick.sh` as proposed (`PICK_PROPOSED=1`) and go into the ud env on the owner's word. Not touched: the iq4_xs tile
+(no shared-header saving to take: its 8-byte header is decoded in five instructions) and the width-4 kernels.

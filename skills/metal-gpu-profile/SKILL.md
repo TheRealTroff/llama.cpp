@@ -156,7 +156,12 @@ the fullest worked example - a cross-framework per-instruction diff that found a
 kernel win):
 
 - **Normalize per dispatch** (`executed_total / dispatches`) before comparing captures;
-  captures repeat ops a shape-dependent number of times.
+  captures repeat ops a shape-dependent number of times. **And per OP INSTANCE across arms of one shape**
+  (2026-09-18, `perf/w8-decomp-sep18.md` levers 3+4): `test-backend-ops perf` fills the captured graph with a
+  speed-dependent number of copies of the op, so a faster variant shows MORE executed instructions per hot row
+  (5/6/8/9 copies across four arms; the tool's `dispatches` stayed 71 in all of them). Divide a hot row's
+  `executed` by its per-instance count (trip count x simdgroups x threadgroups; here 308992 in every arm) and
+  compare static hot-row counts (391 -> 365 -> 339) - never `exec/disp` between arms of different speed.
 - **Hot loop = rows with `executed >= 0.9 * max(executed)`.** Sum their `cost` (issue)
   and `cost2` (stall) for the loop's share; histogram their `size` field for the
   codegen fingerprint (6 B ~ f32 FMA short forms, 10 B ~ compact wide-operand

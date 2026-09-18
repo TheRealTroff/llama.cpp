@@ -61,7 +61,9 @@ xcrun metal -c ggml/src/ggml-metal/ggml-metal.metal -o /tmp/x.air \
 xcrun metallib /tmp/x.air -o /tmp/x.metallib
 ```
 
-`-DTURBO_USE_PAIR_LUT=1` mirrors the runtime's preprocessor macro (`ggml-metal-device.m` sets it before
+Under Xcode 27 add `-mmacosx-version-min=26.0`: its `metal` emits AIR 2.9 and `applegpu-nt` targets 2.8 ("incompatible
+module, module AIR version (2.9) is bigger than the one of the target (2.8)"); the Metal Toolchain is a separate
+`xcodebuild -downloadComponent MetalToolchain` (2026-09-18). `-DTURBO_USE_PAIR_LUT=1` mirrors the runtime's preprocessor macro (`ggml-metal-device.m` sets it before
 compiling the embedded source): without it the Turbo4 FA forms fail with "use of undeclared identifier
 'turbo_pairs_4bit'" and no `.air` is written (2026-09-16, macOS 27 / Xcode 26.6). Check for other macros in
 that file's `preprocessorMacros` block when a new define appears there.
@@ -175,6 +177,19 @@ Forms measured to matter on AGX/g16s (each worth re-trying on any slow inner loo
   byte floor); the shuffle form doubles the text (6.6 KB) AND the time, losing to the
   incumbent it was meant to replace. The offline text size ranked it correctly before any
   GPU run.
+- **A 16-entry `constant` table indexed per element is already in its best place; do not move it** (2026-09-18,
+  `perf/w8-decomp-sep18.md` lever 2, seven arms on the iq4_xs width-8 tile): deleting the lookup outright is worth 4-9%
+  of the call, and every exact replacement lost - the same 16 floats staged in threadgroup memory (flat to +1.8%: bank
+  conflicts on a random gather), a byte-indexed 256-entry pair table with HALF the loads (+9..11% as `constant float2`,
+  +2..4% as `constant half2`, +1..2% staged in threadgroup: the loss scales with the constant footprint, not the load
+  count - form 3 had 32 fewer load instructions and -13% text), and an exact minimax quartic + `rint` (+10..17%: 320
+  more 8 B instructions). The skill's "256-entry float2 table staged in threadgroup was -15%" (Turbo4 FA) was a win over
+  a 2 KB CONSTANT table, i.e. over the losing form, not over a 64 B one. Prescreen text and 14 B counts ranked the arms
+  by load count and got the order WRONG here; the deletion probe first, then time.
+- **Decode a shared header once for the tiles that share it** (same day, lever 4): the skinny K-quant tile dequantizes
+  two 16-element tiles of ONE superblock per K-step and decoded d/dmin/the 6-bit scale pair twice; a paired reader (one
+  header decode, one `uint2` pack load and one `uint` plane load per tile pair) was -6..-8% per call on q4_K and q5_K,
+  byte-identical (same expressions per tile), 0 spill, text -4.4/-6.6%. The prescreen ranked this one correctly.
 - **Do not write column streams as `half8 v[NC]` arrays indexed under `#pragma unroll`**
   (same day): templating a measured kernel on the column count with an array form changed
   the codegen - width-4 text shrank 3240 -> 2604, the width-5 instantiation ballooned to
