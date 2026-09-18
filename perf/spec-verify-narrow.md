@@ -621,3 +621,25 @@ persistent cache; the concurrency registration only adds barriers. **A greedy fo
 when a near-tie token went through a different kernel family, i.e. the controller picked a different width first** - the
 controller learns cost[k] from wall time (EMA 0.9), so its picks are timing-dependent in principle, deterministic here in
 practice. The one fork's mechanism is UNRESOLVED; a 32-run logged soak (fix x24 / prod x8, `cc-soak-*`) bounds the rate.
+
+**RESOLVED by the soak (`cc-soak-*`, fix x24 / prod x8, all with the pick log): 31/32 canonical, the one fork (`cc-soak-fix-4-1`)
+is the SAME alternative text as the first (`a982e09753d9`, 927 tokens), and its pick log shows the mechanism - it is the
+controller, not a race.** Round 202 (identical drafter confidences in every run, so identical text up to there):
+
+| run | k3 EV = 3.00 / cost[3] | k7 EV = 4.07 / cost[7] | pick |
+|---|--:|--:|---|
+| `cc-soak-fix-4-1` (forked) | 3.00 / 93.1 = 0.03222 | 4.07 / 124.4 = 0.03272 | **7** |
+| `cc-soak-fix-4-2` (clean) | 3.00 / 90.5 = 0.03315 | 4.07 / 123.6 = 0.03293 | 3 |
+| `cc-dbg-prod-1` (clean) | 3.00 / 91.1 = 0.03293 | 4.07 / 124.4 = 0.03272 | 3 |
+
+The two candidates sit within 0.7% in expected value on that round; a 2.6 ms wobble in the learned cost[3] (the forked
+run's rounds were slower over the preceding EMA window - both forks were the first fix run after the prod binary) tips
+the verify width to 7, the next tokens go through the width-8 kernel family, and a bold-vs-plain near tie ~40 tokens
+later flips. Deterministic given the pick (the same alternative text twice), timing-dependent only through the EMA. The
+"first launch compiles pipelines" guess of the paragraph above was WRONG (the probe was clean and a comment does not
+recompile anyway); the pinned-width 8/8 and the identical-pick runs were the evidence that mattered. Tool:
+`LLAMA_SPEC_EV_DBG=1 -lv 5` + a pick-sequence diff (scratchpad `pickdiff.py`; the `k3:EV/cost` numbers are on the line).
+Design note (owner): the cost EMA is what makes the controller reactive to context length (width 8's FA share grows
+faster than width 3's), other slots and machine state; for surgery the right tool is a pick-trace record/replay gate,
+not a frozen table (a frozen 8K seed is the wrong table at 96K; a fitted cost model goes stale with every kernel change).
+Under several slots each slot's table measures the BATCHED round (never measured with the controller, item 4).
