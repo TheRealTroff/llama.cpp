@@ -18091,6 +18091,106 @@ constant bool  FC_mul_mm_soa   [[function_constant(FC_MUL_MM + 6)]];
 constant bool  FC_kq_soa_exact [[function_constant(FC_MUL_MM + 7)]];
 constant bool  FC_kq_soa_exact_set = is_function_constant_defined(FC_kq_soa_exact);
 constant bool  FC_kq_soa_exact_v   = FC_kq_soa_exact_set ? FC_kq_soa_exact : false;
+// GGML_MM_SKINNY_IQ4LUT (perf/w8-decomp-sep18.md lever 2): the iq4_xs tile's 16-entry table indexed per element
+// compiles to a device load per lookup (32 per K-step per thread, the tile's stall). 1 = the table staged once
+// per threadgroup in threadgroup memory (64 B after sb); 2 = the exact arithmetic form (a minimax quartic in the
+// nibble + rint reproduces all 16 values; float32 Horner verified, margin 0.067). Both byte-identical: the same
+// f32 constants reach the same d * v product. Unset (every other pipeline) = the constant table.
+constant short FC_mul_mm_iq4lut [[function_constant(FC_MUL_MM + 9)]];
+constant bool  FC_mul_mm_iq4lut_set = is_function_constant_defined(FC_mul_mm_iq4lut);
+constant short FC_mul_mm_iq4lut_v   = FC_mul_mm_iq4lut_set ? FC_mul_mm_iq4lut : 0;
+// GGML_MM_SKINNY_Q5K=1 (perf/w8-decomp-sep18.md lever 3): the stored q5_K tile's high-bit plane folded into the
+// in-place nibble integer before ONE convert (the q4_K path's masked form + the plane bit shifted to 16*16^c),
+// one 16-bit load for the two hbits bytes. Byte-identical: the same integer e = v + 16*bit reaches the same
+// fl(dl' * e) - ml (power-of-two scales commute with the rounding). Unset (the prefill bodies) = the select form.
+constant short FC_mul_mm_q5k [[function_constant(FC_MUL_MM + 10)]];
+constant bool  FC_mul_mm_q5k_set = is_function_constant_defined(FC_mul_mm_q5k);
+constant short FC_mul_mm_q5k_v   = FC_mul_mm_q5k_set ? FC_mul_mm_q5k : 0;
+// GGML_MM_SKINNY_KQ2=1 (lever 4 of the same note): the stored q4_K/q5_K tiles' superblock header (d, dmin, the 6-bit
+// scale/min pair, the tile scale) decoded ONCE for the two tiles of a K-step - the skinny tile's two SKINNY_DEQ calls
+// are tiles il and il+1 (il even) of one superblock, same il/2 and the same side of the ilm < 2 split. Byte-identical:
+// the same expressions on the same values, per tile. The pack and plane loads are widened to cover both tiles.
+constant short FC_mul_mm_kq2 [[function_constant(FC_MUL_MM + 11)]];
+constant bool  FC_mul_mm_kq2_set = is_function_constant_defined(FC_mul_mm_kq2);
+constant short FC_mul_mm_kq2_v   = FC_mul_mm_kq2_set ? FC_mul_mm_kq2 : 0;
+
+// forms 3/4: the table indexed by a BYTE (two nibbles) -> two values per lookup, half the loads per element
+constexpr constant static float2 kvalues_iq4nl_pair_f[256] = {
+    float2(-127.f, -127.f), float2(-104.f, -127.f), float2(-83.f, -127.f), float2(-65.f, -127.f), float2(-49.f, -127.f), float2(-35.f, -127.f), float2(-22.f, -127.f), float2(-10.f, -127.f),
+    float2(1.f, -127.f), float2(13.f, -127.f), float2(25.f, -127.f), float2(38.f, -127.f), float2(53.f, -127.f), float2(69.f, -127.f), float2(89.f, -127.f), float2(113.f, -127.f),
+    float2(-127.f, -104.f), float2(-104.f, -104.f), float2(-83.f, -104.f), float2(-65.f, -104.f), float2(-49.f, -104.f), float2(-35.f, -104.f), float2(-22.f, -104.f), float2(-10.f, -104.f),
+    float2(1.f, -104.f), float2(13.f, -104.f), float2(25.f, -104.f), float2(38.f, -104.f), float2(53.f, -104.f), float2(69.f, -104.f), float2(89.f, -104.f), float2(113.f, -104.f),
+    float2(-127.f, -83.f), float2(-104.f, -83.f), float2(-83.f, -83.f), float2(-65.f, -83.f), float2(-49.f, -83.f), float2(-35.f, -83.f), float2(-22.f, -83.f), float2(-10.f, -83.f),
+    float2(1.f, -83.f), float2(13.f, -83.f), float2(25.f, -83.f), float2(38.f, -83.f), float2(53.f, -83.f), float2(69.f, -83.f), float2(89.f, -83.f), float2(113.f, -83.f),
+    float2(-127.f, -65.f), float2(-104.f, -65.f), float2(-83.f, -65.f), float2(-65.f, -65.f), float2(-49.f, -65.f), float2(-35.f, -65.f), float2(-22.f, -65.f), float2(-10.f, -65.f),
+    float2(1.f, -65.f), float2(13.f, -65.f), float2(25.f, -65.f), float2(38.f, -65.f), float2(53.f, -65.f), float2(69.f, -65.f), float2(89.f, -65.f), float2(113.f, -65.f),
+    float2(-127.f, -49.f), float2(-104.f, -49.f), float2(-83.f, -49.f), float2(-65.f, -49.f), float2(-49.f, -49.f), float2(-35.f, -49.f), float2(-22.f, -49.f), float2(-10.f, -49.f),
+    float2(1.f, -49.f), float2(13.f, -49.f), float2(25.f, -49.f), float2(38.f, -49.f), float2(53.f, -49.f), float2(69.f, -49.f), float2(89.f, -49.f), float2(113.f, -49.f),
+    float2(-127.f, -35.f), float2(-104.f, -35.f), float2(-83.f, -35.f), float2(-65.f, -35.f), float2(-49.f, -35.f), float2(-35.f, -35.f), float2(-22.f, -35.f), float2(-10.f, -35.f),
+    float2(1.f, -35.f), float2(13.f, -35.f), float2(25.f, -35.f), float2(38.f, -35.f), float2(53.f, -35.f), float2(69.f, -35.f), float2(89.f, -35.f), float2(113.f, -35.f),
+    float2(-127.f, -22.f), float2(-104.f, -22.f), float2(-83.f, -22.f), float2(-65.f, -22.f), float2(-49.f, -22.f), float2(-35.f, -22.f), float2(-22.f, -22.f), float2(-10.f, -22.f),
+    float2(1.f, -22.f), float2(13.f, -22.f), float2(25.f, -22.f), float2(38.f, -22.f), float2(53.f, -22.f), float2(69.f, -22.f), float2(89.f, -22.f), float2(113.f, -22.f),
+    float2(-127.f, -10.f), float2(-104.f, -10.f), float2(-83.f, -10.f), float2(-65.f, -10.f), float2(-49.f, -10.f), float2(-35.f, -10.f), float2(-22.f, -10.f), float2(-10.f, -10.f),
+    float2(1.f, -10.f), float2(13.f, -10.f), float2(25.f, -10.f), float2(38.f, -10.f), float2(53.f, -10.f), float2(69.f, -10.f), float2(89.f, -10.f), float2(113.f, -10.f),
+    float2(-127.f, 1.f), float2(-104.f, 1.f), float2(-83.f, 1.f), float2(-65.f, 1.f), float2(-49.f, 1.f), float2(-35.f, 1.f), float2(-22.f, 1.f), float2(-10.f, 1.f),
+    float2(1.f, 1.f), float2(13.f, 1.f), float2(25.f, 1.f), float2(38.f, 1.f), float2(53.f, 1.f), float2(69.f, 1.f), float2(89.f, 1.f), float2(113.f, 1.f),
+    float2(-127.f, 13.f), float2(-104.f, 13.f), float2(-83.f, 13.f), float2(-65.f, 13.f), float2(-49.f, 13.f), float2(-35.f, 13.f), float2(-22.f, 13.f), float2(-10.f, 13.f),
+    float2(1.f, 13.f), float2(13.f, 13.f), float2(25.f, 13.f), float2(38.f, 13.f), float2(53.f, 13.f), float2(69.f, 13.f), float2(89.f, 13.f), float2(113.f, 13.f),
+    float2(-127.f, 25.f), float2(-104.f, 25.f), float2(-83.f, 25.f), float2(-65.f, 25.f), float2(-49.f, 25.f), float2(-35.f, 25.f), float2(-22.f, 25.f), float2(-10.f, 25.f),
+    float2(1.f, 25.f), float2(13.f, 25.f), float2(25.f, 25.f), float2(38.f, 25.f), float2(53.f, 25.f), float2(69.f, 25.f), float2(89.f, 25.f), float2(113.f, 25.f),
+    float2(-127.f, 38.f), float2(-104.f, 38.f), float2(-83.f, 38.f), float2(-65.f, 38.f), float2(-49.f, 38.f), float2(-35.f, 38.f), float2(-22.f, 38.f), float2(-10.f, 38.f),
+    float2(1.f, 38.f), float2(13.f, 38.f), float2(25.f, 38.f), float2(38.f, 38.f), float2(53.f, 38.f), float2(69.f, 38.f), float2(89.f, 38.f), float2(113.f, 38.f),
+    float2(-127.f, 53.f), float2(-104.f, 53.f), float2(-83.f, 53.f), float2(-65.f, 53.f), float2(-49.f, 53.f), float2(-35.f, 53.f), float2(-22.f, 53.f), float2(-10.f, 53.f),
+    float2(1.f, 53.f), float2(13.f, 53.f), float2(25.f, 53.f), float2(38.f, 53.f), float2(53.f, 53.f), float2(69.f, 53.f), float2(89.f, 53.f), float2(113.f, 53.f),
+    float2(-127.f, 69.f), float2(-104.f, 69.f), float2(-83.f, 69.f), float2(-65.f, 69.f), float2(-49.f, 69.f), float2(-35.f, 69.f), float2(-22.f, 69.f), float2(-10.f, 69.f),
+    float2(1.f, 69.f), float2(13.f, 69.f), float2(25.f, 69.f), float2(38.f, 69.f), float2(53.f, 69.f), float2(69.f, 69.f), float2(89.f, 69.f), float2(113.f, 69.f),
+    float2(-127.f, 89.f), float2(-104.f, 89.f), float2(-83.f, 89.f), float2(-65.f, 89.f), float2(-49.f, 89.f), float2(-35.f, 89.f), float2(-22.f, 89.f), float2(-10.f, 89.f),
+    float2(1.f, 89.f), float2(13.f, 89.f), float2(25.f, 89.f), float2(38.f, 89.f), float2(53.f, 89.f), float2(69.f, 89.f), float2(89.f, 89.f), float2(113.f, 89.f),
+    float2(-127.f, 113.f), float2(-104.f, 113.f), float2(-83.f, 113.f), float2(-65.f, 113.f), float2(-49.f, 113.f), float2(-35.f, 113.f), float2(-22.f, 113.f), float2(-10.f, 113.f),
+    float2(1.f, 113.f), float2(13.f, 113.f), float2(25.f, 113.f), float2(38.f, 113.f), float2(53.f, 113.f), float2(69.f, 113.f), float2(89.f, 113.f), float2(113.f, 113.f)
+};
+
+// form 6: the byte-indexed pair table in half (1 KB; every value is half-exact, the convert folds into the product)
+constexpr constant static half2 kvalues_iq4nl_pair_h[256] = {
+    half2(-127.h, -127.h), half2(-104.h, -127.h), half2(-83.h, -127.h), half2(-65.h, -127.h), half2(-49.h, -127.h), half2(-35.h, -127.h), half2(-22.h, -127.h), half2(-10.h, -127.h),
+    half2(1.h, -127.h), half2(13.h, -127.h), half2(25.h, -127.h), half2(38.h, -127.h), half2(53.h, -127.h), half2(69.h, -127.h), half2(89.h, -127.h), half2(113.h, -127.h),
+    half2(-127.h, -104.h), half2(-104.h, -104.h), half2(-83.h, -104.h), half2(-65.h, -104.h), half2(-49.h, -104.h), half2(-35.h, -104.h), half2(-22.h, -104.h), half2(-10.h, -104.h),
+    half2(1.h, -104.h), half2(13.h, -104.h), half2(25.h, -104.h), half2(38.h, -104.h), half2(53.h, -104.h), half2(69.h, -104.h), half2(89.h, -104.h), half2(113.h, -104.h),
+    half2(-127.h, -83.h), half2(-104.h, -83.h), half2(-83.h, -83.h), half2(-65.h, -83.h), half2(-49.h, -83.h), half2(-35.h, -83.h), half2(-22.h, -83.h), half2(-10.h, -83.h),
+    half2(1.h, -83.h), half2(13.h, -83.h), half2(25.h, -83.h), half2(38.h, -83.h), half2(53.h, -83.h), half2(69.h, -83.h), half2(89.h, -83.h), half2(113.h, -83.h),
+    half2(-127.h, -65.h), half2(-104.h, -65.h), half2(-83.h, -65.h), half2(-65.h, -65.h), half2(-49.h, -65.h), half2(-35.h, -65.h), half2(-22.h, -65.h), half2(-10.h, -65.h),
+    half2(1.h, -65.h), half2(13.h, -65.h), half2(25.h, -65.h), half2(38.h, -65.h), half2(53.h, -65.h), half2(69.h, -65.h), half2(89.h, -65.h), half2(113.h, -65.h),
+    half2(-127.h, -49.h), half2(-104.h, -49.h), half2(-83.h, -49.h), half2(-65.h, -49.h), half2(-49.h, -49.h), half2(-35.h, -49.h), half2(-22.h, -49.h), half2(-10.h, -49.h),
+    half2(1.h, -49.h), half2(13.h, -49.h), half2(25.h, -49.h), half2(38.h, -49.h), half2(53.h, -49.h), half2(69.h, -49.h), half2(89.h, -49.h), half2(113.h, -49.h),
+    half2(-127.h, -35.h), half2(-104.h, -35.h), half2(-83.h, -35.h), half2(-65.h, -35.h), half2(-49.h, -35.h), half2(-35.h, -35.h), half2(-22.h, -35.h), half2(-10.h, -35.h),
+    half2(1.h, -35.h), half2(13.h, -35.h), half2(25.h, -35.h), half2(38.h, -35.h), half2(53.h, -35.h), half2(69.h, -35.h), half2(89.h, -35.h), half2(113.h, -35.h),
+    half2(-127.h, -22.h), half2(-104.h, -22.h), half2(-83.h, -22.h), half2(-65.h, -22.h), half2(-49.h, -22.h), half2(-35.h, -22.h), half2(-22.h, -22.h), half2(-10.h, -22.h),
+    half2(1.h, -22.h), half2(13.h, -22.h), half2(25.h, -22.h), half2(38.h, -22.h), half2(53.h, -22.h), half2(69.h, -22.h), half2(89.h, -22.h), half2(113.h, -22.h),
+    half2(-127.h, -10.h), half2(-104.h, -10.h), half2(-83.h, -10.h), half2(-65.h, -10.h), half2(-49.h, -10.h), half2(-35.h, -10.h), half2(-22.h, -10.h), half2(-10.h, -10.h),
+    half2(1.h, -10.h), half2(13.h, -10.h), half2(25.h, -10.h), half2(38.h, -10.h), half2(53.h, -10.h), half2(69.h, -10.h), half2(89.h, -10.h), half2(113.h, -10.h),
+    half2(-127.h, 1.h), half2(-104.h, 1.h), half2(-83.h, 1.h), half2(-65.h, 1.h), half2(-49.h, 1.h), half2(-35.h, 1.h), half2(-22.h, 1.h), half2(-10.h, 1.h),
+    half2(1.h, 1.h), half2(13.h, 1.h), half2(25.h, 1.h), half2(38.h, 1.h), half2(53.h, 1.h), half2(69.h, 1.h), half2(89.h, 1.h), half2(113.h, 1.h),
+    half2(-127.h, 13.h), half2(-104.h, 13.h), half2(-83.h, 13.h), half2(-65.h, 13.h), half2(-49.h, 13.h), half2(-35.h, 13.h), half2(-22.h, 13.h), half2(-10.h, 13.h),
+    half2(1.h, 13.h), half2(13.h, 13.h), half2(25.h, 13.h), half2(38.h, 13.h), half2(53.h, 13.h), half2(69.h, 13.h), half2(89.h, 13.h), half2(113.h, 13.h),
+    half2(-127.h, 25.h), half2(-104.h, 25.h), half2(-83.h, 25.h), half2(-65.h, 25.h), half2(-49.h, 25.h), half2(-35.h, 25.h), half2(-22.h, 25.h), half2(-10.h, 25.h),
+    half2(1.h, 25.h), half2(13.h, 25.h), half2(25.h, 25.h), half2(38.h, 25.h), half2(53.h, 25.h), half2(69.h, 25.h), half2(89.h, 25.h), half2(113.h, 25.h),
+    half2(-127.h, 38.h), half2(-104.h, 38.h), half2(-83.h, 38.h), half2(-65.h, 38.h), half2(-49.h, 38.h), half2(-35.h, 38.h), half2(-22.h, 38.h), half2(-10.h, 38.h),
+    half2(1.h, 38.h), half2(13.h, 38.h), half2(25.h, 38.h), half2(38.h, 38.h), half2(53.h, 38.h), half2(69.h, 38.h), half2(89.h, 38.h), half2(113.h, 38.h),
+    half2(-127.h, 53.h), half2(-104.h, 53.h), half2(-83.h, 53.h), half2(-65.h, 53.h), half2(-49.h, 53.h), half2(-35.h, 53.h), half2(-22.h, 53.h), half2(-10.h, 53.h),
+    half2(1.h, 53.h), half2(13.h, 53.h), half2(25.h, 53.h), half2(38.h, 53.h), half2(53.h, 53.h), half2(69.h, 53.h), half2(89.h, 53.h), half2(113.h, 53.h),
+    half2(-127.h, 69.h), half2(-104.h, 69.h), half2(-83.h, 69.h), half2(-65.h, 69.h), half2(-49.h, 69.h), half2(-35.h, 69.h), half2(-22.h, 69.h), half2(-10.h, 69.h),
+    half2(1.h, 69.h), half2(13.h, 69.h), half2(25.h, 69.h), half2(38.h, 69.h), half2(53.h, 69.h), half2(69.h, 69.h), half2(89.h, 69.h), half2(113.h, 69.h),
+    half2(-127.h, 89.h), half2(-104.h, 89.h), half2(-83.h, 89.h), half2(-65.h, 89.h), half2(-49.h, 89.h), half2(-35.h, 89.h), half2(-22.h, 89.h), half2(-10.h, 89.h),
+    half2(1.h, 89.h), half2(13.h, 89.h), half2(25.h, 89.h), half2(38.h, 89.h), half2(53.h, 89.h), half2(69.h, 89.h), half2(89.h, 89.h), half2(113.h, 89.h),
+    half2(-127.h, 113.h), half2(-104.h, 113.h), half2(-83.h, 113.h), half2(-65.h, 113.h), half2(-49.h, 113.h), half2(-35.h, 113.h), half2(-22.h, 113.h), half2(-10.h, 113.h),
+    half2(1.h, 113.h), half2(13.h, 113.h), half2(25.h, 113.h), half2(38.h, 113.h), half2(53.h, 113.h), half2(69.h, 113.h), half2(89.h, 113.h), half2(113.h, 113.h)
+};
+
+// the iq4_nl table as arithmetic: rint(P4(idx)), exact on 0..15 (perf/w8-decomp-sep18.md)
+inline float iq4nl_value_poly(uint idx) {
+    const float x = (float) idx;
+    return rint(fma(fma(fma(fma(0.001586042823154396f, x, 0.031086439333914404f), x, -1.3719270420306529f), x, 24.17383029342025f), x, -126.56701030927982f));
+}
 
 template <typename type4x4>
 inline void dequantize_q4_0_soa_mm(
@@ -18136,12 +18236,99 @@ inline void dequantize_iq4_xs_soa_mm(
     const float d = (float) dh * (ls - 32);
     const uint q0 = packs[0];
     const uint q1 = packs[1];
+    if (FC_mul_mm_iq4lut_v == 6) {
+        for (int i = 0; i < 4; ++i) {
+            const uint q = (i < 2 ? q0 : q1) >> (16*(i & 1));
+            const half2 p0 = kvalues_iq4nl_pair_h[q & 0xff];
+            const half2 p1 = kvalues_iq4nl_pair_h[(q >> 8) & 0xff];
+            reg[i][0] = d * (float) p0.x;
+            reg[i][1] = d * (float) p0.y;
+            reg[i][2] = d * (float) p1.x;
+            reg[i][3] = d * (float) p1.y;
+        }
+        return;
+    }
+    if (FC_mul_mm_iq4lut_v == 5) {
+        // CEILING PROBE ONLY (wrong values): the lookup deleted, the nibble used linearly - prices the table
+        for (int i = 0; i < 4; ++i) {
+            const uint q = (i < 2 ? q0 : q1) >> (16*(i & 1));
+            reg[i][0] = d * (float) (int) ((q >>  0) & 0xf);
+            reg[i][1] = d * (float) (int) ((q >>  4) & 0xf);
+            reg[i][2] = d * (float) (int) ((q >>  8) & 0xf);
+            reg[i][3] = d * (float) (int) ((q >> 12) & 0xf);
+        }
+        return;
+    }
+    if (FC_mul_mm_iq4lut_v == 3) {
+        for (int i = 0; i < 4; ++i) {
+            const uint q = (i < 2 ? q0 : q1) >> (16*(i & 1));
+            const float2 p0 = kvalues_iq4nl_pair_f[q & 0xff];
+            const float2 p1 = kvalues_iq4nl_pair_f[(q >> 8) & 0xff];
+            reg[i][0] = d * p0.x;
+            reg[i][1] = d * p0.y;
+            reg[i][2] = d * p1.x;
+            reg[i][3] = d * p1.y;
+        }
+        return;
+    }
+    if (FC_mul_mm_iq4lut_v == 2) {
+        for (int i = 0; i < 4; ++i) {
+            const uint q = (i < 2 ? q0 : q1) >> (16*(i & 1));
+            reg[i][0] = d * iq4nl_value_poly((q >>  0) & 0xf);
+            reg[i][1] = d * iq4nl_value_poly((q >>  4) & 0xf);
+            reg[i][2] = d * iq4nl_value_poly((q >>  8) & 0xf);
+            reg[i][3] = d * iq4nl_value_poly((q >> 12) & 0xf);
+        }
+        return;
+    }
     for (int i = 0; i < 4; ++i) {
         const uint q = (i < 2 ? q0 : q1) >> (16*(i & 1));
         reg[i][0] = d * kvalues_iq4nl_f[(q >>  0) & 0xf];
         reg[i][1] = d * kvalues_iq4nl_f[(q >>  4) & 0xf];
         reg[i][2] = d * kvalues_iq4nl_f[(q >>  8) & 0xf];
         reg[i][3] = d * kvalues_iq4nl_f[(q >> 12) & 0xf];
+    }
+}
+
+// FC_mul_mm_iq4lut == 1: the same reader with the table in threadgroup memory (staged by the skinny kernel)
+template <typename type4x4>
+inline void dequantize_iq4_xs_soa_mm_tglut(
+        device const char * row,
+        int ne00,
+        int block_idx,
+        short il,
+        thread type4x4 & reg,
+        threadgroup const char * lutc) {
+    const int nsb = ne00/256;
+    device const uint  * packs = (device const uint  *)(row + 16*nsb) + 32*block_idx + 2*il;
+    device const uchar * hdr   = (device const uchar *)(row + 144*nsb) + 8*block_idx;
+    const half   dh       = *(device const half *) hdr;
+    const ushort scales_h = (ushort) hdr[2] | ((ushort) hdr[3] << 8);
+    const int ib32 = il/2;
+    const int ls = ((hdr[4 + ib32/2] >> 4*(ib32%2)) & 0xf) | (((scales_h >> 2*ib32) & 3) << 4);
+    const float d = (float) dh * (ls - 32);
+    const uint q0 = packs[0];
+    const uint q1 = packs[1];
+    if (FC_mul_mm_iq4lut_v == 4) {
+        threadgroup const float2 * lut2 = (threadgroup const float2 *) lutc;
+        for (int i = 0; i < 4; ++i) {
+            const uint q = (i < 2 ? q0 : q1) >> (16*(i & 1));
+            const float2 p0 = lut2[q & 0xff];
+            const float2 p1 = lut2[(q >> 8) & 0xff];
+            reg[i][0] = d * p0.x;
+            reg[i][1] = d * p0.y;
+            reg[i][2] = d * p1.x;
+            reg[i][3] = d * p1.y;
+        }
+        return;
+    }
+    threadgroup const float * lut = (threadgroup const float *) lutc;
+    for (int i = 0; i < 4; ++i) {
+        const uint q = (i < 2 ? q0 : q1) >> (16*(i & 1));
+        reg[i][0] = d * lut[(q >>  0) & 0xf];
+        reg[i][1] = d * lut[(q >>  4) & 0xf];
+        reg[i][2] = d * lut[(q >>  8) & 0xf];
+        reg[i][3] = d * lut[(q >> 12) & 0xf];
     }
 }
 
@@ -18190,6 +18377,27 @@ inline void dequantize_kq_soa_mm(
         reg = (type4x4) rf;
         return;
     }
+    if (FC_mul_mm_q5k_v == 1) {
+        // plane bits for the 16 elements: byte 0 = tile elements 0..7 (pack 0), byte 1 = elements 8..15 (pack 1),
+        // bit c of a nibble-group's 4 bits = element c of that group (the select form's (h >> c) & 1)
+        const uint hh = *(device const ushort *) hbits;
+        const uint h0 = hh & 0xff;
+        const uint h1 = hh >> 8;
+        const float dlh = ilm < 2 ? dl : dl * 16.f;                 // (v<<4) + 256*bit = 16*(v + 16*bit)
+        const float4 dlo = dlh * float4(1.f, 1.f/16.f, 1.f/256.f, 1.f/4096.f);
+        const uint4 mlo = uint4(0x0000000Fu, 0x000000F0u, 0x00000F00u, 0x0000F000u);
+        const uint4 hm  = uint4(1u, 2u, 4u, 8u);                    // bit c of the group's 4 plane bits
+        const uint4 hs  = uint4(4u, 7u, 10u, 13u);                  // -> 16 * 16^c in place (max 31 * 4096 < 2^24)
+        // the odd groups are shifted DOWN 16 (not scaled up like the q4_K path): the plane bit of the top
+        // nibble in place would sit at bit 32
+        float4x4 rf;
+        rf[0] = dlo * float4((uint4(q0)       & mlo) | ((uint4(h0)      & hm) << hs)) - ml;
+        rf[1] = dlo * float4((uint4(q0 >> 16) & mlo) | ((uint4(h0 >> 4) & hm) << hs)) - ml;
+        rf[2] = dlo * float4((uint4(q1)       & mlo) | ((uint4(h1)      & hm) << hs)) - ml;
+        rf[3] = dlo * float4((uint4(q1 >> 16) & mlo) | ((uint4(h1 >> 4) & hm) << hs)) - ml;
+        reg = (type4x4) rf;
+        return;
+    }
     const uint h0 = hbits[0];
     const uint h1 = hbits[1];
     for (int i = 0; i < 4; ++i) {
@@ -18203,11 +18411,79 @@ inline void dequantize_kq_soa_mm(
     }
 }
 
+// FC_mul_mm_kq2: tiles il (even) and il+1 of one superblock in one call, the header decoded once (GGML_MM_SKINNY_KQ2)
+template <bool HB, typename type4x4>
+inline void dequantize_kq_soa_mm_pair(
+        device const char * row,
+        int ne00,
+        int block_idx,
+        short il,
+        thread type4x4 & rega,
+        thread type4x4 & regb) {
+    const int nsb = ne00/256;
+    device const uint  * packs = (device const uint  *)(row + 32*nsb) + 32*block_idx + 2*il;
+    device const uchar * hbits = (device const uchar *)(row + 160*nsb) + 32*block_idx + 2*il;
+    device const uchar * hdr   = (device const uchar *)(row + (HB ? 192 : 160)*nsb) + 16*block_idx;
+    const half dh    = ((device const half *) hdr)[0];
+    const half dminh = ((device const half *) hdr)[1];
+    const uchar2 sc = get_scale_min_k4_just2(il/2, 0, hdr + 4);
+    const short ilm = il & 3;                                  // 0 or 2: both tiles on the same side of the split
+    const float d   = ilm < 2 ? dh : (HB ? dh / 16.f : dh / 16.h);
+    const float min = dminh;
+    const float dl = d * sc[0];
+    const float ml = min * sc[1];
+    const uint2 pa = ((device const uint2 *) packs)[0];       // tile il: packs 2il, 2il+1
+    const uint2 pb = ((device const uint2 *) packs)[1];       // tile il+1
+    const uint4 mlo = uint4(0x0000000Fu, 0x000000F0u, 0x00000F00u, 0x0000F000u);
+    if (!HB) {
+        const float dl4 = (ilm < 2 || FC_kq_soa_exact_v ? (float) dh : (float) (dh / 16.h) * 16.f) * sc[0];
+        const float4 dlo = dl4 * float4(1.f, 1.f/16.f, 1.f/256.f, 1.f/4096.f);
+        const float4 dhi = dlo * (1.f/65536.f);
+        const uint4 mhi = mlo << 16;
+        float4x4 rf;
+        rf[0] = dlo * float4(uint4(pa.x) & mlo) - ml;
+        rf[1] = dhi * float4(uint4(pa.x) & mhi) - ml;
+        rf[2] = dlo * float4(uint4(pa.y) & mlo) - ml;
+        rf[3] = dhi * float4(uint4(pa.y) & mhi) - ml;
+        rega = (type4x4) rf;
+        rf[0] = dlo * float4(uint4(pb.x) & mlo) - ml;
+        rf[1] = dhi * float4(uint4(pb.x) & mhi) - ml;
+        rf[2] = dlo * float4(uint4(pb.y) & mlo) - ml;
+        rf[3] = dhi * float4(uint4(pb.y) & mhi) - ml;
+        regb = (type4x4) rf;
+        return;
+    }
+    // q5_K: the folded plane (GGML_MM_SKINNY_Q5K=1 form) for both tiles; the 4 plane bytes in one load
+    const uint hh = *(device const uint *) hbits;
+    const float dlh = ilm < 2 ? dl : dl * 16.f;
+    const float4 dlo = dlh * float4(1.f, 1.f/16.f, 1.f/256.f, 1.f/4096.f);
+    const uint4 hm  = uint4(1u, 2u, 4u, 8u);
+    const uint4 hs  = uint4(4u, 7u, 10u, 13u);
+    float4x4 rf;
+    rf[0] = dlo * float4((uint4(pa.x)       & mlo) | ((uint4( hh        & 0xff) & hm) << hs)) - ml;
+    rf[1] = dlo * float4((uint4(pa.x >> 16) & mlo) | ((uint4((hh >>  4) & 0x0f) & hm) << hs)) - ml;
+    rf[2] = dlo * float4((uint4(pa.y)       & mlo) | ((uint4((hh >>  8) & 0xff) & hm) << hs)) - ml;
+    rf[3] = dlo * float4((uint4(pa.y >> 16) & mlo) | ((uint4((hh >> 12) & 0x0f) & hm) << hs)) - ml;
+    rega = (type4x4) rf;
+    rf[0] = dlo * float4((uint4(pb.x)       & mlo) | ((uint4((hh >> 16) & 0xff) & hm) << hs)) - ml;
+    rf[1] = dlo * float4((uint4(pb.x >> 16) & mlo) | ((uint4((hh >> 20) & 0x0f) & hm) << hs)) - ml;
+    rf[2] = dlo * float4((uint4(pb.y)       & mlo) | ((uint4((hh >> 24) & 0xff) & hm) << hs)) - ml;
+    rf[3] = dlo * float4((uint4(pb.y >> 16) & mlo) | ((uint4((hh >> 28) & 0x0f) & hm) << hs)) - ml;
+    regb = (type4x4) rf;
+}
+
 // tag-dispatched: the mul_mm bodies call dequantize_soa_mm((device const block_q *) nullptr, ...)
 template <typename type4x4> inline void dequantize_soa_mm(device const block_q4_0   *, device const char * row, int ne00, int block_idx, short il, thread type4x4 & reg) { dequantize_q4_0_soa_mm(row, ne00/32, block_idx, il, reg); }
 template <typename type4x4> inline void dequantize_soa_mm(device const block_iq4_xs *, device const char * row, int ne00, int block_idx, short il, thread type4x4 & reg) { dequantize_iq4_xs_soa_mm(row, ne00, block_idx, il, reg); }
 template <typename type4x4> inline void dequantize_soa_mm(device const block_q4_K   *, device const char * row, int ne00, int block_idx, short il, thread type4x4 & reg) { dequantize_kq_soa_mm<false>(row, ne00, block_idx, il, reg); }
 template <typename type4x4> inline void dequantize_soa_mm(device const block_q5_K   *, device const char * row, int ne00, int block_idx, short il, thread type4x4 & reg) { dequantize_kq_soa_mm<true>(row, ne00, block_idx, il, reg); }
+// the skinny tile's pair-of-tiles form: q4_K/q5_K decode the header once, every other format runs the single reader twice
+template <typename type4x4> inline void dequantize_soa_mm_pair(device const block_q4_K *, device const char * row, int ne00, int block_idx, short il, thread type4x4 & rega, thread type4x4 & regb) { dequantize_kq_soa_mm_pair<false>(row, ne00, block_idx, il, rega, regb); }
+template <typename type4x4> inline void dequantize_soa_mm_pair(device const block_q5_K *, device const char * row, int ne00, int block_idx, short il, thread type4x4 & rega, thread type4x4 & regb) { dequantize_kq_soa_mm_pair<true>(row, ne00, block_idx, il, rega, regb); }
+template <typename block_q, typename type4x4> inline void dequantize_soa_mm_pair(device const block_q * tag, device const char * row, int ne00, int block_idx, short il, thread type4x4 & rega, thread type4x4 & regb) { dequantize_soa_mm(tag, row, ne00, block_idx, il, rega); dequantize_soa_mm(tag, row, ne00, block_idx, (short) (il + 1), regb); }
+// the skinny tile's form with a staged table: iq4_xs reads it, the other formats ignore it
+template <typename type4x4> inline void dequantize_soa_mm_lut(device const block_iq4_xs *, device const char * row, int ne00, int block_idx, short il, thread type4x4 & reg, threadgroup const char * lut) { dequantize_iq4_xs_soa_mm_tglut(row, ne00, block_idx, il, reg, lut); }
+template <typename block_q, typename type4x4> inline void dequantize_soa_mm_lut(device const block_q * tag, device const char * row, int ne00, int block_idx, short il, thread type4x4 & reg, threadgroup const char *) { dequantize_soa_mm(tag, row, ne00, block_idx, il, reg); }
 // every other block type: never reached (the host only sets FC_mul_mm_soa for the four stored types)
 template <int F, typename type4x4>
 inline void dequantize_ud_soa_mm(device const char * row, int K, int block_idx, short il, thread type4x4 & reg) {
@@ -18804,9 +19080,25 @@ kernel void kernel_mul_mm_skinny_t(
     // tile) through the mul_mm bodies' dequantize_soa_mm instead of a block pointer (perf/w6-verify-cliff.md)
     device const char * xrowc = src0 + args.nb01*(r0 + lr0) + offset0;
     int kx = 32*il0; // this thread's first A element of the current slice
+    // GGML_MM_SKINNY_IQ4LUT=1: the iq4_nl table staged once per threadgroup (64 B after sb)
+    // (=4: the 256-entry byte-indexed pair table, 2 KB, four entries per thread)
+    threadgroup char * slut = shmem + NR0*NK*sizeof(a_t) + NK*NR1*sizeof(a_t);
+    if (FC_mul_mm_iq4lut_v == 1) {
+        if (tiitg < 16) { ((threadgroup float *) slut)[tiitg] = kvalues_iq4nl_f[tiitg]; }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    } else if (FC_mul_mm_iq4lut_v == 4) {
+        threadgroup float2 * sl2 = (threadgroup float2 *) slut;
+        sl2[tiitg] = kvalues_iq4nl_pair_f[tiitg]; sl2[64 + tiitg] = kvalues_iq4nl_pair_f[64 + tiitg];
+        sl2[128 + tiitg] = kvalues_iq4nl_pair_f[128 + tiitg]; sl2[192 + tiitg] = kvalues_iq4nl_pair_f[192 + tiitg];
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
 #define SKINNY_DEQ(KX, OFF, REG) \
-    if (FC_mul_mm_soa) { dequantize_soa_mm((device const block_q *) nullptr, xrowc, args.ne00, (KX)/(16*nl), (short) (((KX)/16)%nl + (OFF)), REG); } \
+    if (FC_mul_mm_soa && (FC_mul_mm_iq4lut_v == 1 || FC_mul_mm_iq4lut_v == 4)) { dequantize_soa_mm_lut((device const block_q *) nullptr, xrowc, args.ne00, (KX)/(16*nl), (short) (((KX)/16)%nl + (OFF)), REG, (threadgroup const char *) slut); } \
+    else if (FC_mul_mm_soa) { dequantize_soa_mm((device const block_q *) nullptr, xrowc, args.ne00, (KX)/(16*nl), (short) (((KX)/16)%nl + (OFF)), REG); } \
     else               { dequantize_func(xrow + (KX)/(16*nl), ((KX)/16)%nl + (OFF), REG); }
+#define SKINNY_DEQ2(KX, REGA, REGB) \
+    if (FC_mul_mm_soa && FC_mul_mm_kq2_v == 1) { dequantize_soa_mm_pair((device const block_q *) nullptr, xrowc, args.ne00, (KX)/(16*nl), (short) (((KX)/16)%nl), REGA, REGB); } \
+    else { SKINNY_DEQ(KX, 0, REGA); SKINNY_DEQ(KX, 1, REGB); }
 
     // B stage: BPC threads per column, BVL = NK/BPC activations each (GGML_MM_SKINNY_BSPLIT, the q4_0 SoA
     // kernel's form; the generic tile ran the 32-thread loader until 2026-09-18, perf/w8-decomp-sep18.md)
@@ -18831,8 +19123,7 @@ kernel void kernel_mul_mm_skinny_t(
     // prefetch slice 0
     a4x4_t ta0;
     a4x4_t ta1;
-    SKINNY_DEQ(kx, 0, ta0);
-    SKINNY_DEQ(kx, 1, ta1);
+    SKINNY_DEQ2(kx, ta0, ta1);
     kx += NK;
 
     for (int loop_k = 0; loop_k < args.ne00; loop_k += NK) {
@@ -18873,11 +19164,11 @@ kernel void kernel_mul_mm_skinny_t(
 
         // prefetch slice t+1 while the MACs below run
         if (loop_k + NK < args.ne00) {
-            SKINNY_DEQ(kx, 0, ta0);
-            SKINNY_DEQ(kx, 1, ta1);
+            SKINNY_DEQ2(kx, ta0, ta1);
             kx += NK;
         }
 #undef SKINNY_DEQ
+#undef SKINNY_DEQ2
 
         threadgroup const a_t * lsma = sa + 16*sgitg*NK;
 

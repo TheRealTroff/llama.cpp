@@ -759,8 +759,18 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm_skinny(gg
     // GGML_MM_SKINNY_BSPLIT=1|2: B stage over all 64 threads (2 = float4 loads), the same constant as the q4_0 SoA
     // skinny kernel; the generic tile ignored it until 2026-09-18 (perf/w8-decomp-sep18.md)
     static const int env_bsplit = getenv("GGML_MM_SKINNY_BSPLIT") ? atoi(getenv("GGML_MM_SKINNY_BSPLIT")) : 0;
+    // GGML_MM_SKINNY_IQ4LUT=1|2: the stored iq4_xs tile's table in threadgroup memory | as arithmetic (FC_MUL_MM + 9,
+    // perf/w8-decomp-sep18.md lever 2); the constant is set only for the IQ4_XS_SOA pipeline
+    static const int env_iq4lut = getenv("GGML_MM_SKINNY_IQ4LUT") ? atoi(getenv("GGML_MM_SKINNY_IQ4LUT")) : 0;
+    const int iq4lut = (soa && op->src[0]->type == GGML_TYPE_IQ4_XS_SOA) ? env_iq4lut : 0;
+    // GGML_MM_SKINNY_Q5K=1: the stored q5_K tile's folded high-bit plane (FC_MUL_MM + 10, lever 3 of the same note)
+    static const int env_q5k = getenv("GGML_MM_SKINNY_Q5K") ? atoi(getenv("GGML_MM_SKINNY_Q5K")) : 0;
+    const int q5k = (soa && op->src[0]->type == GGML_TYPE_Q5_K_SOA) ? env_q5k : 0;
+    // GGML_MM_SKINNY_KQ2=1: the stored q4_K/q5_K tiles' header decoded once per K-step (FC_MUL_MM + 11, lever 4)
+    static const int env_kq2 = getenv("GGML_MM_SKINNY_KQ2") ? atoi(getenv("GGML_MM_SKINNY_KQ2")) : 0;
+    const int kq2 = (soa && (op->src[0]->type == GGML_TYPE_Q5_K_SOA || op->src[0]->type == GGML_TYPE_Q4_K_SOA)) ? env_kq2 : 0;
     snprintf(base, 256, "kernel_mul_mm_skinny_%s%s_%s%s", ggml_type_name(ggml_metal_soa_base_type(op->src[0]->type)), di ? "_di" : "", ggml_type_name(op->src[1]->type), fp ? "_fp" : "");
-    snprintf(name, 256, "%s%s%s_ne12=%d_r2=%d_r3=%d_bsp=%d", base, soa ? "_soa" : "", soa && gen_exact ? "_ex" : "", ne12, r2, r3, env_bsplit);
+    snprintf(name, 256, "%s%s%s_ne12=%d_r2=%d_r3=%d_bsp=%d%s%s", base, soa ? "_soa" : "", soa && gen_exact ? "_ex" : "", ne12, r2, r3, env_bsplit, iq4lut == 1 ? "_iq4lut=1" : iq4lut == 2 ? "_iq4lut=2" : iq4lut == 3 ? "_iq4lut=3" : iq4lut == 4 ? "_iq4lut=4" : iq4lut == 5 ? "_iq4lut=5" : iq4lut == 6 ? "_iq4lut=6" : q5k == 1 ? "_q5k=1" : "", kq2 == 1 ? "_kq2=1" : "");
 
     ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
     if (!res.pipeline) {
@@ -775,6 +785,15 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm_skinny(gg
         ggml_metal_cv_set_int16(cv, (int16_t) r2,   FC_MUL_MM + 4);
         ggml_metal_cv_set_int16(cv, (int16_t) r3,   FC_MUL_MM + 5);
         ggml_metal_cv_set_int16(cv, (int16_t) env_bsplit, FC_MUL_MM + 8);
+        if (iq4lut) {
+            ggml_metal_cv_set_int16(cv, (int16_t) iq4lut, FC_MUL_MM + 9);
+        }
+        if (q5k) {
+            ggml_metal_cv_set_int16(cv, (int16_t) q5k, FC_MUL_MM + 10);
+        }
+        if (kq2) {
+            ggml_metal_cv_set_int16(cv, (int16_t) kq2, FC_MUL_MM + 11);
+        }
 
         res = ggml_metal_library_compile_pipeline(lib, base, name, cv);
 
@@ -784,7 +803,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm_skinny(gg
     res.nr0  = 32;
     res.nr1  = 8;
     res.nsg  = 2;
-    res.smem = fp ? 8192 + 2048 : 4096 + 1024;
+    res.smem = (fp ? 8192 + 2048 : 4096 + 1024) + (iq4lut == 4 ? 2048 : 64);   // + the staged iq4_nl table (GGML_MM_SKINNY_IQ4LUT=1|4)
 
     return res;
 }
