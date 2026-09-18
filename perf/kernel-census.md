@@ -9,13 +9,17 @@ was which kernel got opened. The census does the two steps for every kernel that
 
 ## How to run
 
-**2026-09-18: the replay half is DOWN under macOS 27** (installed 2026-09-16 11:38, six hours after the last
-working census `census-ud-96k-fa24`): the `dy` replay resolves but streams no APS counters (no processor plugin),
-and macOS 27's new `/usr/bin/gpudebug` v1.0 (auto-selected by the headless wrapper) runs `profile run` but every
-performance leaf is empty for our traces. Timings and captures still work; `perf/agx-nt-opt.py mir` + `agx-disasm.py`
-give static instruction counts (see `w8-decomp-sep18.md` for the method on four kernels). `PHASE=decode|prefill`
-limits the plan to one phase - the 8K benchprompt otherwise fills a top-N with prefill rows.
-
+**2026-09-18 midday: the replay half is BACK** (Xcode 27 + `xcodebuild -downloadComponent MetalToolchain`; the owner accepted
+the license). ~~2026-09-18 morning: the replay half was DOWN under macOS 27 (installed 2026-09-16 11:38): the `dy` replay
+resolved but streamed no APS counters, and `/usr/bin/gpudebug` v1.0 under Xcode 26.6 showed empty performance leaves.~~ The
+headless wrapper now drives `gpudebug -t <trace> -c 'profile run --exec serial --embed'` and moves the embedded
+`emb_stream_0.gpuprofiler_raw/` bundle (streamData + the 20 Counters/Timeline/Profiling files) to `<id>.replay/raw` - the same
+contract as before, so nothing in this script changed; per-row replay 8-30 s. Still down under Xcode 27: the machine-IR join
+(`agx-nt-opt.py mir`: the re-signed debug translator says "cannot emit pipeline") - rows print "no join" and the per-instruction
+reading falls back to encoding sizes (14 B = loads). The translator metallib compile needs `-mmacosx-version-min=26.0` now
+(Xcode 27's `metal` emits AIR 2.9; `applegpu-nt` targets 2.8). `PHASE=decode|prefill` limits the plan to one phase - the 8K
+benchprompt otherwise fills a top-N with prefill rows. A stuck `gpudebug` session (`gpudebug -l`, `--terminate all`) is the first
+thing to check when a row's `*.instr.txt` comes back empty.
 
 ```sh
 # 1. a profiled run of the pick (any harness with GGML_METAL_PROFILE=1 in the env)

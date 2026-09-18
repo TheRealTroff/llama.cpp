@@ -1,8 +1,16 @@
 #!/usr/bin/env python3
 """Profile an existing Metal .gputrace without opening Xcode.
 
-Prefer Apple's supported ``gpudebug`` command when the selected Xcode ships it.
-Xcode 26 does not, so the wrapper falls back to the verified local DY replayer.
+Backends:
+  gpudebug (Xcode 27, /usr/bin/gpudebug v1.0 on macOS 27): `profile run --exec serial --embed`
+      replays the trace, collects the shader profiler and EMBEDS the bundle into the trace as
+      <trace>/emb_stream_N.gpuprofiler_raw (streamData + 20 each of Counters/Timeline/Profiling
+      _f_N.raw). The wrapper moves that bundle to <outdir>/raw and copies its streamData to
+      <outdir>/streamData - the same reader contract as the DY path, so gpuprofiler-stats.py and
+      perf/shaderprof-table.py read it unchanged (verified 2026-09-18: q5_K skinny tile, executed
+      sums match the binary totals). Run it with nothing else on the GPU.
+  dy (Xcode 26.6 private frameworks): the verified fallback until the macOS 27 upgrade; under
+      Xcode 27 it finds no DYDesktopDevice. Kept for an older Xcode.
 
 The command never captures a workload; its input is an existing .gputrace.
 """
@@ -31,19 +39,37 @@ def find_gpudebug():
 
 
 def run_gpudebug(tool, trace, outdir, commands):
-    # `performance` is a documented root node.  Keep commands overridable because
-    # gpudebug is newer than Xcode 26 and its self-describing actions may evolve.
+    """Replay + shader-profile through gpudebug and archive the embedded bundle as <outdir>/raw."""
+    outdir.mkdir(parents=True, exist_ok=True)
+    before = set(trace.glob("*.gpuprofiler_raw"))
     if not commands:
-        commands = ["go performance", "list --all"]
+        commands = ["profile run --exec serial --embed", "wait", "profile list",
+                    "go performance", "go shaders", "list --all"]
     cmd = [tool, "--oneshot", "-t", str(trace)]
     for command in commands:
         cmd += ["-c", command]
     result = subprocess.run(cmd, text=True, stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT)
-    outdir.mkdir(parents=True, exist_ok=True)
     (outdir / "gpudebug.txt").write_text(result.stdout)
     sys.stdout.write(result.stdout)
-    return result.returncode
+    new = sorted(set(trace.glob("*.gpuprofiler_raw")) - before, key=lambda d: d.stat().st_mtime)
+    if not new:
+        print("gpudebug: no embedded profile bundle appeared in the trace "
+              "(is another gpudebug session holding the device? `gpudebug -l`)", flush=True)
+        return result.returncode or 1
+    raw = outdir / "raw"
+    if raw.exists():
+        shutil.rmtree(raw)
+    shutil.move(str(new[-1]), str(raw))
+    stream = raw / "streamData"
+    if not stream.exists():
+        print("gpudebug: bundle %s has no streamData" % raw, flush=True)
+        return 1
+    shutil.copy2(stream, outdir / "streamData")
+    n = sum(1 for _ in raw.iterdir())
+    print("gpudebug: embedded bundle -> %s (%d files); streamData -> %s" %
+          (raw, n, outdir / "streamData"), flush=True)
+    return 0
 
 
 def run_dy(trace, outdir):

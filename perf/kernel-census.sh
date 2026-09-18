@@ -21,7 +21,7 @@ mkdir -p "$OUT"; exec > >(tee "$OUT/census.log") 2>&1
 export CENSUS_METALLIB=${CENSUS_METALLIB:-$B/build-air/ggml.metallib}
 if [ ! -f "$CENSUS_METALLIB" ] || [ "$B/ggml/src/ggml-metal/ggml-metal.metal" -nt "$CENSUS_METALLIB" ]; then
     mkdir -p "$(dirname "$CENSUS_METALLIB")"
-    (cd "$B" && xcrun metal -fmodules-cache-path=/tmp/air-module-cache -DGGML_METAL_HAS_BF16=1 -DTURBO_USE_4MAG=1 -DTURBO_USE_PAIR_LUT=1 \
+    (cd "$B" && xcrun metal -mmacosx-version-min=26.0 -fmodules-cache-path=/tmp/air-module-cache -DGGML_METAL_HAS_BF16=1 -DTURBO_USE_4MAG=1 -DTURBO_USE_PAIR_LUT=1 \
         -c ggml/src/ggml-metal/ggml-metal.metal -Iggml/src/ggml-metal -Iggml/src -o "${CENSUS_METALLIB%.metallib}.air" > "${CENSUS_METALLIB%.metallib}.log" 2>&1 \
         && xcrun metallib "${CENSUS_METALLIB%.metallib}.air" -o "$CENSUS_METALLIB") || echo "translator metallib build FAILED (see ${CENSUS_METALLIB%.metallib}.log); rows get no join"
 fi

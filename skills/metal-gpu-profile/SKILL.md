@@ -99,30 +99,30 @@ Two facts that make the comparison valid and cheap:
 
 ## Step 2 - Replay and profile (headless)
 
-> **macOS 27 (2026-09-16) broke both replay backends on this machine - check before trusting a run.**
-> macOS 27 ships `/usr/bin/gpudebug` (v1.0), so the wrapper's auto mode now picks it; its documented
-> `go performance` fails ("not navigable") and the working drive (`-c 'profile run --exec serial' -c wait
-> -c 'go performance' -c 'list --all'`; `profile help` lists `run/load/embed`) collects a profile in 5-8 s but
-> every leaf (`encoders`, `commands`, `shaders`, `timeline/{encoders,counters,shaders}`) is EMPTY for llama.cpp
-> compute traces. `--backend dy` (the Xcode 26.6 private path) still launches the replayer and the coordinator
-> resolves, but no processor plugin is set (`setup processor plugin=(nil)`, no `AGXMetalG16X` / GTLLVMHelper
-> pass) and it ends with `APSCounterData entries: 0` - the pre-upgrade log shows the plugin line and ~40 APS
-> records. Symptom in a census: `*.stats.txt` = a traceback on a missing `streamData`, no `*.instr.txt`.
-> Static instruction counts still work (`perf/agx-nt-opt.py mir` + `perf/agx-disasm.py`, the
-> `metal-air-layout-control` skill); `perf/agx-nt-debug.sh` was fixed the same day for the cryptex toolchain mount
-> path changing under its symlinks. Likely fix: the Xcode 27 toolchain that `gpudebug` belongs to (owner's call).
-
+> **Xcode 27 + Metal Toolchain (2026-09-18) restored the per-instruction profiler after the macOS 27 upgrade
+> (2026-09-16) had taken it out.** The route is Apple's `gpudebug` v1.0: `profile run --exec serial --embed`
+> replays the trace (8-30 s) and EMBEDS the shader-profiler bundle into it as
+> `<trace>/emb_stream_N.gpuprofiler_raw/` - `streamData` plus 20 each of `Counters/Timeline/Profiling_f_N.raw`,
+> byte-for-byte the `raw/` contract of step 3. The wrapper below does that and moves the bundle to
+> `<outdir>/raw` + `<outdir>/streamData`; `kernel-census.sh` needed no change (verified on the width-8 census:
+> executed sums = binary totals, issue/stall/regs populated). Facts that cost time: the Metal Toolchain is a
+> separate download (`xcodebuild -downloadComponent MetalToolchain`, 839 MB - `xcrun metal` refuses without
+> it); the license must be accepted (`sudo xcodebuild -license`); use `--oneshot`, a trailing `exit` leaves
+> the session alive (`gpudebug -l`, `--terminate all`); in an interactive session the `shaders` leaf fills a
+> few seconds AFTER "Profile data collected"; offline `metal` compiles for the prescreen/translator need
+> `-mmacosx-version-min=26.0` (Xcode 27 emits AIR 2.9, `applegpu-nt` targets 2.8). Still down under Xcode 27:
+> `--backend dy` (no DYDesktopDevice) and the lldb machine-IR join (`agx-nt-opt.py mir`, "cannot emit
+> pipeline" from the re-signed debug copy) - census rows say "no join"; read sizes (14 B = loads) meanwhile.
+> Under Xcode 26.6 on macOS 27 both backends were empty (`APSCounterData entries: 0`, empty performance leaves).
 
 ```sh
 references/metal-profile-headless.py \
   /tmp/perf-metal-<pid>.gputrace /tmp/profile-output
 ```
 
-The wrapper prefers Apple's supported `gpudebug` CLI when the selected Xcode provides it.
-Apple documents it as scriptable and agent-friendly, with a live local replayer and a
-`performance` subtree. Xcode 26.6 does not ship it; this was checked with `xcrun --find`,
-the bundle contents, man pages and downloadable-component list. The documentation appears
-to describe Xcode 27-era tooling but does not state a minimum version.
+The wrapper prefers Apple's supported `gpudebug` CLI (macOS 27's `/usr/bin/gpudebug`, functional with
+Xcode 27 + the Metal Toolchain; empty under Xcode 26.6). It drives `profile run --exec serial --embed` and
+archives the embedded bundle; pass `-c` commands to override.
 
 When `gpudebug` is absent, the wrapper automatically uses the Xcode 26 DY private-framework
 path. This fallback is verified on Xcode 26.6: it launches `GPUToolsReplayService`, drives
