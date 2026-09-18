@@ -643,3 +643,14 @@ Design note (owner): the cost EMA is what makes the controller reactive to conte
 faster than width 3's), other slots and machine state; for surgery the right tool is a pick-trace record/replay gate,
 not a frozen table (a frozen 8K seed is the wrong table at 96K; a fitted cost model goes stale with every kernel change).
 Under several slots each slot's table measures the BATCHED round (never measured with the controller, item 4).
+
+**Determinism as an option (owner: "make determinism an option"; branch `exp/spec-ev-replay`):** `LLAMA_SPEC_EV_TRACE=<file>`
+records the per-round (drafted b, verified k) decisions, `LLAMA_SPEC_EV_REPLAY=<file>` replays them (block() and pick() return
+the recorded values; the tables keep learning but do not decide; past the trace or on a drafted-count mismatch the live rule
+takes over and the summary counts it). Not a frozen cost table: a frozen 8K seed is the wrong table at 96K, a fitted model
+goes stale with every kernel change, and the reactive EMA is what tracks context length; the surgery question is "the same
+kernels on the same tokens", which is a width sequence. Harness `perf/run-specev-replay-gate.sh` (record on tree A, replay
+x N on tree B). Self-gate on the branch (`replaygate-sep18-self`, q4 Turbo4 controller, 1200 tokens): 317 picks recorded,
+4 replays each `replay [317 picks, 0 desync, 0 past trace]`, sha `35abc5a8312e` = the record run, pick sequences identical.
+A single-slot trace replays on whichever slot the server hands the request. Under several slots the trace is per (slot,
+request) and the picks are still the batched round's - untested there.

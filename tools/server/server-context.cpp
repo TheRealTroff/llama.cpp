@@ -18,6 +18,7 @@
 #include "mtmd-helper.h"
 
 #include <algorithm>
+#include <map>
 #include <cstddef>
 #include <cinttypes>
 #include <exception>
@@ -341,6 +342,71 @@ struct server_slot {
         std::vector<float> last_conf;
         bool  dbg = false;
 
+        // pick-trace record / replay (perf/spec-verify-narrow.md section 11, owner 2026-09-18: "make determinism an
+        // option"): the controller's decisions depend on wall time through the cost EMA, so two runs of the same
+        // text can verify different widths on a marginal round and fork a near tie under a different kernel family.
+        //   LLAMA_SPEC_EV_TRACE=<path>   record one line per round: "<request> <slot> <drafted b> <verified k>"
+        //   LLAMA_SPEC_EV_REPLAY=<path>  replay those decisions (block() returns b, pick() returns k) - the same
+        //                                kernels on the same tokens across builds; the cost/calibration tables keep
+        //                                learning but do not decide. Past the trace's end, or if the drafted count
+        //                                differs from the recorded b (the texts diverged), the live rule takes over
+        //                                and the summary counts it. Gate tools only: never in a pick.
+        int slot_id  = 0;
+        int req_idx  = 0;                // per-slot request counter (begin_request increments; init is lazy, on the first draft)
+        size_t replay_pos = 0;
+        int n_replayed = 0, n_desync = 0, n_past_trace = 0;
+        struct trace_store {
+            FILE * out = nullptr;
+            bool   replay = false;
+            int    one_slot = -1;        // the trace's only slot id when it has exactly one (then the lookup ignores the slot:
+                                         // a single-stream gate must not depend on which slot the server hands the request)
+            std::map<std::pair<int, int>, std::vector<std::pair<int, int>>> picks; // (slot, request) -> [(b, k)]
+        };
+        static trace_store & store() {
+            static trace_store st;
+            static bool loaded = false;
+            if (!loaded) {
+                loaded = true;
+                if (const char * path = getenv("LLAMA_SPEC_EV_TRACE")) {
+                    st.out = fopen(path, "w");
+                    if (!st.out) LOG_WRN("spec-ev: cannot open trace file %s for writing\n", path);
+                    else LOG_INF("spec-ev: recording picks to %s\n", path);
+                }
+                if (const char * path = getenv("LLAMA_SPEC_EV_REPLAY")) {
+                    FILE * f = fopen(path, "r");
+                    if (!f) {
+                        LOG_WRN("spec-ev: cannot open replay file %s - the live rule decides\n", path);
+                    } else {
+                        int r, sl, b, k, n = 0;
+                        while (fscanf(f, "%d %d %d %d", &r, &sl, &b, &k) == 4) {
+                            st.picks[{sl, r}].push_back({b, k});
+                            n++;
+                        }
+                        fclose(f);
+                        st.replay = true;
+                        for (const auto & kv : st.picks) {
+                            if (st.one_slot == -1) st.one_slot = kv.first.first;
+                            else if (st.one_slot != kv.first.first) { st.one_slot = -2; break; }
+                        }
+                        LOG_INF("spec-ev: replaying %d recorded picks from %s\n", n, path);
+                    }
+                }
+            }
+            return st;
+        }
+        const std::vector<std::pair<int, int>> * replay_seq() const {
+            const trace_store & st = store();
+            if (!st.replay) return nullptr;
+            auto it = st.picks.find({st.one_slot >= 0 ? st.one_slot : slot_id, req_idx});
+            return it == st.picks.end() ? nullptr : &it->second;
+        }
+        bool replay_next(int & b, int & k) const {
+            const auto * seq = replay_seq();
+            if (!seq || replay_pos >= seq->size()) return false;
+            b = (*seq)[replay_pos].first; k = (*seq)[replay_pos].second;
+            return true;
+        }
+
         static int bin(float p) {
             return std::max(0, std::min(NB - 1, (int) (p * NB)));
         }
@@ -400,13 +466,17 @@ struct server_slot {
                 }
             }
             last_k = b_min; last_full = false; t_last_us = 0; cur_b = 0;
+            store();
         }
 
         void begin_request() {
             last_k = b_min; last_full = false; t_last_us = 0; cur_b = 0;
+            req_idx++; replay_pos = 0;
         }
 
         int block() const {
+            int rb, rk;
+            if (replay_next(rb, rk)) return std::max(1, std::min(b_max, rb));
             if (mode == 0) return b_max;
             if (mode == 2) return (last_k >= 4 && last_full) ? b_max : b_mid;
             return (last_k >= 4 || last_full) ? b_max : b_min;
@@ -415,7 +485,22 @@ struct server_slot {
         // conf: per-position drafter confidence of the block just drafted; n_avail = drafted tokens
         int pick(const std::vector<float> & conf, int n_avail) {
             last_conf = conf;
+            int rb, rk;
+            if (replay_next(rb, rk)) {
+                replay_pos++;
+                n_replayed++;
+                if (rb != n_avail) {
+                    if (n_desync++ == 0) LOG_WRN("spec-ev: replay desync at request %d round %zu: recorded b=%d, drafted %d (the texts diverged?)\n", req_idx, replay_pos, rb, n_avail);
+                }
+                const int k = std::max(1, std::min(n_avail, rk));
+                if (dbg) LOG_INF("spec-ev: b=%d (replay b=%d) => k=%d (replay)\n", n_avail, rb, k);
+                return k;
+            }
+            if (replay_seq() && n_past_trace++ == 0) {
+                LOG_WRN("spec-ev: replay trace exhausted at request %d after %zu rounds - the live rule decides from here\n", req_idx, replay_pos);
+            }
             if (conf.empty() || (int) conf.size() < n_avail) {
+                record(n_avail, n_avail);
                 return n_avail;
             }
             float surv = 1.0f, etok = 1.0f;
@@ -435,7 +520,16 @@ struct server_slot {
                 for (float p : conf) ps += string_format("%.2f ", p);
                 LOG_INF("spec-ev: b=%d p=[%s] ->%s => k=%d\n", n_avail, ps.c_str(), d.c_str(), best);
             }
+            record(n_avail, best);
             return best;
+        }
+
+        void record(int b, int k) const {
+            trace_store & st = store();
+            if (st.out) {
+                fprintf(st.out, "%d %d %d %d\n", req_idx, slot_id, b, k);
+                fflush(st.out);
+            }
         }
 
         void update(int k, int n_accepted) {
@@ -468,7 +562,9 @@ struct server_slot {
                 for (int b = 5; b < NB; ++b) q += string_format("%.2f ", hit[g][b] / cnt[g][b]);
                 q += "| ";
             }
-            return string_format("k hist [%s] block hist [%s] cost [%s] calib p>=.5 by pos group [%s]", h.c_str(), bh.c_str(), c.c_str(), q.c_str());
+            std::string rp;
+            if (n_replayed || n_desync || n_past_trace) rp = string_format(" replay [%d picks, %d desync, %d past trace]", n_replayed, n_desync, n_past_trace);
+            return string_format("k hist [%s] block hist [%s] cost [%s] calib p>=.5 by pos group [%s]%s", h.c_str(), bh.c_str(), c.c_str(), q.c_str(), rp.c_str());
         }
     } spec_ev;
     std::vector<float> spec_conf;
@@ -3256,6 +3352,7 @@ private:
 
                 if (env_spec_ev && n_draft_max > 0) {
                     if (!slot.spec_ev.inited) {
+                        slot.spec_ev.slot_id = slot.id;
                         slot.spec_ev.init(common_speculative_n_max(&params_base.speculative));
                     }
                     n_draft_max = std::min(n_draft_max, slot.spec_ev.block());
