@@ -50,7 +50,7 @@ PICK_MANIFEST=(
   "LLAMA_GDN_REPLAY=1|BI|both|pick|gdn-replay-rollback.md (sha-identical, activation-traced)"
   "DFLASH_FUSED_INJECT=1|BI|both|pick|drafter-graph-count.md"
   "DFLASH_ASYNC_INJECT=1|BI|both|pick|drafter-graph-count.md"
-  "GGML_MM_SKINNY_BSPLIT=2|BI|both|pick|spec-verify-narrow.md section 8 (-5% per width-8 round, byte-identical; inert at width 4-5; in both picks since 2026-09-07)"
+  "GGML_MM_SKINNY_BSPLIT=2|BI|both|pick|spec-verify-narrow.md section 8 (-5% per width-8 round on q4, byte-identical; inert at width 4-5; in both picks since 2026-09-07 - but INERT on ud until 2026-09-18: the generic skinny tile ignored the constant; ported on exp/skinny-gen-bsplit = ud width-8 round -2.9%, sha canonical, w8-decomp-sep18.md)"
   "GGML_MV_Y16_CVT=1|BI|both|pick|agx-backend-access.md (contiguous cast for the decode f32->f16 activation copy; +2.7% q4 / +2.3% ud e2e ABAB x2, shas identical; owner 2026-09-09: 'bring it in')"
   "GGML_SSM_CONV_WB=1|BI|both|pick|agx-backend-access.md (conv-state carry fused into the decode ssm_conv kernel; +0.2..0.7% alone, stacked with the cast +3.3/+3.1% q4, +2.8/+2.0% ud e2e ABAB x2, shas identical; owner 2026-09-09: 'bring it in')"
   "GGML_FUSE_SMALL=60|BI|both|pick|small-op-fusion.md (gated norm, add+norm, GDN gate chain, conv+carry+silu [8 carry copies since 2026-09-18: the q4 depth-7 pick had silently lost this bit, spec-verify-narrow.md section 11] - no f16 twins; ud +1.6/+1.8% (600/300), q4 +2.1/+2.0% e2e ABAB x2 on the final binary, shas canonical, acceptance identical; the twins (bits 1/2 -> mask 63) stay off: a drafter-side trace divergence under twins + add+norm, open - see the note; owner 2026-09-11: 'bring it into prod')"

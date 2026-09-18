@@ -756,8 +756,11 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm_skinny(gg
     // constant is left unset - which is what the tile did until 2026-09-16 (perf/w6-verify-cliff.md: the
     // deterministic 1e-5-median deviation). GGML_MM_SKINNY_GEN_EXACT=0 reproduces the unset form for the A/B.
     static const bool gen_exact = !getenv("GGML_MM_SKINNY_GEN_EXACT") || atoi(getenv("GGML_MM_SKINNY_GEN_EXACT")) != 0;
+    // GGML_MM_SKINNY_BSPLIT=1|2: B stage over all 64 threads (2 = float4 loads), the same constant as the q4_0 SoA
+    // skinny kernel; the generic tile ignored it until 2026-09-18 (perf/w8-decomp-sep18.md)
+    static const int env_bsplit = getenv("GGML_MM_SKINNY_BSPLIT") ? atoi(getenv("GGML_MM_SKINNY_BSPLIT")) : 0;
     snprintf(base, 256, "kernel_mul_mm_skinny_%s%s_%s%s", ggml_type_name(ggml_metal_soa_base_type(op->src[0]->type)), di ? "_di" : "", ggml_type_name(op->src[1]->type), fp ? "_fp" : "");
-    snprintf(name, 256, "%s%s%s_ne12=%d_r2=%d_r3=%d", base, soa ? "_soa" : "", soa && gen_exact ? "_ex" : "", ne12, r2, r3);
+    snprintf(name, 256, "%s%s%s_ne12=%d_r2=%d_r3=%d_bsp=%d", base, soa ? "_soa" : "", soa && gen_exact ? "_ex" : "", ne12, r2, r3, env_bsplit);
 
     ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
     if (!res.pipeline) {
@@ -771,6 +774,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm_skinny(gg
         ggml_metal_cv_set_int16(cv, (int16_t) ne13, FC_MUL_MM + 3);
         ggml_metal_cv_set_int16(cv, (int16_t) r2,   FC_MUL_MM + 4);
         ggml_metal_cv_set_int16(cv, (int16_t) r3,   FC_MUL_MM + 5);
+        ggml_metal_cv_set_int16(cv, (int16_t) env_bsplit, FC_MUL_MM + 8);
 
         res = ggml_metal_library_compile_pipeline(lib, base, name, cv);
 

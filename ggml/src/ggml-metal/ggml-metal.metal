@@ -18808,14 +18808,18 @@ kernel void kernel_mul_mm_skinny_t(
     if (FC_mul_mm_soa) { dequantize_soa_mm((device const block_q *) nullptr, xrowc, args.ne00, (KX)/(16*nl), (short) (((KX)/16)%nl + (OFF)), REG); } \
     else               { dequantize_func(xrow + (KX)/(16*nl), ((KX)/16)%nl + (OFF), REG); }
 
-    const short bcol = (short)(tiitg/4) < nr1 ? (short)(tiitg/4) : nr1 - 1;
-    const short bsx  = tiitg%4;
+    // B stage: BPC threads per column, BVL = NK/BPC activations each (GGML_MM_SKINNY_BSPLIT, the q4_0 SoA
+    // kernel's form; the generic tile ran the 32-thread loader until 2026-09-18, perf/w8-decomp-sep18.md)
+    const short BPC = FC_mul_mm_sk_bsp ? 8 : 4;
+    const short BVL = NK/BPC;
+    const short bcol = (short)(tiitg/BPC) < nr1 ? (short)(tiitg/BPC) : nr1 - 1;
+    const short bsx  = tiitg%BPC;
 
     device const float * y = (device const float *)(src1
         + args.nb13*i13
         + args.nb12*i12
         + args.nb11*(r1 + bcol)
-        + args.nb10*(16*bsx));
+        + args.nb10*(BVL*bsx));
 
     a8x8_t ma[2];
     a8x8_t mb;
@@ -18844,9 +18848,22 @@ kernel void kernel_mul_mm_skinny_t(
         pa[6] = ta1[2];
         pa[7] = ta1[3];
 
-        if (tiitg < 4*NR1) {
+        // the activations rounded through half in every form (f16y)
+        if (FC_mul_mm_sk_bsp == 2) {
+            // split B stage, two float4 loads per thread (BVL = 8)
+            device const float4 * y4 = (device const float4 *) y;
+            const float4 v0 = y4[0];
+            const float4 v1 = y4[1];
+            threadgroup a_t * sbp = sb + (8*bsx)*NR1 + tiitg/8;
+            sbp[0*NR1] = (a_t) (half) v0.x; sbp[1*NR1] = (a_t) (half) v0.y; sbp[2*NR1] = (a_t) (half) v0.z; sbp[3*NR1] = (a_t) (half) v0.w;
+            sbp[4*NR1] = (a_t) (half) v1.x; sbp[5*NR1] = (a_t) (half) v1.y; sbp[6*NR1] = (a_t) (half) v1.z; sbp[7*NR1] = (a_t) (half) v1.w;
+        } else if (FC_mul_mm_sk_bsp == 1) {
+            FOR_UNROLL (short j = 0; j < 8; ++j) {
+                sb[(8*bsx + j)*NR1 + tiitg/8] = (a_t) (half) y[j];
+            }
+        } else if (tiitg < 4*NR1) {
             FOR_UNROLL (short j = 0; j < 16; ++j) {
-                sb[(16*bsx + j)*NR1 + tiitg/4] = (a_t) (half) y[j]; // the activations rounded through half in both forms (f16y)
+                sb[(16*bsx + j)*NR1 + tiitg/4] = (a_t) (half) y[j];
             }
         }
 
