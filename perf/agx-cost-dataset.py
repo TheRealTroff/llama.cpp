@@ -72,6 +72,13 @@ def constant_args(kernel, capture_log):
                 args += [{'s': '--cv', 'i': '--cvi', 'b': '--cvb'}[t], '%d=%s' % (abs_idx, v)]
             if suffix.endswith('_exact') and 'exact' in keys:
                 t, idx = keys['exact']; args += ['--cvb', '%d=1' % (fam[1] + idx if idx < 100 else idx)]
+            # bare flags in the pipeline name (no '=value'): '_soa', '_ex' (the mul_mm exact-scale form) - the
+            # stored-SoA skinny tile is 'kernel_mul_mm_skinny_q4_K_f32_soa_ex_ne12=1_r2=1_r3=1' (2026-09-18)
+            for tok in re.findall(r'_([A-Za-z]+)(?=_|$)', suffix):
+                k = {'ex': 'exact'}.get(tok, tok)
+                if k in keys and keys[k][0] == 'b':
+                    t, idx = keys[k]; a = ['--cvb', '%d=1' % (fam[1] + idx if idx < 100 else idx)]
+                    if a[1] not in args: args += a
         if args not in out:
             out.append(args)
     return out or [[]]

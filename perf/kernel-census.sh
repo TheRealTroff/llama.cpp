@@ -9,7 +9,7 @@ LOG=$1; TAG=${2:-census-$(date +%m%d-%H%M)}
 B=${B:-/Users/troff/play/llama.cpp-ud-soa}
 BIN=$B/build/bin/test-backend-ops
 ENVS=${ENVS:-}
-TOP=${TOP:-16}; MIN_MS=${MIN_MS:-0}
+TOP=${TOP:-16}; MIN_MS=${MIN_MS:-0}; PHASE=${PHASE:-}   # PHASE=decode|prefill limits the plan to one phase (a long prompt fills a top-N with prefill rows)
 PREV=${PREV:-}
 OUT=/Users/troff/play/kvquant-experiments/census/$TAG
 PY=${PY:-/Users/troff/play/.venv-convert/bin/python3}
@@ -26,7 +26,7 @@ if [ ! -f "$CENSUS_METALLIB" ] || [ "$B/ggml/src/ggml-metal/ggml-metal.metal" -n
         && xcrun metallib "${CENSUS_METALLIB%.metallib}.air" -o "$CENSUS_METALLIB") || echo "translator metallib build FAILED (see ${CENSUS_METALLIB%.metallib}.log); rows get no join"
 fi
 echo "=== kernel census $TAG: $LOG"; echo "commit : $(cd "$B" && git rev-parse --short HEAD) on $(cd "$B" && git rev-parse --abbrev-ref HEAD)  env: $ENVS"
-python3 "$B/perf/kernel-census.py" plan "$LOG" --top "$TOP" --min-ms "$MIN_MS" > "$OUT/plan.json"
+python3 "$B/perf/kernel-census.py" plan "$LOG" --top "$TOP" --min-ms "$MIN_MS" ${PHASE:+--phase "$PHASE"} > "$OUT/plan.json"
 n=$(python3 -c "import json;print(len(json.load(open('$OUT/plan.json'))))"); echo "rows: $n"
 for i in $(seq 0 $((n-1))); do
     python3 -c "import json;print(json.dumps(json.load(open('$OUT/plan.json'))[$i]))" > "$OUT/row$i.json"

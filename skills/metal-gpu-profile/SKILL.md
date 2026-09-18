@@ -99,6 +99,20 @@ Two facts that make the comparison valid and cheap:
 
 ## Step 2 - Replay and profile (headless)
 
+> **macOS 27 (2026-09-16) broke both replay backends on this machine - check before trusting a run.**
+> macOS 27 ships `/usr/bin/gpudebug` (v1.0), so the wrapper's auto mode now picks it; its documented
+> `go performance` fails ("not navigable") and the working drive (`-c 'profile run --exec serial' -c wait
+> -c 'go performance' -c 'list --all'`; `profile help` lists `run/load/embed`) collects a profile in 5-8 s but
+> every leaf (`encoders`, `commands`, `shaders`, `timeline/{encoders,counters,shaders}`) is EMPTY for llama.cpp
+> compute traces. `--backend dy` (the Xcode 26.6 private path) still launches the replayer and the coordinator
+> resolves, but no processor plugin is set (`setup processor plugin=(nil)`, no `AGXMetalG16X` / GTLLVMHelper
+> pass) and it ends with `APSCounterData entries: 0` - the pre-upgrade log shows the plugin line and ~40 APS
+> records. Symptom in a census: `*.stats.txt` = a traceback on a missing `streamData`, no `*.instr.txt`.
+> Static instruction counts still work (`perf/agx-nt-opt.py mir` + `perf/agx-disasm.py`, the
+> `metal-air-layout-control` skill); `perf/agx-nt-debug.sh` was fixed the same day for the cryptex toolchain mount
+> path changing under its symlinks. Likely fix: the Xcode 27 toolchain that `gpudebug` belongs to (owner's call).
+
+
 ```sh
 references/metal-profile-headless.py \
   /tmp/perf-metal-<pid>.gputrace /tmp/profile-output

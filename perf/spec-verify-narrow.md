@@ -480,7 +480,7 @@ pair, the mint `prodpick-sep17-specev-q4`) follow below.
 Open after this: (1) ~~the +4 ms on the target's wait under a block-8 draft (`forced83` vs `forced43`: the drafter's
 +4.4 ms is the Sep 7 number, the wait's +4.0 is new to the accounting and not the async inject)~~ ANSWERED, section 11
 (a configuration cost of the depth-7 target, fixed on `exp/conv-carry-slots`); (2) the UD width-8
-round at 178 ms vs q4's 131 - the width-6..8 tile and the plain FA route at widths 7-8 on ud; (3) a block rule that
+round at 178 ms vs q4's 131 - the width-6..8 tile and the plain FA route at widths 7-8 on ud - DECOMPOSED 2026-09-18 (`w8-decomp-sep18.md`: the FA route is +0.6 ms, the generic tile's per-format dequant economy and the q6_K head are the gap; the B-split was never ported to the generic tile); (3) a block rule that
 escalates on the drafter's confidence instead of the last round's acceptance would cut the (7,3) tax rounds
 (30 of 98 on free-form); (4) 2-8 slots under the controller (never measured); (5) the f16 line runs the controller in
 the q4 pick untested beyond the mint's own f16 arms. (01-code-explain's EOS-first is not open: owner - it hinges on

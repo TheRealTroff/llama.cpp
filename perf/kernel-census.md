@@ -9,6 +9,14 @@ was which kernel got opened. The census does the two steps for every kernel that
 
 ## How to run
 
+**2026-09-18: the replay half is DOWN under macOS 27** (installed 2026-09-16 11:38, six hours after the last
+working census `census-ud-96k-fa24`): the `dy` replay resolves but streams no APS counters (no processor plugin),
+and macOS 27's new `/usr/bin/gpudebug` v1.0 (auto-selected by the headless wrapper) runs `profile run` but every
+performance leaf is empty for our traces. Timings and captures still work; `perf/agx-nt-opt.py mir` + `agx-disasm.py`
+give static instruction counts (see `w8-decomp-sep18.md` for the method on four kernels). `PHASE=decode|prefill`
+limits the plan to one phase - the 8K benchprompt otherwise fills a top-N with prefill rows.
+
+
 ```sh
 # 1. a profiled run of the pick (any harness with GGML_METAL_PROFILE=1 in the env)
 # 2. the census over its log, with the SAME routing env (captures must run the pick's kernels)

@@ -30,9 +30,9 @@ rm -rf "$T/lib/air-nt" "$T/lib/applegpu-nt"
 cp -R "$SRC/lib/air-nt" "$SRC/lib/applegpu-nt" "$T/lib/"
 # everything else: symlink (other OS-version backends, AMD/Intel plugins)
 for f in "$SRC"/lib/*.dylib; do
-    b=$(basename "$f"); [[ -e "$T/lib/$b" ]] || ln -s "$f" "$T/lib/$b"
+    b=$(basename "$f"); [[ -e "$T/lib/$b" && ! -L "$T/lib/$b" ]] || ln -sf "$f" "$T/lib/$b"   # real copies stay; links are refreshed (the cryptex mount path changes on every toolchain activation)
 done
-[[ -e "$T/lib/amd_13/libAMDNTPlugin.dylib" ]] || ln -s "$SRC/lib/amd_13/libAMDNTPlugin.dylib" "$T/lib/amd_13/"
+ln -sf "$SRC/lib/amd_13/libAMDNTPlugin.dylib" "$T/lib/amd_13/"   # -sf: a stale link to a moved toolchain fails -e and then ln (2026-09-18)
 cp "$SRC"/ToolchainInfo.* "$T/" 2>/dev/null || true
 # ad-hoc signatures: required for lldb to attach and for a patched dylib to load
 codesign -f -s - "$T/bin/air-nt" 2>/dev/null

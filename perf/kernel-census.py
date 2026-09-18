@@ -94,6 +94,7 @@ def plan(args):
     for r in rows:
         if r['ctx'] != 'm1': continue
         phase = 'decode' if mb.is_decode(r) else 'prefill'
+        if args.phase and phase != args.phase: continue
         filt, cls = case_filter(r)
         gf, by = work(r)
         out.append(dict(phase=phase, op=r['op'], typ=r['typ'], s0=r['s0'], s1=r['s1'], dst=r['dst'],
@@ -243,7 +244,7 @@ def report(args):
 
 ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
 sp = ap.add_subparsers(dest='cmd', required=True)
-p = sp.add_parser('plan'); p.add_argument('log'); p.add_argument('--top', type=int, default=16); p.add_argument('--min-ms', type=float, default=0.0); p.set_defaults(f=plan)
+p = sp.add_parser('plan'); p.add_argument('log'); p.add_argument('--top', type=int, default=16); p.add_argument('--min-ms', type=float, default=0.0); p.add_argument('--phase', choices=['decode', 'prefill'], default=None); p.set_defaults(f=plan)
 p = sp.add_parser('metrics'); p.add_argument('dir'); p.add_argument('row'); p.set_defaults(f=metrics)
 p = sp.add_parser('report'); p.add_argument('dir'); p.add_argument('--diff'); p.add_argument('--md'); p.add_argument('--snapshot'); p.set_defaults(f=report)
 a = ap.parse_args(); a.f(a)
