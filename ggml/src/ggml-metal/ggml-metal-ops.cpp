@@ -103,7 +103,13 @@ static bool ggml_metal_ssm_conv_wb_cpy(const ggml_tensor * cpy, const ggml_tenso
 #define GGML_METAL_FUSE_SMALL_CONV    32   // concat + ssm_conv (+ carry) + silu in one kernel
 #define GGML_METAL_FUSE_SMALL_GS_MARK   0x4753  // op_params[0] of the gated norm's MUL: src1 is z, silu applied in the kernel
 #define GGML_METAL_FUSE_SMALL_CONV_SILU 1       // op_params[0] of a rewritten SSM_CONV: silu applied to the output
-#define GGML_METAL_FUSE_SMALL_CONV_MAX_WB 6     // carry slots an SSM_CONV can take as sources (src[4..9])
+#define GGML_METAL_FUSE_SMALL_CONV_MAX_WB_SRC 6                          // carry copies that ride on the SSM_CONV's own src[4..9]
+#define GGML_METAL_FUSE_SMALL_CONV_MAX_WB     GGML_METAL_SSM_CONV_CAT_MAX // carry copies the cat kernel takes (8): the ones past the
+                                                                         // src slots ride on the FIRST copy's free src[2..9] (a CPY
+                                                                         // uses src[0..1]). A conv carries n_rs_seq + 1 copies: 8 at
+                                                                         // draft depth 7, so the 6-slot form lost this fusion on every
+                                                                         // round of a depth-7 line (perf/spec-verify-narrow.md, 2026-09-18)
+static_assert(2 + GGML_METAL_FUSE_SMALL_CONV_MAX_WB - GGML_METAL_FUSE_SMALL_CONV_MAX_WB_SRC <= GGML_MAX_SRC, "carry chain does not fit a CPY's src slots");
 
 static int ggml_metal_fuse_small(void) {
     static const int v = getenv("GGML_FUSE_SMALL") ? atoi(getenv("GGML_FUSE_SMALL")) : 0;
@@ -264,7 +270,11 @@ static void ggml_metal_fuse_small_rewrite_conv(ggml_cgraph * gf, int iconv) {
     conv->src[2] = st;
     conv->src[3] = x;
     for (int k = 0; k < n_cpy; k++) {
-        conv->src[4 + k] = cpys[k];
+        if (k < GGML_METAL_FUSE_SMALL_CONV_MAX_WB_SRC) {
+            conv->src[4 + k] = cpys[k];
+        } else {
+            cpys[0]->src[2 + k - GGML_METAL_FUSE_SMALL_CONV_MAX_WB_SRC] = cpys[k];
+        }
         cpys[k]->op = GGML_OP_NONE;
     }
     cat->op = GGML_OP_NONE;
@@ -2386,7 +2396,8 @@ int ggml_metal_op_ssm_conv(ggml_metal_op_t ctx, int idx) {
     // kernel at these widths dispatches ne01 x ne02 two-thread threadgroups (480 us/call at 8 seqs)
     if (ne1 >= 1 && ne1 <= 16 && op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_F32) {
         // small-op fusion (GGML_FUSE_SMALL bit 32, rewritten graph): src[2] = the state, src[3] = the batch's tokens,
-        // src[4..] = the carry slots (the CPY nodes), op_params[0] = apply the silu. One dispatch for the window
+        // src[4..9] = the carry slots (the CPY nodes), src[4]->src[2..] = the carry slots past the six (see
+        // GGML_METAL_FUSE_SMALL_CONV_MAX_WB), op_params[0] = apply the silu. One dispatch for the window
         // concat, the conv, the carry and the silu.
         if (op->src[2] && op->src[3]) {
             const ggml_tensor * st = op->src[2];
@@ -2402,8 +2413,16 @@ int ggml_metal_op_ssm_conv(ggml_metal_op_t ctx, int idx) {
             cargs.nb0 = nb0; cargs.nb1 = nb1; cargs.nb2 = nb2;
             cargs.silu = ggml_get_op_params_i32(op, 0) == GGML_METAL_FUSE_SMALL_CONV_SILU ? 1 : 0;
             ggml_metal_buffer_id bid_state = {};
+            const ggml_tensor * cpys[GGML_METAL_FUSE_SMALL_CONV_MAX_WB];
+            int n_cpy = 0;
             for (int k = 4; k < GGML_MAX_SRC && op->src[k]; k++) {
-                const ggml_tensor * cpy = op->src[k];
+                cpys[n_cpy++] = op->src[k];
+            }
+            for (int k = 2; op->src[4] && k < GGML_MAX_SRC && op->src[4]->src[k] && n_cpy < GGML_METAL_FUSE_SMALL_CONV_MAX_WB; k++) {
+                cpys[n_cpy++] = op->src[4]->src[k];
+            }
+            for (int k = 0; k < n_cpy; k++) {
+                const ggml_tensor * cpy = cpys[k];
                 ggml_metal_buffer_id bid = ggml_metal_get_buffer_id(cpy);
                 if (cargs.n_wb == 0) {
                     bid_state = bid;
@@ -2432,6 +2451,11 @@ int ggml_metal_op_ssm_conv(ggml_metal_op_t ctx, int idx) {
             ggml_metal_encoder_set_buffer(enc, ggml_metal_get_buffer_id(op),         4);
             ggml_metal_encoder_set_buffer(enc, cargs.n_wb ? bid_state : ggml_metal_get_buffer_id(op), 5);
             ggml_metal_encoder_dispatch_threadgroups(enc, (int) ((ne01 + 255)/256), 1, ne02, 256, 1, 1);
+            // the absorbed copies' slots are written by this dispatch: register them as destinations for the
+            // concurrency tracker (as sources of the conv they only counted as reads)
+            for (int k = 0; k < n_cpy; k++) {
+                ggml_metal_op_concurrency_add(ctx, cpys[k]);
+            }
             return 1;
         }
         // the conv-state carry copies this op absorbs (dropped on the copy side over the same window)
