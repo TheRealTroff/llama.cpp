@@ -2,8 +2,10 @@
 
 Status: **open** - the round-level decomposition is in (this section); lever 1 MERGED (below); lever 2 (the iq4_xs table)
 REFUTED 2026-09-18 with the profiler back (six exact forms against a 4-9% deletion ceiling, section below); levers 3 + 4 (the q5_K
-plane fold, the K-quant header decoded once per step) BUILT + GATED the same afternoon: ud width-8 round -3.3%, byte-identical
-(last section), adoption = owner.
+plane fold, the K-quant header decoded once per step) BUILT + GATED the same afternoon: ud width-8 round -3.3%, byte-identical;
+the q6_K head's tile pair form GATED -0.8% (last sections). **Both branches MERGED TO PROD 2026-09-18 (owner: "merge the last
+2"), the three flags promoted to the ud pick (`GGML_MM_SKINNY_Q5K=1 GGML_MM_SKINNY_KQ2=1 GGML_MM_SKINNY_Q6K=1`, all inert at
+the pick's depth 3 by construction); mint `prodpick-sep18-kqq6-ud`, see the README pick block.**
 
 `spec-verify-narrow.md` section 10 left the (7,7) round at ud 180 ms vs q4 131 ms with the width-4 rounds
 only 13 ms apart, and named two suspects for the ~35 ms: the generic skinny tile over the stored SoA formats
