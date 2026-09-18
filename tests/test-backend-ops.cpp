@@ -10694,6 +10694,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
         }
     }
 
+    // the UD line's q6_K lm_head (perf/w8-decomp-sep18.md, the q6_K head item): native block q6_K as the file
+    // stores it, and its stored SoA twin for the conversion question, at every decode/speculative width
+    for (int bs : {1, 2, 3, 4, 5, 6, 7, 8}) {
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q6_K,     GGML_TYPE_F32, 248320, bs, 5120, {1, 1}, {1, 1}));
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q6_K_SOA, GGML_TYPE_F32, 248320, bs, 5120, {1, 1}, {1, 1}));
+    }
+
     // Persistent Q4_0_SOA_V1 readers: every converted Qwen3.8 projection at
     // decode/speculative widths, plus both FFN orientations at generic prefill.
     for (int bs : {1, 2, 3, 4, 5, 6, 7, 8, 512}) {
