@@ -1333,7 +1333,7 @@ Superseded, kept for history - do not quote numbers from these:
   +0.16 pt, acch +0.34 pt; acch's cost is +12.5% at heat = the wikitext figure, +6.6% on greedy
   self-text: price NUM levers on wikitext or heated self-text, never greedy self-text.**
   `run-agreement-heated.sh`, `run-kld-heated.sh`.
-- **`spec-verify-narrow.md` - variable speculation depth PRICED 2026-09-07 (branch `spec-verify-narrow`,
+- **`spec-verify-narrow.md` - section 11 (2026-09-18): the open "+4 ms target wait under a block-8 draft" ANSWERED - the depth-7 target config (n_rs_seq = draft max = 7 -> 8 conv-state carry copies) defeated the conv+carry+silu fusion's 6-source cap on EVERY round of the q4 pick, ~1.5 ms wait / ~1 ms round; fixed byte-identical on branch `exp/conv-carry-slots` (adoption = owner); the drafter's own block-8 cost (+2.7 ms over block 4) is what remains of the (7,3) tax. Variable speculation depth PRICED 2026-09-07 (branch `spec-verify-narrow`,
   unmerged, owner: "let's see what we can uncover").** 7-depth Turbo4 sweep over the 9-prompt
   corpus with per-round acceptance (`run-depth-corpus.sh`): the block depth does NOT change the
   prefix acceptance (matched-sha prompts within +/-2%), so draft-deep/verify-narrow is dead

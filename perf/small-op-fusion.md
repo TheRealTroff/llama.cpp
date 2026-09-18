@@ -36,7 +36,7 @@ type's alloc-size hook for the producer node (`ggml_metal_op_extra_f16_twin`), s
 the producer's range and the graph's hazard tracking orders every reader behind it. Bits 4, 16, 32 read
 the inputs of nodes that no longer run, so they are a **graph rewrite** in `ggml_metal_graph_optimize`
 (`ggml_metal_op_fuse_small_rewrite`, before allocation): the absorbing node takes those inputs as its own
-sources (the SSM_CONV gets the state and the tokens as src[2], src[3] and the carry copies as src[4..],
+sources (the SSM_CONV gets the state and the tokens as src[2], src[3] and the carry copies as src[4..] - six there and, since 2026-09-18 on `exp/conv-carry-slots`, the rest on the first copy's free src[2..]: a depth-7 line carries n_rs_seq + 1 = 8 copies per conv and the six-slot form silently lost this fusion on every round, `spec-verify-narrow.md` section 11 -
 the GDN's gate reshape is re-pointed at the raw alpha projection with dt_bias and A riding on it, the
 gated norm's MUL gets z as src1 plus a marker in op_params), and the absorbed nodes become GGML_OP_NONE,
 the construct ggml-backend already uses for dependency-only nodes. Nothing is dropped at encode time and

@@ -431,8 +431,11 @@ rows decide; fixed 3 repeated first and last = drift check, 30.75 / 30.63 q4, 28
   the block-8 draft on rounds that then verify 3 (30 of 98 rounds, +4 ms each).
 - Against Sep 7: the (7,7) class is unchanged (131 vs 136-141 then, JSON 114 vs 116-121) while the fixed-3 round
   went 94 -> 90 ms (the width-4 stack of Sep 9-16). The controller's alternative got 5% faster, its wins did not.
-- The +4 ms on the target's wait under a block-8 draft the target never sees is real and unexplained (not the async
-  inject); it is paid on every block-8 round. Open.
+- ~~The +4 ms on the target's wait under a block-8 draft the target never sees is real and unexplained (not the async
+  inject); it is paid on every block-8 round. Open.~~ **ANSWERED 2026-09-18 (section 11): it is the depth-7
+  CONFIGURATION, not the block-8 draft - the draft max sets n_rs_seq, 8 conv-state carry copies per layer defeat the
+  conv+carry+silu fusion's 6-source cap, and every round of a depth-7 line pays ~1.5 ms of unfused GPU work; fixed on
+  branch `exp/conv-carry-slots`, byte-identical.**
 
 | arm (ud, benchprompt) | t/s | tok/rd | ms/rd | draft_call | dec_syn_tg | note |
 |---|--:|--:|--:|--:|--:|---|
@@ -474,8 +477,9 @@ saturated text, and the owner's UD standard is conservative; picking it there is
 The remaining gate steps for the q4 form (agreement corpora fixed 3 vs the controller scored against q8_0, the 96K
 pair, the mint `prodpick-sep17-specev-q4`) follow below.
 
-Open after this: (1) the +4 ms on the target's wait under a block-8 draft (`forced83` vs `forced43`: the drafter's
-+4.4 ms is the Sep 7 number, the wait's +4.0 is new to the accounting and not the async inject); (2) the UD width-8
+Open after this: (1) ~~the +4 ms on the target's wait under a block-8 draft (`forced83` vs `forced43`: the drafter's
++4.4 ms is the Sep 7 number, the wait's +4.0 is new to the accounting and not the async inject)~~ ANSWERED, section 11
+(a configuration cost of the depth-7 target, fixed on `exp/conv-carry-slots`); (2) the UD width-8
 round at 178 ms vs q4's 131 - the width-6..8 tile and the plain FA route at widths 7-8 on ud; (3) a block rule that
 escalates on the drafter's confidence instead of the last round's acceptance would cut the (7,3) tax rounds
 (30 of 98 on free-form); (4) 2-8 slots under the controller (never measured); (5) the f16 line runs the controller in
@@ -527,3 +531,93 @@ benchprompt's greedy text is the same under the controller at 300 and 600 on bot
 reproduce the width-4 argmax chain on this prompt), so the q4 lineage did not move at the mint - it moves on the
 free-form prompts where the sha map forks (section 4). Turbo4 +3% at both lengths on benchprompt vs the Sep 16 mint at
 the same b1 anchor; the corpus number is the +10.7% above.**
+
+### 11. The +4 ms target wait, chased (2026-09-18, owner: "chase those 4ms and we'll see what's what")
+
+**It is the depth configuration, not the block-8 draft.** The forced arms of section 10 differ in TWO things: the
+drafter's block (8 vs 4) and the target context's draft max (`DEPTHS=7` vs `4`), and the draft max sets
+`n_rs_seq` (`common.h need_n_rs_seq() = draft.n_max`): the recurrent-state snapshot count, `n_rs_seq = 4` vs `7` in
+the server logs. A delta-net conv layer carries `n_rs_seq + 1` conv-state copies (`delta-net-base.cpp`, the
+`[TAG_RECURRENT_ROLLBACK_SPLITS]` loop): 5 at depth 4, 8 at depth 7. The small-op conv fusion (`GGML_FUSE_SMALL` bit 32,
+`ggml_metal_fuse_small_rewrite_conv`) stored the absorbed copies as the SSM_CONV's own `src[4..9]` and bailed past six
+(`GGML_METAL_FUSE_SMALL_CONV_MAX_WB 6`), although the cat kernel's kargs already hold `GGML_METAL_SSM_CONV_CAT_MAX = 8`
+slots. So on a depth-7 line the CONCAT + SSM_CONV + carry + SILU fusion NEVER fired: `GGML_METAL_FUSION_DEBUG=2` on prod
+at depth 7 prints 0 fused conv dispatches; the fixed build prints 432 per 9 graphs (48 layers).
+
+How it was found, in order (`specev-wait-sep18-*` in results, chains in the session scratchpad):
+
+1. **Submit-prof** (`GGML_METAL_SUBMIT_PROF=1`, 600 tokens so the target context gets two pure-verify 64-graph windows;
+   the first window is the prefill's and is not readable): the target's verify graph averages **4837 nodes at depth 7
+   vs 4405 at depth 4** - the graph is not the same - and its GPU **busy 80.0-81.1 vs 78.5-78.7 ms** (+1.5..2.4),
+   pre/gaps equal. So: kernels or node count, not queueing behind the drafter (the two contexts share one command
+   queue, `TAG_QUEUE_PER_BACKEND`, but nothing of the drafter's is in flight when the target commits - the draft
+   synchronizes for its logits).
+2. **Per-op profile** (`GGML_METAL_PROFILE=1`, `opprof-diff.py` in the scratchpad): every target decode kernel has the
+   same us/call in both arms; the depth-7 arm carries extra nodes per GDN layer - CONCAT [3,10240]+[4,10240], a plain
+   SSM_CONV at 22 us instead of the fused 12 us, SILU [10240,4], more CPY [3,10240] - the unfused conv path. Under the
+   per-op profiler (one encoder per op) the wait is EQUAL in both arms (85.0 vs 85.4): the tax is dispatch count and
+   lost concurrency, which serialized encoders hide.
+3. **The separating arm** (`d7b4`: `LLAMA_SPEC_EV_BLOCK=tiered LLAMA_SPEC_EV_WIDTHS=3 DEPTHS=7` = block 4 every round
+   under the depth-7 target config), ABAB against the two forced arms, prod, q4 Turbo4 benchprompt 300:
+
+| arm | target config | block | draft_call | dec_sub_tg | dec_syn_tg | ms/rd |
+|---|---|--:|--:|--:|--:|--:|
+| forced43 | depth 4 | 4 | 13.31 / 13.32 | 3.09 / 3.08 | **78.25 / 78.26** | 93.98 / 93.98 |
+| d7b4 | depth 7 | 4 | 13.39 / 13.39 | 2.49 / 2.48 | **79.86 / 79.79** | 95.08 / 94.97 |
+| forced83 | depth 7 | 8 | 16.06 / 16.03 | 2.52 / 2.52 | **79.81 / 79.81** | 98.26 / 97.49 |
+
+   The wait follows the configuration exactly: +1.55 ms on every round of a depth-7 line, block 4 or 8 alike, and the
+   block-8 draft adds only its own drafter time (+2.7 ms over block 4, the Sep 7 number over block 3). The submit is
+   0.6 ms SHORTER on the depth-7 config: the rewrite's copy scan and use-count scans run per conv over the whole
+   graph, and at depth 7 they bailed early. The Sep 17 "+4.0" was forced83 80.0 vs forced43 76.2 in a non-interleaved
+   chain; today's interleaved pairs put the configuration cost at 1.55 ms of wait / ~1.0 ms of round.
+
+**The fix (branch `exp/conv-carry-slots`, `179c30935`):** copies past the six src slots ride on the FIRST copy's free
+`src[2..9]` (a CPY uses `src[0..1]`); the encoder walks both lists; the absorbed copies are registered with the
+concurrency tracker as destinations after the dispatch (as sources of the conv they counted as reads). The chained
+copies are views of the persistent state cache, so the pre-allocation rewrite changes no lifetime (the rule in
+`small-op-fusion.md`). Gate on the fixed build (q4 Turbo4 benchprompt 300, LV 5): forced43, forced83 and the pick's
+`widths {3,7}` controller all keep **`86213d038a29`** = byte-identical to prod; forced83's wait 78.40 / 79.59 vs
+forced43's 78.06 / 78.29 on the same build, the submit +0.7 ms (the rewrite now completes at depth 7: the whole-graph
+scans are a CPU item of their own, `ggml_metal_use_count` twice per conv plus the copy scan, ~0.6 ms per graph, hidden
+under the GPU only past the first command buffer).
+
+**What remains of the (7,3) tax is the drafter alone:** block 8 costs the drafter +2.7 ms over block 4 and +4.4 over
+block 3 (section 7), paid on the ~30% of free-form rounds that draft deep and verify 3; the confidence-escalating block
+rule (open item 3) is the lever for that, not the target.
+
+**Implication for the UD proposal:** the UD line's fixed depth-3 pick has `n_rs_seq = 3` (4 copies, fused); picking the
+controller with block cap 7 on ud would have lost the fusion the same way without this fix.
+
+**E2e price (`specev-wait-sep18-ab{1,2}-q4-{prod,convcarry}`, q4 Turbo4 benchprompt 600, LV 3, the harness's default
+depth sweep 1..7, prod / fix / prod / fix; every arm's sha = prod's at every depth):** fixed depths 1-5 are identical to
+the digit (n_rs_seq + 1 <= 6 copies: the fusion fired on both builds), depth 6 (7 copies) round 93.1 -> 92.2 / 92.5
+(-0.6..-1.0%, t/s +0.6..+1.0%), and at the pick's controller (cap 7) the round falls 100.5 / 103.8 -> 98.4 / 98.8 ms
+(-1.7..-2.2%) with the wait 84.6-87.8 -> 82.0-82.1 and the submit +0.9 - but t/s is a wash (34.05 / 32.99 vs
+33.45 / 33.30): the controller's picks moved with the timing, 175 rounds at 3.43 tok/rd on prod vs 182 at 3.30 on
+the fix in BOTH passes (same text). The fused conv saves ~1.5 ms on every round, which is 1.7% of a width-3 round and
+1.1% of a width-8 round, so cost[7]/cost[3] rises a hair and the EV rule takes width 7 seven fewer times per 600
+tokens; those were marginal picks and the two effects cancel on this prompt. The first prod pass was a slow run at
+every depth (machine state, -3% at depths 1-3 where nothing differs) and is not the comparison.
+
+So: the open item is answered and the pick's manifest is honest again (`GGML_FUSE_SMALL=60` claims conv+carry+silu on
+both lines; on the q4 line it had been silently off since the block-cap-7 pick of Sep 17 - a pick change is a routing
+change, like a file swap: `GGML_METAL_FUSION_DEBUG=2` and a count of `fuse: CONCAT + SSM_CONV` lines is the proof), the
+per-round gain is ~1% at fixed depth 6-7 and byte-identical, e2e at the controller a wash on benchprompt. Adoption =
+owner. The drafter's block-8 cost is the whole remaining (7,3) tax.
+
+**Race-class evidence for the fix (owner: "variable timing is a race *opportunity*"; `fuse-quick/cc-*`, q4 Turbo4, the pick's
+controller, quickprompt-3000 at 1200 tokens):** widths PINNED (`LLAMA_SPEC_EV_BLOCK=full LLAMA_SPEC_EV_WIDTHS=3`, no timing in
+the picks) fix **8/8 = prod's `a1e9aa7e1773`**; prod at the controller **10/10 `35abc5a8312e`** (8 plain + 2 with the pick log);
+fix at the controller **24/25**: the very first launch of the new binary forked (`cc-repro-fix-1`, `a982e09753d9`, 927 tokens,
+a bold-vs-plain formatting token ~750 tokens in, no per-round log), then 7/7, then 8/8 WITH the per-round pick log
+(`LLAMA_SPEC_EV_DBG=1`, `-lv 5`, scratchpad `pickdiff.py`): every logged run's 317 picks are identical to prod's, so the
+controller was not marginal on this prompt and an ordinary timing wobble does not explain the fork; a forced "first launch"
+(a comment appended to the Metal source, rebuilt) 3/3 identical picks and sha - but a comment does not change the compiled
+functions, so that probe may not have forced pipeline compiles (the Metal service caches by function hash). Guard hits 0
+everywhere, and the guard does not cover the conv group (add+norm and gated norm only). By construction: the cat kernel is
+one thread per row (window to registers, then its row's slots) at any n_t/n_wb; the chained copies are views of the
+persistent cache; the concurrency registration only adds barriers. **A greedy fork on the same text is legitimate only
+when a near-tie token went through a different kernel family, i.e. the controller picked a different width first** - the
+controller learns cost[k] from wall time (EMA 0.9), so its picks are timing-dependent in principle, deterministic here in
+practice. The one fork's mechanism is UNRESOLVED; a 32-run logged soak (fix x24 / prod x8, `cc-soak-*`) bounds the rate.
