@@ -365,5 +365,5 @@ knobs at width 4 on the head (`GGML_MV_EXT_NR0=1` +56%, `NSG=4` flat, `NXPSG=4` 
 is at its own optimum, 1.29x the floor. What remains for the head at the pick's width is the stored layout: the `-SOA-V3`
 question above (+10% at width 4, +49% at width 5, -5% at width 1, the decode numerics class on the logits).
 
-Not touched: `TOP_K f32 [248320, 8]` at 1.7 ms/call in the drafter's graph (0.86 at width 4) - a 32 MB read that should
-take ~0.15 ms; its own item, not a q6_K one.
+~~Not touched: `TOP_K f32 [248320, 8]` at 1.7 ms/call in the drafter's graph (0.86 at width 4) - a 32 MB read that should
+take ~0.15 ms; its own item, not a q6_K one.~~ Done 2026-09-19: `GGML_TOPK_STREAM=1` = 0.116 ms at width 8 (`topk-stream.md`).

@@ -169,7 +169,7 @@ its gate values are now computed once per simdgroup and broadcast): see the attr
   (one kernel: 48 dispatches/round); the output chain is five ops on one [6144, 4] activation (one kernel
   with an f16 twin, the gated-norm rewrite as the template: 80/round); rope into the k quantizer's prologue
   is moderate; quantization into the v projection is the hard one.
-- The drafter's REPEAT/CONCAT/CONT/FILL storm and TOP_K (on hold, owner).
+- The drafter's REPEAT/CONCAT/CONT/FILL storm ~~and TOP_K (on hold, owner)~~ (TOP_K built 2026-09-19, `topk-stream.md`).
 - Re-run the kernel census with the corrected parser once the branch is picked; the Sep 06 snapshots lack
   the 3D decode rows.
 - A read-only bandwidth kernel for the SLC's actual read rate (the sweep above only bounds the knee).
