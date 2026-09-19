@@ -1,7 +1,8 @@
 # Streaming top-k for the DFlash selector (`GGML_TOPK_STREAM=1`)
 
-**Status 2026-09-19: BUILT on `exp/topk-stream` (worktree `llama.cpp-topk`), op-level 12-14x, e2e gate running
-(`run-topk-stream-e2e.sh`, TAG `topk-0919-e2e`). Owner released the 2026-08-28 hold ("Go ahead"). Adoption = owner.**
+**Status 2026-09-19: PICKED on both lines and MERGED to prod (owner: "Go ahead" on the hold, then "I would pick it");
+gated e2e below; the prod MINT IS PENDING - the pick landed on battery. On AC: `perf/run-prod-pick.sh` TAG
+`prodpick-sep19-topk`, both lines, shas must equal the Sep 18 mint's (`README.md` pick block carries the stub).**
 
 ## The item
 
@@ -84,7 +85,7 @@ compile lines; the 10x on the op row under the flag is the route.
 
 ## Status
 
-BI class on both lines, proposed in `perf/pick.sh` (`GGML_TOPK_STREAM=1`). Adoption = owner. Open: nothing on the kernel
+BI class on both lines, `pick` in `perf/pick.sh` (`GGML_TOPK_STREAM=1`) since 2026-09-19; mint pending AC (see the status line). Open: nothing on the kernel
 (the ~65 us floor at width 4 is two dispatches + the read). The algorithmic question (does the selector need an exact
 full-vocab top-16) is CLOSED by the owner 2026-09-19 from the DFlash 2 post: it does - DFlash 2's gain over DFlash rests
 on the correct token almost always being inside the top 16, with a small path finder (the lattice) picking among them.
