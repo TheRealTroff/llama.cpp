@@ -85,5 +85,7 @@ compile lines; the 10x on the op row under the flag is the route.
 ## Status
 
 BI class on both lines, proposed in `perf/pick.sh` (`GGML_TOPK_STREAM=1`). Adoption = owner. Open: nothing on the kernel
-(the ~65 us floor at width 4 is two dispatches + the read); the algorithmic question (does the selector need an exact
-full-vocab top-16) stays drafter design, the owner's.
+(the ~65 us floor at width 4 is two dispatches + the read). The algorithmic question (does the selector need an exact
+full-vocab top-16) is CLOSED by the owner 2026-09-19 from the DFlash 2 post: it does - DFlash 2's gain over DFlash rests
+on the correct token almost always being inside the top 16, with a small path finder (the lattice) picking among them.
+The exact top-16 is the contract; a partial or approximate top-k is off the table.
