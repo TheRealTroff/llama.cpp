@@ -363,8 +363,8 @@ two-dispatch design the owner put on hold at width 4 (1.09 ms then).
 - The refuted NR0 knob (section 9) was stripped from the tree before the merge (owner: "leave out
   the losing experiment code"); the record stays here and in the README flag table.
 - The remaining free-form deficit is the block-8 drafter tax (4.4 ms) on rounds the pick verifies
-  narrow. Width-8 items still open: TOP_K at width 8 (1.8 ms serialized per deep round, linear in
-  width; owner's hold), the skinny family's instruction economy (1.5-1.7x floor at width 8, issue-
+  narrow. Width-8 items still open: ~~TOP_K at width 8 (1.8 ms serialized per deep round, linear in
+  width; owner's hold)~~ (BUILT 2026-09-19, `GGML_TOPK_STREAM=1`: 1.63 -> 0.12 ms per call, q4 depth-7 round -1.0%, `topk-stream.md`), the skinny family's instruction economy (1.5-1.7x floor at width 8, issue-
   bound; the head is its best shape, section 9 - NR0 refuted there too).
 - Not measured: 2- and 4-slot points under `LLAMA_SPEC_SLOT_BUDGET` with the controller, long
   context (the cost curve flattens at 96K and the optimum should move deeper), ~~temperature > 0

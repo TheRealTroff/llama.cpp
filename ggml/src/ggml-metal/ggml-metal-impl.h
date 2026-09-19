@@ -1262,6 +1262,20 @@ typedef struct {
     int32_t  len;
 } ggml_metal_kargs_argsort_merge;
 
+// fork: streaming top-k (GGML_TOPK_STREAM=1) - strip scan + simd extract-max reduce, one merge dispatch
+typedef struct {
+    int32_t  ne00;
+    int32_t  ne01;
+    int32_t  ne02;
+    int32_t  ne03;
+    uint64_t nb01;
+    uint64_t nb02;
+    uint64_t nb03;
+    int32_t  top_k;
+    int32_t  nblk;   // strips per row (pass 1 threadgroups per row; pass 2 lists per row)
+    int32_t  nstrip; // elements per strip
+} ggml_metal_kargs_top_k_stream;
+
 typedef struct {
     int32_t nrows;
 } ggml_metal_kargs_fwht;

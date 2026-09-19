@@ -60,6 +60,13 @@ b1 13.08.** Every sha = the morning mint's; the depth-3 arms within the day's no
 flags that only fire at widths 6-8. The q4 line is untouched (its q4_0 tensors run their own skinny SoA kernel; its q6_K/q8_0
 tensors would take the tile at widths 6-8 under the same env - the flags are ud-only in the manifest).
 
+**2026-09-19 (owner: "Go ahead" on the 2026-08-28 TOP_K hold, then "I would pick it"): `exp/topk-stream` MERGED and
+`GGML_TOPK_STREAM=1` promoted to BOTH picks** - the drafter selector's `TOP_K [248320, width] -> 16` as a strip scan + one
+merge dispatch (`topk-stream.md`): 837 -> 67 us at width 4, 1631 -> 116 at width 8; `draft_call` -0.8 / -1.5 ms, ud +0.6 /
++0.9%, q4 +1.0 / +1.9% at depth 3 / 7, shas canonical on every arm (BI: the op is a set, the text verify-gated). **MINT
+PENDING: the machine was on battery at the pick - on AC run `perf/run-prod-pick.sh` with TAG `prodpick-sep19-topk` on both
+lines and replace this sentence with the numbers; every sha must equal the Sep 18 mint's.**
+
 **2026-09-18 midday (owner: "go ahead"): `exp/skinny-gen-bsplit` MERGED (prod `b2878ceaa`) - the skinny B-split on the generic
 skinny tile, i.e. the UD line's width-6..8 verify path finally takes `GGML_MM_SKINNY_BSPLIT=2` (it had been in the env and inert
 there since Sep 7; `w8-decomp-sep18.md` lever 1): ud fixed-width-8 round 174.5 -> 169.5 ms (-2.9%), byte-identical. Inert at the
@@ -486,6 +493,7 @@ routing flag in this table is value-based.
 | `GGML_MM_SKINNY_BSPLIT=2` | **in both picks since 2026-09-07** (BI); **live on the UD line's width-6..8 tile only since 2026-09-18** (the generic `kernel_mul_mm_skinny_t` ignored the constant until `exp/skinny-gen-bsplit` merged: ud width-8 round -2.9%, byte-identical, `w8-decomp-sep18.md`) | the Aug-24 skinny B-stage split + float4 loads (`skinny-tpr-bsplit.md`, never merged) ported to the SoA skinny body: **-4.7..-5.1% per width-8 round, +4.8..5.4% t/s at fixed depth 7, byte-identical**; inert at width 4-5. Pays on every width-6..8 verify: the controller's deep rounds, the drafter's block-8 draft, multi-slot skinny points. spec-verify-narrow.md section 8 | spec-verify-narrow.md |
 | `GGML_MM_SKINNY_Q5K=1` | **in the ud pick since 2026-09-18** (BI; merged from `exp/iq4xs-lut`, owner: "merge the last 2") | the stored q5_K width-6..8 tile's high-bit plane folded into the in-place nibble integer before one convert (the q4_K path's form), one 16-bit plane load: -2% per call, byte-identical; part of the -3.3% ud width-8 round with `KQ2` below. `w8-decomp-sep18.md` levers 3+4 | w8-decomp-sep18.md |
 | `GGML_MM_SKINNY_KQ2=1` | **in the ud pick since 2026-09-18** (BI; merged from `exp/iq4xs-lut`, owner: "merge the last 2") | the stored q4_K/q5_K width-6..8 tiles decode the superblock header (d, dmin, the 6-bit scale pair, the tile scale) ONCE for the two tiles of a K-step, packs in `uint2` and plane bytes in one `uint`: -6..-8% per call on both formats; with `Q5K=1`: ud fixed-width-8 round -3.3%, GPU wait -2.7%, sha canonical. Inert at width 4. `w8-decomp-sep18.md` | w8-decomp-sep18.md |
+| `GGML_TOPK_STREAM=1` | **in BOTH picks since 2026-09-19** (BI; merged from `exp/topk-stream`, owner: "I would pick it"; mint pending AC) | the drafter selector's `TOP_K [248320, width] -> 16` as a strip scan (per-thread register top-16, simd extract-max reduce) + one merge dispatch, in place of upstream's 1024-wide bitonic block sort + 8-dispatch serialized merge ladder: 837 -> 67 us at width 4, 1631 -> 116 at width 8 (`GGML_TOPK_NB` strips per row, default 32). e2e: `draft_call` -0.8 ms at width 4 / -1.5 at width 8 on both lines, ud +0.6% / +0.9%, q4 +1.0% / +1.9% (depth 3 / 7), shas canonical, ABAB x2. `topk-stream.md` | topk-stream.md |
 | `GGML_MM_SKINNY_Q6K=1` | **in the ud pick since 2026-09-18** (BI; merged from `exp/q6k-head`, owner: "merge the last 2") | the q6_K lm_head's width-6..8 tile (native 210-byte blocks, 2-byte aligned: upstream's reader takes 16 ushort loads per tile) reads its two tiles per K-step as a pair with eight `packed_ushort4` loads, d and the mask setup once: head call 6822 -> 6092 us (-10.7%); ud fixed-width-8 round -0.8% (target + drafter head), sha canonical. The stored-SoA q6_K tile gets the same pair form (-5.7%). Inert at width 4 (the ext r1_4 reader, whose wide-load form is +6%: refuted, `GGML_MV_EXT_Q6K_WIDE=1` kept routable). `w8-decomp-sep18.md` the q6_K head | w8-decomp-sep18.md |
 | ~~`GGML_MM_SKINNY_NR0_XL=64\|128`~~ | (code removed) | rows per threadgroup of the SoA skinny kernel for >= 65536-row weights (the vocab head). **Refuted 2026-09-07, byte-identical: head per call +5% at 64, +15% at 128; the code was stripped before the merge (owner), the record stays** - activation re-read is not the head's wall (same as the ffn NR0 sweep); the head at 1.50x floor is the skinny family's best shape. spec-verify-narrow.md section 9 | spec-verify-narrow.md |
 | `GGML_FA_QT=1` | off | transposed-Q QK form of the f16 batched FA kernel (K tiles load untransposed, Q staged transposed): -7..-8% per FA call, byte-identical; the QR and Q16 routes require it. **In the pick since 2026-09-06** | ud-model.md step 9 |
@@ -884,7 +892,7 @@ Current state:
   doors opened same evening (owner's ask): **drafter attention window
   `LLAMA_DRAFT_WINDOW=1024` measures +1.94% e2e with acceptance IMPROVED (50.1 vs
   49.8), knee bracketed (512 +1.25%, 2048 +0.94%), sha-safe by construction,
-  `run-draft-window.sh` - adoption owner's call**; TOP_K's 1.09 ms is a serialized
+  `run-draft-window.sh` - adoption owner's call**; ~~TOP_K's 1.09 ms is a serialized~~ (BUILT 2026-09-19 after the owner released the hold: `GGML_TOPK_STREAM=1`, 12-14x per call, `draft_call` -0.8/-1.5 ms at width 4/8, `topk-stream.md`; the rest of this sentence is the record) TOP_K's 1.09 ms is a serialized
   merge-ladder structure (~5 MB data), streaming two-dispatch design scoped in the
   stub, prize ~+0.8%. Remaining: elementwise tail, drafter-design questions (head
   ~30% of the drafter).

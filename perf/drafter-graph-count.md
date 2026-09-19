@@ -86,8 +86,12 @@ whose inside decomposes as above, plus ~1.2 ms of enc/inject slivers.
    keeping a local top-16, one merge of the ~1-4k candidates) - expect ~0.1-0.15 ms,
    **prize ~0.9 ms/round ~ +0.8% e2e**. Confirm attribution with the per-instruction
    profiler before building. Algorithmic sub-door (does the selector need exact
-   full-vocab top-16?) is drafter design - owner's.
-   **ON HOLD 2026-08-28 (owner: "hold off on top K") - do not build unprompted.**
+   full-vocab top-16?) is drafter design - owner's. ~~open~~ CLOSED 2026-09-19 (owner, from the DFlash 2 post): it
+   does - the DFlash 2 gain is a path finder over the top 16, where the correct token almost always sits.
+   ~~**ON HOLD 2026-08-28 (owner: "hold off on top K") - do not build unprompted.**~~ **RELEASED AND BUILT
+   2026-09-19 (owner: "Go ahead"): `GGML_TOPK_STREAM=1` on `exp/topk-stream` = the design above (strip scan with
+   per-thread register top-16 + one merge): 837 -> 67 us at width 4, 1631 -> 116 at width 8, `draft_call` -0.8 / -1.5 ms,
+   ud +0.6 / +0.9%, q4 +1.0 / +1.9% at depth 3 / 7, byte-identical - `topk-stream.md`; proposed, adoption = owner.**
 2. ~~**Drafter FA runs over the full ~8.4k KV**~~ **MEASURED same evening
    (`run-draft-window.sh`, interleaved 600 units, sha canonical in EVERY arm - text
    is verify-gated, so windowing is sha-safe by construction):** the already-built
