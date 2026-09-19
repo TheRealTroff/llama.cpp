@@ -13341,6 +13341,161 @@ kernel void kernel_argsort_merge_f32_i32(
 template [[host_name("kernel_argsort_merge_f32_i32_asc")]]  kernel argsort_merge_t kernel_argsort_merge_f32_i32<GGML_SORT_ORDER_ASC>;
 template [[host_name("kernel_argsort_merge_f32_i32_desc")]] kernel argsort_merge_t kernel_argsort_merge_f32_i32<GGML_SORT_ORDER_DESC>;
 
+// fork: streaming top-k (GGML_TOPK_STREAM=1), exact, descending value with ascending index on ties.
+// pass 1: each threadgroup scans one strip of a row; every thread keeps a sorted top-K in registers
+//         (unrolled insertion, taken only when the element beats the thread's K-th), then K rounds of
+//         simd extract-max reduce lane lists -> simdgroup lists -> one list per strip.
+// pass 2: one threadgroup per row merges the strip lists the same way (up to 256 lists).
+// An empty slot is (-INFINITY, INT_MAX): it sorts after every real element, including real -inf.
+#define TOPK_NT  256
+#define TOPK_NSG 8
+
+template<int K>
+static inline void topk_list_init(thread float (&v)[K], thread int (&ix)[K]) {
+    #pragma unroll
+    for (int j = 0; j < K; ++j) { v[j] = -INFINITY; ix[j] = INT_MAX; }
+}
+
+template<int K, typename PV, typename PI>
+static inline void topk_list_load(thread float (&v)[K], thread int (&ix)[K], PV pv, PI pi, bool valid) {
+    #pragma unroll
+    for (int j = 0; j < K; ++j) {
+        v[j]  = valid ? pv[j] : -INFINITY;
+        ix[j] = valid ? pi[j] : INT_MAX;
+    }
+}
+
+// caller guarantees (nv, ni) beats slot K-1
+template<int K>
+static inline void topk_list_insert(thread float (&v)[K], thread int (&ix)[K], float nv, int ni) {
+    v[K-1] = nv; ix[K-1] = ni;
+    #pragma unroll
+    for (int j = K-1; j > 0; --j) {
+        const bool  up = (v[j] > v[j-1]) || (v[j] == v[j-1] && ix[j] < ix[j-1]);
+        const float tv = v[j-1];
+        const int   ti = ix[j-1];
+        v[j-1]  = up ? v[j]  : tv;
+        ix[j-1] = up ? ix[j] : ti;
+        v[j]    = up ? tv    : v[j];
+        ix[j]   = up ? ti    : ix[j];
+    }
+}
+
+// kout rounds of extract-max across the 32 lanes' sorted lists; lane 0 writes (value, index) r < kout
+template<int K, typename PV, typename PI>
+static inline void topk_simd_extract(thread float (&v)[K], thread int (&ix)[K], PV ov, PI oi, int kout, ushort tiisg) {
+    for (int r = 0; r < kout; ++r) {
+        const float m  = simd_max(v[0]);
+        const int   c  = (v[0] == m) ? ix[0] : INT_MAX;
+        const int   mi = simd_min(c);
+        if (tiisg == 0) { ov[r] = m; oi[r] = mi; }
+        if (v[0] == m && ix[0] == mi) {
+            #pragma unroll
+            for (int j = 0; j < K-1; ++j) { v[j] = v[j+1]; ix[j] = ix[j+1]; }
+            v[K-1] = -INFINITY; ix[K-1] = INT_MAX;
+        }
+    }
+}
+
+template<int K>
+kernel void kernel_top_k_stream_f32_i32(
+        constant ggml_metal_kargs_top_k_stream & args,
+        device const char    * src0,
+        device       int32_t * dst,
+        device       int32_t * tmp_i,
+        device       float   * tmp_v,
+        threadgroup  char    * shmem [[threadgroup(0)]],
+        uint3   tgpig[[threadgroup_position_in_grid]],
+        ushort3 tpitg[[thread_position_in_threadgroup]],
+        ushort  tiisg[[thread_index_in_simdgroup]],
+        ushort  sgitg[[simdgroup_index_in_threadgroup]]) {
+    const int ib  = tgpig[0] / args.ne01;
+    const int i01 = tgpig[0] % args.ne01;
+    const int i02 = tgpig[1];
+    const int i03 = tgpig[2];
+    const int row = i01 + args.ne01*(i02 + args.ne02*i03);
+
+    device const float * x = (device const float *)(src0 + args.nb01*i01 + args.nb02*i02 + args.nb03*i03);
+
+    const int i0 = ib*args.nstrip;
+    const int i1 = min(i0 + args.nstrip, args.ne00);
+
+    float v[K];
+    int   ix[K];
+    topk_list_init<K>(v, ix);
+
+    for (int i = i0 + tpitg.x; i < i1; i += TOPK_NT) {
+        const float xi = x[i];
+        if (xi > v[K-1] || (xi == v[K-1] && i < ix[K-1])) {
+            topk_list_insert<K>(v, ix, xi, i);
+        }
+    }
+
+    threadgroup float * sv = (threadgroup float *) shmem;
+    threadgroup int   * si = (threadgroup int   *) (shmem + TOPK_NSG*K*sizeof(float));
+
+    topk_simd_extract<K>(v, ix, sv + sgitg*K, si + sgitg*K, K, tiisg);
+
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    if (sgitg == 0) {
+        topk_list_load<K>(v, ix, sv + tiisg*K, si + tiisg*K, tiisg < TOPK_NSG);
+        if (args.nblk == 1) {
+            // single strip: the strip list is the answer
+            device int32_t * d = dst + (int64_t) row*args.top_k;
+            topk_simd_extract<K>(v, ix, sv, d, args.top_k, tiisg);
+        } else {
+            const int64_t off = ((int64_t) row*args.nblk + ib)*K;
+            topk_simd_extract<K>(v, ix, tmp_v + off, tmp_i + off, K, tiisg);
+        }
+    }
+}
+
+template<int K>
+kernel void kernel_top_k_stream_merge_f32_i32(
+        constant ggml_metal_kargs_top_k_stream & args,
+        device       int32_t * dst,
+        device const int32_t * tmp_i,
+        device const float   * tmp_v,
+        threadgroup  char    * shmem [[threadgroup(0)]],
+        uint3   tgpig[[threadgroup_position_in_grid]],
+        ushort3 tpitg[[thread_position_in_threadgroup]],
+        ushort  tiisg[[thread_index_in_simdgroup]],
+        ushort  sgitg[[simdgroup_index_in_threadgroup]]) {
+    const int i01 = tgpig[0];
+    const int i02 = tgpig[1];
+    const int i03 = tgpig[2];
+    const int row = i01 + args.ne01*(i02 + args.ne02*i03);
+
+    const int l = sgitg*32 + tiisg; // list held by this lane
+
+    float v[K];
+    int   ix[K];
+    const int64_t off = ((int64_t) row*args.nblk + l)*K;
+    topk_list_load<K>(v, ix, tmp_v + off, tmp_i + off, l < args.nblk);
+
+    threadgroup float * sv = (threadgroup float *) shmem;
+    threadgroup int   * si = (threadgroup int   *) (shmem + TOPK_NSG*K*sizeof(float));
+
+    topk_simd_extract<K>(v, ix, sv + sgitg*K, si + sgitg*K, K, tiisg);
+
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    if (sgitg == 0) {
+        topk_list_load<K>(v, ix, sv + tiisg*K, si + tiisg*K, tiisg < TOPK_NSG);
+        device int32_t * d = dst + (int64_t) row*args.top_k;
+        topk_simd_extract<K>(v, ix, sv, d, args.top_k, tiisg);
+    }
+}
+
+typedef decltype(kernel_top_k_stream_f32_i32<16>)       top_k_stream_t;
+typedef decltype(kernel_top_k_stream_merge_f32_i32<16>) top_k_stream_merge_t;
+
+template [[host_name("kernel_top_k_stream_f32_i32_k16")]]       kernel top_k_stream_t       kernel_top_k_stream_f32_i32<16>;
+template [[host_name("kernel_top_k_stream_merge_f32_i32_k16")]] kernel top_k_stream_merge_t kernel_top_k_stream_merge_f32_i32<16>;
+template [[host_name("kernel_top_k_stream_f32_i32_k32")]]       kernel top_k_stream_t       kernel_top_k_stream_f32_i32<32>;
+template [[host_name("kernel_top_k_stream_merge_f32_i32_k32")]] kernel top_k_stream_merge_t kernel_top_k_stream_merge_f32_i32<32>;
+
 template<int N>
 kernel void kernel_fwht_f32(
         constant ggml_metal_kargs_fwht & args,

@@ -1866,6 +1866,24 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_top_k_merge(ggml
     return res;
 }
 
+// fork: streaming top-k pipelines (kmax = 16 or 32 register slots per thread)
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_top_k_stream(ggml_metal_library_t lib, const ggml_tensor * op, int kmax, bool merge) {
+    assert(op->op == GGML_OP_TOP_K);
+
+    char base[256];
+    char name[256];
+
+    snprintf(base, 256, "kernel_top_k_stream%s_%s_%s_k%d", merge ? "_merge" : "", ggml_type_name(op->src[0]->type), ggml_type_name(op->type), kmax);
+    snprintf(name, 256, "%s", base);
+
+    ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
+    if (!res.pipeline) {
+        res = ggml_metal_library_compile_pipeline(lib, base, name, nullptr);
+    }
+
+    return res;
+}
+
 ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext_pad(
         ggml_metal_library_t lib,
         const struct ggml_tensor * op,

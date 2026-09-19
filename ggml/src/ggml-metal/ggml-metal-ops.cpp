@@ -7542,7 +7542,105 @@ int ggml_metal_op_argsort(ggml_metal_op_t ctx, int idx) {
     return 1;
 }
 
+// fork: streaming top-k (GGML_TOPK_STREAM=1): strip scan with per-thread register lists + one merge
+// dispatch, in place of the block-bitonic + 8-deep serialized merge ladder. Exact; order = value
+// desc, index asc on ties. GGML_TOPK_NB = strips per row (default 32, max 256).
+static int ggml_metal_op_top_k_stream_kmax(const ggml_tensor * op) {
+    static const int mode = getenv("GGML_TOPK_STREAM") ? atoi(getenv("GGML_TOPK_STREAM")) : 0;
+    if (mode == 0 || op->src[0]->type != GGML_TYPE_F32) {
+        return 0;
+    }
+    const int top_k = op->ne[0];
+    if (top_k <= 16) return 16;
+    if (top_k <= 32) return 32;
+    return 0;
+}
+
+static int ggml_metal_op_top_k_stream(ggml_metal_op_t ctx, int idx, int kmax) {
+    ggml_tensor * op = ctx->node(idx);
+
+    ggml_metal_library_t lib = ctx->lib;
+    ggml_metal_encoder_t enc = ctx->enc;
+
+    GGML_ASSERT(ggml_is_contiguous_rows(op->src[0]));
+
+    GGML_TENSOR_LOCALS( int32_t, ne0, op->src[0], ne);
+    GGML_TENSOR_LOCALS(uint64_t, nb0, op->src[0], nb);
+    GGML_TENSOR_LOCALS( int32_t, ne,  op,         ne);
+
+    static const int nb_env = getenv("GGML_TOPK_NB") ? atoi(getenv("GGML_TOPK_NB")) : 32;
+
+    const int top_k = ne0;
+    const int nrows = ne01*ne02*ne03;
+
+    // strips per row: the tmp lists (nblk*kmax per row) must fit the op's scratch (nelements(src0) i32 + f32)
+    int nblk = std::max(1, std::min(std::min(nb_env, 256), ne00/(2*kmax))); // i32 + f32 lists must fit 2x nelements(src0) i32 minus the output
+    if (nblk < 2) {
+        nblk = 1;
+    }
+    const int nstrip = (ne00 + nblk - 1)/nblk;
+
+    ggml_metal_kargs_top_k_stream args = {
+        /*.ne00   =*/ ne00,
+        /*.ne01   =*/ ne01,
+        /*.ne02   =*/ ne02,
+        /*.ne03   =*/ ne03,
+        /*.nb01   =*/ nb01,
+        /*.nb02   =*/ nb02,
+        /*.nb03   =*/ nb03,
+        /*.top_k  =*/ top_k,
+        /*.nblk   =*/ nblk,
+        /*.nstrip =*/ nstrip,
+    };
+
+    ggml_metal_buffer_id bid_src0 = ggml_metal_get_buffer_id(op->src[0]);
+    ggml_metal_buffer_id bid_dst  = ggml_metal_get_buffer_id(op);
+
+    ggml_metal_buffer_id bid_tmp_i = bid_dst;
+    bid_tmp_i.offs += sizeof(int32_t)*ggml_nelements(op->src[0]);
+    ggml_metal_buffer_id bid_tmp_v = bid_tmp_i;
+    bid_tmp_v.offs += sizeof(int32_t)*(size_t) nrows*nblk*kmax;
+    GGML_ASSERT(nblk == 1 || (size_t) 2*nrows*nblk*kmax <= (size_t) ggml_nelements(op->src[0]));
+
+    const size_t smem = 8*kmax*(sizeof(float) + sizeof(int32_t));
+
+    {
+        auto pipeline = ggml_metal_library_get_pipeline_top_k_stream(lib, op, kmax, false);
+
+        ggml_metal_encoder_set_pipeline(enc, pipeline);
+        ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);
+        ggml_metal_encoder_set_buffer  (enc, bid_src0,  1);
+        ggml_metal_encoder_set_buffer  (enc, bid_dst,   2);
+        ggml_metal_encoder_set_buffer  (enc, bid_tmp_i, 3);
+        ggml_metal_encoder_set_buffer  (enc, bid_tmp_v, 4);
+        ggml_metal_encoder_set_threadgroup_memory_size(enc, smem, 0);
+
+        ggml_metal_encoder_dispatch_threadgroups(enc, nblk*ne01, ne02, ne03, 256, 1, 1);
+    }
+
+    if (nblk > 1) {
+        ggml_metal_op_concurrency_reset(ctx);
+
+        auto pipeline = ggml_metal_library_get_pipeline_top_k_stream(lib, op, kmax, true);
+
+        ggml_metal_encoder_set_pipeline(enc, pipeline);
+        ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);
+        ggml_metal_encoder_set_buffer  (enc, bid_dst,   1);
+        ggml_metal_encoder_set_buffer  (enc, bid_tmp_i, 2);
+        ggml_metal_encoder_set_buffer  (enc, bid_tmp_v, 3);
+        ggml_metal_encoder_set_threadgroup_memory_size(enc, smem, 0);
+
+        ggml_metal_encoder_dispatch_threadgroups(enc, ne01, ne02, ne03, 256, 1, 1);
+    }
+
+    return 1;
+}
+
 int ggml_metal_op_top_k(ggml_metal_op_t ctx, int idx) {
+    if (const int kmax = ggml_metal_op_top_k_stream_kmax(ctx->node(idx))) {
+        return ggml_metal_op_top_k_stream(ctx, idx, kmax);
+    }
+
     ggml_tensor * op = ctx->node(idx);
 
     ggml_metal_library_t lib = ctx->lib;

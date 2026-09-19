@@ -10908,6 +10908,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     test_cases.emplace_back(new test_argsort(GGML_TYPE_F32, {200000, 16, 1, 1}));
 
     test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, {2, 1, 1, 1}, 1));
+    // fork: the DFlash selector's lattice shape (vocab 248320, k 16) at the verify widths
+    for (auto w : {2, 4, 8}) {
+        test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, {248320, w, 1, 1}, 16));
+    }
     for (auto k : {1, 10, 40, 400}) {
         for (auto nrows : {1, 16}) {
             for (auto cols : {k, 1000, 65000, 200000}) {
