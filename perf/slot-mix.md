@@ -81,6 +81,16 @@ launch (`state_write: recompute-on-rollback: materializing cell N`), the DFlash 
 blocks per sequence, the in-place state write of the zero cell (cell 1) by seq 1 while seqs 2-3 gather from it.
 Untested: N_EXEC=2 f16, prompts of equal length, checkpoints off.
 
+## Why the 64-way split wedged the process (hypothesis)
+
+A Metal command queue admits 64 uncompleted command buffers by default; past that, taking or committing a buffer
+blocks until one completes. The 64-way split plus the main buffer plus the drafter's exceeds it while the layer 8
+buffer spins ahead of everything, so encoder threads block inside the driver's submit path, where SIGKILL cannot
+reach them, and the context is never torn down (ps state E, allocations and the spinning kernel kept). The
+ordinary two-buffer runs never touched the limit and every kill was clean. Unconfirmed: `sample <pid>` on a
+wedged server before the reboot would show where the threads sit. Tool rule: keep `GGML_METAL_NCB` at <= 16
+(about four layers per buffer) and bisect inside a buffer with a second run, never by splitting finer.
+
 ## Machine state at hand-off
 
 Two guard-killed servers (pids 69807, 71046) are stuck in kernel exit holding 44 GB of GPU allocations and a
