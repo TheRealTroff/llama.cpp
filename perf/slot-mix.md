@@ -1,6 +1,6 @@
 # Multi-slot speculation: the GPU hang and the garbage drafts (2026-09-23)
 
-**Status: RESOLVED 2026-09-23 evening (commit 6ed433a2f on this branch, NOT YET IN PROD): both defects were one
+**Status: RESOLVED 2026-09-23 evening (commit 6ed433a2f), MERGED TO PROD adea1cc69 the same evening (owner), smoke on the prod binary = the gate below, re-mint pending: both defects were one
 bug, an f16-B scratch overflow on folded per-sequence matmuls - see "Resolution" below. The sections after it
 are the morning's hunt as written, kept for the record (their "machine state" is stale).** Branch `exp/slot-ctx-classes`, tree
 `~/play/llama.cpp-slotctx`. Started as the per-slot context sizes baseline (`run-slot-mix.sh`, one 96K coordinator
