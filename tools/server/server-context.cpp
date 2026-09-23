@@ -4081,6 +4081,14 @@ private:
 
                 if (ret == -1) {
                     err = "Invalid input batch.";
+                    // 2026-09-23 multi-slot spec bug hunt: dump the batch view so the bad entry names its slot and position
+                    for (int32_t k = 0; k < batch_view.n_tokens; ++k) {
+                        SRV_ERR("bad batch[%3d]: token=%d pos=%d n_seq=%d seq0=%d logits=%d\n", k,
+                            batch_view.token ? batch_view.token[k] : -2, batch_view.pos ? batch_view.pos[k] : -2,
+                            batch_view.n_seq_id ? batch_view.n_seq_id[k] : -2,
+                            (batch_view.seq_id && batch_view.seq_id[k]) ? batch_view.seq_id[k][0] : -2,
+                            batch_view.logits ? (int) batch_view.logits[k] : -2);
+                    }
                 }
 
                 if (ret < -1) {

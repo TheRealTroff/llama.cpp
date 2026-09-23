@@ -20,7 +20,7 @@
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 
 // max number of MTLCommandBuffer used to submit a graph for processing
-#define GGML_METAL_MAX_COMMAND_BUFFERS 8
+#define GGML_METAL_MAX_COMMAND_BUFFERS 64 // raised from 8 for the sync guard's GGML_METAL_NCB localization (2026-09-23)
 
 // max deferred host-side get_tensor copies (GGML_METAL_GET_MEMCPY=1)
 #define GGML_METAL_MAX_DEFERRED_GETS 16
@@ -592,6 +592,42 @@ static void * ggml_metal_sync_guard_thread(void * arg) {
             if (since != 0 && now - since > timeout_ns) {
                 GGML_LOG_ERROR("sync-guard: backend %s has waited %.1f s in %s (limit %.1f s) - the GPU is hung; dumping the graph and killing pid %d\n",
                     ctx->name, (now - since) / 1e9, ctx->wait_where ? ctx->wait_where : "?", g_sync_guard_timeout, (int) getpid());
+                {
+                    // which command buffers are still in flight: the hung node lies in the first non-completed one
+                    // (the main thread encodes nodes [0, n_nodes_0), extra cb i encodes [n_nodes_0 + i*n_nodes_per_cb, ...))
+                    for (int c = 0; c <= ctx->n_cb; ++c) {
+                        id<MTLCommandBuffer> cb = ctx->cmd_bufs[c].obj;
+                        const int lo = c == ctx->n_cb ? 0 : ctx->n_nodes_0 + c*ctx->n_nodes_per_cb;
+                        const int hi = c == ctx->n_cb ? ctx->n_nodes_0 : lo + ctx->n_nodes_per_cb;
+                        // GPUStartTime is set the moment the GPU begins a command buffer: the last one with a start
+                        // and no end is the one executing, whatever the scheduled/committed statuses say
+                        GGML_LOG_ERROR("sync-guard: cmd_buf[%d] (%s, nodes [%d, %d)) status %ld gpu start %.3f end %.3f%s\n", c, c == ctx->n_cb ? "main thread" : "extra", lo, hi,
+                            cb ? (long) [cb status] : -1L, cb ? [cb GPUStartTime] : 0.0, cb ? [cb GPUEndTime] : 0.0, cb == ctx->cmd_buf_last ? " <- cmd_buf_last" : "");
+                    }
+                    GGML_LOG_ERROR("sync-guard: %d ext command buffers; status codes: 0 notEnqueued 1 enqueued 2 committed 3 scheduled 4 completed 5 error\n", (int) ctx->cmd_bufs_ext.count);
+                    // every other registered context on this device shares the device's command queue: a command
+                    // buffer of theirs that is scheduled but never started (an event wait ahead of its signal)
+                    // stalls the queue for everyone
+                    for (int o = 0; o < g_sync_guard_n; ++o) {
+                        ggml_metal_t oc = g_sync_guard_ctxs[o];
+                        if (oc == ctx) continue;
+                        GGML_LOG_ERROR("sync-guard: other context %s: n_cb %d, %d ext command buffers, waiting=%s\n", oc->name, oc->n_cb, (int) oc->cmd_bufs_ext.count,
+                            atomic_load_explicit(&oc->wait_since_ns, memory_order_acquire) ? "yes" : "no");
+                        for (int c = 0; c <= oc->n_cb; ++c) {
+                            id<MTLCommandBuffer> cb = oc->cmd_bufs[c].obj;
+                            if (!cb) continue;
+                            GGML_LOG_ERROR("sync-guard:   other cmd_buf[%d] status %ld gpu start %.3f end %.3f%s\n", c, (long) [cb status], [cb GPUStartTime], [cb GPUEndTime], cb == oc->cmd_buf_last ? " <- cmd_buf_last" : "");
+                        }
+                        for (int c = 0; c < (int) oc->cmd_bufs_ext.count; ++c) {
+                            id<MTLCommandBuffer> cb = oc->cmd_bufs_ext[c];
+                            GGML_LOG_ERROR("sync-guard:   other ext[%d] status %ld gpu start %.3f end %.3f\n", c, (long) [cb status], [cb GPUStartTime], [cb GPUEndTime]);
+                        }
+                    }
+                    for (int c = 0; c < (int) ctx->cmd_bufs_ext.count; ++c) {
+                        id<MTLCommandBuffer> cb = ctx->cmd_bufs_ext[c];
+                        GGML_LOG_ERROR("sync-guard:   ext[%d] status %ld gpu start %.3f end %.3f\n", c, (long) [cb status], [cb GPUStartTime], [cb GPUEndTime]);
+                    }
+                }
                 ggml_metal_sync_guard_dump_graph(ctx);
                 GGML_LOG_ERROR("sync-guard: SIGKILL in 1.5 s (letting the asynchronous log thread drain the dump)\n");
                 fflush(stderr);
@@ -1124,7 +1160,18 @@ ggml_metal_event_t ggml_metal_get_ev_cpy(ggml_metal_t ctx) {
     return ctx->ev_cpy;
 }
 
+// GGML_METAL_NCB=<n>: force the number of extra command buffers a graph is split into (diagnostic, with the sync
+// guard: each command buffer's status names the node range that hung; 64 buffers on a ~4300-node graph = one layer each)
+static int ggml_metal_ncb_override(int n_cb) {
+    static int env_ncb = -1;
+    if (env_ncb < 0) {
+        env_ncb = getenv("GGML_METAL_NCB") ? atoi(getenv("GGML_METAL_NCB")) : 0;
+    }
+    return env_ncb > 0 ? env_ncb : n_cb;
+}
+
 void ggml_metal_set_n_cb(ggml_metal_t ctx, int n_cb) {
+    n_cb = ggml_metal_ncb_override(n_cb);
     if (ctx->n_cb != n_cb) {
         ctx->n_cb = MIN(n_cb, GGML_METAL_MAX_COMMAND_BUFFERS);
 

@@ -354,6 +354,21 @@ void llm_graph_input_rs::set_input(const llama_ubatch * ubatch) {
                 if (d_xp) d_xp[i] = mctx->xk_replay(i);
                 if (d_xw) d_xw[i] = mctx->xk_wrow(i);
             }
+            // LLAMA_GDN_REPLAY_DBG=1 (2026-09-23 multi-slot hang hunt): the per-seq replay inputs of every
+            // multi-seq ubatch, and which of them this graph did not allocate (a kernel reading an
+            // unallocated input reads garbage)
+            static const bool replay_dbg = getenv("LLAMA_GDN_REPLAY_DBG") && atoi(getenv("LLAMA_GDN_REPLAY_DBG"));
+            if (replay_dbg && n_seqs > 1) {
+                std::string line;
+                for (uint32_t i = 0; i < n_seqs; ++i) {
+                    char buf[160];
+                    snprintf(buf, sizeof(buf), " [seq %d: rep=%d rrow=%d wrow=%d ss=%d src0=%d]", (int) ubatch->seq_id[i*ubatch->n_seq_tokens][0],
+                        mctx->xk_replay(i), mctx->xk_rrow(i), mctx->xk_wrow(i), mctx->s_copy_ss_peek(i), mctx->s_copy_src0(i));
+                    line += buf;
+                }
+                LLAMA_LOG_WARN("gdn-replay-dbg: n_seqs=%u n_seq_tokens=%u n_rs=%lld n_extra=%u alloc{ss=%d xr=%d xp=%d xw=%d xg=%d}%s\n",
+                    n_seqs, (unsigned) ubatch->n_seq_tokens, (long long) n_rs, n_extra, d_ss != nullptr, d_xr != nullptr, d_xp != nullptr, d_xw != nullptr, d_xg != nullptr, line.c_str());
+            }
             // displaced cells (not in the batch) move every group of their state, and their kept
             // inputs, to the new cell; their rollback index is left pending
             for (uint32_t i = 0; d_xg && i < n_extra; ++i) {
