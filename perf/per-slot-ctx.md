@@ -1,6 +1,12 @@
 # Per-slot context sizes: the size-class work (2026-09-24)
 
-**Status: IN PROGRESS on branch `exp/ctx-classes` (tree `~/play/llama.cpp-ctxclass`, off prod cdcb10e86).** Owner's use
+**Status 2026-09-24 02:00: PROPOSED, owner decides - branch `exp/ctx-classes` (tree `~/play/llama.cpp-ctxclass`, off prod
+cdcb10e86). The lever is `GGML_FA_GQA_WMIN_MS=2 GGML_FA_GQA_WMIN_KVMIN=8192` (the GQA-reuse FA tile at width 2 on
+multi-stream calls whose extent exceeds 8K): at the 96K baseline config the mix round 225 -> 146 ms, coordinator 7.57 ->
+11.56 t/s, executors 7.78 -> 12.14 per stream (29.8 aggregate); executors alone and the solo coordinator byte-identical
+to the baseline (all 8 shas), the mix 5/7 shas held and 2 moved on the width-2 route - a multi-slot width-2 lineage
+move, recurring run to run. Lever 1 (per-stream KV extent) is byte-identical and inert; the slot budget at 16 is a
+wash. See "The proposed configuration" at the end.** Owner's use
 case (memory `per-slot-context-sizes-state`): one resident 96K coordinator + short-lived executors, deterministic, no
 starvation. The plan's order (2026-09-23 night): single-class byte-identical gate first, then per-stream KV length in
 the decode FA kernels, then the memory layout. Baseline = `slot-mix.md` "The per-slot context baseline"
@@ -122,3 +128,36 @@ requests and a round boundary, and a mix-phase sha is only evidence when it recu
   (`get_k/get_v` view a contiguous stream range, `cpy_k/cpy_v` use global indices). Per-class sizes need a per-stream
   offset table in the FA kernels (the same input as `kv_len`, `[2, n_stream]`) and offset-based indices; the value on
   this 48 GB box is memory (4 x 1.6 GB Turbo4 at 96K today vs 1.6 + 3 x 0.13), not speed.
+
+## The proposed configuration, gated (`gqaw2k8-96k`, 01:32-01:52)
+
+`GGML_FA_GQA_WMIN_MS=2 GGML_FA_GQA_WMIN_KVMIN=8192` on the ctxclass binary (f68eeb468), the Sep 23 baseline config:
+
+| phase | baseline (split, Sep 23) | proposed | shas |
+|---|---|---|---|
+| executors alone, per stream / aggregate | 17.94 / 39.98 | 18.18 / 40.53 | 6/6 identical (extent < 8K = the old route) |
+| coordinator solo (96K prefill 1045 s) | 21.12 | 21.23 | 318524e3ecaa both |
+| mix coordinator (overlap window) | 7.53 | **11.52** (+53%) | 7a2e58f5669a both |
+| mix executors per stream / aggregate | 7.78 / 19.55 | **12.14 / 29.83** (+56% / +53%) | 5/7 held; 04-math 0749107642e8 -> 92977c8bec89 (its execs-phase text), 02-prose 92fd53479c9d -> a4f1c47dfd61 |
+| mix round, coordinator / executors | 225 / 216-244 ms | 146 / 140-157 | |
+
+The mix shas are identical between the two lever-2 runs (`gqaw2-96k`, `gqaw2k8-96k`: 7/7), so the two moves are the
+kernel family, not timing. Against the UNIFIED baseline (8.68 / 9.51) the proposed split arm is +33% / +28%: the
+size-class question "can split mode beat unified" is answered before any layout work.
+
+**Adoption.** Multi-stream only, extent > 8K only: every one-slot arm of the mint and the multislot gate arm (f16,
+512-cell extents) run the old routes - their shas cannot move. What moves is multi-slot text whose long stream
+verifies at width 2: the same `qtnw16o gqah=6` tile family the pick already runs at widths 5-6, at a new width.
+Owner's call on the lineage; a pairwise decode-path KLD on multi-slot width-2 text (the per-width recipe of
+`ud-width5-decode-kld`) is the formal gate if wanted. If adopted: both flags into `perf/pick.sh` PICK_ENV (BI class
+with a multi-stream lineage note), and `run-multislot-gate.sh` gains a long-extent arm (a 32K coordinator + 3
+executors, `PHASES=execs,solo,mix`, ~6 min) so this route is gated from now on.
+
+**Open after this:**
+- width 1 (5+ slots, the budget turns speculation off): `GGML_FA_GQA_WMIN_MS=1` puts the 6 GQA rows in one 8-row
+  tile per KV head; untested (the owner's use case is 1 + 3).
+- the size-class memory layout: memory only (48 GB box: 4 x 1.6 GB Turbo4 at 96K + the drafter's f16 per slot);
+  design = a per-stream offset table beside `kv_len` in the FA op, offset-based `k_idxs`/`v_idxs`, per-stream cell
+  counts, a per-slot cap list in the server. Start it when the owner wants more executor slots than the box holds.
+- the slot budget policy for 2-3 generating slots (depth 1 today, 8/n - 1): the width-3 GQA route at 2 slots
+  (budget 8 -> depth 3, width 4) is already the single-stream route; nothing to do there.
