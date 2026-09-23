@@ -41,7 +41,7 @@ def stream_completion(port, prompt, n_predict, id_slot, on_first=None):
     return {
         "id_slot": id_slot, "t_start": t_start, "t_first": stamps[0] if stamps else None,
         "t_end": time.time(), "stamps": stamps, "sha1": hashlib.sha1(text.encode()).hexdigest()[:12],
-        "n_content": len(text), "prompt_n": t.get("prompt_n"), "prompt_ms": t.get("prompt_ms"),
+        "n_content": len(text), "text": text, "prompt_n": t.get("prompt_n"), "prompt_ms": t.get("prompt_ms"),
         "prompt_tps": t.get("prompt_per_second"), "predicted_n": t.get("predicted_n"),
         "predicted_ms": t.get("predicted_ms"), "tps": t.get("predicted_per_second"),
         "draft_n": t.get("draft_n"), "draft_n_accepted": t.get("draft_n_accepted"),

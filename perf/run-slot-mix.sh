@@ -11,7 +11,7 @@
 set -u
 if [ -z "${CAFFEINATED:-}" ]; then exec env CAFFEINATED=1 caffeinate -dimsu "$0" "$@"; fi
 B=${B:-/Users/troff/play/llama.cpp-prod}   # the tree whose binary AND pick.sh run; export B for an experiment tree
-BIN=$B/build/bin
+BIN=${BIN:-$B/build/bin}   # BIN= runs another tree's binary under this tree's pick.sh/prompts (a bisect step, an old anchor build)
 SD=$(cd "$(dirname "$0")" && pwd)                 # the driver lives beside this script
 LINE=${LINE:-q4}
 KV=${KV:-turbo4}
@@ -59,6 +59,12 @@ pick_check "$LINE" || exit 1
 COORD=$(pick_prompt "$COORD_PROMPT")
 EXECS=(); for p in $EXEC_PROMPTS; do EXECS+=("$(pick_prompt "$p")"); done
 pick_env "$LINE" "$KV"
+# UNSET_ENV="A B": drop those names from the pick env. A presence-based flag cannot be turned off with =0
+# (README trap 2026-09-02); this is how the 2026-09-23 hunt split the pick one flag at a time (slot-mix.md).
+if [ -n "${UNSET_ENV:-}" ]; then
+  keep=(); for kv in "${PICK_ENV[@]}"; do n=${kv%%=*}; drop=0; for u in $UNSET_ENV; do [ "$n" = "$u" ] && drop=1; done; [ $drop = 0 ] && keep+=("$kv"); done
+  PICK_ENV=("${keep[@]}"); echo "unset from pick env: $UNSET_ENV"
+fi
 pick_args "$LINE" "$KV"
 ARGS=(); skip=0
 for a in "${PICK_ARGS[@]}"; do   # context and slot count are the arm's, not the manifest's
