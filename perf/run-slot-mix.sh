@@ -36,6 +36,24 @@ SYNC_TIMEOUT=${SYNC_TIMEOUT:-15}   # GGML_METAL_SYNC_TIMEOUT: a command-buffer w
 EXTRA_ARGS=${EXTRA_ARGS:-}
 mkdir -p "$OUT"
 
+# A server killed while a GPU kernel spins can stay in kernel exit (ps state E): it keeps its port and its GPU
+# allocations, the next server fails to allocate or hangs for unrelated reasons, and a `wait` on it never returns
+# (2026-09-23, perf/slot-mix.md). Refuse to start beside one, and after every kill check that the pid is really gone.
+stuck_servers() { ps -axo pid=,stat=,command= | awk '$2 ~ /E/ && $0 ~ /llama-server/ {print $1}'; }
+if [ -n "$(stuck_servers)" ]; then
+  echo "ABORT: llama-server pid(s) $(stuck_servers | tr '\n' ' ')are stuck in kernel exit (ps state E) holding GPU allocations - reboot before the next GPU run"; exit 3
+fi
+kill_server() {  # kill_server <pid>: TERM, then KILL, then prove the exit; a pid that survives SIGKILL is wedged
+  local pid=$1
+  kill -TERM $pid 2>/dev/null; for i in $(seq 1 120); do kill -0 $pid 2>/dev/null || break; sleep 1; done
+  kill -9 $pid 2>/dev/null; for i in $(seq 1 10); do kill -0 $pid 2>/dev/null || break; sleep 1; done
+  if kill -0 $pid 2>/dev/null; then
+    echo "  SERVER PID $pid SURVIVED SIGKILL (ps state $(ps -o stat= -p $pid)): stuck in kernel exit, its GPU context is wedged - REBOOT before the next GPU run. Not running further arms."
+    exit 3
+  fi
+  wait $pid 2>/dev/null
+}
+
 source "$B/perf/pick.sh"
 pick_check "$LINE" || exit 1
 COORD=$(pick_prompt "$COORD_PROMPT")
@@ -90,6 +108,6 @@ for arm in $ARMS; do
       grep -q "sync-guard: backend" "$slog" && echo "  THE SYNC GUARD FIRED - the GPU hung; graph dump in the log. Not running further arms." && exit 2
     fi
   fi
-  kill -TERM $pid 2>/dev/null; for i in $(seq 1 120); do kill -0 $pid 2>/dev/null || break; sleep 1; done; kill -9 $pid 2>/dev/null; wait $pid 2>/dev/null
+  kill_server $pid
 done
 echo; echo "results: $OUT/$TAG-*.json"
