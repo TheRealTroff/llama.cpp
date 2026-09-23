@@ -540,6 +540,10 @@ void llm_graph_input_attn_kv::set_input(const llama_ubatch * ubatch) {
         mctx->set_input_kq_mask(self_kq_mask, ubatch, cparams.causal_attn);
     }
 
+    if (self_kv_len && self_kv_len->buffer) {
+        mctx->set_input_kv_len(self_kv_len, ubatch);
+    }
+
     if (self_k_rot && self_k_rot->buffer) {
         mctx->set_input_k_rot(self_k_rot);
     }
@@ -560,6 +564,10 @@ bool llm_graph_input_attn_kv::can_reuse(const llm_graph_params & params) {
   //res &= self_v_idxs->ne[0] == params.ubatch.n_tokens; // TODO: need to move this to the unified cache and check there
 
     res &= can_reuse_kq_mask(self_kq_mask, mctx, params.ubatch, params.cparams);
+
+    if (self_kv_len) {
+        res &= self_kv_len->ne[0] == (params.cparams.kv_unified ? 1 : params.ubatch.n_seqs_unq);
+    }
 
     return res;
 }
@@ -1129,6 +1137,12 @@ void llm_graph_input_mem_hybrid::set_input(const llama_ubatch * ubatch) {
 
     mctx->get_attn()->set_input_kq_mask(inp_attn->self_kq_mask, ubatch, cparams.causal_attn);
 
+    // the per-stream KV extent (split mode); the hybrid input sets the attention inputs itself, so this mirrors
+    // llm_graph_input_attn_kv::set_input (an unset extent = a truncated attention, 2026-09-24 smoke)
+    if (inp_attn->self_kv_len && inp_attn->self_kv_len->buffer) {
+        mctx->get_attn()->set_input_kv_len(inp_attn->self_kv_len, ubatch);
+    }
+
     if (inp_attn->self_k_rot) {
         mctx->get_attn()->set_input_k_rot(inp_attn->self_k_rot);
     }
@@ -1153,6 +1167,10 @@ bool llm_graph_input_mem_hybrid::can_reuse(const llm_graph_params & params) {
   //res &= inp_attn->self_v_idxs->ne[0] == params.ubatch.n_tokens; // TODO: need to move this to the unified cache and check there
 
     res &= can_reuse_kq_mask(inp_attn->self_kq_mask, mctx->get_attn(), params.ubatch, params.cparams);
+
+    if (inp_attn->self_kv_len) {
+        res &= inp_attn->self_kv_len->ne[0] == (params.cparams.kv_unified ? 1 : params.ubatch.n_seqs_unq);
+    }
 
     res &= inp_rs->can_reuse_rs(mctx->get_recr(), params.ubatch); // view offset / gather / replay shape are topology
 
@@ -2545,7 +2563,8 @@ ggml_tensor * llm_graph_context::build_attn_mha(
          ggml_tensor * sinks,
          ggml_tensor * v_mla,
                float   kq_scale,
-                 int   il) const {
+                 int   il,
+         ggml_tensor * kv_len) const {
     const bool v_trans = v->nb[1] > v->nb[2];
 
     // split the batch into streams if needed
@@ -2581,6 +2600,7 @@ ggml_tensor * llm_graph_context::build_attn_mha(
         res->add_fused_node({LLM_FUSED_OP_FLASH_ATTN, cur, il});
 
         ggml_flash_attn_ext_add_sinks(cur, sinks);
+        ggml_flash_attn_ext_set_kv_len(cur, kv_len);
         ggml_flash_attn_ext_set_prec (cur, GGML_PREC_F32);
 
         // TurboQuant V stays in the rotated domain; undo the rotation on the attention output
@@ -2778,6 +2798,18 @@ static std::unique_ptr<llm_graph_input_attn_kv> build_attn_inp_kv_impl(
 
         inp->self_kq_mask = build_attn_inp_kq_mask(ctx0, mctx_cur, ubatch, cparams);
         inp->self_kq_mask_cnv = inp->self_kq_mask;
+
+        // split mode: the per-stream KV extent, so a short stream's attention stops at its own cells instead of
+        // the ubatch's longest stream (llama_kv_cache::set_input_kv_len; unified and single-stream graphs unchanged)
+        // LLAMA_ATTN_KV_LEN=0: do not create the input at all (the graph is exactly the old one) - the graph-level kill switch
+        static const bool env_kv_len = getenv("LLAMA_ATTN_KV_LEN") ? atoi(getenv("LLAMA_ATTN_KV_LEN")) != 0 : true;
+        if (env_kv_len && mctx_cur->get_n_stream() > 1) {
+            const auto n_stream = cparams.kv_unified ? 1 : ubatch.n_seqs_unq;
+
+            inp->self_kv_len = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_stream);
+            ggml_set_input(inp->self_kv_len);
+            ggml_set_name(inp->self_kv_len, "attn_inp_kv_len");
+        }
     }
 
     inp->self_k_rot = mctx_cur->build_input_k_rot(ctx0);
@@ -2853,7 +2885,7 @@ ggml_tensor * llm_graph_context::build_attn(
         cb(q, "q_turbo_wht", il);
     }
 
-    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, kq_scale, il);
+    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, kq_scale, il, inp->self_kv_len);
     cb(cur, "kqv_out", il);
 
     if (inp->self_v_rot) {

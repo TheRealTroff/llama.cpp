@@ -2279,6 +2279,9 @@ int llama_context::decode(const llama_batch & batch_inp) {
     do {
         const auto & ubatch = mctx->get_ubatch();
 
+        LLAMA_LOG_DEBUG("%s: ubatch n_tokens = %u, n_seqs = %u, n_seq_tokens = %u, n_seqs_unq = %u\n", __func__,
+                ubatch.n_tokens, ubatch.n_seqs, ubatch.n_seq_tokens, ubatch.n_seqs_unq);
+
         // count the outputs in this ubatch
         {
             int32_t n_outputs_new = 0;

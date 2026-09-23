@@ -214,6 +214,7 @@ public:
     void set_input_k_shift(ggml_tensor * dst) const;
 
     void set_input_kq_mask   (ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const;
+    void set_input_kv_len    (ggml_tensor * dst, const llama_ubatch * ubatch) const; // I32 [n_stream of the ubatch]: per-stream KV extent
     void set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const;
 
     void set_input_k_rot(ggml_tensor * dst) const;
@@ -365,6 +366,7 @@ public:
     //
 
     uint32_t get_n_kv() const;
+    uint32_t get_n_stream() const;
 
     ggml_type type_k() const;
     ggml_type type_v() const;
@@ -396,6 +398,7 @@ public:
 
     void set_input_k_shift   (ggml_tensor * dst) const;
     void set_input_kq_mask   (ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const;
+    void set_input_kv_len    (ggml_tensor * dst, const llama_ubatch * ubatch) const; // I32 [n_stream of the ubatch]: per-stream KV extent
     void set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const;
 
     void set_input_k_rot(ggml_tensor * dst) const;
