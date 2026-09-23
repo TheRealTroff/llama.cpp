@@ -3492,6 +3492,24 @@ static int64_t ggml_metal_mul_mat_eff_ne11(const ggml_tensor * op) {
     return ggml_metal_mul_mat_soa_folds(op) ? op->src[1]->ne[1]*op->src[1]->ne[2]*op->src[1]->ne[3] : op->src[1]->ne[1];
 }
 
+// the fold itself: the 2D op the encoder actually routes ([K, T*S] activation, [M, T*S] output). Shared by
+// ggml_metal_op_mul_mat and the alloc-size query so both see the same shape - the 2026-09-23 multi-slot
+// hunt (perf/slot-mix.md): the encoder folded a per-sequence projection, took the GGML_MM_F16B mm route and
+// cast T*S columns into the scratch behind dst, while the alloc-size query saw the 3D op, failed the mm
+// gate (ne12 > 1) and reserved nothing -> the cast overwrote the tensors behind dst (garbage logits,
+// NaN drafter caches) or unmapped memory (the GPU hang) in every multi-sequence graph.
+static void ggml_metal_mul_mat_fold(const ggml_tensor * op, ggml_tensor & dstf, ggml_tensor & src1f) {
+    src1f = *op->src[1];
+    dstf  = *op;
+    src1f.ne[1] = op->src[1]->ne[1]*op->src[1]->ne[2]*op->src[1]->ne[3];
+    src1f.ne[2] = 1; src1f.ne[3] = 1;
+    src1f.nb[2] = src1f.nb[1]*src1f.ne[1]; src1f.nb[3] = src1f.nb[2];
+    dstf.ne[1] = op->ne[1]*op->ne[2]*op->ne[3];
+    dstf.ne[2] = 1; dstf.ne[3] = 1;
+    dstf.nb[2] = dstf.nb[1]*dstf.ne[1]; dstf.nb[3] = dstf.nb[2];
+    dstf.src[1] = &src1f;
+}
+
 // prefill-side f16 activations (perf/ud-model.md step 10, GGML_MM_F16B=1): the mul_mm tile converts
 // its B operand to half at staging anyway, so casting src1 once into the scratch and running the
 // *_f16 tile is byte-identical and skips the per-K-step convert plus half the B bytes. Must agree
@@ -3536,6 +3554,15 @@ static bool ggml_metal_mul_mat_use_f16_src1_mm(const ggml_tensor * op) {
 size_t ggml_metal_op_mul_mat_extra_src1f16(const ggml_tensor * op) {
     if (ggml_metal_mul_mat_use_f16_src1_mm(op)) {
         return GGML_PAD(ggml_nelements(op->src[1])*sizeof(ggml_fp16_t), 32);
+    }
+    // a folded per-sequence projection is routed as its 2D fold: ask the mm gate about THAT shape (the fix of
+    // 2026-09-23, see ggml_metal_mul_mat_fold); the element count is the same either way
+    if (ggml_metal_mul_mat_soa_folds(op)) {
+        ggml_tensor src1f, dstf;
+        ggml_metal_mul_mat_fold(op, dstf, src1f);
+        if (ggml_metal_mul_mat_use_f16_src1_mm(&dstf)) {
+            return GGML_PAD(ggml_nelements(op->src[1])*sizeof(ggml_fp16_t), 32);
+        }
     }
     // the f16 activation scratch lives right after dst; this must match the encode-time route
     // (the fold made a [K,1,S] projection a 3-column f16y op while this reserved nothing: the
@@ -3791,15 +3818,8 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
     // same matmul as [K, T*S]: fold the batch dims into the column count so the width routes
     // (w1..w8, skinny, mm) apply with N = T*S columns, exactly like the token-major projections.
     if (ggml_metal_mul_mat_soa_folds(op)) {
-        ggml_tensor src1f = *op->src[1];
-        ggml_tensor dstf  = *op;
-        src1f.ne[1] = op->src[1]->ne[1]*op->src[1]->ne[2]*op->src[1]->ne[3];
-        src1f.ne[2] = 1; src1f.ne[3] = 1;
-        src1f.nb[2] = src1f.nb[1]*src1f.ne[1]; src1f.nb[3] = src1f.nb[2];
-        dstf.ne[1] = op->ne[1]*op->ne[2]*op->ne[3];
-        dstf.ne[2] = 1; dstf.ne[3] = 1;
-        dstf.nb[2] = dstf.nb[1]*dstf.ne[1]; dstf.nb[3] = dstf.nb[2];
-        dstf.src[1] = &src1f;
+        ggml_tensor src1f, dstf;
+        ggml_metal_mul_mat_fold(op, dstf, src1f);
         return ggml_metal_op_mul_mat_impl(ctx, idx, &dstf);
     }
 
