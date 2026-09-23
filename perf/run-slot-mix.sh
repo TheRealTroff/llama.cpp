@@ -30,6 +30,9 @@ LV=${LV:-}
 OUT=/Users/troff/play/kvquant-experiments/results
 TAG=${TAG:-slotmix-$(date +%m%d-%H%M)}
 EXTRA_ENV=${EXTRA_ENV:-}
+SYNC_TIMEOUT=${SYNC_TIMEOUT:-15}   # GGML_METAL_SYNC_TIMEOUT: a command-buffer wait over this many seconds = a hung GPU; the server dumps
+                                  # the graph in flight and SIGKILLs itself, well inside WindowServer's 40 s watchdog (2026-09-23 it
+                                  # took the login session down). 0 = off. Needs a binary with the guard (exp/slot-ctx-classes).
 EXTRA_ARGS=${EXTRA_ARGS:-}
 mkdir -p "$OUT"
 
@@ -66,7 +69,7 @@ for arm in $ARMS; do
   for i in $(seq 1 90); do lsof -ti :$PORT >/dev/null 2>&1 || break; sleep 2; done
   if lsof -ti :$PORT >/dev/null 2>&1; then echo "ABORT: port $PORT busy"; exit 1; fi
   echo; echo "--- arm $arm: ${arm_args[*]} (log $slog)"
-  env "${PICK_ENV[@]}" $EXTRA_ENV "$BIN/llama-server" -m "$PICK_MODEL" "${ARGS[@]}" "${arm_args[@]}" \
+  env "${PICK_ENV[@]}" GGML_METAL_SYNC_TIMEOUT=$SYNC_TIMEOUT $EXTRA_ENV "$BIN/llama-server" -m "$PICK_MODEL" "${ARGS[@]}" "${arm_args[@]}" \
     "${spec[@]}" $EXTRA_ARGS ${LV:+-lv "$LV"} --port $PORT >"$slog" 2>&1 &
   pid=$!; ok=0
   for i in $(seq 1 300); do
@@ -82,6 +85,10 @@ for arm in $ARMS; do
     echo "  wall $(( $(date +%s) - t0 )) s"
     grep -E 'spec-prof (round|loop_body)' "$slog" | tail -2 | sed -E 's/^[0-9.]+ I srv +operator\(\): /  /'
     grep -ciE "error|failed" "$slog" | sed 's/^/  server log error lines: /'
+    if ! kill -0 $pid 2>/dev/null; then
+      echo "  SERVER DIED DURING THE ARM (log $slog):"; grep -m3 "sync-guard: backend\|sync-guard: graph" "$slog" | sed 's/^/    /'
+      grep -q "sync-guard: backend" "$slog" && echo "  THE SYNC GUARD FIRED - the GPU hung; graph dump in the log. Not running further arms." && exit 2
+    fi
   fi
   kill -TERM $pid 2>/dev/null; for i in $(seq 1 120); do kill -0 $pid 2>/dev/null || break; sleep 1; done; kill -9 $pid 2>/dev/null; wait $pid 2>/dev/null
 done

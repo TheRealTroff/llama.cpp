@@ -245,6 +245,10 @@ struct ggml_metal {
     // once set, graph_compute will return GGML_STATUS_FAILED until the backend is recreated
     bool has_error;
 
+    // sync guard (GGML_METAL_SYNC_TIMEOUT): when a wait on a command buffer starts, the monotonic time in ns; 0 = not waiting
+    _Atomic int64_t wait_since_ns;
+    const char *    wait_where;
+
     // ordinal for the profiler key - separates per-model rows (target/drafter dims collide)
     int prof_id;
 
@@ -347,6 +351,9 @@ static void ggml_metal_submit_prof_attach(struct ggml_metal_submit_rec * rec, id
         ggml_metal_submit_prof_complete(rec);
     }];
 }
+
+static void ggml_metal_sync_guard_register  (ggml_metal_t ctx);
+static void ggml_metal_sync_guard_unregister(ggml_metal_t ctx);
 
 ggml_metal_t ggml_metal_init(ggml_metal_device_t dev) {
     GGML_LOG_INFO("%s: allocating\n", __func__);
@@ -458,11 +465,17 @@ ggml_metal_t ggml_metal_init(ggml_metal_device_t dev) {
 
     res->pipelines_ext = ggml_metal_pipelines_init();
 
+    atomic_store(&res->wait_since_ns, 0);
+    res->wait_where = NULL;
+    ggml_metal_sync_guard_register(res);
+
     return res;
 }
 
 void ggml_metal_free(ggml_metal_t ctx) {
     GGML_LOG_INFO("%s: deallocating\n", __func__);
+
+    ggml_metal_sync_guard_unregister(ctx);
 
     if (ggml_metal_prof_enabled()) {
         ggml_metal_synchronize(ctx);
@@ -516,10 +529,126 @@ const char * ggml_metal_get_name(ggml_metal_t ctx) {
     return ctx->name;
 }
 
+// ---- sync guard ------------------------------------------------------------------------------------------
+// GGML_METAL_SYNC_TIMEOUT=<seconds> (off unless set): a watchdog thread that SIGKILLs this process when a wait on a
+// command buffer exceeds the deadline. A hung GPU command buffer stalls every Metal client on the machine, WindowServer
+// included, and macOS kills WindowServer - and with it the whole login session - after 40 s of that (2026-09-23,
+// the --kv-unified 3-slot run). Killing the offending process is the only thing that can free the GPU in time.
+// Before dying, the guard dumps the graph in flight (op, name, ne, src shapes) to the log so the hang can be located.
+// The hot path pays two atomic stores per wait; the watchdog polls every 250 ms.
+#include <pthread.h>
+#include <signal.h>
+#include <time.h>
+
+#define GGML_METAL_SYNC_GUARD_MAX 16
+
+static ggml_metal_t     g_sync_guard_ctxs[GGML_METAL_SYNC_GUARD_MAX];
+static int              g_sync_guard_n       = 0;
+static double           g_sync_guard_timeout = 0.0;
+static pthread_mutex_t  g_sync_guard_mutex   = PTHREAD_MUTEX_INITIALIZER;
+static bool             g_sync_guard_started = false;
+
+static int64_t ggml_metal_sync_guard_now_ns(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (int64_t) ts.tv_sec * 1000000000LL + ts.tv_nsec;
+}
+
+static void ggml_metal_sync_guard_dump_graph(ggml_metal_t ctx) {
+    struct ggml_cgraph * gf = ctx->gf;
+    if (!gf) {
+        GGML_LOG_ERROR("sync-guard: no graph recorded for backend %s\n", ctx->name);
+        return;
+    }
+    GGML_LOG_ERROR("sync-guard: graph in flight on backend %s: %d nodes (main thread %d, %d per extra cb, n_cb %d)\n",
+        ctx->name, gf->n_nodes, ctx->n_nodes_0, ctx->n_nodes_per_cb, ctx->n_cb);
+    for (int i = 0; i < gf->n_nodes; ++i) {
+        const struct ggml_tensor * t = gf->nodes[i];
+        if (!t) continue;
+        char line[512];
+        int n = snprintf(line, sizeof(line), "sync-guard:   [%4d] %-16s %-40s %s ne=[%lld %lld %lld %lld]",
+            i, ggml_op_name(t->op), t->name, ggml_type_name(t->type),
+            (long long) t->ne[0], (long long) t->ne[1], (long long) t->ne[2], (long long) t->ne[3]);
+        for (int k = 0; k < GGML_MAX_SRC && n < (int) sizeof(line) - 80; ++k) {
+            const struct ggml_tensor * src = t->src[k];
+            if (!src) continue;
+            n += snprintf(line + n, sizeof(line) - n, " src%d=%s[%lld %lld %lld %lld]", k, ggml_type_name(src->type),
+                (long long) src->ne[0], (long long) src->ne[1], (long long) src->ne[2], (long long) src->ne[3]);
+        }
+        GGML_LOG_ERROR("%s\n", line);
+    }
+}
+
+static void * ggml_metal_sync_guard_thread(void * arg) {
+    (void) arg;
+    const int64_t timeout_ns = (int64_t) (g_sync_guard_timeout * 1e9);
+    for (;;) {
+        usleep(250 * 1000);
+        const int64_t now = ggml_metal_sync_guard_now_ns();
+        pthread_mutex_lock(&g_sync_guard_mutex);
+        for (int i = 0; i < g_sync_guard_n; ++i) {
+            ggml_metal_t ctx = g_sync_guard_ctxs[i];
+            const int64_t since = atomic_load_explicit(&ctx->wait_since_ns, memory_order_acquire);
+            if (since != 0 && now - since > timeout_ns) {
+                GGML_LOG_ERROR("sync-guard: backend %s has waited %.1f s in %s (limit %.1f s) - the GPU is hung; dumping the graph and killing pid %d\n",
+                    ctx->name, (now - since) / 1e9, ctx->wait_where ? ctx->wait_where : "?", g_sync_guard_timeout, (int) getpid());
+                ggml_metal_sync_guard_dump_graph(ctx);
+                GGML_LOG_ERROR("sync-guard: SIGKILL in 1.5 s (letting the asynchronous log thread drain the dump)\n");
+                fflush(stderr);
+                usleep(1500 * 1000);
+                kill(getpid(), SIGKILL);
+            }
+        }
+        pthread_mutex_unlock(&g_sync_guard_mutex);
+    }
+    return NULL;
+}
+
+static void ggml_metal_sync_guard_register(ggml_metal_t ctx) {
+    const char * val = getenv("GGML_METAL_SYNC_TIMEOUT");
+    if (!val || atof(val) <= 0.0) {
+        return;
+    }
+    pthread_mutex_lock(&g_sync_guard_mutex);
+    g_sync_guard_timeout = atof(val);
+    if (g_sync_guard_n < GGML_METAL_SYNC_GUARD_MAX) {
+        g_sync_guard_ctxs[g_sync_guard_n++] = ctx;
+    }
+    if (!g_sync_guard_started) {
+        pthread_t th;
+        if (pthread_create(&th, NULL, ggml_metal_sync_guard_thread, NULL) == 0) {
+            pthread_detach(th);
+            g_sync_guard_started = true;
+            GGML_LOG_INFO("%s: sync guard armed: a command-buffer wait over %.1f s dumps the graph and SIGKILLs the process\n", __func__, g_sync_guard_timeout);
+        }
+    }
+    pthread_mutex_unlock(&g_sync_guard_mutex);
+}
+
+static void ggml_metal_sync_guard_unregister(ggml_metal_t ctx) {
+    pthread_mutex_lock(&g_sync_guard_mutex);
+    for (int i = 0; i < g_sync_guard_n; ++i) {
+        if (g_sync_guard_ctxs[i] == ctx) {
+            g_sync_guard_ctxs[i] = g_sync_guard_ctxs[--g_sync_guard_n];
+            break;
+        }
+    }
+    pthread_mutex_unlock(&g_sync_guard_mutex);
+}
+
+// the guarded form of [cmd_buf waitUntilCompleted]: brackets the wait for the watchdog
+static void ggml_metal_wait_guarded(ggml_metal_t ctx, id<MTLCommandBuffer> cmd_buf, const char * where) {
+    ctx->wait_where = where;
+    atomic_store_explicit(&ctx->wait_since_ns, ggml_metal_sync_guard_now_ns(), memory_order_release);
+    [cmd_buf waitUntilCompleted];
+    atomic_store_explicit(&ctx->wait_since_ns, 0, memory_order_release);
+}
+// ---- end sync guard --------------------------------------------------------------------------------------
+
 void ggml_metal_synchronize(ggml_metal_t ctx) {
     // wait for any backend operations to finish
     if (ctx->cmd_buf_last) {
-        [ctx->cmd_buf_last waitUntilCompleted];
+        ggml_metal_wait_guarded(ctx, ctx->cmd_buf_last, "synchronize");
         ctx->cmd_buf_last = nil;
     }
 
@@ -743,7 +872,7 @@ enum ggml_status ggml_metal_graph_compute(ggml_metal_t ctx, struct ggml_cgraph *
     // before this graph can overwrite the source
     if (ctx->n_get_deferred > 0) {
         if (ctx->cmd_buf_last) {
-            [ctx->cmd_buf_last waitUntilCompleted];
+            ggml_metal_wait_guarded(ctx, ctx->cmd_buf_last, "graph_compute/deferred-get");
         }
         ggml_metal_drain_deferred_gets(ctx);
     }
