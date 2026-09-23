@@ -87,8 +87,10 @@ A Metal command queue admits 64 uncompleted command buffers by default; past tha
 blocks until one completes. The 64-way split plus the main buffer plus the drafter's exceeds it while the layer 8
 buffer spins ahead of everything, so encoder threads block inside the driver's submit path, where SIGKILL cannot
 reach them, and the context is never torn down (ps state E, allocations and the spinning kernel kept). The
-ordinary two-buffer runs never touched the limit and every kill was clean. Unconfirmed: `sample <pid>` on a
-wedged server before the reboot would show where the threads sit. Tool rule: keep `GGML_METAL_NCB` at <= 16
+ordinary two-buffer runs never touched the limit and every kill was clean. Checked afterwards: `sample` cannot
+attach to a wedged pid and `ps -M` lists NO threads - user space is fully torn down, the process is wedged in
+the kernel's exit path, i.e. the driver destroying a context with a spinning buffer and ~60 queued behind it. A
+kernel stack needs `sudo spindump <pid>` (owner) before the reboot. Tool rule: keep `GGML_METAL_NCB` at <= 16
 (about four layers per buffer) and bisect inside a buffer with a second run, never by splitting finer.
 
 ## Machine state at hand-off
