@@ -83,6 +83,23 @@ priced pairwise like the other decode-route moves if adopted). The executors-alo
 2-4% per round back: at 512-cell extents the 16-row tile's per-KV-head pass is not cheaper than six 8-row
 passes. A route rule by extent (the tile from ~8K cells up, like `GGML_FA_Q16_KVMIN`) would keep both.
 
+## The slot budget at 16 on top of lever 2 - a wash in the mix (refuted for this workload)
+
+`budget16-96k` = lever 2 + `LLAMA_SPEC_SLOT_BUDGET=16 LLAMA_SPEC_SLOT_BUDGET_WIDE=16 GGML_MM_SKINNY_N16=1` (3 slots
+-> depth 4, 4 slots -> depth 3, the fused 16-column projection tile; `parallel-streams.md`):
+
+| | lever 2 (budget 8) | + budget 16 |
+|---|---|---|
+| mix coordinator / acceptance | 11.53 t/s / 76% | 10.89 / 48% |
+| mix executors per stream / aggregate | 12.08 / 29.7 | 12.03 / 28.1 |
+| executors alone per stream | 17.53 (JSON 29, prose 12) | 20.23 (JSON 62, prose 7.6, math 18.6) |
+| solo coordinator | 21.22, 318524e3ecaa | 21.11, 318524e3ecaa |
+
+At 4 slots the deeper drafts halve the coordinator's acceptance and the 16-column round is ~2x the 8-column one:
+the extra tokens per round pay for the round, no more. Executors alone gain 15% on average with a per-prompt spread
+of 8x (JSON near 100% acceptance flies, prose at depth 4 crawls). Not a lever for the coordinator + executors
+workload at 96K; the parallel-streams numbers (8K contexts, 4-8 equal slots) stand as their own case.
+
 ## Mix-phase determinism
 
 At 96K the mix phase reproduced every sha across two binaries and two days (7 requests). At 32K two of seven mix
