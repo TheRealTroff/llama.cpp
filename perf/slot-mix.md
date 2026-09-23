@@ -61,12 +61,18 @@ GATED_DELTA_NET [6144 1006] on q/k [128 16 74 3] + xp [10336 3 8] + xrep/xrow i3
 the kept-input SET_ROWS) never completes, while the identical blocks of layers 0-2 and 4-6 did. The host inputs
 of that ubatch (LLAMA_GDN_REPLAY_DBG=1, t23/t25) are legitimate and identical under f16 and Turbo4: all three
 sequences are fresh, cell 1 is the batch's zero cell (src0=ss=1 for all, rrow=5, rep=0, wrow=1/2/3). `ioreg`
-shows Device Utilization 100% from the orphaned processes: a kernel really is spinning. No loop in the delta-net
+shows Device Utilization 100% from the orphaned processes - but the machine is COLD with no fan (owner, 17:xx),
+so no kernel is executing: the counter reports a scheduled-but-blocked buffer as busy. Layer 8's buffer never
+launches. What blocks a scheduled buffer with the GPU idle: an MTLSharedEvent wait ahead of it on the shared
+device queue whose signal never comes (cross-context copies use signal/wait pairs), or a referenced resource the
+driver cannot make resident - the backend encodes with unretained references, so a Metal buffer freed after the
+encode presents as a launch that never happens. Both are host-side ordering bugs; both fit "f16 immune" as an
+allocation-pattern difference rather than arithmetic. No loop in the delta-net
 kernels has a data-dependent bound except the replay count (n_rep = 0 here), the op's src bindings are right
-(src6 xp, src7 xrep, src8 xrow). OPEN: which kernel in nodes 551-611 spins, and why only with Turbo4 KV on the
-attention layers (f16 KV runs the same ubatch with the same inputs). Next tools: GGML_METAL_NCB=64 puts one layer
-per buffer - go finer by encoding the delta-net block's nodes one per buffer (a debug switch in graph_compute), or
-capture the spinning kernel from a wedged machine with the GPU profiler before rebooting.
+(src6 xp, src7 xrep, src8 xrow). OPEN: what the layer-8 buffer waits on. Next tools: log every ggml_metal_event_encode_signal/wait
+(context, value) and every Metal buffer free between encode and completion under the reproducer; run the guard's
+other-context dump (t32 never ran: the GPU was already wedged) to see the drafter's ext buffers; keep
+GGML_METAL_NCB <= 16.
 
 ## Defect 2: garbage drafts at multiple slots (f16 too, replay off too)
 
