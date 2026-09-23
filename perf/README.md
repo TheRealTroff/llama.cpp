@@ -81,6 +81,22 @@ arm is gated by the replay gate, and a timing win is expected to move it. t/s: b
 Sep 18 (the gate said +1.0 / +0.6% - the rest is the day), ud Turbo4 within 1%. `run-prod-pick.sh` now takes `EXTRA` (env
 appended after the pick env) and the replay gate `EXTRA_A` / `EXTRA_B`, both added for this check.**
 
+**2026-09-23 (owner: "obviously we're going to want the fix in prod", then "do 1-3"): `exp/slot-ctx-classes` MERGED (`adea1cc69`) -
+the multi-slot speculation fix** (`slot-mix.md` Resolution: the `GGML_MM_F16B` scratch was never reserved for the folded
+per-sequence `[K,T,S]` matmuls - garbage logits, NaN drafter caches and the GPU hang at >= 2 slots since 2026-09-07), the Metal
+sync guard `GGML_METAL_SYNC_TIMEOUT`, the slot-mix harness, and **the mint's new multi-slot arm** (`run-multislot-gate.sh`, called
+by `run-prod-pick.sh`, `MULTISLOT=0` skips: 3 executors on 3 slots, f16, depth 1, per-slot shas vs the line's reference).
+Single-sequence graphs never fold, so no one-slot sha can move. **Mint TAGs `prodpick-sep23-multislot-{q4,ud}` (prod `582cae336`,
+binary 18:57, AC): q4 f16 32.22 / 32.28 at 300 (`d2953fccfb41`), 33.37 / 33.35 at 600 (`441120c66064`), partial 21.56
+(`95fb10b8e7da`), MTP 22.71, b1 14.29; Turbo4 34.11 at 300 (`86213d038a29`), 33.89 / 33.82 at 600 (`9e49b3d13b31` TWICE - the
+controller arm that forked on Sep 19 picked the replay-gated text both times); multi-slot arm PASS `fa07afbb6c44` /
+`b5639c4c0996` / `68e5283468ff` (acc 75 / 56 / 67%). ud f16 28.19 / 28.20 at 300 (`9c53aaade052`), 27.67 / 27.72 at 600
+(`86b6e9b02cf0`), partial 23.09, MTP 18.82, b1 12.98; Turbo4 29.84 at 300 (`ce826d8a3cbd`), 28.96 / 29.09 at 600
+(`7eaeffa2a01e`); multi-slot arm `fa07afbb6c44` / `a3c90139bbfd` / `68e5283468ff` (acc 75 / 100 / 75%) = THE UD LINE'S FIRST
+MULTI-SLOT RUN, now its reference.** Every one-slot sha = the Sep 19 mint's; the ud pick arms read ~2% under Sep 19 with identical
+shas (evening thermal, the Turbo4 arms are on the Sep 19 numbers). The slot-mix baseline (`run-slot-mix.sh`, this branch's
+original purpose) ran right after with speculation on - `slot-mix.md`.
+
 **2026-09-18 midday (owner: "go ahead"): `exp/skinny-gen-bsplit` MERGED (prod `b2878ceaa`) - the skinny B-split on the generic
 skinny tile, i.e. the UD line's width-6..8 verify path finally takes `GGML_MM_SKINNY_BSPLIT=2` (it had been in the env and inert
 there since Sep 7; `w8-decomp-sep18.md` lever 1): ud fixed-width-8 round 174.5 -> 169.5 ms (-2.9%), byte-identical. Inert at the

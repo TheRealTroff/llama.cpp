@@ -13,7 +13,7 @@ PORT=${PORT:-8098}
 OUT=/Users/troff/play/kvquant-experiments/results
 case "$LINE" in   # slot 1 = 01-code-explain, 2 = 02-prose-creative, 3 = 03-chat-support (perf/prompts, chat-templated)
   q4) REF="fa07afbb6c44 b5639c4c0996 68e5283468ff" ;;   # 2026-09-23 fix gate, prod adea1cc69 (slot-mix.md Resolution)
-  ud) REF="" ;;                                          # never run at > 1 slot before the fix: the first run records
+  ud) REF="fa07afbb6c44 a3c90139bbfd 68e5283468ff" ;;   # first ud multi-slot run ever, mint prodpick-sep23-multislot-ud (acc 75/100/75%)
   *) echo "unknown LINE $LINE"; exit 1 ;;
 esac
 export B LINE PORT TAG="$TAG-multislot-$LINE" KV=f16 ARMS=split PHASES=execs EXEC_ROUNDS=1 NPRED_EXEC=16 CTX_COORD=8192 \
