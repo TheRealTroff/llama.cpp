@@ -88,8 +88,13 @@ passes. A route rule by extent (the tile from ~8K cells up, like `GGML_FA_Q16_KV
 At 96K the mix phase reproduced every sha across two binaries and two days (7 requests). At 32K two of seven mix
 shas forked between the two binaries while every deterministic phase matched. The mix phase's ubatch composition
 depends on when each executor's next request lands relative to a round, so a fork there is a timing fork unless
-the picks (kernel family) differed first (memory `owner-race-evidence-bar`); `kvlen32k-new2` = the new binary run
-again at 32K to see whether it forks from itself.
+the picks (kernel family) differed first (memory `owner-race-evidence-bar`). **Resolved 01:07:** the new binary
+reproduced itself at 32K three times (`kvlen32k-new`, `-new2`, and `-new-k0` = kernels ignoring the extent via
+`GGML_FA_KVLEN=0`: all 14 shas identical, so the extent path is inert on the same composition), and the prod
+binary's rerun (`kvlen32k-ref2`) produced the NEW binary's mix shas - the first reference run was the timing fork
+(its coordinator 9fe3be25e872 and 04-math 0749107642e8 never recurred). Lever 1 is byte-identical on every
+comparison that shares a composition; a 32K mix fork of this harness is a race between the executors' second
+requests and a round boundary, and a mix-phase sha is only evidence when it recurs.
 
 ## Open
 
