@@ -5147,8 +5147,12 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
     // default 3 = the single-stream rule). A multi-slot round under the slot budget verifies at width 1-2, where the
     // 8-row tile streams each KV head once per query head (6x the traffic of the GQA tile at a 96K stream). Single-stream
     // calls keep the width >= 3 rule, so the one-slot lineage is untouched (per-slot context sizes, 2026-09-24)
+    // GGML_FA_GQA_WMIN_KVMIN: the multi-stream rule applies only when the call's KV extent (ne11, the ubatch's longest
+    // stream) exceeds this many cells; at short extents the per-KV-head tile pass is not cheaper than the per-head
+    // 8-row passes (executors alone at 512 cells: -2%), at 96K it is 6x cheaper. 0 = every extent.
     static const int env_fa_gqa_wmin_ms = getenv("GGML_FA_GQA_WMIN_MS") ? atoi(getenv("GGML_FA_GQA_WMIN_MS")) : 3;
-    const int gqa_wmin = ne03 > 1 ? env_fa_gqa_wmin_ms : 3;
+    static const int env_fa_gqa_wmin_kvmin = getenv("GGML_FA_GQA_WMIN_KVMIN") ? atoi(getenv("GGML_FA_GQA_WMIN_KVMIN")) : 0;
+    const int gqa_wmin = ne03 > 1 && ne11 > env_fa_gqa_wmin_kvmin ? env_fa_gqa_wmin_ms : 3;
     const bool use_gqa_reuse = gqa_ratio_enabled && (is_turbo4_kv || (env_fa_gqa_f16 && is_f16_kv)) && ne00 < 512 &&
                                ne01 >= gqa_wmin && ne01 <= 6 && (gqa_ratio == 4 || gqa_ratio == 6) &&
                                !has_sinks && !has_bias &&
