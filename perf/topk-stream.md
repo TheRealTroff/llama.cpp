@@ -1,8 +1,10 @@
 # Streaming top-k for the DFlash selector (`GGML_TOPK_STREAM=1`)
 
 **Status 2026-09-19: PICKED on both lines and MERGED to prod (owner: "Go ahead" on the hold, then "I would pick it");
-gated e2e below; the prod MINT IS PENDING - the pick landed on battery. On AC: `perf/run-prod-pick.sh` TAG
-`prodpick-sep19-topk`, both lines, shas must equal the Sep 18 mint's (`README.md` pick block carries the stub).**
+gated e2e below; MINTED 2026-09-23 (TAGs `prodpick-sep19-topk-{q4,ud}`, README pick block): every sha = the Sep 18 mint's
+except the q4 Turbo4 600 arm, which forked run to run = the adaptive-depth controller re-picking on the cheaper width-3 block
+(cost 95 -> 91 ms), not the kernel: the old selector on the same binary returns `9e49b3d13b31` twice, and the replay gate
+(TAG `topk-replay-0923`) reproduces the recorded picks' sha under the streaming top-k, 0 desync. f16 arms +2.5..4.5% on the day.**
 
 ## The item
 
@@ -85,7 +87,7 @@ compile lines; the 10x on the op row under the flag is the route.
 
 ## Status
 
-BI class on both lines, `pick` in `perf/pick.sh` (`GGML_TOPK_STREAM=1`) since 2026-09-19; mint pending AC (see the status line). Open: nothing on the kernel
+BI class on both lines, `pick` in `perf/pick.sh` (`GGML_TOPK_STREAM=1`) since 2026-09-19; minted 2026-09-23 (status line; the q4 Turbo4 600 fork = controller, replay-gated byte-identical). Open: nothing on the kernel
 (the ~65 us floor at width 4 is two dispatches + the read). The algorithmic question (does the selector need an exact
 full-vocab top-16) is CLOSED by the owner 2026-09-19 from the DFlash 2 post: it does - DFlash 2's gain over DFlash rests
 on the correct token almost always being inside the top 16, with a small path finder (the lattice) picking among them.

@@ -110,6 +110,7 @@ echo "repo   : $B"
 echo "commit : $(cd "$B" && git rev-parse --short HEAD) on $(cd "$B" && git rev-parse --abbrev-ref HEAD) ($(cd "$B" && git status --porcelain | wc -l | tr -d ' ') files dirty)"
 echo "binary : $(date -r "$BIN/llama-server" '+%Y-%m-%d %H:%M')"
 echo "env    : ${PICK_ENV[*]}"
+[ -n "${EXTRA:-}" ] && echo "extra  : $EXTRA (appended after the pick env - a later assignment overrides an earlier one)"
 echo "spec   : ${PICK_SPEC[*]}"
 echo "prompt : $PROMPT_FILE (PICK_CHAT=$PICK_CHAT)"
 echo
@@ -137,7 +138,7 @@ run_one() {
     echo "[$label] ABORT: port $PORT busy before start (stale server?)"; return 1
   fi
 
-  env "${envv[@]}" "$BIN/llama-server" -m "$model" -c "$ctx" -fa on "${kvargs[@]}" \
+  env "${envv[@]}" ${EXTRA:-} "$BIN/llama-server" -m "$model" -c "$ctx" -fa on "${kvargs[@]}" \
     "${specv[@]}" ${LV:+-lv "$LV"} --port $PORT >"$slog" 2>&1 &
   local pid=$!
   local ok=0

@@ -63,9 +63,23 @@ tensors would take the tile at widths 6-8 under the same env - the flags are ud-
 **2026-09-19 (owner: "Go ahead" on the 2026-08-28 TOP_K hold, then "I would pick it"): `exp/topk-stream` MERGED and
 `GGML_TOPK_STREAM=1` promoted to BOTH picks** - the drafter selector's `TOP_K [248320, width] -> 16` as a strip scan + one
 merge dispatch (`topk-stream.md`): 837 -> 67 us at width 4, 1631 -> 116 at width 8; `draft_call` -0.8 / -1.5 ms, ud +0.6 /
-+0.9%, q4 +1.0 / +1.9% at depth 3 / 7, shas canonical on every arm (BI: the op is a set, the text verify-gated). **MINT
-PENDING: the machine was on battery at the pick - on AC run `perf/run-prod-pick.sh` with TAG `prodpick-sep19-topk` on both
-lines and replace this sentence with the numbers; every sha must equal the Sep 18 mint's.**
++0.9%, q4 +1.0 / +1.9% at depth 3 / 7, shas canonical on every arm (BI: the op is a set, the text verify-gated). **Mint TAGs `prodpick-sep19-topk-{q4,ud}` (run 2026-09-23 on AC, prod `b2f47235a`, binary 09-19 09:13; the f16 arms ran under the
+shared TAG `prodpick-sep19-topk`, server logs renamed per line): q4 f16 32.28 / 31.54 at 300 (`d2953fccfb41`), 34.18 / 33.12 at 600
+(`441120c66064`), partial 22.01 (`95fb10b8e7da`), MTP 23.34, b1 14.74; Turbo4 33.09 at 300 (`86213d038a29`), **32.23 / 33.95 at 600
+(`61c00439a03a` / `801cb0758d4e` - FORKED, see below)**. ud f16 28.73 / 28.79 at 300 (`9c53aaade052`), 28.35 / 28.27 at 600
+(`86b6e9b02cf0`), partial 23.58, MTP 19.30, b1 13.38; Turbo4 30.02 at 300 (`ce826d8a3cbd`), 28.99 / 28.47 at 600 (`7eaeffa2a01e`).
+Every sha = the Sep 18 mint's except the q4 Turbo4 600 arm, and that one is THE CONTROLLER, NOT THE KERNEL: (a) its two runs
+forked from each other (a kernel change reproduces bit-exactly); (b) the spec-ev block histogram moved (Sep 18 `3:82 7:90`,
+today `3:95 7:90` / `3:93 7:87`) with the width-3 block cost 95 -> 91 ms = the top-k saving, a marginal pick flipping kernel
+family late in the 600-token text (the 300-token arm holds); (c) the same binary with `EXTRA=GGML_TOPK_STREAM=0` (the old
+selector, mint TAG `prodpick-sep19-topk-q4-topk0`) gave `9e49b3d13b31` twice at 33.32 / 32.89; (d) the replay gate
+(`run-specev-replay-gate.sh` TAG `topk-replay-0923`, EXTRA_A=GGML_TOPK_STREAM=0): the pick sequence recorded under the old
+selector (`91090ee9be13`, 325 picks) replayed twice under the streaming top-k = `91090ee9be13`, 0 desync - byte-identical on the
+same tokens; the control record under the old selector free-ran to `35abc5a8312e` (317 picks) and replayed to itself. RULE: a
+controller arm's free-running sha is statistical (section 11 of `spec-verify-narrow.md`); a mint that moves ONLY a controller
+arm is gated by the replay gate, and a timing win is expected to move it. t/s: both lines' f16 arms +2.5..4.5% on the day vs
+Sep 18 (the gate said +1.0 / +0.6% - the rest is the day), ud Turbo4 within 1%. `run-prod-pick.sh` now takes `EXTRA` (env
+appended after the pick env) and the replay gate `EXTRA_A` / `EXTRA_B`, both added for this check.**
 
 **2026-09-18 midday (owner: "go ahead"): `exp/skinny-gen-bsplit` MERGED (prod `b2878ceaa`) - the skinny B-split on the generic
 skinny tile, i.e. the UD line's width-6..8 verify path finally takes `GGML_MM_SKINNY_BSPLIT=2` (it had been in the env and inert
