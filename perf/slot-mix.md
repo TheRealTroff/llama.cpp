@@ -68,6 +68,35 @@ single slot unchanged (fa07afbb6c44). Single-sequence graphs never fold, so the 
 - a debug-build assert at encode time that the scratch it is about to write was reserved (compare against
   `ggml_backend_buffer_get_alloc_size`) would have caught this in the first multi-slot run
 
+## The per-slot context baseline, run at last (2026-09-23 22:33, TAG `slotmix-baseline-sep23`)
+
+The branch's original question, measured on the fixed prod binary (adea1cc69 + 582cae336) with speculation ON:
+q4 line, Turbo4 KV, one 95,520-token coordinator (slot 0, `longprompt-96k`, chat-templated) + 3 executors on slots
+1-3 (six benchmark prompts, two rounds), unified = `-np 4 -c 126976 --kv-unified`, split = `-np 4 -c 409600`
+(every slot the long size). Results `kvquant-experiments/results/slotmix-baseline-sep23-{unified,split}.json`.
+
+| phase | metric | unified | split |
+|---|---|---|---|
+| execs alone | per stream / aggregate | 17.73 / 38.98 t/s | 17.94 / 39.98 t/s |
+| execs alone | 05-json (98% acceptance) | 31.24 | 30.65 |
+| solo | coordinator prefill 95,520 tok | 1047.0 s | 1045.3 s |
+| solo | coordinator decode (300) | 21.09 | 21.12 (same sha 318524e3ecaa) |
+| mix | coordinator in the overlap window (~592 of 600 tok) | **8.68** | **7.53** |
+| mix | executors per stream / aggregate | **9.51 / 22.47** | **7.78 / 19.55** |
+| wall | both arms | 1171 s | 1179 s |
+
+Reading: beside a 96K stream, the executors lose 46% (unified) / 57% (split) of their stand-alone rate and the
+coordinator loses 59% / 64% of its solo rate; **unified beats split by 13% (coordinator) and 22% (executors) in
+the mix** - the "extent cost" of giving every slot a 102400-token cache, the number the size-class work must
+beat at a single class. No hang, no guard hit, in 39 minutes of 4-slot speculation. Two observations for whoever
+continues: (1) the execs-alone shas differ between the arms (unified 7768b8ac7922 / 44bff5235140 / db5040e9fdac vs
+split 50da9595a8e3 / a22d604f6a2e / 914119d97178 for prompts 01/02/03; the JSON prompt 05 is identical) - the KV
+layout picks different attention kernels, a lineage difference, so multi-slot shas are per arm; (2) within one
+arm the same prompt on the same slot forks between the execs and mix phases for the marginal texts (01/02/06) and
+holds for the easy ones (03/04/05): the coordinator's rounds change the verify width and with it the kernel
+family - multi-slot text is width-class-stable, not slot-count-stable. The 4-token prompts in the mix phase are
+prompt-cache hits (same slot, same prompt as the execs phase).
+
 ## Why now
 
 Nothing has been gated at more than one slot since the parallel-streams work of 2026-09-04 (raw prompts, f16 KV,
