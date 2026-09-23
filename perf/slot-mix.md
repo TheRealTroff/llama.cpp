@@ -1,11 +1,72 @@
 # Multi-slot speculation: the GPU hang and the garbage drafts (2026-09-23)
 
-**Status: OPEN, two defects, both need speculation ON and two or more sequences in one ubatch; the machine
-needs a reboot before any further GPU trial (see "machine state").** Branch `exp/slot-ctx-classes`, tree
+**Status: RESOLVED 2026-09-23 evening (commit 6ed433a2f on this branch, NOT YET IN PROD): both defects were one
+bug, an f16-B scratch overflow on folded per-sequence matmuls - see "Resolution" below. The sections after it
+are the morning's hunt as written, kept for the record (their "machine state" is stale).** Branch `exp/slot-ctx-classes`, tree
 `~/play/llama.cpp-slotctx`. Started as the per-slot context sizes baseline (`run-slot-mix.sh`, one 96K coordinator
 + N executors, unified vs split arms); the baseline never ran because the first multi-slot decode with the pick
 hung the GPU, and it hung in BOTH arms, so `--kv-unified` is not the trigger (the audit of the unified path found
 no unbounded loop either).
+
+## Resolution (2026-09-23 evening)
+
+**The bug.** `ggml_metal_op_mul_mat` folds a stored-SoA `[K, T, S]` activation (the per-sequence GDN projections
+of a multi-sequence graph: `linear_attn_out`, alpha/beta/z, ...) into `[K, T*S]` columns and routes the fold
+(7415209e2, 2026-09-04). With `GGML_MM_F16B=1` the fold takes the mm route, which casts the T*S columns to f16
+into the scratch behind dst. The alloc-size query `ggml_metal_op_mul_mat_extra_src1f16` evaluated the mm gate
+on the UNFOLDED 3D op, failed it (`ne12 > 1`), fell through to the mv-side rules and reserved nothing for the
+stored Q4_0 file at these column counts. So every folded projection wrote `T*S*K` halves past its own
+allocation. Single-sequence graphs never fold: every one-slot mint was blind. Open since the Sep 7 routing fix
+let F16B apply to the stored file (4ca3aa693) - the Sep 6 build (0623a06a5) runs three slots correctly.
+
+**The three symptoms, one cause.** The overrun lands on whatever ggml-alloc placed behind the dst: a live tensor
+(the three-prompt prefill diverges at layer 8's `attn_residual-8`, the first layer where it hits one - the same
+layer 8 the morning's `GGML_METAL_NCB=64` localization found), the drafter's inject graph (`fc_out` NaN/inf,
+NaN KV cache -> 0% acceptance), or unmapped memory (the "scheduled command buffer never runs" hang - f16 hung
+too, with three equal 192-token prompts). Layout-dependent, hence Turbo4-vs-f16 and equal-vs-unequal prompts
+looked like triggers; deterministic (survives `GGML_METAL_CONCURRENCY_DISABLE`), and
+`GGML_METAL_GRAPH_OPTIMIZE_DISABLE` turns the f16 garbage run into a hang.
+
+**How it was found** (results `kvquant-experiments/results/{c,d,e,f,g,h,j,k,m,n,p}*-split.*`, all f16 depth 1
+unless noted, the reproducer of the morning with `GGML_TOPK_STREAM=0` so garbage is visible instead of rejected):
+
+| step | result |
+|---|---|
+| c0 no-spec 3 slots | reference shas 26dcd34b6034 / 1c3c69404784 / b02132081808 |
+| c5 the Sep 6 build (0623a06a5), same pick env | CORRECT, acceptance 55-75% -> a regression after Sep 6 |
+| c4 Sep 4-style env (inject/fusions/replay/copies off) | still garbage: every slot's first token is `,` |
+| d1 pick minus `GGML_MM_ACC_HALF GGML_MM_SKINNY_BSPLIT GGML_MM_N64 GGML_MM_F16B` | CORRECT (the Sep 6 shas) |
+| d3-d6 one flag at a time | only **`GGML_MM_F16B`** matters (d6 correct; acch changes shas but stays garbage) |
+| h1 three equal prompts (the f16 hang config) minus F16B | no hang, fa07afbb6c44 x3 = single-slot sha |
+| g2/g3/j1-j4 single slot with `-ub 32/12/19/20/17`, F16B on | all correct: the f16-B tile is fine at odd N |
+| i1/i2, k1/k2 `LLAMA_MM_DUMP` of the N=12 and N=19 target matmuls, F16B on vs off | byte-identical -> not the tile |
+| n1/n2 `LLAMA_TRACE_DUMP` per node, F16B on vs off | first real divergence: graph 23 (222 tok, 3 seq) node 561 `attn_residual-8`, right after the folded `linear_attn_out-8` `[5120,74,3]`; drafter graph 26 `fc_out` NaN x179642 |
+| code | `ggml_metal_op_mul_mat` folds then gates on the fold; `extra_src1f16` gated on the 3D op -> 0 bytes |
+
+The commit-level bisect (first-parent, `git bisect run` with the f16 reproducer as judge) was started and
+stopped once d1 named the flag: its first step put the break before 6fa9126c4 (Sep 15), and its second step
+(a5ddd78a1, Sep 9, no sync guard) HUNG for 30 min without taking the session down - see the hang note.
+
+**The fix** (6ed433a2f): one helper `ggml_metal_mul_mat_fold` builds the 2D fold for both the encoder and the
+alloc-size query, and the query asks the mm gate about the folded shape. Rule going forward: **every route
+that takes scratch behind dst must be decided by the same function at alloc time and at encode time, on the
+same (folded) shape** - the mv side learned this on 2026-09-04, the mm side today.
+
+**Gate on the fixed binary** (`p*` results): f16 three unequal prompts fa07afbb6c44 / 68e5283468ff /
+b5639c4c0996 = the no-F16B run, acceptance 75/67/56%; three equal prompts no hang, fa07afbb6c44 x3; Turbo4
+three unequal prompts under the pick's spec (the original t5/t6 hang) no hang, real text 96ad83ceb082 /
+68e5283468ff / e08ee49f4e78; the full f16 pick (controller + streaming top-k) at 3 slots = the same shas;
+single slot unchanged (fa07afbb6c44). Single-sequence graphs never fold, so the fix cannot move a one-slot sha.
+
+**Open after the fix (owner):**
+- merge 6ed433a2f to prod and re-mint; add a multi-slot arm to the mint (`run-slot-mix.sh`, split arm, 3
+  executors, fixed shas) so this class is gated from now on - nothing was gated at > 1 slot since 2026-09-04
+- the parallel-streams numbers of 2026-09-04 predate the break; the per-slot context baseline (this branch's
+  original purpose) can now run with speculation ON
+- the 2026-09-04 "symmetric Turbo4 3+ slots emits EOS" refutation stands on its own evidence (a first-token
+  tie); today's EOS on slot 1 was the overflow
+- a debug-build assert at encode time that the scratch it is about to write was reserved (compare against
+  `ggml_backend_buffer_get_alloc_size`) would have caught this in the first multi-slot run
 
 ## Why now
 
