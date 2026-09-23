@@ -31,3 +31,13 @@ been moved to `~/.claude/skills/`, where they are available in every project.
   carries its scripts in its own `references/` directory; the old `perf/<name>` paths
   still work as symlinks into `references/`, so perf docs that cite them stay correct.
   The capture and compile steps still assume a fork checkout as cwd; the SKILL.mds say so.
+
+## Added 2026-09-23
+
+- `metal-divergence-hunt` - localizing a wrong-output / NaN / GPU-hang defect in the Metal backend to a
+  node and a code gate (anchor build under the current pick, pick-flag stripping, single-slot shape probes,
+  `LLAMA_MM_DUMP` A/B, `LLAMA_TRACE_DUMP` per-node diff, reading the sync guard's dump). Installed as
+  `~/.claude/skills/metal-divergence-hunt -> ~/play/llama.cpp-prod/skills/metal-divergence-hunt`; its
+  scripts live in `references/` with `perf/trace-nodediff.py` and `perf/mm-dump-diff.py` as symlinks.
+  Born from `perf/slot-mix.md`.
+
