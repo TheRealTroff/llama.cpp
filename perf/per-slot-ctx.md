@@ -64,7 +64,24 @@ FA is short either way).
 single-stream rule, which is untouched so the one-slot lineage holds). At width 2 with `GGML_FA_Q24_ROWS=12` the
 12 GQA rows take one 16-row tile per KV head per split; width 1 (6 rows) takes the 8-row tile at `gqah=6`.
 A lineage move for multi-slot width-1/2 text (new kernel family at those widths) - multi-slot shas are already
-per width class (`slot-mix.md`). Trial: `gqaw2-96k` = the 96K config with `GGML_FA_GQA_WMIN_MS=2`.
+per width class (`slot-mix.md`).
+
+**Trial `gqaw2-96k` (the 96K baseline config + `GGML_FA_GQA_WMIN_MS=2`, 00:36-00:55): the width-2 rounds take the
+16-row O-resident tile per KV head (`qtnw16o ... nwg=20 gqah=6`) and the mix round drops 225 -> 146 ms (-35%).**
+
+| mix phase, 96K coordinator + 3 executors | baseline (split) | unified baseline | `GQA_WMIN_MS=2` (split) |
+|---|---|---|---|
+| coordinator, overlap window | 7.53 t/s | 8.68 | **11.48** (+52%) |
+| executors per stream / aggregate | 7.78 / 19.55 | 9.51 / 22.47 | **12.08 / 29.74** (+55%) |
+| ms per round (coordinator / executors) | 225 / 216-244 | 193 / 165-208 | **146 / 140-159** |
+| executors alone (3 slots, also width 2 now on the tile) | 17.94 | 17.73 | 17.53 (-2%, ms/round +2-4%) |
+| coordinator solo (single stream, untouched) | 21.12, sha 318524e3ecaa | 21.09 | 21.22, sha 318524e3ecaa |
+
+Shas: the solo coordinator and the 96K mix coordinator (7a2e58f5669a) held; 4 of 6 executors-alone texts and 2 of
+7 mix texts moved (the width-2 kernel family changed: a NUM-TG lineage move on multi-stream width-2 text, to be
+priced pairwise like the other decode-route moves if adopted). The executors-alone phase (short extents) gives
+2-4% per round back: at 512-cell extents the 16-row tile's per-KV-head pass is not cheaper than six 8-row
+passes. A route rule by extent (the tile from ~8K cells up, like `GGML_FA_Q16_KVMIN`) would keep both.
 
 ## Mix-phase determinism
 
