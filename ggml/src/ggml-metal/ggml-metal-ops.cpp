@@ -5143,8 +5143,14 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
     // head sizes >= 512 run the batched kernel at nsg 8, whose dispatch instantiates the GQA row tile only for
     // the Turbo4 TR forms (dk 128/256): the flattened grid would run as GQAH = 1 there (wrong output; the f16
     // hsk 512/576 GQA4 width-3 test cases, found 2026-09-16 - no model in use has such heads)
+    // GGML_FA_GQA_WMIN_MS: the smallest verify width that takes the GQA tile when the FA call is multi-stream (ne03 > 1;
+    // default 3 = the single-stream rule). A multi-slot round under the slot budget verifies at width 1-2, where the
+    // 8-row tile streams each KV head once per query head (6x the traffic of the GQA tile at a 96K stream). Single-stream
+    // calls keep the width >= 3 rule, so the one-slot lineage is untouched (per-slot context sizes, 2026-09-24)
+    static const int env_fa_gqa_wmin_ms = getenv("GGML_FA_GQA_WMIN_MS") ? atoi(getenv("GGML_FA_GQA_WMIN_MS")) : 3;
+    const int gqa_wmin = ne03 > 1 ? env_fa_gqa_wmin_ms : 3;
     const bool use_gqa_reuse = gqa_ratio_enabled && (is_turbo4_kv || (env_fa_gqa_f16 && is_f16_kv)) && ne00 < 512 &&
-                               ne01 >= 3 && ne01 <= 6 && (gqa_ratio == 4 || gqa_ratio == 6) &&
+                               ne01 >= gqa_wmin && ne01 <= 6 && (gqa_ratio == 4 || gqa_ratio == 6) &&
                                !has_sinks && !has_bias &&
                                ne11 % OP_FLASH_ATTN_EXT_NCPSG == 0;
     const bool use_vec = ggml_metal_op_flash_attn_ext_use_vec(op) && !(use_gqa_reuse && ne01 <= 4);
