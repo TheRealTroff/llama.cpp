@@ -461,3 +461,23 @@ extent (ggml-metal-ops.cpp; `GGML_FA_GQA_WMIN_MS/_KVMIN/_ALL` stay as the narrow
 NUM-TG. What moves: one-slot width-1/2 calls = the mint's `batch1-300` (no-spec, f16) and `mtp-d1-300` (width 2, f16) arms
 and the new `turbo4-b1-300` arm (the Turbo4 no-spec anchor, added to `run-prod-pick.sh`); the depth-3+ pick arms verify at
 widths 3-7 and never see it. Gates below as they land.
+
+**Gates (17:13-17:53, branch binary dd1369295):** `test-backend-ops test -o FLASH_ATTN_EXT` under `GGML_FA_GQA_WMIN=1`:
+4869/4869 on q4 turbo4, q4 f16, ud turbo4, ud f16. E2e `run-prod-pick.sh` ABAB x2 per line on the three arms that run
+widths 1-2 (`EXTRA=GGML_FA_GQA_WMIN=3` = the old routes; 300-token prompt + 300 generated, so the calls sit under 1K
+cells where the per-call win is smallest; hot ambient, interleaved):
+
+| arm (width, cache) | line | old t/s (x2) | new t/s (x2) | delta | sha |
+|---|---|---|---|---|---|
+| `batch1-300` (no-spec = width 1, f16) | q4 | 14.29 / 14.76 | 14.52 / 14.90 | +1.0..1.6% | `d2953fccfb41` both = HELD |
+| | ud | 12.95 / 13.34 | 13.55 / 13.55 | +1.5..4.6% | `9c53aaade052` both = HELD |
+| `mtp-d1-300` (width 2, f16) | q4 | 22.68 / 23.35 | 23.48 / 24.31 | +3.5..4.1% | `d2953fccfb41` = HELD, acc 86.2% |
+| | ud | 18.88 / 19.41 | 19.39 / 20.03 | +2.7..3.2% | `9c53aaade052` = HELD, acc 87.4% |
+| `turbo4-b1-300` (no-spec = width 1, Turbo4; NEW arm) | q4 | 13.67 / 14.06 | 14.32 / 14.79 | +4.7..5.2% | `86213d038a29` -> `7c5254d01b12` = MOVES (the TR 7 tile vs the half-dequant vec kernel) |
+| | ud | 12.42 / 12.85 | 13.40 / 13.39 | +4.3..7.9% | `d180ae89f168` both = HELD |
+
+So on the f16 cache the move is text-identical on both lines at this length (f16 K/V are exact in both kernels; only the
+summation order differs), and on Turbo4 only the q4 line's no-spec text moves (its `turbo4-b1-300` reference is
+`7c5254d01b12` from here on; the arm is new to the mint, so no minted sha changes). Every depth-3+ pick arm verifies at
+widths 3-7 and is untouched by construction. KLD pricing of the width-1 route (pairwise vs the vec route, 12 chunks at 2K,
+`-b 1 -ub 1`): below when it lands.
