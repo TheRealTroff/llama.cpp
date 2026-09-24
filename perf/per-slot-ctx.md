@@ -1,9 +1,14 @@
 # Per-slot context sizes: the size-class work (2026-09-24)
 
-**Status 2026-09-24 05:00: ON HOLD - the width-1/2 multi-stream GQA route is fast (+53% in the 96K mix) but its
-pairwise decode KLD is 0.0022 mean / 98.94% same-top / max 8 against the old route (section "Pricing the route"), 400x the
-summation-order class: a defect or a numerics class, not a lineage - being localized (single-stream tile pairs queued).
-Do not adopt until explained. Earlier status kept below for the record:** PROPOSED, owner decides - branch `exp/ctx-classes` (tree `~/play/llama.cpp-ctxclass`, off prod
+**Status 2026-09-24 06:45: PROPOSED (NUM-TG class), owner decides.** The lever is `GGML_FA_GQA_WMIN_MS=1 GGML_FA_GQA_WMIN_KVMIN=8192`
+(the GQA-reuse FA tile at widths 1-2 on multi-stream calls over 8K cells): at the 96K baseline config the mix round
+225 -> 146 ms, coordinator 7.57 -> 11.56 t/s, executors 7.78 -> 12.14 per stream; at 5 slots (width 1) 6.13 -> 8.25 /
+6.50 -> 8.94; wins at every extent from 7.5K up. One-slot and short-extent shas are untouched by construction; multi-slot
+width-1/2 text moves. NOT byte-identical and NOT a mere lineage: the pairwise decode KLD vs the old width-2 route is
+0.0022 / 98.9% same-top, but the float64 reference of the dumped node and the exact-f16-cache KLD both put the new
+route CLOSER to the truth than the old one (below). Lever 1 (per-stream KV extent) is byte-identical and inert; the slot
+budget at 16 is a wash; the size-class layout is a memory lever only. Earlier status lines kept below for the record.
+PROPOSED, owner decides - branch `exp/ctx-classes` (tree `~/play/llama.cpp-ctxclass`, off prod
 cdcb10e86). The lever is `GGML_FA_GQA_WMIN_MS=2 GGML_FA_GQA_WMIN_KVMIN=8192` (the GQA-reuse FA tile at width 2 on
 multi-stream calls whose extent exceeds 8K): at the 96K baseline config the mix round 225 -> 146 ms, coordinator 7.57 ->
 11.56 t/s, executors 7.78 -> 12.14 per stream (29.8 aggregate); executors alone and the solo coordinator byte-identical
@@ -261,3 +266,39 @@ width 2 than the GQA tiles is open (its arithmetic should be per row; at width 4
 (`GGML_FA_Q24_ROWS=0`), one stream, 12 chunks: **mean KLD 0.000000, median 0, max 6.8e-5 (the uint16 base floor),
 same-top 100.000%** - the GQA tiles are one arithmetic at every row count, exactly as the width-2 probes showed. The
 pick's width-6 route is unaffected by anything here.
+
+## The direction, at the logits (`kld-w2-f16ref`, 05:58-06:40)
+
+Each width-2 route (one stream, `-b 2 -ub 2`, 12 chunks at 2K) against the EXACT cache: the same model with f16 K/V:
+
+| route | mean KLD vs f16 cache | median | 99.9% | max | same top |
+|---|---|---|---|---|---|
+| old: 8-row `qtnw` at `gqah=1` | 0.01071 ± 0.0020 | 0.00127 | 1.25 | 15.2 | 97.46 ± 0.14% |
+| new: the GQA tile at width 2 | **0.00895 ± 0.0018** | 0.00129 | **0.95** | 15.8 | 97.45 ± 0.14% |
+
+The new route is 16% closer to the exact cache in mean KLD and 24% in the 99.9% tail, same-top equal within error: the
+op-level verdict (1.9e-4 vs 3.4e-4 from exact per layer) holds at the logits. (Both numbers are the Turbo4 cache's own
+price on the width-2 decode path, larger than the 0.006-0.008 prefill-path figure.) So the move is a NUM-TG class change
+in the favourable direction on multi-slot width-1/2 text. Why the 8-row `gqah=1` tile is the less accurate one at width
+2 (at width 4 the two agree byte for byte) stays open - a kernel question, not a blocker.
+
+## Gate arm references (`run-multislot-gate.sh LONG=1`, 04:41-04:58, prod route vs the flags)
+
+| line | route | execs 1/2/3 | solo | mix coord / 1 / 2 / 3 |
+|---|---|---|---|---|
+| q4 | prod (old) | c8522a40c1e8 / 28ff51768e4d / 914119d97178 | d0d8cd0eb2d8 | eeffe5ac0857 / c8522a40c1e8 / 36715962b9e7 / db5040e9fdac |
+| q4 | flags | same | same | 64a49312d01f / 67b0b590dd7b / d5fa80109900 / eae23bbebec0 |
+| ud | prod (old) | 36529d9fb3fe / 039bf7ad9b41 / 9c7f73d13fb8 | d6c3f3372554 | cf057877480d / 36529d9fb3fe / 039bf7ad9b41 / 9c7f73d13fb8 |
+| ud | flags | same | same | ef89fa0c0a9c / 36529d9fb3fe / 039bf7ad9b41 / 9c7f73d13fb8 |
+
+Executors alone and solo identical on both lines (short extents / one stream); the mix moves on the width-2 texts
+(the UD line's executors' mix texts held, its coordinator moved). Whichever route the owner picks, its row becomes
+`REF_LONG_Q4` / `REF_LONG_UD` in `run-multislot-gate.sh` and `LONG=1` joins the mint.
+
+## If adopted
+
+- `GGML_FA_GQA_WMIN_MS=1` and `GGML_FA_GQA_WMIN_KVMIN=8192` into `perf/pick.sh` PICK_ENV, class NUM-TG, both lines
+  (the UD line's Turbo4 tile is its own instantiation, `qtl4w16o`; its long arm above ran it; its pairwise KLD is not
+  measured - the same two runs as `kld-w2-1s` on the UD model if wanted).
+- `REF_LONG_{Q4,UD}` = the flags rows above; `LONG=1` in `run-prod-pick.sh`'s multi-slot call.
+- Lever 1 stays as merged infrastructure (inert, byte-identical), the kill switches documented.
