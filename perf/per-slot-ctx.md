@@ -489,9 +489,10 @@ Turbo4 both arms, base = the vec route (`GGML_FA_GQA_WMIN=3`), test = the tile):
 |---|---|---|---|---|---|---|---|
 | q4 | 0.00354 ± 0.00158 | 0.000194 | 0.0101 | 0.319 | 18.7 | 98.925 ± 0.093% | 1.85% |
 | (the morning's width-2 pair, same base kind) | 0.00223 ± 0.00044 | 0.000205 | | 0.299 | 4.18 | 98.83% | |
-| ud | (below when it lands) | | | | | | |
+| ud | 0.00319 ± 0.00153 | 0.000167 | 0.0071 | 0.359 | 18.5 | 98.957 ± 0.092% | 1.36% |
+| (the afternoon's ud width-2 pair) | 0.00238 | | | | | 98.77% | |
 
-The width-1 pair is the width-2 class: the median and the same-top are the same numbers, the mean is a tail (one 18.7
-position, error bar 0.0016 - the "a mean KL can be one chaotic position" rule). Its direction was settled at the node:
+The width-1 pairs are the width-2 class on both lines: the medians and the same-tops are the same numbers, the means are
+tails (one ~18.5 position on each line, error bars 0.0015 - the "a mean KL can be one chaotic position" rule). Its direction was settled at the node:
 the tile is 2.09e-4 from exact at width 1, the vec kernel 3.75e-4. The f16 pairs were not run: the e2e text is
 identical on both f16 arms and f16 K/V are exact in both kernels (summation order only) - open if anyone wants the number.
