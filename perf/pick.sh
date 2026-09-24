@@ -89,7 +89,7 @@ PICK_MANIFEST=(
   "GGML_FA_TURBO_NWG=20|BI|both|pick|longctx-inventory-sep15.md (split-K width for every Turbo4 batched FA route: -21% per decode FA call at 96K, verify round -6.8% at 96K / -0.8% at 8K; the reduce sums the partials with simd_sum so the Turbo4 shas move = a lineage, kernel numerics unchanged; f16 routes and prefill untouched; 2026-09-15; owner 2026-09-16: 'I'll take the flag' - in the pick, mint prodpick-sep16-nwg20)"
   "GGML_FA_TR=7|NUM-PP/TG|q4|pick|q4-fa-folded-pick.md (owner 2026-09-08: take the faster folded form for q4_0; accuracy mixed, new output lineage)"
   # --- the multi-stream GQA width rule (per-slot-ctx.md, 2026-09-24): a multi-slot round under the slot budget verifies the
-  #     long stream at width 1-2, where the 8-row Turbo4 tile at gqah=1 streams each KV head once per query head; these two
+  #     long stream at width 1-2, where the old route [the VEC kernel, mislabelled '8-row tile at gqah=1' until the evening] streams each KV head once per query head; these two
   #     flags route multi-stream FA calls over 8K cells at widths 1-2 onto the GQA tiles (gqah=6). One-slot calls keep the
   #     width >= 3 rule (every one-slot sha holds by construction); multi-slot width-1/2 text over 8K cells MOVES: pairwise
   #     0.0022 / 98.9% same-top vs the old route, but the f64 node reference (1.9e-4 vs 3.4e-4) and the exact-f16-cache KLD
@@ -99,6 +99,14 @@ PICK_MANIFEST=(
   "GGML_FA_GQA_WMIN_KVMIN=8192|NUM-TG|q4|pick|per-slot-ctx.md (the rule applies over 8K cells only: keeps the short-extent multi-slot arm on its references; 0 would take +0.7% at 512 cells and move them)"
   "GGML_FA_GQA_WMIN_MS=1|NUM-TG|ud|pick|per-slot-ctx.md (ud PRICED 2026-09-24 afternoon, owner: 'Take them on ud': pairwise 0.00238 / 98.77% vs the old route = the q4 class; vs the f16 cache old 0.0105 -> new 0.0091 by the perplexity tool, paired over the same 12,276 positions -0.0001 +/- 0.0006 = indistinguishable, the body favours the tile by 12%, same-top slip = 81 vs 59 discordant tie-margin flips at p ~ 0.06; 32K mix +5% coordinator / +11% executors)"
   "GGML_FA_GQA_WMIN_KVMIN=8192|NUM-TG|ud|pick|per-slot-ctx.md (with GGML_FA_GQA_WMIN_MS=1; owner 2026-09-24)"
+  #   GGML_FA_GQA_WMIN=1 (2026-09-24 evening, owner: "Just go for it", then "I don't see the point in reserving it for turbo4"):
+  #     the GQA tile from width 1 on EVERY cache, stream count and extent. The one-stream width-1/2 route it replaces is the
+  #     VEC kernel (GGML_FA_VEC_MAX=3 sends ne01 < 3 there) - NOT the 8-row tile at gqah=1 as the comment above and the note's
+  #     morning sections say: no fa-route line = the vec getter; the 8-row tile at gqah=1 is byte-identical to the GQA tile at
+  #     widths 2 and 4 (per-slot-ctx.md "Resolution"). Per call, one stream, Turbo4: 8K w1 287 -> 74 us, w2 537 -> 125;
+  #     100K w1 3752 -> 800, w2 6972 -> 1335 (both lines within 10%); the tile is the closer kernel to exact (2.0e-4 vs
+  #     3.7e-4 relRMS per layer: the vec kernel dequantizes through a half table). f16 timed the same evening (the note).
+  "GGML_FA_GQA_WMIN=1|NUM-TG|both|pick|per-slot-ctx.md Resolution (one-stream widths 1-2 leave the vec kernel for the GQA tile: per call 0.19-0.28x on Turbo4 at 8K/100K, the closer kernel to exact; the width-2 class was priced in the morning (pairwise 0.0022 / 98.9% vs the vec route, closer to the f16 cache), width 1 and f16 priced in the evening; one-slot no-spec and depth-1 shas move = a lineage on those arms)"
   # --- refused / declined, listed so pick_check knows them ---
   "GGML_MM_SKINNY_GEN=6|NUM-TG|ud|pick|w6-verify-cliff.md (the generic skinny MMA tile over the stored SoA rows at verify widths 6-8: round -24% at 8K, -15% at 96K; FIXED 2026-09-16 night - the pipeline had left the stored q4_K reader's exact-scale constant unset (upstream's half-quotient form, 5e-4 pairwise); with it set the tile is the pick's own decode class: 2.5e-5 mean / 99.910% same-top vs the width-4 base = the reader's 99.914; not byte-identical (the half A tile); paired bf16 a wash; owner 2026-09-16 night: 'Pick it' - the depth-5 text = the depth-3 canonical sha 9128633c6cfa)"
   "GGML_FA_TR=6|NUM-TG|none|refused|ud-model.md step 16 C (folded norm, KLD a wash; owner took =9)"

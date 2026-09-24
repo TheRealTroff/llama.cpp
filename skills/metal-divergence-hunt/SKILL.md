@@ -100,11 +100,23 @@ wrong. Answer that with a reference that is exact by construction, at two levels
 2026-09-24, the width-2 GQA route): (1) op level - `LLAMA_FA_DUMP=<dir>` (with `_NT`, `_NS`, `_KVMIN`
 selectors for the token count, stream count and extent) dumps one FA node's inputs and output under
 each route; `perf/fa-dump-ref.py` recomputes it in float64 from the dumped Turbo4 blocks and reports
-each route's relative RMS from exact (old 3.4e-4, new 1.9e-4: the NEW route was the accurate one);
+each route's relative RMS from exact (old 3.4e-4, new 1.9e-4: the NEW route was the accurate one - and the
+OLD route was the vec kernel, not the 8-row tile it was labelled for a whole night, see the rule below);
 (2) logit level - `run-quant-kld.sh` with `REF=<the same model> REF_KV=f16` and each route as a test
 arm under `KV=turbo4` (same `-b W -ub W` on both arms) gives each route's distance from the exact
 cache; the direction must agree with (1). Only then is the move a numerics class with a sign, not a
 defect. Do not price a decode route with the prefill-shaped KLD line (README rule).
+
+**Name the kernel from the `fa-route:` line, never from the routing code you believe applies.** `GGML_FA_DEBUG=1`
+prints one `fa-route: kernel_flash_attn_ext_...` line per new tile pipeline (device.cpp, the tile getter only): a
+shape with NO line went to the vec getter (`kernel_flash_attn_ext_vec_*`), which does not print. The 2026-09-24
+width-2 "old route" was written up as the 8-row tile at `gqah=1` in three documents and the pick manifest; it was
+`kernel_flash_attn_ext_vec_turbo4` (`GGML_FA_VEC_MAX=3` sends ne01 < 3 there, whatever the stream count or extent),
+found the next afternoon by the missing line. The gqah=1 tile is byte-identical to the GQA tile at every width
+(per-slot-ctx.md Resolution). Before writing "route X vs route Y", force each route explicitly (`GGML_FA_VEC_MAX=1`,
+`GGML_FA_GQA_HEADS=1`, `GGML_FA_Q16=0 GGML_FA_Q24=0`) and quote its line. Residual structure (`perf/fa-residual.py`:
+cosine of `out - exact` with each single-key direction and the explicit mask-row-shift hypotheses) tells rounding
+(aligned with the heaviest keys, no key index shared across heads) from an off-by-one (one key, |cos| ~ 1, every head).
 
 ## Step 5 - Node-level: the first divergent computed op
 

@@ -201,6 +201,9 @@ if [ "$TURBO" = 1 ]; then
   run_one "turbo4-n3-600"    600 TURBO_PICK_ENV TURBO_SPEC turbo4
   run_one "turbo4-n3-600-r2" 600 TURBO_PICK_ENV TURBO_SPEC turbo4
   run_one "turbo4-n3-300"    300 TURBO_PICK_ENV TURBO_SPEC turbo4
+  # the Turbo4 no-spec anchor (width 1 on the Turbo4 cache: the route GGML_FA_GQA_WMIN=1 moved off the vec kernel,
+  # per-slot-ctx.md Resolution 2026-09-24; the depth-3 arms above verify at width 4 and never see it)
+  run_one "turbo4-b1-300"    300 TURBO_PICK_ENV BASE_SPEC turbo4
 fi
 
 if [ "${MULTISLOT:-1}" = 1 ]; then

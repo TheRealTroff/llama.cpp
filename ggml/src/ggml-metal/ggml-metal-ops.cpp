@@ -5155,7 +5155,15 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
     // GGML_FA_GQA_WMIN_ALL=1: apply the width minimum to single-stream calls too (a pricing probe: the tile at width 1-2
     // on one sequence, where llama-perplexity -ub W scores it against the 8-row route)
     static const bool env_fa_gqa_wmin_all = getenv("GGML_FA_GQA_WMIN_ALL") && atoi(getenv("GGML_FA_GQA_WMIN_ALL")) != 0;
-    const int gqa_wmin = (ne03 > 1 || env_fa_gqa_wmin_all) && ne11 > env_fa_gqa_wmin_kvmin ? env_fa_gqa_wmin_ms : 3;
+    // GGML_FA_GQA_WMIN=<w>: the GQA tile from this width up on ANY cache, stream count and extent (default 3 = the
+    // rules above). The pick sets 1: the width-1/2 route it replaces is the VEC kernel (GGML_FA_VEC_MAX=3 sends
+    // ne01 < 3 there), which streams each KV head once per query head; on Turbo4 it also dequantizes through a
+    // half table. One stream, per call, Turbo4: 8K w1 287 -> 74 us, w2 537 -> 125; 100K w1 3752 -> 800, w2 6972 -> 1335
+    // (both lines within 10%), and the tile is the closer kernel to exact (2.0e-4 vs 3.7e-4 relRMS per layer).
+    // f16 timed the same evening (perf/per-slot-ctx.md, 2026-09-24)
+    static const int env_fa_gqa_wmin = getenv("GGML_FA_GQA_WMIN") ? atoi(getenv("GGML_FA_GQA_WMIN")) : 3;
+    const int gqa_wmin = env_fa_gqa_wmin < 3 ? env_fa_gqa_wmin :
+                         (ne03 > 1 || env_fa_gqa_wmin_all) && ne11 > env_fa_gqa_wmin_kvmin ? env_fa_gqa_wmin_ms : 3;
     const bool use_gqa_reuse = gqa_ratio_enabled && (is_turbo4_kv || (env_fa_gqa_f16 && is_f16_kv)) && ne00 < 512 &&
                                ne01 >= gqa_wmin && ne01 <= 6 && (gqa_ratio == 4 || gqa_ratio == 6) &&
                                !has_sinks && !has_bias &&
