@@ -353,3 +353,23 @@ statistics lean the other way, both inside their error: same-top -0.20 pt (two Â
 (`kld-w2-ud-fisher-{D,X,Y}`, 13:45); verdict below. Speed on ud at 32K (the long arm, old vs flags rows above):
 mix coordinator 12.30 -> 12.95 t/s (+5%), executors 9.31 -> 10.30 per stream (+11%); the 96K figure is unmeasured on ud
 (q4's +6% at 7.5K grew to +53% at 96K).
+
+**Paired verdict (`kld-w2-ud-fisher-{D,X,Y}` + `perf/kld-fisher.py`, rows in `logits/kld-w2-ud-fisher-rows.npz`, 14:37):** the
+two routes are statistically indistinguishable at the logits on this corpus, and neither is worse.
+
+| paired over the same 12,276 positions | old | GQA tile | paired difference |
+|---|---|---|---|
+| KL vs the f16 cache (common-window form) | 0.008780 | 0.008665 | -0.000114 Â± 0.000567 (t = -0.2) |
+| ... without the 0.1% largest positions (12) | 0.004817 | 0.004235 | the body favours the tile by 12% |
+| ... the 12 largest positions, summed KL | 48.7 | 54.4 | chaotic positions decide the sign of any mean |
+| top flips vs the f16 cache | 292 | 314 | discordant: old-only 59, tile-only 81 (McNemar chi2 3.5, p ~ 0.06) |
+| discordant flips' base top-2 margin | | | median 0.11 nat, 90% < 0.37 nat = ties; at margin > 1 nat: 3 vs 3 |
+| Fisher corr(old, tile) under p_D | | | median 0.93, pooled 0.85: both deviate together (the cache), the kernel term is small |
+
+So the perplexity tool's -13% (its full-logit tail treatment) and this tool's -1% (common window) are the same data read through
+different tail conventions; the body of the distribution favours the tile on ud as it did on q4, the dozen chaotic positions go
+either way, and the same-top slip is 22 net coin-flip positions at p ~ 0.06. Nothing here says the new route is worse; nothing
+here proves it better on ud the way the q4 f64 node reference did (the ud TR=9 instantiation was not dumped at the op level).
+**The ud manifest rule (`pick.sh`: ud = BI/SPEC only, plus what the owner has explicitly taken) makes a NUM-TG flag on ud the
+owner's explicit call - the entries stay `proposed` with this record until then.** Speed on ud at 32K: +5% coordinator / +11%
+executors in the mix (above); at 96K the q4 curve suggests several times that.
