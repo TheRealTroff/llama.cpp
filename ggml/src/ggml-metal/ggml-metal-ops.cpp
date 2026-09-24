@@ -5152,7 +5152,10 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
     // 8-row passes (executors alone at 512 cells: -2%), at 96K it is 6x cheaper. 0 = every extent.
     static const int env_fa_gqa_wmin_ms = getenv("GGML_FA_GQA_WMIN_MS") ? atoi(getenv("GGML_FA_GQA_WMIN_MS")) : 3;
     static const int env_fa_gqa_wmin_kvmin = getenv("GGML_FA_GQA_WMIN_KVMIN") ? atoi(getenv("GGML_FA_GQA_WMIN_KVMIN")) : 0;
-    const int gqa_wmin = ne03 > 1 && ne11 > env_fa_gqa_wmin_kvmin ? env_fa_gqa_wmin_ms : 3;
+    // GGML_FA_GQA_WMIN_ALL=1: apply the width minimum to single-stream calls too (a pricing probe: the tile at width 1-2
+    // on one sequence, where llama-perplexity -ub W scores it against the 8-row route)
+    static const bool env_fa_gqa_wmin_all = getenv("GGML_FA_GQA_WMIN_ALL") && atoi(getenv("GGML_FA_GQA_WMIN_ALL")) != 0;
+    const int gqa_wmin = (ne03 > 1 || env_fa_gqa_wmin_all) && ne11 > env_fa_gqa_wmin_kvmin ? env_fa_gqa_wmin_ms : 3;
     const bool use_gqa_reuse = gqa_ratio_enabled && (is_turbo4_kv || (env_fa_gqa_f16 && is_f16_kv)) && ne00 < 512 &&
                                ne01 >= gqa_wmin && ne01 <= 6 && (gqa_ratio == 4 || gqa_ratio == 6) &&
                                !has_sinks && !has_bias &&

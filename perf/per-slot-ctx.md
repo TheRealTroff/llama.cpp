@@ -1,6 +1,9 @@
 # Per-slot context sizes: the size-class work (2026-09-24)
 
-**Status 2026-09-24 02:00: PROPOSED, owner decides - branch `exp/ctx-classes` (tree `~/play/llama.cpp-ctxclass`, off prod
+**Status 2026-09-24 05:00: ON HOLD - the width-1/2 multi-stream GQA route is fast (+53% in the 96K mix) but its
+pairwise decode KLD is 0.0022 mean / 98.94% same-top / max 8 against the old route (section "Pricing the route"), 400x the
+summation-order class: a defect or a numerics class, not a lineage - being localized (single-stream tile pairs queued).
+Do not adopt until explained. Earlier status kept below for the record:** PROPOSED, owner decides - branch `exp/ctx-classes` (tree `~/play/llama.cpp-ctxclass`, off prod
 cdcb10e86). The lever is `GGML_FA_GQA_WMIN_MS=2 GGML_FA_GQA_WMIN_KVMIN=8192` (the GQA-reuse FA tile at width 2 on
 multi-stream calls whose extent exceeds 8K): at the 96K baseline config the mix round 225 -> 146 ms, coordinator 7.57 ->
 11.56 t/s, executors 7.78 -> 12.14 per stream (29.8 aggregate); executors alone and the solo coordinator byte-identical
@@ -196,3 +199,27 @@ executors, `PHASES=execs,solo,mix`, ~6 min) so this route is gated from now on.
   counts, a per-slot cap list in the server. Start it when the owner wants more executor slots than the box holds.
 - the slot budget policy for 2-3 generating slots (depth 1 today, 8/n - 1): the width-3 GQA route at 2 slots
   (budget 8 -> depth 3, width 4) is already the single-stream route; nothing to do there.
+
+## Pricing the route: NOT a summation-order move (`kld-w2ms-route`, 03:27-04:40)
+
+Pairwise decode-path KLD, two streams of 16K cells (`llama-perplexity -c 16384 -b 32768 -ub 4` = 2 tokens per stream per
+ubatch, the positions scored are cells 8192-16384, all under the tile with `KVMIN=8192`), Turbo4 KV both sides, the q4
+pick env, base = the old route, 4 chunks (32K scored positions):
+
+| row | mean KLD | median | 99.9% | max | same top | overlap (1-TV) |
+|---|---|---|---|---|---|---|
+| control (same config as the base) | 0.000000 | 0 | 0.00005 | 0.00006 | 100.000% | 99.945% |
+| `GGML_FA_GQA_WMIN_MS=2` (the 16-row GQA tile, 12 rows) | **0.002156** | 0.00018 | 0.21 | 8.06 | **98.944%** | 99.00% |
+
+Per chunk 0.0005 / 0.0036 / 0.0026 / 0.0022 (chunk 1 = stream 0 of the first pair is the low one; no clean per-stream
+pattern). For scale: the priced decode-route moves are 5e-6 to 2.5e-5 mean / 99.9x% same-top, the whole Turbo4 cache
+costs 0.006-0.008 vs f16, and the q4 line's folded-norm FA form (TR=7) was a 0.0019 perturbation. So this is either a
+defect in the tile when it runs with `ne03 > 1` (it never had before this session - every prior GQA-tile call was one
+stream) or a numerics class of the 12-row `qtnw16o` tile that the width-6 single-stream pricing did not see.
+`test-backend-ops -o FLASH_ATTN_EXT` passes with the route on (0 fails incl. the multi-stream `nr23=[x,2]` cases), which
+bounds it: not a gross indexing error at test shapes (short KV, no split-K at 20 workgroups).
+
+Discriminator queued (`kld-w2-1s`, `kld-w6-1s`): the tile at width 2 on ONE stream (`GGML_FA_GQA_WMIN_ALL=1`) vs the 8-row
+route, and the pick's width-6 24+16 plan vs 8-row GQA tiles (`GGML_FA_Q24_ROWS=0`). Tile-at-12-rows ~0.002 on one stream =
+the tile's own class (then the pick's width 6 carries it too, to be re-priced); ~5e-6 on one stream = a multi-stream
+defect in the tile (then hunt with `LLAMA_FA_DUMP` on a two-stream ubatch).
