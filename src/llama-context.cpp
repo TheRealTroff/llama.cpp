@@ -228,10 +228,15 @@ static bool llama_fa_dump_cb_eval(struct ggml_tensor * t, bool ask, void * user_
     GGML_UNUSED(user_data);
     static const char * dir = getenv("LLAMA_FA_DUMP");
     static const int   nt  = getenv("LLAMA_FA_DUMP_NT") ? atoi(getenv("LLAMA_FA_DUMP_NT")) : 4;
+    // LLAMA_FA_DUMP_NS (default 0 = any): the stream count (dst ne[3]); LLAMA_FA_DUMP_KVMIN (default 0): the smallest
+    // KV extent (k ne[1]) to dump - selects a multi-stream, long-KV graph (per-slot-ctx.md, 2026-09-24)
+    static const int   ns    = getenv("LLAMA_FA_DUMP_NS") ? atoi(getenv("LLAMA_FA_DUMP_NS")) : 0;
+    static const int   kvmin = getenv("LLAMA_FA_DUMP_KVMIN") ? atoi(getenv("LLAMA_FA_DUMP_KVMIN")) : 0;
     static int  n_dumped = 0;
     static bool done = false;
     if (!dir || done) return false;
-    const bool match = t->op == GGML_OP_FLASH_ATTN_EXT && t->ne[2] == nt;
+    const bool match = t->op == GGML_OP_FLASH_ATTN_EXT && t->ne[2] == nt && (ns == 0 || t->ne[3] == ns) &&
+                       (kvmin == 0 || (t->src[1] && t->src[1]->ne[1] >= kvmin));
     if (ask) return match;
     if (!match) return true;
     char fn[1024];

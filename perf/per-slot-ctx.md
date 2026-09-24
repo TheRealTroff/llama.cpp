@@ -223,3 +223,13 @@ Discriminator queued (`kld-w2-1s`, `kld-w6-1s`): the tile at width 2 on ONE stre
 route, and the pick's width-6 24+16 plan vs 8-row GQA tiles (`GGML_FA_Q24_ROWS=0`). Tile-at-12-rows ~0.002 on one stream =
 the tile's own class (then the pick's width 6 carries it too, to be re-priced); ~5e-6 on one stream = a multi-stream
 defect in the tile (then hunt with `LLAMA_FA_DUMP` on a two-stream ubatch).
+
+**Op level (05:20, `LLAMA_FA_DUMP` with the new `LLAMA_FA_DUMP_NS=2 LLAMA_FA_DUMP_KVMIN=1536` selectors, the KL-divergence
+configuration at 2K):** the first attention layer's FA node on a two-stream, 2-token, 1536-cell ubatch has byte-identical
+q/k/v/mask under both routes and outputs that differ by **relative RMS 2.7e-4, max 9.4e-4, on every head (5e-5..7e-4),
+both tokens and both streams** (stream 0 3.4e-4, stream 1 1.7e-4); the later layers drift to 1-4e-2 through the
+residual. Not a row or stream mapping error (that would be O(1) on some rows) - a precision-class difference between
+the 8-row `qtnw` tile at `gqah=1` and the 16-row O-resident `qtnw16o` tile at `gqah=6`, at 12 valid rows. The three
+Turbo4 tiles share `FA_TYPES` and the template flags (QT, TRM 3, VU 4, LD 1), so the difference is in the tile's
+data path, not its declared types. 2.7e-4 relative per layer at 1.5K cells, growing with the extent, matches the KLD
+0.0003 (2K) -> 0.002 (16K).
