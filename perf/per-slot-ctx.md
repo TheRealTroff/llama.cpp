@@ -256,3 +256,8 @@ class move on multi-slot width-1/2 text, not a bug and not a free lineage. Queue
 logits at one stream (`kld-w2-f16ref`) to state the direction at the logit level; `kld-w6-1s` prices the pick's own
 width-6 tile plan against 8-row GQA tiles (expected ~1e-5: both are GQA paths). Why the 8-row `gqah=1` tile is worse at
 width 2 than the GQA tiles is open (its arithmetic should be per row; at width 4 the two agree byte for byte).
+
+**`kld-w6-1s` (06:00):** the pick's width-6 plan (`GGML_FA_Q24_ROWS=12`: a 24-row + a 16-row tile) vs 8-row GQA tiles
+(`GGML_FA_Q24_ROWS=0`), one stream, 12 chunks: **mean KLD 0.000000, median 0, max 6.8e-5 (the uint16 base floor),
+same-top 100.000%** - the GQA tiles are one arithmetic at every row count, exactly as the width-2 probes showed. The
+pick's width-6 route is unaffected by anything here.
