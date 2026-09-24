@@ -496,3 +496,16 @@ The width-1 pairs are the width-2 class on both lines: the medians and the same-
 tails (one ~18.5 position on each line, error bars 0.0015 - the "a mean KL can be one chaotic position" rule). Its direction was settled at the node:
 the tile is 2.09e-4 from exact at width 1, the vec kernel 3.75e-4. The f16 pairs were not run: the e2e text is
 identical on both f16 arms and f16 K/V are exact in both kernels (summation order only) - open if anyone wants the number.
+
+**Minted (`prodpick-sep24-gqaw12-{q4,ud}`, 19:52-20:34, prod `d4c0d1b64`, HOT AMBIENT 27 C = a SHA mint; numbers in the README
+merge log):** every one-slot sha on both lines = the recorded lineage; the new `turbo4-b1-300` arm records `7c5254d01b12` (q4)
+and `d180ae89f168` (ud). Multi-slot: q4 short PASS, long = the executors-alone shas moved onto the mix-phase shas (their 512-cell
+width-2 calls left the vec kernel too - the executors' text no longer depends on a long coordinator beside them; `REF_LONG_Q4`
+re-pinned), solo and mix held; ud long PASS, short = slot 2 (f16, 16 tokens) `a3c90139bbfd` -> `ff519f555a75`, stable on 3
+reruns, re-pinned. Worktree `llama.cpp-gqaw12` removed, branch `exp/fa-gqa-w12-ss` kept.
+
+Open after this: (1) the f16 GQA tile at widths 1-2 runs its generic split (`GGML_FA_MM_NWG=8`; the Turbo4 tile has
+`GGML_FA_TURBO_NWG=20`) - an untimed lever; (2) the f16 width-1/2 KLD pairs were not run (text identical on every f16 arm);
+(3) `GGML_FA_VEC_MAX=3` is now inert for GQA-6 shapes on both caches (widths 1-2 go to the tile before the vec rule is
+consulted) and only routes non-GQA or hsk >= 512 shapes; (4) `GGML_FA_GQA_WMIN_MS/_KVMIN/_ALL` are subsumed by `_WMIN=1` in
+the pick and stay as the narrower rules.

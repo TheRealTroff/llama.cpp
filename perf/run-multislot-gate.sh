@@ -14,7 +14,7 @@ PORT=${PORT:-8098}
 OUT=/Users/troff/play/kvquant-experiments/results
 case "$LINE" in   # slot 1 = 01-code-explain, 2 = 02-prose-creative, 3 = 03-chat-support (perf/prompts, chat-templated)
   q4) REF="fa07afbb6c44 b5639c4c0996 68e5283468ff" ;;   # 2026-09-23 fix gate, prod adea1cc69 (slot-mix.md Resolution)
-  ud) REF="fa07afbb6c44 a3c90139bbfd 68e5283468ff" ;;   # first ud multi-slot run ever, mint prodpick-sep23-multislot-ud (acc 75/100/75%)
+  ud) REF="fa07afbb6c44 ff519f555a75 68e5283468ff" ;;   # slot 2 a3c90139bbfd -> ff519f555a75 2026-09-24 evening (GGML_FA_GQA_WMIN=1: the f16 width-2 calls at 512 cells left the vec kernel; stable x4, mint prodpick-sep24-gqaw12-ud); slots 1/3 = the first ud run, mint prodpick-sep23-multislot-ud
   *) echo "unknown LINE $LINE"; exit 1 ;;
 esac
 export B LINE PORT TAG="$TAG-multislot-$LINE" KV=f16 ARMS=split PHASES=execs EXEC_ROUNDS=1 NPRED_EXEC=16 CTX_COORD=8192 \
@@ -54,7 +54,7 @@ rc_short=$prc
 #       coordinator differs from the old route's row (cf057877480d -> ef89fa0c0a9c), the executors' mix texts held
 if [ "${LONG:-0}" = 1 ]; then
   case "$LINE" in
-    q4) REF_LONG="${REF_LONG_Q4:-execs:1:c8522a40c1e8 execs:2:28ff51768e4d execs:3:914119d97178 solo:0:d0d8cd0eb2d8 mix:0:64a49312d01f mix:1:67b0b590dd7b mix:2:d5fa80109900 mix:3:eae23bbebec0}" ;;
+    q4) REF_LONG="${REF_LONG_Q4:-execs:1:67b0b590dd7b execs:2:d5fa80109900 execs:3:eae23bbebec0 solo:0:d0d8cd0eb2d8 mix:0:64a49312d01f mix:1:67b0b590dd7b mix:2:d5fa80109900 mix:3:eae23bbebec0}" ;;   # execs 1-3 = the mix shas since 2026-09-24 evening (GGML_FA_GQA_WMIN=1 puts the executors-alone width-2 calls on the tile at every extent; before, KVMIN=8192 kept them on the vec kernel and their text differed from the mix phase)
     ud) REF_LONG="${REF_LONG_UD:-execs:1:36529d9fb3fe execs:2:039bf7ad9b41 execs:3:9c7f73d13fb8 solo:0:d6c3f3372554 mix:0:ef89fa0c0a9c mix:1:36529d9fb3fe mix:2:039bf7ad9b41 mix:3:9c7f73d13fb8}" ;;
   esac
   export TAG="$TAG-long" KV=turbo4 PHASES=execs,solo,mix EXEC_ROUNDS=1 NPRED_EXEC=100 NPRED_SOLO=32 NPRED_MIX=200 \

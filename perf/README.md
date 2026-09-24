@@ -122,6 +122,26 @@ ud f16 28.56 / 28.55 at 300 (`9c53aaade052`), 27.92 / 28.03 at 600 (`86b6e9b02cf
 at 300 (`ce826d8a3cbd`), 29.45 / 29.36 at 600 (`7eaeffa2a01e`); multi-slot short arm PASS, long arm PASS on the flags row
 (mix coordinator `ef89fa0c0a9c`).** Every one-slot sha = the Sep 23 mint's on both lines, as the flags' construction requires.
 
+**2026-09-24 evening (owner: "Just go for it", then "I don't see the point in reserving it for turbo4"): `exp/fa-gqa-w12-ss`
+MERGED (prod `ee10da4a4`) - `GGML_FA_GQA_WMIN=1` on both lines, the GQA decode FA tile from width 1 on every cache, stream count
+and extent.** The morning's "8-row tile at gqah=1" was a mislabel: the one-stream width-1/2 route was the VEC kernel
+(`GGML_FA_VEC_MAX=3`; no `fa-route:` line = the vec getter), and the gqah=1 tile is byte-identical to the GQA tile at widths 2
+and 4 (`per-slot-ctx.md` Resolution). Per call, one stream: Turbo4 0.19-0.28x, f16 0.20-0.76x of the vec call at 8K/100K; the
+tile is the closer kernel to exact (2.0e-4 vs 3.7e-4 relRMS per layer). Gates: FLASH_ATTN_EXT 4869/4869 x4; e2e ABAB x2 both
+lines (no-spec f16 +1..5%, MTP depth 1 +3..4%, Turbo4 no-spec +4..8%); KLD width-1 pairs vs the vec route = the width-2 class
+(median 1.7-1.9e-4, same-top 98.9%). **Mint TAGs `prodpick-sep24-gqaw12-{q4,ud}` (prod `d4c0d1b64`, binary 17:56, HOT AMBIENT
+27 C, evening - a SHA mint): q4 f16 31.99 / 31.07 at 300 (`d2953fccfb41`), 33.10 / 33.05 at 600 (`441120c66064`), partial 21.40,
+MTP 23.44, b1 14.32; Turbo4 33.89 at 300 (`86213d038a29`), 33.54 / 33.59 at 600 (`9e49b3d13b31` x2 = the replay-gated text),
+NEW ARM `turbo4-b1-300` (the Turbo4 no-spec anchor) 14.13 (`7c5254d01b12`, first record); multi-slot short arm PASS; long arm:
+the executors-alone shas MOVED onto the mix-phase shas (`67b0b590dd7b d5fa80109900 eae23bbebec0` - their 512-cell width-2 calls
+left the vec kernel too, so the executors' text no longer depends on a long coordinator beside them; `REF_LONG_Q4` re-pinned),
+solo and mix held. ud f16 28.12 / 28.03 at 300 (`9c53aaade052`), 27.67 / 27.54 at 600 (`86b6e9b02cf0`), partial 22.97, MTP 18.92,
+b1 12.77; Turbo4 29.94 at 300 (`ce826d8a3cbd`), 28.72 / 28.91 at 600 (`7eaeffa2a01e`), `turbo4-b1-300` 12.95 (`d180ae89f168`,
+first record); long arm PASS on the flags row (ud's executors-alone text already equalled its mix text); short arm: slot 2
+(02-prose-creative, f16, 16 tokens) `a3c90139bbfd` -> `ff519f555a75` = the f16 width-2 route at 512 cells (summation order only;
+stable on 3 reruns, re-pinned), slots 1 and 3 held.** Every one-slot sha on both lines = the recorded lineage.
+
+
 **2026-09-18 midday (owner: "go ahead"): `exp/skinny-gen-bsplit` MERGED (prod `b2878ceaa`) - the skinny B-split on the generic
 skinny tile, i.e. the UD line's width-6..8 verify path finally takes `GGML_MM_SKINNY_BSPLIT=2` (it had been in the env and inert
 there since Sep 7; `w8-decomp-sep18.md` lever 1): ud fixed-width-8 round 174.5 -> 169.5 ms (-2.9%), byte-identical. Inert at the
