@@ -13559,6 +13559,7 @@ template [[host_name("kernel_fwht_f32_256")]] kernel kernel_fwht_t kernel_fwht_f
 template [[host_name("kernel_fwht_f32_512")]] kernel kernel_fwht_t kernel_fwht_f32<512>;
 
 constant bool FC_flash_attn_ext_pad_has_mask [[function_constant(FC_FLASH_ATTN_EXT_PAD + 0)]];
+constant bool FC_flash_attn_ext_pad_has_kvoff [[function_constant(FC_FLASH_ATTN_EXT_PAD + 6)]]; // per-stream KV cell offset buffer (kvoff[i3], replaces i3*nb13)
 
 constant int32_t FC_flash_attn_ext_pad_ncpsg [[function_constant(FC_FLASH_ATTN_EXT_PAD + 25)]];
 
@@ -13569,6 +13570,7 @@ kernel void kernel_flash_attn_ext_pad(
         device const char * v,
         device const char * mask,
         device       char * dst,
+        device const int32_t * kvoff,
         uint3   tgpig[[threadgroup_position_in_grid]],
         ushort  tiitg[[thread_index_in_threadgroup]],
         ushort3   ntg[[threads_per_threadgroup]]) {
@@ -13586,8 +13588,13 @@ kernel void kernel_flash_attn_ext_pad(
     const int32_t i3 = tgpig[2];
 
     if (i2 < args.ne_12_2 && i3 < args.ne_12_3) {
-        device const char * k_src = k + args.nb11*(ic0 + i1) + args.nb12*i2 + args.nb13*i3;
-        device const char * v_src = v + args.nb21*(ic0 + i1) + args.nb22*i2 + args.nb23*i3;
+        // per-slot context sizes: stream i3's rows start kvoff[i3] cells from the view base (packed streams of
+        // different sizes have no uniform nb13)
+        const uint64_t k_s3 = FC_flash_attn_ext_pad_has_kvoff ? (uint64_t) kvoff[i3]*args.nb11 : args.nb13*i3;
+        const uint64_t v_s3 = FC_flash_attn_ext_pad_has_kvoff ? (uint64_t) kvoff[i3]*args.nb21 : args.nb23*i3;
+
+        device const char * k_src = k + args.nb11*(ic0 + i1) + args.nb12*i2 + k_s3;
+        device const char * v_src = v + args.nb21*(ic0 + i1) + args.nb22*i2 + v_s3;
 
         device char * k_dst = k_pad + args.nb11*i1 + args.nb11*C*i2 + args.nb11*C*args.ne_12_2*i3;
         device char * v_dst = v_pad + args.nb21*i1 + args.nb21*C*i2 + args.nb21*C*args.ne_12_2*i3;
@@ -13701,6 +13708,7 @@ constant bool FC_flash_attn_ext_has_bias  [[function_constant(FC_FLASH_ATTN_EXT 
 constant bool FC_flash_attn_ext_has_scap  [[function_constant(FC_FLASH_ATTN_EXT + 3)]];
 constant bool FC_flash_attn_ext_has_kvpad [[function_constant(FC_FLASH_ATTN_EXT + 4)]];
 constant bool FC_flash_attn_ext_has_kvlen [[function_constant(FC_FLASH_ATTN_EXT + 5)]]; // per-stream KV extent buffer (kvlen[iq3])
+constant bool FC_flash_attn_ext_has_kvoff [[function_constant(FC_FLASH_ATTN_EXT + 6)]]; // per-stream KV cell offset buffer (kvoff[iq3], replaces iq3*nb13)
 
 constant bool FC_flash_attn_ext_bc_mask [[function_constant(FC_FLASH_ATTN_EXT + 10)]];
 
@@ -13764,6 +13772,7 @@ void kernel_flash_attn_ext_impl(
         device const char * blk,
         device       char * dst,
         device const int32_t * kvlen,
+        device const int32_t * kvoff,
         threadgroup  half * shmem_f16,
         uint3   tgpig,
         ushort  tiisg,
@@ -13865,8 +13874,15 @@ void kernel_flash_attn_ext_impl(
         const short ikv2 = (GQAH == 1 ? iq2 : iqh0)/(args.ne02/args.ne_12_2);
         const short ikv3 = iq3/(args.ne03/args.ne_12_3);
 
-        k += ikv2*args.nb12 + ikv3*args.nb13;
-        v += ikv2*args.nb22 + ikv3*args.nb23;
+        // per-slot context sizes: with the offset table, stream ikv3's rows start kvoff[ikv3] cells (K/V rows) from the
+        // view base (streams of different sizes packed back to back have no uniform nb13/nb23)
+        if (FC_flash_attn_ext_has_kvoff) {
+            k += ikv2*args.nb12 + (uint64_t) kvoff[ikv3]*args.nb11;
+            v += ikv2*args.nb22 + (uint64_t) kvoff[ikv3]*args.nb21;
+        } else {
+            k += ikv2*args.nb12 + ikv3*args.nb13;
+            v += ikv2*args.nb22 + ikv3*args.nb23;
+        }
     }
 
     // load heads from Q to shared memory
@@ -14966,12 +14982,13 @@ kernel void kernel_flash_attn_ext(
         device const char * blk,
         device       char * dst,
         device const int32_t * kvlen,
+        device const int32_t * kvoff,
         threadgroup  half * shmem_f16 [[threadgroup(0)]],
         uint3   tgpig[[threadgroup_position_in_grid]],
         ushort  tiisg[[thread_index_in_simdgroup]],
         ushort  sgitg[[simdgroup_index_in_threadgroup]]) {
 #define FWD_TMPL q_t, q4_t, q8x8_t, k_t, k4x4_t, k8x8_t, v_t, v4x4_t, v8x8_t, qk_t, qk8x8_t, s_t, s2_t, s8x8_t, o_t, o4_t, o8x8_t, kd4x4_t, nl_k, deq_k, vd4x4_t, nl_v, deq_v, DK, DV, Q, C
-#define FWD_ARGS args, q, k, v, mask, sinks, pad, blk, dst, kvlen, shmem_f16, tgpig, tiisg, sgitg
+#define FWD_ARGS args, q, k, v, mask, sinks, pad, blk, dst, kvlen, kvoff, shmem_f16, tgpig, tiisg, sgitg
     switch (FC_flash_attn_ext_nsg) {
       // note: disabled cases to reduce library load time
       //case 1: kernel_flash_attn_ext_impl<FWD_TMPL, 1>(FWD_ARGS); break;
@@ -15250,6 +15267,7 @@ constant bool FC_flash_attn_ext_vec_has_bias  [[function_constant(FC_FLASH_ATTN_
 constant bool FC_flash_attn_ext_vec_has_scap  [[function_constant(FC_FLASH_ATTN_EXT_VEC + 3)]];
 constant bool FC_flash_attn_ext_vec_has_kvpad [[function_constant(FC_FLASH_ATTN_EXT_VEC + 4)]];
 constant bool FC_flash_attn_ext_vec_has_kvlen [[function_constant(FC_FLASH_ATTN_EXT_VEC + 5)]]; // per-stream KV extent buffer (kvlen[iq3])
+constant bool FC_flash_attn_ext_vec_has_kvoff [[function_constant(FC_FLASH_ATTN_EXT_VEC + 6)]]; // per-stream KV cell offset buffer (kvoff[iq3], replaces iq3*nb13)
 
 //constant float FC_flash_attn_ext_vec_scale         [[function_constant(FC_FLASH_ATTN_EXT_VEC + 10)]];
 //constant float FC_flash_attn_ext_vec_max_bias      [[function_constant(FC_FLASH_ATTN_EXT_VEC + 11)]];
@@ -15290,6 +15308,7 @@ kernel void kernel_flash_attn_ext_vec(
         device const char * pad,
         device       char * dst,
         device const int32_t * kvlen,
+        device const int32_t * kvoff,
         threadgroup  half * shmem_f16 [[threadgroup(0)]],
         uint3   tgpig[[threadgroup_position_in_grid]],
         ushort  tiisg[[thread_index_in_simdgroup]],
@@ -15354,8 +15373,15 @@ kernel void kernel_flash_attn_ext_vec(
         const short ikv2 = iq2/(args.ne02/args.ne_12_2);
         const short ikv3 = iq3/(args.ne03/args.ne_12_3);
 
-        k += ikv2*args.nb12 + ikv3*args.nb13;
-        v += ikv2*args.nb22 + ikv3*args.nb23;
+        // per-slot context sizes: with the offset table, stream ikv3's rows start kvoff[ikv3] cells (K/V rows) from the
+        // view base (streams of different sizes packed back to back have no uniform nb13/nb23)
+        if (FC_flash_attn_ext_vec_has_kvoff) {
+            k += ikv2*args.nb12 + (uint64_t) kvoff[ikv3]*args.nb11;
+            v += ikv2*args.nb22 + (uint64_t) kvoff[ikv3]*args.nb21;
+        } else {
+            k += ikv2*args.nb12 + ikv3*args.nb13;
+            v += ikv2*args.nb22 + ikv3*args.nb23;
+        }
     }
 
     // load heads from Q to shared memory (one vector per query row)

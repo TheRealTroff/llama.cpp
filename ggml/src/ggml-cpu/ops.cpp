@@ -9203,6 +9203,10 @@ static void ggml_compute_forward_flash_attn_ext_f16(
 void ggml_compute_forward_flash_attn_ext(
         const ggml_compute_params * params,
         ggml_tensor * dst) {
+    // src[6] = per-stream KV cell offsets (ggml_flash_attn_ext_set_kv_off): the K/V views then have no stream stride,
+    // and only the Metal kernels read the offset table
+    GGML_ASSERT(dst->src[6] == NULL && "flash_attn_ext: per-stream KV offsets (per-slot context sizes) are Metal-only");
+
     switch (dst->op_params[3]) {
         case GGML_PREC_DEFAULT:
         case GGML_PREC_F32:

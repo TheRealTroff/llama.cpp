@@ -39,7 +39,9 @@ public:
                      bool   unified,
                             /* layer filters */
     const layer_filter_cb & filter_attn = nullptr,
-    const layer_filter_cb & filter_recr = nullptr);
+    const layer_filter_cb & filter_recr = nullptr,
+                            /* per-sequence context sizes for the attention cache (see llama_kv_cache), empty = kv_size each */
+    const std::vector<uint32_t> & kv_sizes = {});
 
     ~llama_memory_hybrid() = default;
 

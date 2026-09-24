@@ -1648,6 +1648,40 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_CTX_SIZE"));
     add_opt(common_arg(
+        {"--ctx-seq-sizes"}, "N,N,...",
+        "per-sequence (server: per-slot) context sizes, e.g. 98304,8192,8192,8192 (suffix k = x1024); "
+        "sets -np to the count and -c to the sum; the KV cache packs the sequences so each pays only for its own "
+        "context; needs split mode (no --kv-unified) and flash attention",
+        [](common_params & params, const std::string & value) {
+            params.n_ctx_seq_list.clear();
+            for (const auto & tok : string_split<std::string>(value, ',')) {
+                if (tok.empty()) {
+                    continue;
+                }
+                size_t mul = 1;
+                std::string num = tok;
+                if (num.back() == 'k' || num.back() == 'K') {
+                    mul = 1024;
+                    num.pop_back();
+                }
+                const long long n = std::stoll(num)*mul;
+                if (n <= 0) {
+                    throw std::invalid_argument("error: invalid --ctx-seq-sizes entry '" + tok + "'");
+                }
+                params.n_ctx_seq_list.push_back((uint32_t) n);
+            }
+            if (params.n_ctx_seq_list.empty()) {
+                throw std::invalid_argument("error: --ctx-seq-sizes needs at least one size");
+            }
+            params.n_parallel = (int32_t) params.n_ctx_seq_list.size();
+            params.n_ctx = 0;
+            for (auto n : params.n_ctx_seq_list) {
+                params.n_ctx += n;
+            }
+            params.fit_params_min_ctx = UINT32_MAX;
+        }
+    ).set_env("LLAMA_ARG_CTX_SEQ_SIZES"));
+    add_opt(common_arg(
         {"-n", "--predict", "--n-predict"}, "N",
         string_format(
             ex == LLAMA_EXAMPLE_COMPLETION

@@ -2340,7 +2340,8 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                             /* offload           */ cparams.offload_kqv,
                             /* unified           */ cparams.kv_unified,
                             /* filter_attn       */ std::move(filter_attn),
-                            /* filter_recr       */ std::move(filter_recr));
+                            /* filter_recr       */ std::move(filter_recr),
+                            /* kv_sizes          */ cparams.n_ctx_seq_list);
                     }
                 } else {
                     llama_kv_cache::layer_filter_cb filter = nullptr;
@@ -2404,7 +2405,8 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                                     mem_other,
                                     filter,
                                     reuse,
-                                    share);
+                                    share,
+                                    cparams.n_ctx_seq_list);
                         } else {
                             res = new llama_kv_cache_iswa(
                                     *this,
@@ -2421,7 +2423,8 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                                     nullptr,
                                     filter,
                                     reuse,
-                                    share);
+                                    share,
+                                    cparams.n_ctx_seq_list);
                         }
                     } else {
                         GGML_ASSERT(!hparams.is_swa_any());
@@ -2442,10 +2445,22 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                                 nullptr,
                                 filter,
                                 nullptr,
-                                nullptr);
+                                nullptr,
+                                cparams.n_ctx_seq_list);
                     }
                 }
             }
+    }
+
+    // per-sequence context sizes reach only the plain attention cache and the hybrid wrapper; any other memory
+    // class would silently give every sequence the maximum, so refuse a mixed list there
+    if (!cparams.n_ctx_seq_list.empty()) {
+        const bool mixed = std::any_of(cparams.n_ctx_seq_list.begin(), cparams.n_ctx_seq_list.end(),
+                [&](uint32_t n) { return n != cparams.n_ctx_seq_list[0]; });
+        if (mixed && !dynamic_cast<llama_kv_cache *>(res) && !dynamic_cast<llama_memory_hybrid *>(res) && !dynamic_cast<llama_kv_cache_iswa *>(res)) {
+            delete res;
+            throw std::runtime_error("per-sequence context sizes are not supported by this model's memory type");
+        }
     }
 
     return res;

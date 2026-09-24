@@ -369,6 +369,7 @@ public:
 
     // split mode only (n_stream > 1): the per-stream KV extent, attached to the flash-attention op as src[5]
     ggml_tensor * self_kv_len = nullptr; // I32 [n_stream]
+    ggml_tensor * self_kv_off = nullptr; // I32 [n_stream] per-stream first cell (per-slot context sizes, non-uniform caches only)
 
     // note: assumes v_rot^2 == I
     ggml_tensor * self_k_rot = nullptr;
@@ -1167,7 +1168,8 @@ struct llm_graph_context {
             ggml_tensor * v_mla,   // [n_embd_head_v_mla, n_embd_head_v, n_head_v]
                   float   kq_scale,
                     int   il,
-            ggml_tensor * kv_len = nullptr) const; // I32 [n_stream] per-stream KV extent (split mode), see ggml_flash_attn_ext_set_kv_len
+            ggml_tensor * kv_len = nullptr,        // I32 [n_stream] per-stream KV extent (split mode), see ggml_flash_attn_ext_set_kv_len
+            ggml_tensor * kv_off = nullptr) const; // I32 [n_stream] per-stream first cell (per-slot context sizes), see ggml_flash_attn_ext_set_kv_off
 
     llm_graph_input_attn_no_cache * build_attn_inp_no_cache() const;
 

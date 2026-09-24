@@ -708,7 +708,33 @@ llama_context::llama_context(
     // ref: https://github.com/ggml-org/llama.cpp/pull/17046#discussion_r2503085732
     cparams.n_ctx = GGML_PAD(cparams.n_ctx, 256);
 
-    if (cparams.kv_unified) {
+    if (params.ctx_seq_sizes != nullptr) {
+        // per-sequence context sizes: n_ctx = the sum, n_ctx_seq = the maximum; the memory packs the sequences
+        if (cparams.kv_unified) {
+            throw std::runtime_error("per-sequence context sizes need split mode (kv_unified = false)");
+        }
+
+        cparams.n_ctx_seq_list.assign(params.ctx_seq_sizes, params.ctx_seq_sizes + cparams.n_seq_max);
+
+        uint32_t n_sum = 0;
+        uint32_t n_max = 0;
+        std::string str;
+        for (uint32_t s = 0; s < cparams.n_seq_max; ++s) {
+            auto & n = cparams.n_ctx_seq_list[s];
+            if (n == 0) {
+                throw std::runtime_error("per-sequence context size 0 for sequence " + std::to_string(s));
+            }
+            n = GGML_PAD(n, 256);
+            n_sum += n;
+            n_max  = std::max(n_max, n);
+            str += (s ? "," : "") + std::to_string(n);
+        }
+
+        cparams.n_ctx     = n_sum;
+        cparams.n_ctx_seq = n_max;
+
+        LLAMA_LOG_INFO("%s: n_ctx_seq_list        = %s\n", __func__, str.c_str());
+    } else if (cparams.kv_unified) {
         cparams.n_ctx_seq = cparams.n_ctx;
     } else {
         cparams.n_ctx_seq = cparams.n_ctx / cparams.n_seq_max;
@@ -1175,6 +1201,14 @@ uint32_t llama_context::n_ctx() const {
 
 uint32_t llama_context::n_ctx_seq() const {
     return cparams.n_ctx_seq;
+}
+
+uint32_t llama_context::n_ctx_seq_id(llama_seq_id seq_id) const {
+    if (cparams.n_ctx_seq_list.empty()) {
+        return cparams.n_ctx_seq;
+    }
+    GGML_ASSERT(seq_id >= 0 && (size_t) seq_id < cparams.n_ctx_seq_list.size());
+    return cparams.n_ctx_seq_list[seq_id];
 }
 
 uint32_t llama_context::n_batch() const {
@@ -4061,6 +4095,7 @@ llama_context_params llama_context_default_params() {
         /*.sampler                     =*/ nullptr,
         /*.n_sampler                   =*/ 0,
         /*.ctx_other                   =*/ nullptr,
+        /*.ctx_seq_sizes               =*/ nullptr,
     };
 
     return result;
@@ -4198,6 +4233,10 @@ uint32_t llama_n_ctx(const llama_context * ctx) {
 
 uint32_t llama_n_ctx_seq(const llama_context * ctx) {
     return ctx->n_ctx_seq();
+}
+
+uint32_t llama_n_ctx_seq_id(const llama_context * ctx, llama_seq_id seq_id) {
+    return ctx->n_ctx_seq_id(seq_id);
 }
 
 uint32_t llama_n_batch(const llama_context * ctx) {

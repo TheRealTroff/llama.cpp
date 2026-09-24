@@ -112,7 +112,11 @@ public:
                llama_memory_t   mem_other,
         const layer_filter_cb & filter,
         const  layer_reuse_cb & reuse,
-        const  layer_share_cb & share);
+        const  layer_share_cb & share,
+            // per-slot context sizes (split mode only): the cell count of each stream, n_seq_max entries, each a
+            // multiple of n_pad; empty = kv_size for every stream. The streams are packed back to back in one
+            // buffer per layer (stream s starts at cell v_offs[s]), so a slot pays only for its own context.
+            const std::vector<uint32_t> & kv_sizes = {});
 
     ~llama_kv_cache() = default;
 
@@ -155,6 +159,12 @@ public:
 
     uint32_t get_size()     const;
     uint32_t get_n_stream() const;
+
+    // per-slot context sizes
+    uint32_t get_size_stream(uint32_t strm) const; // cells of stream strm
+    uint32_t get_offs_stream(uint32_t strm) const; // first cell of stream strm in the packed layer buffer
+    uint32_t get_size_total() const;               // sum over the streams
+    bool     is_uniform()     const;               // every stream has the same size (the classic layout)
 
     bool get_has_shift() const;
 
@@ -215,6 +225,7 @@ public:
 
     void set_input_kq_mask   (ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const;
     void set_input_kv_len    (ggml_tensor * dst, const llama_ubatch * ubatch) const; // I32 [n_stream of the ubatch]: per-stream KV extent
+    void set_input_kv_off    (ggml_tensor * dst, const llama_ubatch * ubatch) const; // I32 [n_stream of the ubatch]: per-stream first cell (non-uniform sizes only)
     void set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const;
 
     void set_input_k_rot(ggml_tensor * dst) const;
@@ -281,6 +292,11 @@ private:
 
     // maps from a sequence id to a stream id
     std::vector<uint32_t> seq_to_stream;
+
+    // per-slot context sizes: the first cell of each stream in the packed per-layer buffer (prefix sums of the
+    // stream sizes, which live in v_cells[s].size()); v_offs[n_stream] = the total cell count
+    std::vector<uint32_t> v_offs;
+    bool sizes_uniform = true;
 
     // pending stream copies that will be applied during the next update
     stream_copy_info sc_info;
@@ -367,6 +383,7 @@ public:
 
     uint32_t get_n_kv() const;
     uint32_t get_n_stream() const;
+    bool     is_uniform() const;   // per-slot context sizes: false = the streams have different sizes (kv_off input needed)
 
     ggml_type type_k() const;
     ggml_type type_v() const;
@@ -399,6 +416,7 @@ public:
     void set_input_k_shift   (ggml_tensor * dst) const;
     void set_input_kq_mask   (ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const;
     void set_input_kv_len    (ggml_tensor * dst, const llama_ubatch * ubatch) const; // I32 [n_stream of the ubatch]: per-stream KV extent
+    void set_input_kv_off    (ggml_tensor * dst, const llama_ubatch * ubatch) const; // I32 [n_stream of the ubatch]: per-stream first cell (non-uniform sizes only)
     void set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const;
 
     void set_input_k_rot(ggml_tensor * dst) const;

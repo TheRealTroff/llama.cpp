@@ -9,7 +9,8 @@
 
 struct llama_cparams {
     uint32_t n_ctx;           // context size used during inference
-    uint32_t n_ctx_seq;       // context for a single sequence
+    uint32_t n_ctx_seq;       // context for a single sequence (the maximum over the sequences with per-sequence sizes)
+    std::vector<uint32_t> n_ctx_seq_list; // per-sequence context sizes (n_seq_max entries), empty = every sequence gets n_ctx_seq
     uint32_t n_batch;
     uint32_t n_ubatch;
     uint32_t n_seq_max;

@@ -1876,7 +1876,8 @@ static struct ggml_tensor * ggml_new_tensor_impl(
         data_size *= ne[i];
     }
 
-    GGML_ASSERT(view_src == NULL || data_size == 0 || data_size + view_offs <= ggml_nbytes(view_src));
+    GGML_ASSERT(view_src == NULL || data_size == 0 || data_size + view_offs <= ggml_nbytes(view_src) ||
+            (view_src->flags & GGML_TENSOR_FLAG_LOOSE_VIEWS));
 
     void * data = view_src != NULL ? view_src->data : NULL;
     if (data != NULL) {
@@ -5606,6 +5607,23 @@ void ggml_flash_attn_ext_set_kv_len(
     GGML_ASSERT(kv_len->ne[0] == a->src[0]->ne[3]);
 
     a->src[5] = kv_len;
+}
+
+void ggml_flash_attn_ext_set_kv_off(
+        struct ggml_tensor * a,
+        struct ggml_tensor * kv_off) {
+    if (!kv_off) {
+        a->src[6] = NULL;
+        return;
+    }
+
+    GGML_ASSERT(a->op == GGML_OP_FLASH_ATTN_EXT);
+    GGML_ASSERT(a->src[6] == NULL);
+    GGML_ASSERT(a->src[5] != NULL && "kv_off requires kv_len");
+    GGML_ASSERT(kv_off->type == GGML_TYPE_I32);
+    GGML_ASSERT(kv_off->ne[0] == a->src[0]->ne[3]);
+
+    a->src[6] = kv_off;
 }
 
 // ggml_flash_attn_back

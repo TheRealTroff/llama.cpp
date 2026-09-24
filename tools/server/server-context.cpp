@@ -1584,6 +1584,16 @@ private:
         SRV_INF("initializing, n_slots = %d, n_ctx_slot = %d, kv_unified = '%s'\n",
                 params_base.n_parallel, n_ctx_slot, params_base.kv_unified ? "true" : "false");
 
+        // per-slot context sizes (--ctx-seq-sizes): slot i = sequence i, its context is its own cache size
+        const bool ctx_per_slot = !params_base.n_ctx_seq_list.empty();
+        if (ctx_per_slot) {
+            std::string str;
+            for (int i = 0; i < params_base.n_parallel; i++) {
+                str += (i ? "," : "") + std::to_string(llama_n_ctx_seq_id(ctx_tgt, i));
+            }
+            SRV_INF("per-slot context sizes = %s (a task goes to the smallest idle slot it fits)\n", str.c_str());
+        }
+
         // initialize slots
         for (int i = 0; i < params_base.n_parallel; i++) {
             slots.emplace_back();
@@ -1618,7 +1628,7 @@ private:
             slot.ctx_dft = ctx_dft;
             slot.mem.init(ctx_tgt, ctx_dft);
             slot.spec    = spec.get();
-            slot.n_ctx   = n_ctx_slot;
+            slot.n_ctx   = ctx_per_slot ? std::min((int) llama_n_ctx_seq_id(ctx_tgt, i), n_ctx_train) : n_ctx_slot;
 
             slot.mctx                   = mctx;
             slot.prompt.tokens.has_mtmd = mctx != nullptr;
@@ -1863,6 +1873,35 @@ private:
             }
         }
 
+        // per-slot context sizes: a task may only go to a slot whose context holds its prompt, and among the idle
+        // slots that do, the LRU rule stays inside the smallest such size class (a short task never takes the
+        // coordinator's slot). With uniform slots every slot is one class and this is the old rule. A prompt that
+        // fits no slot at all falls through to the old path, which reports the context error.
+        const size_t n_need = task.tokens.size() + 1;
+        int n_ctx_fit = -1;
+        {
+            bool any_fits = false;
+            for (const server_slot & slot : slots) {
+                if ((size_t) slot.n_ctx >= n_need) {
+                    any_fits = true;
+                    if (!slot.is_processing() && (n_ctx_fit < 0 || slot.n_ctx < n_ctx_fit)) {
+                        n_ctx_fit = slot.n_ctx;
+                    }
+                }
+            }
+            if (task.id_slot == -1 && any_fits && n_ctx_fit < 0) {
+                // every slot that could hold it is busy: defer (same as all-busy in the uniform case)
+                SRV_DBG("no idle slot holds %zu tokens, deferring\n", n_need);
+                return nullptr;
+            }
+        }
+        auto slot_fits = [&](const server_slot & slot) {
+            return n_ctx_fit < 0 || (size_t) slot.n_ctx >= n_need;
+        };
+        auto slot_in_class = [&](const server_slot & slot) {
+            return n_ctx_fit < 0 || slot.n_ctx == n_ctx_fit;
+        };
+
         // find the slot that has at least n% prompt similarity
         if (slot_prompt_similarity != 0.0f) {
             float f_sim_best = 0;
@@ -1875,6 +1914,12 @@ private:
                 // skip the slot if it is not available
                 if (slot.is_processing()) {
                     SLT_TRC(slot, " - skipping, is_processing = %d\n", slot.is_processing());
+                    continue;
+                }
+
+                // per-slot context sizes: a cached prefix in a slot that cannot hold the prompt is no use
+                if (task.id_slot == -1 && !slot_fits(slot)) {
+                    SLT_TRC(slot, " - skipping, n_ctx = %d < %zu\n", slot.n_ctx, n_need);
                     continue;
                 }
 
@@ -1922,6 +1967,11 @@ private:
             for (server_slot & slot : slots) {
                 // skip the slot if it is not available
                 if (slot.is_processing()) {
+                    continue;
+                }
+
+                // per-slot context sizes: stay in the smallest size class that holds the prompt
+                if (!slot_in_class(slot)) {
                     continue;
                 }
 
@@ -4439,7 +4489,12 @@ private:
     }
 
     int get_slot_n_ctx() {
-        return slots.back().n_ctx;
+        // per-slot context sizes: report the largest slot
+        int n_ctx = 0;
+        for (const auto & slot : slots) {
+            n_ctx = std::max(n_ctx, slot.n_ctx);
+        }
+        return n_ctx;
     }
 
     server_response_reader get_response_reader() {

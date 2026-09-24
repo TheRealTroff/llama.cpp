@@ -678,6 +678,10 @@ extern "C" {
         GGML_TENSOR_FLAG_OUTPUT  =  2, // ...is an output for the GGML compute graph
         GGML_TENSOR_FLAG_PARAM   =  4, // ...contains trainable parameters
         GGML_TENSOR_FLAG_LOSS    =  8, // ...defines loss for numerical optimization (multiple loss tensors add up)
+        GGML_TENSOR_FLAG_LOOSE_VIEWS = 16, // views of this tensor skip the contiguous-shape size check in ggml_new_tensor_impl:
+                                           // a packed KV cache (streams of different sizes back to back) is read through
+                                           // strided views whose shape product exceeds the buffer while their real byte
+                                           // extent (ggml_nbytes with the strides) does not; backends still check the latter
         GGML_TENSOR_FLAG_COMPUTE = 16, // ...must be computed
     };
 
@@ -2478,6 +2482,13 @@ extern "C" {
     GGML_API void ggml_flash_attn_ext_set_kv_len(
             struct ggml_tensor * a,
             struct ggml_tensor * kv_len);
+
+    // optional per-stream KV cell offset (src[6]): I32 [q->ne[3]]. Stream s's K/V rows start kv_off[s] cells
+    // (K/V rows, k->nb[1]) from the K/V view's base instead of s*k->nb[3]: the streams of one call can have
+    // different cache sizes packed back to back (per-slot context sizes, 2026-09-25). Requires kv_len.
+    GGML_API void ggml_flash_attn_ext_set_kv_off(
+            struct ggml_tensor * a,
+            struct ggml_tensor * kv_off);
 
     // TODO: needs to be adapted to ggml_flash_attn_ext
     GGML_API struct ggml_tensor * ggml_flash_attn_back(

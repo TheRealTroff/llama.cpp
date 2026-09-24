@@ -242,6 +242,7 @@ struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_att
         ggml_metal_library_t lib,
         const struct ggml_tensor * op,
         bool    has_mask,
+        bool    has_kvoff,   // src[6] = per-stream KV cell offset (ggml_flash_attn_ext_set_kv_off)
         int32_t ncpsg);
 
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext_blk(
@@ -267,6 +268,7 @@ struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_att
         bool    has_scap,
         bool    has_kvpad,
         bool    has_kvlen,   // src[5] = per-stream KV extent (ggml_flash_attn_ext_set_kv_len)
+        bool    has_kvoff,   // src[6] = per-stream KV cell offset (ggml_flash_attn_ext_set_kv_off)
         int32_t nsg,
         int32_t nwg,
         int32_t gqa_heads,
@@ -281,6 +283,7 @@ struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_att
         bool    has_scap,
         bool    has_kvpad,
         bool    has_kvlen,
+        bool    has_kvoff,
         int32_t nsg,
         int32_t nwg,
         int32_t nq);

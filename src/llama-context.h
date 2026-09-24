@@ -64,6 +64,7 @@ struct llama_context {
 
     uint32_t n_ctx()     const;
     uint32_t n_ctx_seq() const;
+    uint32_t n_ctx_seq_id(llama_seq_id seq_id) const;
     uint32_t n_batch()   const;
     uint32_t n_ubatch()  const;
     uint32_t n_seq_max() const;
