@@ -1,6 +1,16 @@
 # Per-slot context sizes: the size-class work (2026-09-24)
 
-**Status 2026-09-24 morning: ADOPTED ON THE q4 LINE (owner: "Cache is fine but at the end of the day the quality of the output
+**Status 2026-09-24 evening: ADOPTED ON BOTH LINES, MERGED TO PROD (e12330da1), MINTED (`prodpick-sep24-gqawmin-{q4,ud}`, a hot-ambient
+SHA mint: every one-slot sha = Sep 23's on both lines, both multi-slot arms PASS on both lines, the long arms on the flags rows).** The ud
+line was priced the same afternoon ("The ud line priced" + "Paired verdict" at the end) and the owner took the flags on ud too
+("Take them on ud"): both entries are `pick` on both lines, `REF_LONG_UD` = the flags row. The q4 Turbo4 600 controller arm forked on
+its first run (`ae44d18ca4a9`, block histogram [3:106 5:1 7:81]) and gave the replay-gated text on its second (`9e49b3d13b31`,
+[2:1 3:90 7:89]): a pick diff before any text diverged = the controller, gated by `run-specev-replay-gate.sh` TAG
+`replaygate-0924-gqawmin` (result at the very end). Open after this: the size-class memory layout (memory only), the 8-row
+`gqah=1` tile's width-2 accuracy question (a kernel question), and - if the owner wants the route's behaviour outside the 2K
+wikitext regime - a paired pair on the model's own chat-templated text at 16-32K and on a code prompt.
+
+~~**Status 2026-09-24 morning: ADOPTED ON THE q4 LINE (owner: "Cache is fine but at the end of the day the quality of the output
 is what matters ... we've been using the reference KLD as the proxy. But for now, I'll go with your recommendations" = adopt on
 q4 as NUM-TG, price the ud line before pinning its reference).** `GGML_FA_GQA_WMIN_MS=1 GGML_FA_GQA_WMIN_KVMIN=8192` are in
 `perf/pick.sh` for q4 (class NUM-TG) and proposed for ud; `run-multislot-gate.sh` carries `REF_LONG_Q4` = the flags row and
@@ -8,7 +18,7 @@ q4 as NUM-TG, price the ud line before pinning its reference).** `GGML_FA_GQA_WM
 this session; the post-merge gate on the prod binary and the ud pricing pair (pairwise + f16-cache, the `kld-w2-1s` /
 `kld-w2-f16ref` recipe on the UD model) are recorded at the end ("Post-merge"). Owner's framing for the record: output quality
 is the real target, ill-defined; the reference KLD is the proxy this project uses for it, and the f16-cache pair is the cache
-form of that proxy.
+form of that proxy.~~
 
 ~~**Status 2026-09-24 06:45: PROPOSED (NUM-TG class), owner decides.**~~ The lever is `GGML_FA_GQA_WMIN_MS=1 GGML_FA_GQA_WMIN_KVMIN=8192`
 (the GQA-reuse FA tile at widths 1-2 on multi-stream calls over 8K cells): at the 96K baseline config the mix round
