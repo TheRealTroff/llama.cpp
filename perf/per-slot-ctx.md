@@ -7,7 +7,7 @@ line was priced the same afternoon ("The ud line priced" + "Paired verdict" at t
 its first run (`ae44d18ca4a9`, block histogram [3:106 5:1 7:81]) and gave the replay-gated text on its second (`9e49b3d13b31`,
 [2:1 3:90 7:89]): a pick diff before any text diverged = the controller, gated by `run-specev-replay-gate.sh` TAG
 `replaygate-0924-gqawmin` (result at the very end). Open after this: the size-class memory layout (memory only), the 8-row
-`gqah=1` tile's width-2 accuracy question (a kernel question), and - if the owner wants the route's behaviour outside the 2K
+`gqah=1` tile's width-2 accuracy question ~~(a kernel question)~~ [CLOSED in the evening, see "Resolution" at the end: the old route was the VEC kernel, the gqah=1 tile is byte-identical to the GQA tile], and - if the owner wants the route's behaviour outside the 2K
 wikitext regime - a paired pair on the model's own chat-templated text at 16-32K and on a code prompt.
 
 ~~**Status 2026-09-24 morning: ADOPTED ON THE q4 LINE (owner: "Cache is fine but at the end of the day the quality of the output
@@ -87,7 +87,7 @@ and offsets in the same place), not as a pick.
 ## Where the +110 ms per round is, then
 
 In the mix the coordinator verifies at width 2 (the budget), and its 96K attention takes the 8-row Turbo4 tile
-**without GQA reuse** (`use_gqa_reuse` needs `ne01 >= 3`): route `qtnw_turbo4 ... nwg=20 gqah=1` in the 96K log,
+**without GQA reuse** (`use_gqa_reuse` needs `ne01 >= 3`): ~~route `qtnw_turbo4 ... nwg=20 gqah=1` in the 96K log~~ [evening correction: at width 2 the call goes to the VEC kernel `kernel_flash_attn_ext_vec_turbo4` (`GGML_FA_VEC_MAX=3`, no `fa-route:` line); the `gqah=1` line in that log belongs to a width >= 3 call without reuse - see "Resolution"],
 one threadgroup per query head, each streaming the whole KV head = 6x the traffic of the `qtnw24 ... gqah=6` route
 the solo coordinator takes at widths 3/7. That is the FA cost that appears only in the mix (the executors' own
 FA is short either way).
@@ -138,8 +138,8 @@ choice, not a need: 8192 keeps the mint's short-extent multi-slot arm (f16, 512 
 ## Width 1: five slots, speculation off by the budget (`w1-96k-{old,w1}`, 02:47-03:27)
 
 The 96K coordinator + 4 executors (5 generating slots: the budget turns speculation off, every round is width 1),
-`GGML_FA_GQA_WMIN_MS=1 GGML_FA_GQA_WMIN_KVMIN=8192` vs the old route (the 8-row tile at `gqah=1`; the new route is the
-same 8-row tile at `gqah=6`, six GQA rows per KV head):
+`GGML_FA_GQA_WMIN_MS=1 GGML_FA_GQA_WMIN_KVMIN=8192` vs the old route (~~the 8-row tile at `gqah=1`~~ [the VEC kernel, see "Resolution"]; the new route is the
+8-row tile at `gqah=6`, six GQA rows per KV head):
 
 | | old | width-1 tile |
 |---|---|---|
@@ -254,7 +254,7 @@ configuration at 2K):** the first attention layer's FA node on a two-stream, 2-t
 q/k/v/mask under both routes and outputs that differ by **relative RMS 2.7e-4, max 9.4e-4, on every head (5e-5..7e-4),
 both tokens and both streams** (stream 0 3.4e-4, stream 1 1.7e-4); the later layers drift to 1-4e-2 through the
 residual. Not a row or stream mapping error (that would be O(1) on some rows) - a precision-class difference between
-the 8-row `qtnw` tile at `gqah=1` and the 16-row O-resident `qtnw16o` tile at `gqah=6`, at 12 valid rows. The three
+~~the 8-row `qtnw` tile at `gqah=1`~~ [the VEC kernel `kernel_flash_attn_ext_vec_turbo4`, see "Resolution"] and the 16-row O-resident `qtnw16o` tile at `gqah=6`, at 12 valid rows. The three
 Turbo4 tiles share `FA_TYPES` and the template flags (QT, TRM 3, VU 4, LD 1), so the difference is in the tile's
 data path, not its declared types. 2.7e-4 relative per layer at 1.5K cells, growing with the extent, matches the KLD
 0.0003 (2K) -> 0.002 (16K).
@@ -271,7 +271,7 @@ layout and the 16 centroids, f64 softmax, scale 1/16):**
 
 | route (same inputs, layer 3, 2 streams x 2 tokens, 1536 cells) | relRMS vs exact | max abs | per stream |
 |---|---|---|---|
-| old: 8-row `qtnw` at `gqah=1` (2 valid rows of 8) | 3.42e-4 | 1.44e-3 | 4.2e-4 / 2.5e-4 |
+| old: ~~8-row `qtnw` at `gqah=1` (2 valid rows of 8)~~ [the VEC kernel, reproduced 3.42e-4 / 1.44e-3 in the evening with no `fa-route:` line] | 3.42e-4 | 1.44e-3 | 4.2e-4 / 2.5e-4 |
 | new: any GQA tile at width 2 (12 rows) | **1.85e-4** | **5.0e-4** | 2.1e-4 / 1.6e-4 |
 
 Both are the q4 line's folded-norm (TR 7) class - a few 1e-4 per layer - and the GQA route is the MORE accurate of the
@@ -280,7 +280,7 @@ same size as the TR 7 perturbation itself (0.0019 when it was introduced), in th
 class move on multi-slot width-1/2 text, not a bug and not a free lineage. Queued: each route against the exact f16-cache
 logits at one stream (`kld-w2-f16ref`) to state the direction at the logit level; `kld-w6-1s` prices the pick's own
 width-6 tile plan against 8-row GQA tiles (expected ~1e-5: both are GQA paths). Why the 8-row `gqah=1` tile is worse at
-width 2 than the GQA tiles is open (its arithmetic should be per row; at width 4 the two agree byte for byte).
+width 2 than the GQA tiles ~~is open (its arithmetic should be per row; at width 4 the two agree byte for byte)~~ [CLOSED: it is not - the 8-row tile at gqah=1 forced at width 2 is byte-identical to the GQA tile; the less accurate route was the VEC kernel. "Resolution" below].
 
 **`kld-w6-1s` (06:00):** the pick's width-6 plan (`GGML_FA_Q24_ROWS=12`: a 24-row + a 16-row tile) vs 8-row GQA tiles
 (`GGML_FA_Q24_ROWS=0`), one stream, 12 chunks: **mean KLD 0.000000, median 0, max 6.8e-5 (the uint16 base floor),
@@ -293,7 +293,7 @@ Each width-2 route (one stream, `-b 2 -ub 2`, 12 chunks at 2K) against the EXACT
 
 | route | mean KLD vs f16 cache | median | 99.9% | max | same top |
 |---|---|---|---|---|---|
-| old: 8-row `qtnw` at `gqah=1` | 0.01071 ± 0.0020 | 0.00127 | 1.25 | 15.2 | 97.46 ± 0.14% |
+| old: ~~8-row `qtnw` at `gqah=1`~~ [the VEC kernel] | 0.01071 ± 0.0020 | 0.00127 | 1.25 | 15.2 | 97.46 ± 0.14% |
 | new: the GQA tile at width 2 | **0.00895 ± 0.0018** | 0.00129 | **0.95** | 15.8 | 97.45 ± 0.14% |
 
 The new route is 16% closer to the exact cache in mean KLD and 24% in the 99.9% tail, same-top equal within error: the
@@ -391,3 +391,73 @@ replay-gated text on its second (`9e49b3d13b31`, [2:1 3:90 7:89]). `run-specev-r
 (record once, replay x3, 949 tokens): record `b981f7376af5`, replays `b981f7376af5` x3, **322 picks, 0 desync, 0 past trace**
 each. The same picks on the same tokens reproduce bit for bit: the fork is the controller's timing-dependent pick (a hot room
 moves the cost EMA), not a kernel change - the one-slot graph does not carry the new route by construction.
+
+## Resolution of the width-2 accuracy question (2026-09-24 evening): the old route was the vec kernel
+
+Owner: "How would you go about finding the answer?" then "do 1 and 2 and we'll reassess", then "Do the sweep", then "Just go
+for it" and "I don't see the point in reserving it for turbo4". Branch `exp/fa-gqa-w12-ss`, tree `llama.cpp-gqaw12`.
+
+**Step 2 (the premise) answered it.** One stream, `-b W -ub W`, q4 pick env, Turbo4 cache, 2K wikitext, the first
+attention layer's node at 1536 cells (inputs route-independent: layers 0-2 are GDN), float64 reference = `fa-dump-ref.py`:
+
+| width | route | kernel (`fa-route:` line) | relRMS from exact | max abs |
+|---|---|---|---|---|
+| 2 | the pick (old) | NONE printed = the vec getter: `kernel_flash_attn_ext_vec_turbo4_dk256_dv256` | 3.66e-4 | 1.32e-3 |
+| 2 | 8-row tile forced (`GGML_FA_VEC_MAX=1 GGML_FA_GQA_HEADS=1 GGML_FA_Q16=0 GGML_FA_Q24=0`) | `qtnw_turbo4 ... nsg=4 nwg=20 gqah=1` | 2.01e-4 | 4.01e-4 |
+| 2 | GQA tile (`GGML_FA_GQA_WMIN_ALL=1 KVMIN=0`) | `qtnw24_turbo4 ... gqah=6` | 2.01e-4, **byte-identical to the row above** | 4.01e-4 |
+| 4 | 8-row tile gqah=1 (`GGML_FA_GQA_HEADS=1`) | `qtnw_turbo4 ... gqah=1` | 2.08e-4, **byte-identical to the 24-row GQA tile** | 5.29e-4 |
+| 8 | 8-row tile gqah=1 | `qtnw_turbo4 ... gqah=1 bcm=0` | 2.06e-4 | 8.81e-4 |
+| 1 | the pick (old) | none = vec | 3.75e-4 | 7.98e-4 |
+| 1 | GQA tile | `qtnw_turbo4 ... gqah=6` | 2.09e-4 | 4.28e-4 |
+
+The two-stream config of the 05:20 section (`-c 2048 -b 4096 -ub 4`) reproduces its "old route" row exactly (3.42e-4 /
+1.44e-3) and prints no route line either. `GGML_FA_VEC_MAX=3` sends `ne01 < 3` to the vec kernel whatever the stream count
+or extent (`ggml_metal_op_flash_attn_ext_use_vec` looks at ne01 and ne00 only). The morning's "8-row tile at gqah=1" was a
+label taken from the routing code, not from a route line - and the `fa-route:` print lives in the tile getter only, so the
+absence of a line IS the vec route (rule captured in the skill, step 4b).
+
+**Step 1 (the residual's structure, `perf/fa-residual.py`)** on the same node: both routes' residuals align with the
+heaviest-weighted keys (|cos| with a single key direction ~0.9, no key index shared across heads); every explicit
+off-by-one hypothesis (the other token's mask row, a dropped boundary key, an added masked key) is 1e-3..1e-1 from the
+kernel output, orders of magnitude worse than exact. Rounding of the dominant terms, not a mapping error. The vec kernel's
+extra share has a visible source: `dequantize_turbo4_0_t4` = half centroid table x half norm, K/V staged as `half4` - a half
+rounding per cache element; the tile's TR forms keep a float table with the norm folded out (TR 7) or staged (TR 9).
+
+**The speed pick that put widths 1-2 on the vec kernel (turbo4-filled-100k.md F, 2026-09-02) is stale.** It measured the
+vec kernel against the 8-row tile at gqah=1 (no reuse below width 3) before the TR forms, split-K 20 and the GQA tile at
+widths 1-2 existed. Per call, one stream, `test-backend-ops perf`, GQA 6, interleaved x3 (spread <= 2%), HOT AMBIENT 27C
+(the vec numbers = the Sep 2 table within 2%, so no throttling at this load), `perf/run-fa-w12-timing.sh`:
+
+| line | cache | kv | width | vec (the pick) | GQA tile (`GGML_FA_GQA_WMIN=1`) | tile / vec |
+|---|---|---:|---:|---:|---:|---:|
+| q4 | turbo4 | 8448 | 1 | 287 us | 74 | 0.26x |
+| q4 | turbo4 | 8448 | 2 | 537 | 125 | 0.23x |
+| q4 | turbo4 | 102400 | 1 | 3752 | 800 | 0.21x |
+| q4 | turbo4 | 102400 | 2 | 6972 | 1335 | 0.19x |
+| ud | turbo4 | 8448 | 1 | 287 | 79 | 0.28x |
+| ud | turbo4 | 8448 | 2 | 540 | 129 | 0.24x |
+| ud | turbo4 | 102400 | 1 | 3750 | 871 | 0.23x |
+| ud | turbo4 | 102400 | 2 | 6965 | 1411 | 0.20x |
+| q4 | f16 | 8448 | 1 | 213 | 163 | 0.76x |
+| q4 | f16 | 8448 | 2 | 378 | 192 | 0.51x |
+| q4 | f16 | 102400 | 1 | 6225 | 1823 | 0.29x |
+| q4 | f16 | 102400 | 2 | 10254 | 2255 | 0.22x |
+| ud | f16 | 8448 | 1 | 216 | 157 | 0.73x |
+| ud | f16 | 8448 | 2 | 382 | 187 | 0.49x |
+| ud | f16 | 102400 | 1 | 6218 | 1781 | 0.29x |
+| ud | f16 | 102400 | 2 | 10804 | 2149 | 0.20x |
+
+(f16 rows and the re-timed Turbo4 rows: the second sweep on the branch binary, 17:10, spread up to 8% on the tile arm and
+15% on one f16 vec cell - the sun was lower but the room was still 27C; the Turbo4 ratios repeat the 16:40 sweep within
+0.02x. The f16 tile at width 1 is the 8-row `qt_f16 ... nwg=8 gqah=6` tile: the f16 line has no `GGML_FA_TURBO_NWG=20`,
+so its split width is the generic `GGML_FA_MM_NWG=8` - a further lever, not taken here.) Owner on f16: "I don't see the
+point in reserving it for turbo4" - the rule is cache-agnostic.
+
+At width 2 the pick's 24-row form (`GGML_FA_Q24_ROWS=12`) beats `GGML_FA_Q24=0` by ~10%. 16 attention layers: per token at
+width 1 the vec route costs 3.4 ms more at 8K and 47 ms more at 100K; at width 2, 6.6 / 90 ms per round.
+
+**Adopted (owner: "Just go for it"): `GGML_FA_GQA_WMIN=1`** - the GQA tile from width 1 on every cache, stream count and
+extent (ggml-metal-ops.cpp; `GGML_FA_GQA_WMIN_MS/_KVMIN/_ALL` stay as the narrower rules and the probe). Both lines,
+NUM-TG. What moves: one-slot width-1/2 calls = the mint's `batch1-300` (no-spec, f16) and `mtp-d1-300` (width 2, f16) arms
+and the new `turbo4-b1-300` arm (the Turbo4 no-spec anchor, added to `run-prod-pick.sh`); the depth-3+ pick arms verify at
+widths 3-7 and never see it. Gates below as they land.
