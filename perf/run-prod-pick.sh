@@ -206,8 +206,9 @@ fi
 if [ "${MULTISLOT:-1}" = 1 ]; then
   echo
   echo "--- multi-slot arm: 3 executors on 3 slots, f16, depth 1 (perf/run-multislot-gate.sh) - every arm above runs ONE"
-  echo "    sequence and cannot see a multi-sequence-graph defect (perf/slot-mix.md, 2026-09-23); MULTISLOT=0 skips it ---"
-  LINE="$LINE" TAG="$TAG" B="$B" PORT=$(( ${PORT:-8093} + 1 )) bash "$B/perf/run-multislot-gate.sh"
+  echo "    sequence and cannot see a multi-sequence-graph defect (perf/slot-mix.md, 2026-09-23); MULTISLOT=0 skips it;"
+  echo "    then the long-extent arm (LONG=1: a 32K Turbo4 coordinator beside the executors, per-slot-ctx.md 2026-09-24) ---"
+  LINE="$LINE" TAG="$TAG" B="$B" PORT=$(( ${PORT:-8093} + 1 )) LONG="${LONG:-1}" bash "$B/perf/run-multislot-gate.sh"
 fi
 
 echo

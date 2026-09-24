@@ -1,6 +1,16 @@
 # Per-slot context sizes: the size-class work (2026-09-24)
 
-**Status 2026-09-24 06:45: PROPOSED (NUM-TG class), owner decides.** The lever is `GGML_FA_GQA_WMIN_MS=1 GGML_FA_GQA_WMIN_KVMIN=8192`
+**Status 2026-09-24 morning: ADOPTED ON THE q4 LINE (owner: "Cache is fine but at the end of the day the quality of the output
+is what matters ... we've been using the reference KLD as the proxy. But for now, I'll go with your recommendations" = adopt on
+q4 as NUM-TG, price the ud line before pinning its reference).** `GGML_FA_GQA_WMIN_MS=1 GGML_FA_GQA_WMIN_KVMIN=8192` are in
+`perf/pick.sh` for q4 (class NUM-TG) and proposed for ud; `run-multislot-gate.sh` carries `REF_LONG_Q4` = the flags row and
+`REF_LONG_UD` = the old route's row (below, "Gate arm references"); the mint's multi-slot call passes `LONG=1`. Merged to prod
+this session; the post-merge gate on the prod binary and the ud pricing pair (pairwise + f16-cache, the `kld-w2-1s` /
+`kld-w2-f16ref` recipe on the UD model) are recorded at the end ("Post-merge"). Owner's framing for the record: output quality
+is the real target, ill-defined; the reference KLD is the proxy this project uses for it, and the f16-cache pair is the cache
+form of that proxy.
+
+~~**Status 2026-09-24 06:45: PROPOSED (NUM-TG class), owner decides.**~~ The lever is `GGML_FA_GQA_WMIN_MS=1 GGML_FA_GQA_WMIN_KVMIN=8192`
 (the GQA-reuse FA tile at widths 1-2 on multi-stream calls over 8K cells): at the 96K baseline config the mix round
 225 -> 146 ms, coordinator 7.57 -> 11.56 t/s, executors 7.78 -> 12.14 per stream; at 5 slots (width 1) 6.13 -> 8.25 /
 6.50 -> 8.94; wins at every extent from 7.5K up. One-slot and short-extent shas are untouched by construction; multi-slot

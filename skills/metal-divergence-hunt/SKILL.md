@@ -93,6 +93,19 @@ entered upstream of this op; `dst` differs with `b` equal = this route's kernel.
 everywhere = the route is innocent, go to Step 5. (`perf/mm-dump-compare.py` is the f64
 reference form for pricing one route's numerics; this is the two-route A/B.)
 
+### Step 4b - Two routes disagree and neither is "the bug": which one is right?
+
+A pairwise KLD between two kernel routes (0.002 here) says how far apart they are, not which one is
+wrong. Answer that with a reference that is exact by construction, at two levels (per-slot-ctx.md
+2026-09-24, the width-2 GQA route): (1) op level - `LLAMA_FA_DUMP=<dir>` (with `_NT`, `_NS`, `_KVMIN`
+selectors for the token count, stream count and extent) dumps one FA node's inputs and output under
+each route; `perf/fa-dump-ref.py` recomputes it in float64 from the dumped Turbo4 blocks and reports
+each route's relative RMS from exact (old 3.4e-4, new 1.9e-4: the NEW route was the accurate one);
+(2) logit level - `run-quant-kld.sh` with `REF=<the same model> REF_KV=f16` and each route as a test
+arm under `KV=turbo4` (same `-b W -ub W` on both arms) gives each route's distance from the exact
+cache; the direction must agree with (1). Only then is the move a numerics class with a sign, not a
+defect. Do not price a decode route with the prefill-shaped KLD line (README rule).
+
 ## Step 5 - Node-level: the first divergent computed op
 
 `LLAMA_TRACE_DUMP=<dir> LLAMA_TRACE_MAX_MB=64` under both configurations (about 2 minutes per
