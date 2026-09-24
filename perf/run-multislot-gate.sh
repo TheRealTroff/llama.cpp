@@ -40,8 +40,7 @@ sys.exit(0 if ok else 1)
 PY
 prc=$?
 grep -q 'sync-guard: backend' "$OUT/$TAG-split.server.log" 2>/dev/null && { echo "  multislot gate: THE SYNC GUARD FIRED (GPU hang) - FAIL"; exit 2; }
-exit $prc
-rc_short=$?
+rc_short=$prc
 
 # LONG=1: the long-extent arm (2026-09-24, perf/per-slot-ctx.md) - a 32K coordinator (slot 0, Turbo4) beside three
 # executors, execs -> solo -> mix at fixed depth, one request per executor so the mix composition is deterministic

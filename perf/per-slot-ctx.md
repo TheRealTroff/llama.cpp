@@ -107,6 +107,23 @@ first 96K trial was run-to-run noise). With the tile the mix round is nearly fla
 choice, not a need: 8192 keeps the mint's short-extent multi-slot arm (f16, 512 cells) on its recorded references,
 0 takes the +0.7% at short extents and moves those references. The proposal keeps 8192.
 
+## Width 1: five slots, speculation off by the budget (`w1-96k-{old,w1}`, 02:47-03:27)
+
+The 96K coordinator + 4 executors (5 generating slots: the budget turns speculation off, every round is width 1),
+`GGML_FA_GQA_WMIN_MS=1 GGML_FA_GQA_WMIN_KVMIN=8192` vs the old route (the 8-row tile at `gqah=1`; the new route is the
+same 8-row tile at `gqah=6`, six GQA rows per KV head):
+
+| | old | width-1 tile |
+|---|---|---|
+| mix coordinator | 6.13 t/s | **8.25** (+35%) |
+| mix executors per stream / aggregate | 6.50 / 21.7 | **8.94 / 29.3** (+38% / +35%) |
+| executors alone (4 slots, 512-cell extents, old route under KVMIN) | 11.88, 8/8 shas identical | 11.88 |
+| solo coordinator | 21.30, 318524e3ecaa | 21.19, 318524e3ecaa |
+
+Every mix sha moved (the width-1 multi-stream kernel family), the coordinator's to 7a2e58f5669a - the same text the
+width-2 tile produces in the 4-slot mix. So `GGML_FA_GQA_WMIN_MS=1` is the general setting: widths 1 and 2 on
+multi-stream calls over the threshold take the GQA tile, widths 3-6 already did.
+
 ## The slot budget at 16 on top of lever 2 - a wash in the mix (refuted for this workload)
 
 `budget16-96k` = lever 2 + `LLAMA_SPEC_SLOT_BUDGET=16 LLAMA_SPEC_SLOT_BUDGET_WIDE=16 GGML_MM_SKINNY_N16=1` (3 slots
