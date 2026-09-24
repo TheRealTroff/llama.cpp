@@ -312,3 +312,17 @@ Executors alone and solo identical on both lines (short extents / one stream); t
   measured - the same two runs as `kld-w2-1s` on the UD model if wanted).
 - `REF_LONG_{Q4,UD}` = the flags rows above; `LONG=1` in `run-prod-pick.sh`'s multi-slot call.
 - Lever 1 stays as merged infrastructure (inert, byte-identical), the kill switches documented.
+
+## Post-merge (prod e12330da1, binary 11:45, 2026-09-24)
+
+`run-multislot-gate.sh LONG=1` on the merged prod binary, the flags supplied by `pick.sh` (no override), both lines
+(TAGs `postmerge-0924-{q4,ud}`):
+
+| line | short arm (f16, 3 executors) | long arm (32K Turbo4 coordinator + 3 executors) |
+|---|---|---|
+| q4 | PASS fa07afbb6c44 / b5639c4c0996 / 68e5283468ff | **PASS, all 8 = the flags row** (mix coordinator 64a49312d01f at 17.60 t/s, executors 12.8-13.1; the route log names `qtnw16o ... gqah=6` at width 2) |
+| ud | PASS fa07afbb6c44 / a3c90139bbfd / 68e5283468ff | PASS, all 8 = the old route's row (mix coordinator cf057877480d; the flags are proposed on ud, so `pick_env ud` does not carry them) |
+
+The ud pricing pair (`kld-w2-ud-1s`: control + tile vs the old-route Turbo4 base at `-b 2 -ub 2`; `kld-w2-ud-f16ref`: each
+route vs the f16 cache; 12 chunks at 2K, the q4 recipe on the UD model, `pick_env ud` exported) started 11:55 on the prod
+binary - results below when they land.

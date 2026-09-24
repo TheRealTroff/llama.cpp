@@ -97,6 +97,20 @@ MULTI-SLOT RUN, now its reference.** Every one-slot sha = the Sep 19 mint's; the
 shas (evening thermal, the Turbo4 arms are on the Sep 19 numbers). The slot-mix baseline (`run-slot-mix.sh`, this branch's
 original purpose) ran right after with speculation on - `slot-mix.md`.
 
+**2026-09-24 (owner, after the tradeoff walk-through: "Cache is fine but at the end of the day the quality of the output is what
+matters ... we've been using the reference KLD as the proxy. But for now, I'll go with your recommendations"): `exp/ctx-classes`
+MERGED (prod `e12330da1`) - the per-slot context work (`per-slot-ctx.md`), and `GGML_FA_GQA_WMIN_MS=1` + `GGML_FA_GQA_WMIN_KVMIN=8192`
+promoted to the q4 pick as NUM-TG (proposed on ud until its own KLD pair is priced).** The flags route multi-stream FA calls
+over 8K cells at verify widths 1-2 onto the GQA tiles: a 96K coordinator beside 3 executors goes 7.5 -> 11.5 t/s (executors
+7.8 -> 12.1 per stream, mix round 225 -> 146 ms), 5 slots at width 1 +35%. Every one-slot call keeps the width >= 3 rule and the
+short-extent multi-slot arm runs under the 8K threshold, so no minted sha can move; what moves is multi-slot width-1/2 text over
+8K - pairwise 0.0022 / 98.9% same-top vs the old route, but the float64 node reference (1.9e-4 vs 3.4e-4 from exact) and the
+f16-cache KLD (0.0090 vs 0.0107) both put the NEW route closer to the truth (skill step 4b = the method). The per-stream KV extent
+input (lever 1) is byte-identical and inert, kept as infrastructure. **The mint's multi-slot call now passes `LONG=1`** (a 32K
+Turbo4 coordinator + 3 executors, ~4 min per line, `REF_LONG_{Q4,UD}` in `run-multislot-gate.sh`); post-merge on the prod
+binary both lines PASS both arms (q4 on the flags row, ud on the old route's row; TAGs `postmerge-0924-{q4,ud}`). Re-mint = after
+the ud pricing pair lands the same day (its result decides whether ud takes the flags and `REF_LONG_UD` swaps to the flags row).
+
 **2026-09-18 midday (owner: "go ahead"): `exp/skinny-gen-bsplit` MERGED (prod `b2878ceaa`) - the skinny B-split on the generic
 skinny tile, i.e. the UD line's width-6..8 verify path finally takes `GGML_MM_SKINNY_BSPLIT=2` (it had been in the env and inert
 there since Sep 7; `w8-decomp-sep18.md` lever 1): ud fixed-width-8 round 174.5 -> 169.5 ms (-2.9%), byte-identical. Inert at the
