@@ -89,6 +89,24 @@ priced pairwise like the other decode-route moves if adopted). The executors-alo
 2-4% per round back: at 512-cell extents the 16-row tile's per-KV-head pass is not cheaper than six 8-row
 passes. A route rule by extent (the tile from ~8K cells up, like `GGML_FA_Q16_KVMIN`) would keep both.
 
+## The extent crossover of the width-2 tile (`xover-{8k,16k,24k}-{old,tile}`, 02:10-02:45)
+
+Coordinators of 7.5K / 16.4K / 24.3K tokens (`longprompt-{8,16,24}k.txt`, cuts of the 32K prompt), 3 executors, the
+tile at EVERY extent (`GGML_FA_GQA_WMIN_MS=2 GGML_FA_GQA_WMIN_KVMIN=0`) vs the old route, q4 Turbo4, fixed depth:
+
+| coordinator | executors alone ms/round old / tile | mix coordinator t/s old / tile | mix round ms old / tile | mix executors t/s old / tile |
+|---|---|---|---|---|
+| 7.5K | 99.1 / 98.4 | 12.79 / 13.59 (+6%) | 139 / 130 | 13.25 / 14.19 |
+| 16.4K | 99.1 / 98.4 | 11.88 / 13.21 (+11%) | 148 / 133 | 12.46 / 13.94 |
+| 24.3K | 99.2 / 98.3 | 11.25 / 12.96 (+15%) | 156 / 134 | 11.80 / 13.76 |
+| 96K (above) | 128 / 126 | 7.53 / 11.52 (+53%) | 225 / 146 | 7.78 / 12.14 |
+
+The tile wins at every extent, including the 512-cell executors alone (three pairs, +0.7% each: the "-2%" of the
+first 96K trial was run-to-run noise). With the tile the mix round is nearly flat in the coordinator's length
+(130 -> 146 ms from 7.5K to 96K) where the old route grew 139 -> 225. `GGML_FA_GQA_WMIN_KVMIN` is therefore a
+choice, not a need: 8192 keeps the mint's short-extent multi-slot arm (f16, 512 cells) on its recorded references,
+0 takes the +0.7% at short extents and moves those references. The proposal keeps 8192.
+
 ## The slot budget at 16 on top of lever 2 - a wash in the mix (refuted for this workload)
 
 `budget16-96k` = lever 2 + `LLAMA_SPEC_SLOT_BUDGET=16 LLAMA_SPEC_SLOT_BUDGET_WIDE=16 GGML_MM_SKINNY_N16=1` (3 slots
