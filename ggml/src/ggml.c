@@ -5592,6 +5592,22 @@ void ggml_flash_attn_ext_add_sinks(
     a->src[4] = sinks;
 }
 
+void ggml_flash_attn_ext_set_kv_len(
+        struct ggml_tensor * a,
+        struct ggml_tensor * kv_len) {
+    if (!kv_len) {
+        a->src[5] = NULL;
+        return;
+    }
+
+    GGML_ASSERT(a->op == GGML_OP_FLASH_ATTN_EXT);
+    GGML_ASSERT(a->src[5] == NULL);
+    GGML_ASSERT(kv_len->type == GGML_TYPE_I32);
+    GGML_ASSERT(kv_len->ne[0] == a->src[0]->ne[3]);
+
+    a->src[5] = kv_len;
+}
+
 // ggml_flash_attn_back
 
 struct ggml_tensor * ggml_flash_attn_back(

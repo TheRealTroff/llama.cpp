@@ -55,6 +55,27 @@ anchor date, or that route the ops the symptom implicates), then one at a time. 
 result on the TEXT: a flag whose removal changes the shas but keeps the garbage is numerics
 noise (acc-half), not the cause; the cause is the one whose removal restores the anchor's shas.
 
+### Step 2b - A new lever ships with one kill switch per layer it touches
+
+A lever that adds a graph input AND a kernel path (the per-stream KV extent, 2026-09-24: an I32
+input on the FA op, kernels that stop at it) gets two env switches before its first run: one
+that leaves the graph exactly as it was (`LLAMA_ATTN_KV_LEN=0`, the input is not created) and
+one that keeps the graph but makes the kernels ignore it (`GGML_FA_KVLEN=0`). When the first
+smoke moved every sha, the kernel switch alone restored the reference: the graph change was
+harmless, the kernels read an UNSET buffer - `llm_graph_input_mem_hybrid::set_input` sets the
+attention inputs itself instead of delegating to `llm_graph_input_attn_kv::set_input`, so a new
+attention input has to be set in BOTH (a `-lv 5` DEBUG line in the setter, grep count 0, named
+it). One run split the hypothesis space; without the switches it is a bisect of the lever.
+
+### Step 2c - A mix-phase sha only counts when it recurs
+
+`run-slot-mix.sh`'s mix phase composes each round from whichever executors' next requests have
+landed, so its ubatch sequence (and with it the width class each marginal text is verified
+under) is a race against the round period. At 32K the prod binary forked from its own rerun on
+2 of 7 mix texts and the "new" binary matched itself three times; at 96K (slower rounds) both
+matched on all 14. Compare binaries on the deterministic phases (executors alone, solo), and
+read a mix fork as evidence only when it recurs on the same binary (memory `owner-race-evidence-bar`).
+
 ## Step 3 - Shape probes on one slot
 
 Any prefill column count N can be reproduced on ONE slot with `EXTRA_ARGS="-ub N"`. If the
@@ -71,6 +92,19 @@ configurations and `references/mm-dump-diff.py dirA dirB`. `b` differs = the cor
 entered upstream of this op; `dst` differs with `b` equal = this route's kernel. Byte-identical
 everywhere = the route is innocent, go to Step 5. (`perf/mm-dump-compare.py` is the f64
 reference form for pricing one route's numerics; this is the two-route A/B.)
+
+### Step 4b - Two routes disagree and neither is "the bug": which one is right?
+
+A pairwise KLD between two kernel routes (0.002 here) says how far apart they are, not which one is
+wrong. Answer that with a reference that is exact by construction, at two levels (per-slot-ctx.md
+2026-09-24, the width-2 GQA route): (1) op level - `LLAMA_FA_DUMP=<dir>` (with `_NT`, `_NS`, `_KVMIN`
+selectors for the token count, stream count and extent) dumps one FA node's inputs and output under
+each route; `perf/fa-dump-ref.py` recomputes it in float64 from the dumped Turbo4 blocks and reports
+each route's relative RMS from exact (old 3.4e-4, new 1.9e-4: the NEW route was the accurate one);
+(2) logit level - `run-quant-kld.sh` with `REF=<the same model> REF_KV=f16` and each route as a test
+arm under `KV=turbo4` (same `-b W -ub W` on both arms) gives each route's distance from the exact
+cache; the direction must agree with (1). Only then is the move a numerics class with a sign, not a
+defect. Do not price a decode route with the prefill-shaped KLD line (README rule).
 
 ## Step 5 - Node-level: the first divergent computed op
 

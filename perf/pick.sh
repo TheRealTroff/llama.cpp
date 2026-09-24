@@ -88,6 +88,17 @@ PICK_MANIFEST=(
   "GGML_FA_Q24_ROWS=12|BI|both|pick|fa-decode-tile24.md widths section (owner 2026-09-16: 'bring this to prod', for adaptive speculation) (the tile at every GQA6 width, per-width plan: width 3 = one 24-row tile -17.5% per call at 96K / -14% at 8K, width 5 = two 16-row O-resident tiles -18% / -15%, width 6 = 24 + 16 -9% / -11%; bitwise identical to the pick's routes in both classes, depth-2/4/5 e2e shas equal; inert at the pick's width 4; 2026-09-16)"
   "GGML_FA_TURBO_NWG=20|BI|both|pick|longctx-inventory-sep15.md (split-K width for every Turbo4 batched FA route: -21% per decode FA call at 96K, verify round -6.8% at 96K / -0.8% at 8K; the reduce sums the partials with simd_sum so the Turbo4 shas move = a lineage, kernel numerics unchanged; f16 routes and prefill untouched; 2026-09-15; owner 2026-09-16: 'I'll take the flag' - in the pick, mint prodpick-sep16-nwg20)"
   "GGML_FA_TR=7|NUM-PP/TG|q4|pick|q4-fa-folded-pick.md (owner 2026-09-08: take the faster folded form for q4_0; accuracy mixed, new output lineage)"
+  # --- the multi-stream GQA width rule (per-slot-ctx.md, 2026-09-24): a multi-slot round under the slot budget verifies the
+  #     long stream at width 1-2, where the 8-row Turbo4 tile at gqah=1 streams each KV head once per query head; these two
+  #     flags route multi-stream FA calls over 8K cells at widths 1-2 onto the GQA tiles (gqah=6). One-slot calls keep the
+  #     width >= 3 rule (every one-slot sha holds by construction); multi-slot width-1/2 text over 8K cells MOVES: pairwise
+  #     0.0022 / 98.9% same-top vs the old route, but the f64 node reference (1.9e-4 vs 3.4e-4) and the exact-f16-cache KLD
+  #     (0.0090 vs 0.0107) both put the new route CLOSER to the truth. q4: PICKED 2026-09-24 (owner: "I'll go with your
+  #     recommendations"); ud: proposed until its own f16-cache pair is measured (the UD Turbo4 tile is its own instantiation)
+  "GGML_FA_GQA_WMIN_MS=1|NUM-TG|q4|pick|per-slot-ctx.md (96K coordinator + 3 executors: mix round 225 -> 146 ms, coordinator 7.5 -> 11.5 t/s, executors 7.8 -> 12.1 per stream; 5 slots at width 1 +35%; executors alone and solo byte-identical; gate = run-multislot-gate.sh LONG=1, REF_LONG_Q4 = the flags row)"
+  "GGML_FA_GQA_WMIN_KVMIN=8192|NUM-TG|q4|pick|per-slot-ctx.md (the rule applies over 8K cells only: keeps the short-extent multi-slot arm on its references; 0 would take +0.7% at 512 cells and move them)"
+  "GGML_FA_GQA_WMIN_MS=1|NUM-TG|ud|proposed|per-slot-ctx.md (the ud long arm ran it: coordinator mix sha moves, executors hold; its pairwise / f16-cache KLD pair queued 2026-09-24 - owner: price before pinning)"
+  "GGML_FA_GQA_WMIN_KVMIN=8192|NUM-TG|ud|proposed|per-slot-ctx.md (with GGML_FA_GQA_WMIN_MS=1)"
   # --- refused / declined, listed so pick_check knows them ---
   "GGML_MM_SKINNY_GEN=6|NUM-TG|ud|pick|w6-verify-cliff.md (the generic skinny MMA tile over the stored SoA rows at verify widths 6-8: round -24% at 8K, -15% at 96K; FIXED 2026-09-16 night - the pipeline had left the stored q4_K reader's exact-scale constant unset (upstream's half-quotient form, 5e-4 pairwise); with it set the tile is the pick's own decode class: 2.5e-5 mean / 99.910% same-top vs the width-4 base = the reader's 99.914; not byte-identical (the half A tile); paired bf16 a wash; owner 2026-09-16 night: 'Pick it' - the depth-5 text = the depth-3 canonical sha 9128633c6cfa)"
   "GGML_FA_TR=6|NUM-TG|none|refused|ud-model.md step 16 C (folded norm, KLD a wash; owner took =9)"

@@ -13628,6 +13628,7 @@ kernel void kernel_flash_attn_ext_pad(
     }
 }
 
+constant bool    FC_flash_attn_ext_blk_has_kvlen [[function_constant(FC_FLASH_ATTN_EXT_BLK + 5)]]; // per-stream KV extent (kvlen[i3])
 constant int32_t FC_flash_attn_ext_blk_nqptg [[function_constant(FC_FLASH_ATTN_EXT_BLK + 24)]];
 constant int32_t FC_flash_attn_ext_blk_ncpsg [[function_constant(FC_FLASH_ATTN_EXT_BLK + 25)]];
 
@@ -13639,6 +13640,7 @@ kernel void kernel_flash_attn_ext_blk(
         constant ggml_metal_kargs_flash_attn_ext_blk & args,
         device const char * mask,
         device       char * dst,
+        device const int32_t * kvlen,
         uint3  tgpig[[threadgroup_position_in_grid]],
         ushort tiisg[[thread_index_in_simdgroup]]) {
     // block size C x Q
@@ -13656,8 +13658,11 @@ kernel void kernel_flash_attn_ext_blk(
 
     device const half * mask_src = (device const half *) (mask + (i1*Q)*args.nb31 + i2*args.nb32 + i3*args.nb33) + i0*C + tiisg;
 
+    // per-stream KV extent: every chunk at or beyond stream i3's extent is fully masked - classify it without reading it
+    const bool beyond = FC_flash_attn_ext_blk_has_kvlen && i0*C >= kvlen[i3];
+
     // detailed check of the elements of the block
-    if ((C > NW || Q > 1) && res == 0) {
+    if ((C > NW || Q > 1) && res == 0 && !beyond) {
         half mmin =  MAXHALF;
         half mmax = -MAXHALF;
 
@@ -13695,6 +13700,7 @@ constant bool FC_flash_attn_ext_has_sinks [[function_constant(FC_FLASH_ATTN_EXT 
 constant bool FC_flash_attn_ext_has_bias  [[function_constant(FC_FLASH_ATTN_EXT + 2)]];
 constant bool FC_flash_attn_ext_has_scap  [[function_constant(FC_FLASH_ATTN_EXT + 3)]];
 constant bool FC_flash_attn_ext_has_kvpad [[function_constant(FC_FLASH_ATTN_EXT + 4)]];
+constant bool FC_flash_attn_ext_has_kvlen [[function_constant(FC_FLASH_ATTN_EXT + 5)]]; // per-stream KV extent buffer (kvlen[iq3])
 
 constant bool FC_flash_attn_ext_bc_mask [[function_constant(FC_FLASH_ATTN_EXT + 10)]];
 
@@ -13757,6 +13763,7 @@ void kernel_flash_attn_ext_impl(
         device const char * pad,
         device const char * blk,
         device       char * dst,
+        device const int32_t * kvlen,
         threadgroup  half * shmem_f16,
         uint3   tgpig,
         ushort  tiisg,
@@ -13959,11 +13966,15 @@ void kernel_flash_attn_ext_impl(
             slope = pow(base, exph);
         }
 
+        // this query stream's KV extent (per-stream KV length, split mode): the chunks beyond it are fully masked and
+        // would be skipped by the blk map / the -INF check anyway, so stopping here changes nothing in the result
+        const int ne11_s = FC_flash_attn_ext_has_kvlen ? min(args.ne11, kvlen[iq3]) : args.ne11;
+
         // loop over the KV cache
         // each simdgroup handles blocks of Q rows and C columns
         for (int ic0 = iwg; ; ic0 += NWG) {
             int ic = ic0*C;
-            if (ic >= args.ne11) {
+            if (ic >= ne11_s) {
                 break;
             }
 
@@ -14954,12 +14965,13 @@ kernel void kernel_flash_attn_ext(
         device const char * pad,
         device const char * blk,
         device       char * dst,
+        device const int32_t * kvlen,
         threadgroup  half * shmem_f16 [[threadgroup(0)]],
         uint3   tgpig[[threadgroup_position_in_grid]],
         ushort  tiisg[[thread_index_in_simdgroup]],
         ushort  sgitg[[simdgroup_index_in_threadgroup]]) {
 #define FWD_TMPL q_t, q4_t, q8x8_t, k_t, k4x4_t, k8x8_t, v_t, v4x4_t, v8x8_t, qk_t, qk8x8_t, s_t, s2_t, s8x8_t, o_t, o4_t, o8x8_t, kd4x4_t, nl_k, deq_k, vd4x4_t, nl_v, deq_v, DK, DV, Q, C
-#define FWD_ARGS args, q, k, v, mask, sinks, pad, blk, dst, shmem_f16, tgpig, tiisg, sgitg
+#define FWD_ARGS args, q, k, v, mask, sinks, pad, blk, dst, kvlen, shmem_f16, tgpig, tiisg, sgitg
     switch (FC_flash_attn_ext_nsg) {
       // note: disabled cases to reduce library load time
       //case 1: kernel_flash_attn_ext_impl<FWD_TMPL, 1>(FWD_ARGS); break;
@@ -15237,6 +15249,7 @@ constant bool FC_flash_attn_ext_vec_has_sinks [[function_constant(FC_FLASH_ATTN_
 constant bool FC_flash_attn_ext_vec_has_bias  [[function_constant(FC_FLASH_ATTN_EXT_VEC + 2)]];
 constant bool FC_flash_attn_ext_vec_has_scap  [[function_constant(FC_FLASH_ATTN_EXT_VEC + 3)]];
 constant bool FC_flash_attn_ext_vec_has_kvpad [[function_constant(FC_FLASH_ATTN_EXT_VEC + 4)]];
+constant bool FC_flash_attn_ext_vec_has_kvlen [[function_constant(FC_FLASH_ATTN_EXT_VEC + 5)]]; // per-stream KV extent buffer (kvlen[iq3])
 
 //constant float FC_flash_attn_ext_vec_scale         [[function_constant(FC_FLASH_ATTN_EXT_VEC + 10)]];
 //constant float FC_flash_attn_ext_vec_max_bias      [[function_constant(FC_FLASH_ATTN_EXT_VEC + 11)]];
@@ -15276,6 +15289,7 @@ kernel void kernel_flash_attn_ext_vec(
         device const char * sinks,
         device const char * pad,
         device       char * dst,
+        device const int32_t * kvlen,
         threadgroup  half * shmem_f16 [[threadgroup(0)]],
         uint3   tgpig[[threadgroup_position_in_grid]],
         ushort  tiisg[[thread_index_in_simdgroup]],
@@ -15402,11 +15416,15 @@ kernel void kernel_flash_attn_ext_vec(
             slope = pow(base, exph);
         }
 
+        // this query stream's KV extent (per-stream KV length, split mode): every chunk beyond it is fully masked
+        // and the -INF check below would skip it; stopping here changes nothing in the result
+        const int ne11_s = FC_flash_attn_ext_vec_has_kvlen ? min(args.ne11, kvlen[iq3]) : args.ne11;
+
         // loop over the KV cache
         // each simdgroup handles blocks of Q rows and C columns
         for (int ic0 = iwg*NSG + sgitg; ; ic0 += NWG*NSG) {
             int ic = ic0*C;
-            if (ic >= args.ne11) {
+            if (ic >= ne11_s) {
                 break;
             }
 

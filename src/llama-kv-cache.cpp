@@ -1806,6 +1806,34 @@ void llama_kv_cache::set_input_kq_mask(ggml_tensor * dst, const llama_ubatch * u
     //LLAMA_LOG_ERROR("%s: kq mask time: %0.3f ms\n", __func__, (t_end - t_start)/1000.0);
 }
 
+// the per-stream KV extent of this ubatch: the same padded used_max_p1 that get_n_kv() takes the max of, so
+// kv_len[s] <= n_kv and every cell of stream s at or beyond kv_len[s] is empty (masked -inf). A flash-attention
+// kernel can stop stream s's KV loop there instead of at n_kv (per-slot context sizes, perf/slot-mix.md).
+void llama_kv_cache::set_input_kv_len(ggml_tensor * dst, const llama_ubatch * ubatch) const {
+    GGML_ASSERT(ggml_backend_buffer_is_host(dst->buffer));
+
+    const int64_t n_stream_ub = dst->ne[0];
+
+    int32_t * data = (int32_t *) dst->data;
+
+    const uint32_t n_pad_cur = std::max(n_pad, 256u);
+
+    GGML_ASSERT(ubatch->n_tokens % n_stream_ub == 0);
+    const int64_t n_tps = ubatch->n_tokens/n_stream_ub;   // the mask's stream s = the s-th block of n_tps tokens
+
+    for (int64_t s = 0; s < n_stream_ub; ++s) {
+        const llama_seq_id seq_id = ubatch->seq_id[s*n_tps][0];
+        const uint32_t strm = n_stream == 1 ? 0 : seq_to_stream[seq_id];
+
+        const auto & cells = v_cells[strm];
+
+        data[s] = (int32_t) std::min(cells.size(), std::max(n_pad_cur, GGML_PAD(cells.used_max_p1(), n_pad_cur)));
+
+        LLAMA_LOG_DEBUG("%s: stream %d (seq %d, strm %u): kv_len = %d (used_max_p1 %u, used %u, n_tps %d)\n", __func__,
+                (int) s, (int) seq_id, strm, data[s], cells.used_max_p1(), cells.get_used(), (int) n_tps);
+    }
+}
+
 void llama_kv_cache::set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const {
     const int64_t n_tokens = ubatch->n_tokens;
 
@@ -2682,6 +2710,14 @@ void llama_kv_cache_context::set_input_v_idxs(ggml_tensor * dst, const llama_uba
 
 void llama_kv_cache_context::set_input_kq_mask(ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const {
     kv->set_input_kq_mask(dst, ubatch, causal_attn);
+}
+
+void llama_kv_cache_context::set_input_kv_len(ggml_tensor * dst, const llama_ubatch * ubatch) const {
+    kv->set_input_kv_len(dst, ubatch);
+}
+
+uint32_t llama_kv_cache_context::get_n_stream() const {
+    return kv->get_n_stream();
 }
 
 void llama_kv_cache_context::set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const {

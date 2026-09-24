@@ -5088,6 +5088,11 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
     const bool has_sinks = op->src[4] != NULL;
     const bool has_bias  = max_bias != 0.0f;
     const bool has_scap  = logit_softcap != 0.0f;
+    // src[5] = the per-stream KV extent (ggml_flash_attn_ext_set_kv_len): each query stream's KV loop stops at
+    // kv_len[iq3] instead of ne11 - only meaningful when the cache and the mask are per stream too
+    // GGML_FA_KVLEN=0: ignore the extent (the kernels loop to ne11 as before) - the kernel-level kill switch
+    static const bool env_fa_kvlen = getenv("GGML_FA_KVLEN") ? atoi(getenv("GGML_FA_KVLEN")) != 0 : true;
+    const bool has_kvlen = env_fa_kvlen && op->src[5] != NULL && op->src[5]->ne[0] == ne03 && ne13 == ne03 && (!op->src[3] || ne33 == ne03);
 
     const uint32_t n_head      = op->src[0]->ne[2];
     const  int32_t n_head_log2 = 1u << (uint32_t) floorf(log2f((float) n_head));
@@ -5102,6 +5107,7 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
     ggml_metal_buffer_id bid_src2 = ggml_metal_get_buffer_id(op->src[2]);
     ggml_metal_buffer_id bid_src3 = has_mask  ? ggml_metal_get_buffer_id(op->src[3]) : bid_src0;
     ggml_metal_buffer_id bid_src4 = has_sinks ? ggml_metal_get_buffer_id(op->src[4]) : bid_src0;
+    ggml_metal_buffer_id bid_src5 = has_kvlen ? ggml_metal_get_buffer_id(op->src[5]) : bid_src0;
 
     ggml_metal_buffer_id bid_dst = ggml_metal_get_buffer_id(op);
 
@@ -5137,8 +5143,21 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
     // head sizes >= 512 run the batched kernel at nsg 8, whose dispatch instantiates the GQA row tile only for
     // the Turbo4 TR forms (dk 128/256): the flattened grid would run as GQAH = 1 there (wrong output; the f16
     // hsk 512/576 GQA4 width-3 test cases, found 2026-09-16 - no model in use has such heads)
+    // GGML_FA_GQA_WMIN_MS: the smallest verify width that takes the GQA tile when the FA call is multi-stream (ne03 > 1;
+    // default 3 = the single-stream rule). A multi-slot round under the slot budget verifies at width 1-2, where the
+    // 8-row tile streams each KV head once per query head (6x the traffic of the GQA tile at a 96K stream). Single-stream
+    // calls keep the width >= 3 rule, so the one-slot lineage is untouched (per-slot context sizes, 2026-09-24)
+    // GGML_FA_GQA_WMIN_KVMIN: the multi-stream rule applies only when the call's KV extent (ne11, the ubatch's longest
+    // stream) exceeds this many cells; at short extents the per-KV-head tile pass is not cheaper than the per-head
+    // 8-row passes (executors alone at 512 cells: -2%), at 96K it is 6x cheaper. 0 = every extent.
+    static const int env_fa_gqa_wmin_ms = getenv("GGML_FA_GQA_WMIN_MS") ? atoi(getenv("GGML_FA_GQA_WMIN_MS")) : 3;
+    static const int env_fa_gqa_wmin_kvmin = getenv("GGML_FA_GQA_WMIN_KVMIN") ? atoi(getenv("GGML_FA_GQA_WMIN_KVMIN")) : 0;
+    // GGML_FA_GQA_WMIN_ALL=1: apply the width minimum to single-stream calls too (a pricing probe: the tile at width 1-2
+    // on one sequence, where llama-perplexity -ub W scores it against the 8-row route)
+    static const bool env_fa_gqa_wmin_all = getenv("GGML_FA_GQA_WMIN_ALL") && atoi(getenv("GGML_FA_GQA_WMIN_ALL")) != 0;
+    const int gqa_wmin = (ne03 > 1 || env_fa_gqa_wmin_all) && ne11 > env_fa_gqa_wmin_kvmin ? env_fa_gqa_wmin_ms : 3;
     const bool use_gqa_reuse = gqa_ratio_enabled && (is_turbo4_kv || (env_fa_gqa_f16 && is_f16_kv)) && ne00 < 512 &&
-                               ne01 >= 3 && ne01 <= 6 && (gqa_ratio == 4 || gqa_ratio == 6) &&
+                               ne01 >= gqa_wmin && ne01 <= 6 && (gqa_ratio == 4 || gqa_ratio == 6) &&
                                !has_sinks && !has_bias &&
                                ne11 % OP_FLASH_ATTN_EXT_NCPSG == 0;
     const bool use_vec = ggml_metal_op_flash_attn_ext_use_vec(op) && !(use_gqa_reuse && ne01 <= 4);
@@ -5150,14 +5169,14 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
         if (fa_debug) {
             static std::set<std::string> seen;
             char buf[512];
-            snprintf(buf, sizeof(buf), "fa: q[%lld,%lld,%lld,%lld] k[%lld,%lld,%lld,%lld] v[%lld,%lld,%lld,%lld] mask[%lld,%lld,%lld,%lld] nb03=%zu nb13=%zu nb23=%zu nb33=%zu types k=%s v=%s vec=%d gqa=%d",
+            snprintf(buf, sizeof(buf), "fa: q[%lld,%lld,%lld,%lld] k[%lld,%lld,%lld,%lld] v[%lld,%lld,%lld,%lld] mask[%lld,%lld,%lld,%lld] nb03=%zu nb13=%zu nb23=%zu nb33=%zu types k=%s v=%s vec=%d gqa=%d kvl=%d",
                 (long long) ne00, (long long) ne01, (long long) ne02, (long long) ne03,
                 (long long) ne10, (long long) ne11, (long long) ne12, (long long) ne13,
                 (long long) ne20, (long long) ne21, (long long) ne22, (long long) ne23,
                 (long long) (has_mask ? op->src[3]->ne[0] : 0), (long long) (has_mask ? op->src[3]->ne[1] : 0),
                 (long long) (has_mask ? op->src[3]->ne[2] : 0), (long long) (has_mask ? op->src[3]->ne[3] : 0),
                 (size_t) op->src[0]->nb[3], (size_t) op->src[1]->nb[3], (size_t) op->src[2]->nb[3], (size_t) (has_mask ? op->src[3]->nb[3] : 0),
-                ggml_type_name(op->src[1]->type), ggml_type_name(op->src[2]->type), (int) use_vec, (int) use_gqa_reuse);
+                ggml_type_name(op->src[1]->type), ggml_type_name(op->src[2]->type), (int) use_vec, (int) use_gqa_reuse, (int) has_kvlen);
             if (seen.insert(buf).second) {
                 GGML_LOG_INFO("%s\n", buf);
             }
@@ -5234,12 +5253,13 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
                 /*.nb33 =*/ nb33,
             };
 
-            auto pipeline0 = ggml_metal_library_get_pipeline_flash_attn_ext_blk(lib, op, nqptg, ncpsg);
+            auto pipeline0 = ggml_metal_library_get_pipeline_flash_attn_ext_blk(lib, op, has_kvlen, nqptg, ncpsg);
 
             ggml_metal_encoder_set_pipeline(enc, pipeline0);
             ggml_metal_encoder_set_bytes   (enc, &args0, sizeof(args0), 0);
             ggml_metal_encoder_set_buffer  (enc, bid_src3, 1);
             ggml_metal_encoder_set_buffer  (enc, bid_blk,  2);
+            ggml_metal_encoder_set_buffer  (enc, bid_src5, 3);
 
             const int32_t nblk1 = ((ne01 + nqptg - 1)/nqptg);
             const int32_t nblk0 = ((ne30 + ncpsg - 1)/ncpsg);
@@ -5389,7 +5409,7 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
         }
 
         auto pipeline = ggml_metal_library_get_pipeline_flash_attn_ext(
-                lib, op, has_mask, has_sinks, has_bias, has_scap, has_kvpad, nsg, nwg, gqa_heads, nqptg);
+                lib, op, has_mask, has_sinks, has_bias, has_scap, has_kvpad, has_kvlen, nsg, nwg, gqa_heads, nqptg);
 
         ggml_metal_encoder_set_pipeline(enc, pipeline);
         ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);
@@ -5401,6 +5421,7 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
         ggml_metal_encoder_set_buffer  (enc, bid_pad,  6);
         ggml_metal_encoder_set_buffer  (enc, bid_blk,  7);
         ggml_metal_encoder_set_buffer  (enc, nwg == 1 ? bid_dst : bid_tmp, 8);
+        ggml_metal_encoder_set_buffer  (enc, bid_src5, 9);
 
         ggml_metal_encoder_set_threadgroup_memory_size(enc, smem, 0);
 
@@ -5452,7 +5473,7 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
                 args.iqr_off = row0;
 
                 auto pipeline_t = ggml_metal_library_get_pipeline_flash_attn_ext(
-                        lib, op, has_mask, has_sinks, has_bias, has_scap, has_kvpad, nsg_t, nwg, gqa_heads, q_t);
+                        lib, op, has_mask, has_sinks, has_bias, has_scap, has_kvpad, has_kvlen, nsg_t, nwg, gqa_heads, q_t);
 
                 ggml_metal_encoder_set_pipeline(enc, pipeline_t);
                 ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);
@@ -5647,7 +5668,7 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
             /*.logit_softcap =*/ logit_softcap,
         };
 
-        auto pipeline = ggml_metal_library_get_pipeline_flash_attn_ext_vec(lib, op, has_mask, has_sinks, has_bias, has_scap, has_kvpad, nsg, nwg, nqptg);
+        auto pipeline = ggml_metal_library_get_pipeline_flash_attn_ext_vec(lib, op, has_mask, has_sinks, has_bias, has_scap, has_kvpad, has_kvlen, nsg, nwg, nqptg);
 
         GGML_ASSERT(nsg*32 <= ggml_metal_pipeline_max_theads_per_threadgroup(pipeline));
 
@@ -5658,6 +5679,7 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
         ggml_metal_encoder_set_buffer  (enc, bid_src2, 3);
         ggml_metal_encoder_set_buffer  (enc, bid_src3, 4);
         ggml_metal_encoder_set_buffer  (enc, bid_src4, 5);
+        ggml_metal_encoder_set_buffer  (enc, bid_src5, 8);
 
         const size_t smem = FATTN_SMEM(nsg);
 

@@ -2472,6 +2472,13 @@ extern "C" {
             struct ggml_tensor * a,
             struct ggml_tensor * sinks);
 
+    // optional per-stream KV extent (src[5]): I32 [q->ne[3]]. A backend may stop stream s's KV loop at kv_len[s]
+    // instead of k->ne[1]; the caller guarantees every cell at or beyond kv_len[s] is masked, so the result is
+    // unchanged (a multi-stream cache where one stream is much longer than the others, 2026-09-24)
+    GGML_API void ggml_flash_attn_ext_set_kv_len(
+            struct ggml_tensor * a,
+            struct ggml_tensor * kv_len);
+
     // TODO: needs to be adapted to ggml_flash_attn_ext
     GGML_API struct ggml_tensor * ggml_flash_attn_back(
            struct ggml_context * ctx,
