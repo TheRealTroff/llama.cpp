@@ -233,3 +233,26 @@ the 8-row `qtnw` tile at `gqah=1` and the 16-row O-resident `qtnw16o` tile at `g
 Turbo4 tiles share `FA_TYPES` and the template flags (QT, TRM 3, VU 4, LD 1), so the difference is in the tile's
 data path, not its declared types. 2.7e-4 relative per layer at 1.5K cells, growing with the extent, matches the KLD
 0.0003 (2K) -> 0.002 (16K).
+
+**Localized (05:30-06:00):** the deviation is the GQA flattening at width 2 itself, not the streams, the extent input,
+the split-K partials or the O-resident tile: the same two-stream node gives byte-identical output under every GQA
+variant (`qtnw16o` nsg 8, the plain 8-row `qtnw gqah=6` via `GGML_FA_Q24_REM=8`, `nwg=1` vs 20, `GGML_FA_KVLEN=0`), all
+2.68e-4 from the `gqah=1` route, and a ONE-stream width-2 node (`-b 2 -ub 2`, `GGML_FA_GQA_WMIN_ALL=1`) shows the same
+3.0e-4. The single-stream KLD pair (`kld-w2-1s`, 12 chunks at 2K) = **0.00223 mean / 98.83% same-top / max 4.2**, the
+two-stream number again.
+
+**Which route is right - a float64 reference of the dumped node (`perf/fa-dump-ref.py`: Turbo4 dequant from the block
+layout and the 16 centroids, f64 softmax, scale 1/16):**
+
+| route (same inputs, layer 3, 2 streams x 2 tokens, 1536 cells) | relRMS vs exact | max abs | per stream |
+|---|---|---|---|
+| old: 8-row `qtnw` at `gqah=1` (2 valid rows of 8) | 3.42e-4 | 1.44e-3 | 4.2e-4 / 2.5e-4 |
+| new: any GQA tile at width 2 (12 rows) | **1.85e-4** | **5.0e-4** | 2.1e-4 / 1.6e-4 |
+
+Both are the q4 line's folded-norm (TR 7) class - a few 1e-4 per layer - and the GQA route is the MORE accurate of the
+two (half the error, a third of the max). So the 0.002 pairwise KLD is the distance between two TR-7-class kernels, the
+same size as the TR 7 perturbation itself (0.0019 when it was introduced), in the favourable direction. It is a NUM-TG
+class move on multi-slot width-1/2 text, not a bug and not a free lineage. Queued: each route against the exact f16-cache
+logits at one stream (`kld-w2-f16ref`) to state the direction at the logit level; `kld-w6-1s` prices the pick's own
+width-6 tile plan against 8-row GQA tiles (expected ~1e-5: both are GQA paths). Why the 8-row `gqah=1` tile is worse at
+width 2 than the GQA tiles is open (its arithmetic should be per row; at width 4 the two agree byte for byte).
