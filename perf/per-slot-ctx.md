@@ -383,3 +383,11 @@ here proves it better on ud the way the q4 f64 node reference did (the ud TR=9 i
 **The ud manifest rule (`pick.sh`: ud = BI/SPEC only, plus what the owner has explicitly taken) makes a NUM-TG flag on ud the
 owner's explicit call - the entries stay `proposed` with this record until then.** Speed on ud at 32K: +5% coordinator / +11%
 executors in the mix (above); at 96K the q4 curve suggests several times that.
+
+## Replay gate on the q4 controller fork (`replaygate-0924-gqawmin`, 15:50-16:00)
+
+The mint's q4 Turbo4 600 arm forked on its first run (`ae44d18ca4a9`, block histogram [3:106 5:1 7:81]) and gave the
+replay-gated text on its second (`9e49b3d13b31`, [2:1 3:90 7:89]). `run-specev-replay-gate.sh` on the merged prod binary
+(record once, replay x3, 949 tokens): record `b981f7376af5`, replays `b981f7376af5` x3, **322 picks, 0 desync, 0 past trace**
+each. The same picks on the same tokens reproduce bit for bit: the fork is the controller's timing-dependent pick (a hot room
+moves the cost EMA), not a kernel change - the one-slot graph does not carry the new route by construction.
