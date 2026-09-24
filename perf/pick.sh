@@ -94,11 +94,11 @@ PICK_MANIFEST=(
   #     width >= 3 rule (every one-slot sha holds by construction); multi-slot width-1/2 text over 8K cells MOVES: pairwise
   #     0.0022 / 98.9% same-top vs the old route, but the f64 node reference (1.9e-4 vs 3.4e-4) and the exact-f16-cache KLD
   #     (0.0090 vs 0.0107) both put the new route CLOSER to the truth. q4: PICKED 2026-09-24 (owner: "I'll go with your
-  #     recommendations"); ud: proposed until its own f16-cache pair is measured (the UD Turbo4 tile is its own instantiation)
+  #     recommendations"); ud: PRICED the same afternoon (its TR=9 tile: the same class, indistinguishable paired) and taken by the owner
   "GGML_FA_GQA_WMIN_MS=1|NUM-TG|q4|pick|per-slot-ctx.md (96K coordinator + 3 executors: mix round 225 -> 146 ms, coordinator 7.5 -> 11.5 t/s, executors 7.8 -> 12.1 per stream; 5 slots at width 1 +35%; executors alone and solo byte-identical; gate = run-multislot-gate.sh LONG=1, REF_LONG_Q4 = the flags row)"
   "GGML_FA_GQA_WMIN_KVMIN=8192|NUM-TG|q4|pick|per-slot-ctx.md (the rule applies over 8K cells only: keeps the short-extent multi-slot arm on its references; 0 would take +0.7% at 512 cells and move them)"
-  "GGML_FA_GQA_WMIN_MS=1|NUM-TG|ud|proposed|per-slot-ctx.md (the ud long arm ran it: coordinator mix sha moves, executors hold; its pairwise / f16-cache KLD pair queued 2026-09-24 - owner: price before pinning)"
-  "GGML_FA_GQA_WMIN_KVMIN=8192|NUM-TG|ud|proposed|per-slot-ctx.md (with GGML_FA_GQA_WMIN_MS=1)"
+  "GGML_FA_GQA_WMIN_MS=1|NUM-TG|ud|pick|per-slot-ctx.md (ud PRICED 2026-09-24 afternoon, owner: 'Take them on ud': pairwise 0.00238 / 98.77% vs the old route = the q4 class; vs the f16 cache old 0.0105 -> new 0.0091 by the perplexity tool, paired over the same 12,276 positions -0.0001 +/- 0.0006 = indistinguishable, the body favours the tile by 12%, same-top slip = 81 vs 59 discordant tie-margin flips at p ~ 0.06; 32K mix +5% coordinator / +11% executors)"
+  "GGML_FA_GQA_WMIN_KVMIN=8192|NUM-TG|ud|pick|per-slot-ctx.md (with GGML_FA_GQA_WMIN_MS=1; owner 2026-09-24)"
   # --- refused / declined, listed so pick_check knows them ---
   "GGML_MM_SKINNY_GEN=6|NUM-TG|ud|pick|w6-verify-cliff.md (the generic skinny MMA tile over the stored SoA rows at verify widths 6-8: round -24% at 8K, -15% at 96K; FIXED 2026-09-16 night - the pipeline had left the stored q4_K reader's exact-scale constant unset (upstream's half-quotient form, 5e-4 pairwise); with it set the tile is the pick's own decode class: 2.5e-5 mean / 99.910% same-top vs the width-4 base = the reader's 99.914; not byte-identical (the half A tile); paired bf16 a wash; owner 2026-09-16 night: 'Pick it' - the depth-5 text = the depth-3 canonical sha 9128633c6cfa)"
   "GGML_FA_TR=6|NUM-TG|none|refused|ud-model.md step 16 C (folded norm, KLD a wash; owner took =9)"

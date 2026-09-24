@@ -50,12 +50,12 @@ rc_short=$prc
 # REF_LONG_{Q4,UD} = "phase:slot:sha ..." recorded per line (override from the environment); a line without one prints its shas.
 #   q4: the GGML_FA_GQA_WMIN_MS=1 + KVMIN=8192 row (PICKED 2026-09-24, per-slot-ctx.md "Gate arm references": the mix
 #       coordinator and the three executors' mix texts are the GQA-tile width-2 lineage; execs/solo = the old route's = prod's)
-#   ud: the OLD route's row (the flags are proposed on ud until its KLD pair is priced); the flags row for ud is
-#       mix:0:ef89fa0c0a9c with every other sha equal - swap it in when the ud line takes the flags
+#   ud: the flags row too since 2026-09-24 afternoon (owner: "Take them on ud" after the paired pricing): only the mix
+#       coordinator differs from the old route's row (cf057877480d -> ef89fa0c0a9c), the executors' mix texts held
 if [ "${LONG:-0}" = 1 ]; then
   case "$LINE" in
     q4) REF_LONG="${REF_LONG_Q4:-execs:1:c8522a40c1e8 execs:2:28ff51768e4d execs:3:914119d97178 solo:0:d0d8cd0eb2d8 mix:0:64a49312d01f mix:1:67b0b590dd7b mix:2:d5fa80109900 mix:3:eae23bbebec0}" ;;
-    ud) REF_LONG="${REF_LONG_UD:-execs:1:36529d9fb3fe execs:2:039bf7ad9b41 execs:3:9c7f73d13fb8 solo:0:d6c3f3372554 mix:0:cf057877480d mix:1:36529d9fb3fe mix:2:039bf7ad9b41 mix:3:9c7f73d13fb8}" ;;
+    ud) REF_LONG="${REF_LONG_UD:-execs:1:36529d9fb3fe execs:2:039bf7ad9b41 execs:3:9c7f73d13fb8 solo:0:d6c3f3372554 mix:0:ef89fa0c0a9c mix:1:36529d9fb3fe mix:2:039bf7ad9b41 mix:3:9c7f73d13fb8}" ;;
   esac
   export TAG="$TAG-long" KV=turbo4 PHASES=execs,solo,mix EXEC_ROUNDS=1 NPRED_EXEC=100 NPRED_SOLO=32 NPRED_MIX=200 \
          CTX_COORD=32768 CTX_EXEC=8192 COORD_PROMPT=/Users/troff/play/kvquant-experiments/data/longprompt-32k.txt \
