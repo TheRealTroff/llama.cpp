@@ -326,3 +326,30 @@ Executors alone and solo identical on both lines (short extents / one stream); t
 The ud pricing pair (`kld-w2-ud-1s`: control + tile vs the old-route Turbo4 base at `-b 2 -ub 2`; `kld-w2-ud-f16ref`: each
 route vs the f16 cache; 12 chunks at 2K, the q4 recipe on the UD model, `pick_env ud` exported) started 11:55 on the prod
 binary - results below when they land.
+
+## The ud line priced (`kld-w2-ud-1s`, `kld-w2-ud-f16ref`, 11:55-13:39, prod e12330da1, hot ambient)
+
+The q4 recipe on the UD model (`pick_env ud` exported: its Turbo4 tile is the TR=9 instantiation), one stream, `-b 2 -ub 2`,
+12 chunks at 2K. Pairwise vs the OLD route (Turbo4 base at width 2):
+
+| row | mean KLD | median | 99.0% | 99.9% | max | same top |
+|---|---|---|---|---|---|---|
+| control (the base rerun) | 0.000000 | 0 | - | 0.00005 | 0.00006 | 99.984 ± 0.012% |
+| the GQA tile at width 2 (`GGML_FA_GQA_WMIN_ALL=1 MS=2`) | **0.002384 ± 0.00062** | 0.00018 | 0.0088 | 0.36 | 6.4 | **98.770 ± 0.10%** |
+
+= the q4 pair (0.00223 / 0.00018 / 98.83%) on every statistic: the TR=9 instantiation moves by the same amount as TR=7 when
+the width-2 flattening changes. Each route vs the EXACT f16 cache (same weights, f16 K/V base at width 2):
+
+| route | mean KLD vs f16 cache | median | 99.0% | 99.9% | max | same top |
+|---|---|---|---|---|---|---|
+| old: 8-row tile at `gqah=1` | 0.010484 ± 0.0022 | 0.00116 | 0.0426 | 1.43 | 17.8 | 97.638 ± 0.14% |
+| new: the GQA tile at width 2 | **0.009117 ± 0.0016** | 0.00116 | 0.0424 | 1.56 | 11.1 | 97.442 ± 0.14% |
+
+The mean (the project's proxy) moves the q4 way: -13% (q4 -16%), median and 99.0% equal, max better. Two secondary
+statistics lean the other way, both inside their error: same-top -0.20 pt (two ± 0.14 bars) and the 99.9% quantile +9%
+(a single quantile over ~24 positions; on q4 it improved -24%). Whether the same-top slip is real is a PAIRED question
+(both arms score the same positions): three base files (D = f16 cache, X = old, Y = GQA) and `perf/kld-fisher.py`
+(per-position KL, top flips per margin bin, the Fisher correlation of the two routes' deviations) are running
+(`kld-w2-ud-fisher-{D,X,Y}`, 13:45); verdict below. Speed on ud at 32K (the long arm, old vs flags rows above):
+mix coordinator 12.30 -> 12.95 t/s (+5%), executors 9.31 -> 10.30 per stream (+11%); the 96K figure is unmeasured on ud
+(q4's +6% at 7.5K grew to +53% at 96K).
