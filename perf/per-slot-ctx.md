@@ -481,3 +481,17 @@ summation order differs), and on Turbo4 only the q4 line's no-spec text moves (i
 `7c5254d01b12` from here on; the arm is new to the mint, so no minted sha changes). Every depth-3+ pick arm verifies at
 widths 3-7 and is untouched by construction. KLD pricing of the width-1 route (pairwise vs the vec route, 12 chunks at 2K,
 `-b 1 -ub 1`): below when it lands.
+
+**KLD pricing of the width-1 route (`kld-w1-turbo4-{q4,ud}-1s`, 17:53-, one stream `-b 1 -ub 1`, 12 chunks at 2K,
+Turbo4 both arms, base = the vec route (`GGML_FA_GQA_WMIN=3`), test = the tile):**
+
+| line | mean KLD | median | 99.0% | 99.9% | max | same top | RMS dp |
+|---|---|---|---|---|---|---|---|
+| q4 | 0.00354 ± 0.00158 | 0.000194 | 0.0101 | 0.319 | 18.7 | 98.925 ± 0.093% | 1.85% |
+| (the morning's width-2 pair, same base kind) | 0.00223 ± 0.00044 | 0.000205 | | 0.299 | 4.18 | 98.83% | |
+| ud | (below when it lands) | | | | | | |
+
+The width-1 pair is the width-2 class: the median and the same-top are the same numbers, the mean is a tail (one 18.7
+position, error bar 0.0016 - the "a mean KL can be one chaotic position" rule). Its direction was settled at the node:
+the tile is 2.09e-4 from exact at width 1, the vec kernel 3.75e-4. The f16 pairs were not run: the e2e text is
+identical on both f16 arms and f16 K/V are exact in both kernels (summation order only) - open if anyone wants the number.
