@@ -41,3 +41,39 @@ PY
 prc=$?
 grep -q 'sync-guard: backend' "$OUT/$TAG-split.server.log" 2>/dev/null && { echo "  multislot gate: THE SYNC GUARD FIRED (GPU hang) - FAIL"; exit 2; }
 exit $prc
+rc_short=$?
+
+# LONG=1: the long-extent arm (2026-09-24, perf/per-slot-ctx.md) - a 32K coordinator (slot 0, Turbo4) beside three
+# executors, execs -> solo -> mix at fixed depth, one request per executor so the mix composition is deterministic
+# (a second round of requests races the round boundary and forks marginal texts - slot-mix.md, per-slot-ctx.md).
+# It gates the multi-stream long-extent FA routes (GGML_FA_GQA_WMIN_MS / _KVMIN) that the short arm above cannot see.
+# REF_LONG_{Q4,UD} = "phase:slot:sha ..." recorded per line; a line without one prints its shas.
+if [ "${LONG:-0}" = 1 ]; then
+  case "$LINE" in
+    q4) REF_LONG="${REF_LONG_Q4:-}" ;;
+    ud) REF_LONG="${REF_LONG_UD:-}" ;;
+  esac
+  export TAG="$TAG-long" KV=turbo4 PHASES=execs,solo,mix EXEC_ROUNDS=1 NPRED_EXEC=100 NPRED_SOLO=32 NPRED_MIX=200 \
+         CTX_COORD=32768 CTX_EXEC=8192 COORD_PROMPT=/Users/troff/play/kvquant-experiments/data/longprompt-32k.txt \
+         SYNC_TIMEOUT=15 PICK_SPEC_EV=0 N_EXEC=3 DEPTH= EXTRA_ENV="GGML_FA_DEBUG=1 ${LONG_EXTRA:-}" PORT=$((PORT + 1))
+  bash "$B/perf/run-slot-mix.sh" > "$OUT/$TAG.console.log" 2>&1
+  python3 - "$OUT/$TAG-split.json" "$REF_LONG" <<'PY'
+import json, sys
+try: rs = json.load(open(sys.argv[1]))['results']
+except Exception as e: print(f'  multislot long arm: NO RESULT ({e}) - the server died or hung, read the console log'); sys.exit(2)
+ref = dict(x.rsplit(':', 1) for x in sys.argv[2].split())
+ok = True; got = []
+for r in sorted(rs, key=lambda r: ({'execs': 0, 'solo': 1, 'mix': 2}[r['phase']], r['id_slot'])):
+    if 'error' in r: print(f"  {r['phase']} slot {r['id_slot']}: ERROR {r['error']}"); ok = False; continue
+    key = f"{r['phase']}:{r['id_slot']}"; exp = ref.get(key, '(unrecorded)')
+    st = 'ok' if (not ref or r['sha1'] == exp) else 'SHA MOVED'
+    if ref and r['sha1'] != exp: ok = False
+    got.append(f"{key}:{r['sha1']}")
+    print(f"  {key:8} {(r.get('prompt') or 'coord')[:20]:<20} sha={r['sha1']} ref={exp} tps={r['tps']:6.2f} {st}")
+print('  multislot long arm: ' + ('PASS' if ok else 'FAIL') + ('' if ref else ' (no reference on this line yet - record: ' + ' '.join(got) + ')'))
+sys.exit(0 if ok else 1)
+PY
+  rc_long=$?
+  [ $rc_short = 0 ] && [ $rc_long = 0 ]; exit $?
+fi
+exit $rc_short
