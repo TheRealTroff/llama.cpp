@@ -528,6 +528,9 @@ the pick's Turbo4 K is smaller in absolute terms, the ratio is the layout's):
 | split, 4 x 96K (before) | 393216 | 9696 MiB | 598.5 MiB |
 | packed, 96K + 3 x 8K | 122880 | **3030 MiB (-69%)** | 598.5 MiB |
 
+With the pick's Turbo4 K and V (`TURBO_AUTO_ASYMMETRIC=0`): 4 x 96K = 6336 MiB (3168 K + 3168 V), 96K + 3 x 8K = **1980 MiB**
+(990 + 990), the same -69%; 16.5 MiB per 1K cells, so an 8K executor slot costs 132 MiB.
+
 **Gate = byte identity against the split arm** (this is the whole point: the same text, a third of the memory). q4 line,
 prod `49bda3039` references, both on the new binary: `run-multislot-gate.sh` split arm PASS (3/3 short, 8/8 long),
 `ARM=classes` (the new arm: `--ctx-seq-sizes 32768,8192,8192,8192`, a 32K coordinator beside three 8K executors) PASS
