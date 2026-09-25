@@ -147,3 +147,35 @@ partial match with no checkpoint under it (A5, whose 2.6K-token prefill also sta
 Recommendation for the size-class servers: `--no-cache-idle-slots`, `LLAMA_CACHE_SAVE_TAIL=64` (32 was the test
 value; a 64-token tail is ~0.5 s of prefill against a ~100 ms save), `LLAMA_CACHE_LOAD_CKPT=1`. Both flags are
 inert without `--cache-ram`. Owner decides; not on prod.
+
+## What a checkpoint is made of (owner: "Can you dump a checkpoint to disk?", 2026-09-25 evening)
+
+Two ways exist. `--slot-save-path` + `POST /slots/<id>?action=save` writes a slot's whole sequence state to a
+file (KV + recurrent + drafter, `llama_state_seq_save_file`) and `action=restore` reads it back - the
+persistent form of a RAM-cache entry, not a checkpoint. A checkpoint is three byte vectors in host memory; the
+branch adds **`LLAMA_CKPT_DUMP=<dir>`**, which writes them as `ckpt-slot<id>-n<tokens>.{tgt,dft,spec}` whenever
+one is created, and `perf/ckpt-dump-decode.py` walks the target blob (magic, seq, cells, then per non-null layer
+a type + row size header and the rows). One 2224-token prompt under the q4 pick:
+
+| blob | bytes | content |
+|---|---|---|
+| `.tgt` | 156,894,364 (149.6 MiB), fixed | the recurrent state only (hybrid `PARTIAL_ONLY`): 48 GDN layers x (S: 786,432 f32 = 3.000 MiB + R: 30,720 f32 = 0.117 MiB), 1 cell at pos 2223 |
+| `.dft` | 35 -> 40 MiB, **grows ~20 KB per token up to the drafter's 2048 cells, then flat** | **the DFlash drafter's entire KV cache** (n_stream 4, 2048 cells of 20 KB; still 40.0 MiB at a 19906-token checkpoint): a plain KV cache ignores `PARTIAL_ONLY` and writes every cell |
+| `.spec` | 0 | the drafter's speculative stash (empty for DFlash2) |
+
+So the "170-190 MiB" of the morning = 150 MiB of GDN state + 20-40 MiB of drafter KV (bounded by the drafter's
+2048-cell context, so a checkpoint is at most ~190 MiB at any position - an earlier reading of the two dumps as
+"13 KB per prompt token, 1.3 GB at 96K" was wrong: the log's 19906-token checkpoint is 189.65 MiB, the same
+drafter part as at 2K). The drafter's memory is a plain KV cache (`SEQ_RM_TYPE_PART`): it needs nothing checkpointed, the normal
+`seq_rm` to `n_past` truncates it on restore exactly as on every cached prefix, and `load_dft` already returns on an
+empty blob. **`LLAMA_CKPT_NO_DFT=1`** (`create_checkpoint`) leaves `data_dft` empty when the drafter's memory
+supports partial removal - a byte-identical lever by construction (the cells below `n_past` are the same cells).
+
+On the f16 idea for the S state: the largest row has max |x| 41.9, every element nonzero, and 7.05% of the
+elements below f16's normal minimum (6.1e-5) - f16 would push them subnormal (bf16 keeps the range at 8 mantissa
+bits). Not free; a numerics lever to price if the 144 MiB per checkpoint ever matters after the drafter fix.
+
+**Arm D** (`ctxcache-armD`: arm C2's config + `LLAMA_CKPT_NO_DFT=1`): every one of the 44 checkpoints is 149.626
+MiB (arm C2: 169.7-189.7), every request's sha, `cache_n` and acceptance identical to arm C2, the RAM cache peak
+3042 -> 2723 MiB (the saved entries carry their checkpoints). Byte-identical as expected: -21% per checkpoint,
+a fixed size at every position. Proposed with the arm C flags; owner decides.

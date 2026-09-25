@@ -2716,9 +2716,31 @@ private:
         cur.update_pos(slot.prompt.n_tokens() - n_tokens_cur, pos_min, pos_max);
 
         cur.update_tgt(ctx_tgt, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
-        cur.update_dft(ctx_dft, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+        // LLAMA_CKPT_NO_DFT=1 (2026-09-25, perf/ctx-class-cache.md "What a checkpoint is made of"): a plain KV cache
+        // ignores PARTIAL_ONLY and writes every cell, so a checkpoint carried the drafter's whole KV cache (~13 KB per
+        // token on the DFlash drafter: 40 MiB at 2K tokens, ~1.3 GB at 96K - more than the recurrent state it exists
+        // for). A drafter whose memory supports partial removal needs nothing checkpointed: the normal seq_rm to
+        // n_past truncates its KV on restore, exactly as it does on every cached prefix.
+        static const bool ckpt_no_dft = getenv("LLAMA_CKPT_NO_DFT") && atoi(getenv("LLAMA_CKPT_NO_DFT")) != 0;
+        if (ckpt_no_dft && ctx_dft_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_PART) {
+            cur.data_dft.clear();
+        } else {
+            cur.update_dft(ctx_dft, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+        }
         // stash the draft's speculative state with the checkpoint
         common_speculative_get_state(spec.get(), slot.id, cur.data_spec);
+
+        // LLAMA_CKPT_DUMP=<dir>: write the checkpoint's three blobs to disk (2026-09-25, perf/ctx-class-cache.md:
+        // what the 170-190 MiB per checkpoint is made of; perf/ckpt-dump-decode.py parses the target blob)
+        if (const char * dir = getenv("LLAMA_CKPT_DUMP")) {
+            const std::string base = std::string(dir) + "/ckpt-slot" + std::to_string(slot.id) + "-n" + std::to_string(cur.n_tokens);
+            const std::pair<const char *, const std::vector<uint8_t> *> parts[] = {{"tgt", &cur.data_tgt}, {"dft", &cur.data_dft}, {"spec", &cur.data_spec}};
+            for (const auto & p : parts) {
+                FILE * f = fopen((base + "." + p.first).c_str(), "wb");
+                if (f) { fwrite(p.second->data(), 1, p.second->size(), f); fclose(f); }
+            }
+            SLT_INF(slot, "checkpoint dumped to %s.{tgt,dft,spec} (%zu + %zu + %zu bytes)\n", base.c_str(), cur.data_tgt.size(), cur.data_dft.size(), cur.data_spec.size());
+        }
 
         SLT_TRC(slot,
                 "created context checkpoint %d of %d (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB)\n",
