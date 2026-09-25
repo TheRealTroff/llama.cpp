@@ -32,6 +32,19 @@ one level down, and it bit the `GGML_MV_EXT_V2` work on 2026-08-22.
 
 ## The prod pick
 
+**2026-09-25 MERGED (owner: "Bring it onto prod"): per-slot context sizes, the packed KV layout (`exp/kv-size-classes`,
+merge `dc02ff4d6`, `per-slot-ctx.md` "the packed layout").** `--ctx-seq-sizes 98304,8192,8192,8192` gives each slot its own
+cache: 96K + 3 x 8K = 1980 MiB Turbo4 KV vs 6336 for 4 x 96K (-69%), output byte-identical to the split layout. The mint's
+multi-slot call now runs a CLASSES arm (the packed layout, short + long, gated against the split arm's shas). **Mint TAGs
+`prodpick-sep25-kvclass-{q4,ud}` (prod `8ccffca2e`, a cool day - the first real t/s mint since the Sep 24 hot-ambient
+SHA mints): q4 f16 31.27 / 32.20 at 300 (`d2953fccfb41`), 33.45 / 33.34 at 600 (`441120c66064`); Turbo4 33.22 at 300
+(`7c5254d01b12`), 31.63 / 33.78 at 600 (`ae44d18ca4a9` / `9e49b3d13b31` - the known controller fork of Sep 24, second run
+canonical); b1 14.41, MTP 23.68; multi-slot split PASS 3/3 + 8/8, classes PASS 3/3 + 8/8. ud f16 28.52 / 28.54 at 300
+(`9c53aaade052`), 27.93 / 27.90 at 600 (`86b6e9b02cf0`); Turbo4 29.94 at 300 (`ce826d8a3cbd`), 28.89 / 29.31 at 600
+(`7eaeffa2a01e`); b1 13.04, MTP 19.55; multi-slot split PASS + classes PASS, both arms. Every sha = the Sep 18/24 lineage;
+t/s at or slightly above the Sep 18 mint on both lines (q4 600 +2%, ud 600 +2%).**
+
+
 **2026-09-18 MERGED (owner: "I am all for bringing both into prod"): the conv+carry+silu fusion takes 8 carry copies
 (`exp/conv-carry-slots`) and the controller's pick-trace record/replay (`exp/spec-ev-replay`).** The q4 pick's block cap 7
 had silently turned the fusion off since Sep 17 (n_rs_seq = draft max -> 8 conv-state copies per layer over the 6-source

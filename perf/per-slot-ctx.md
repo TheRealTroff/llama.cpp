@@ -560,5 +560,7 @@ refuse it (create_memory guard); `--kv-unified` refuses it. ~~Adoption = owner (
 arm can join the mint if the pick starts using the list).~~ **MERGED TO PROD 2026-09-25 (dc02ff4d6, owner: "Bring it onto
 prod")**; post-merge gates on the prod binary: split arm PASS 3/3 + LONG 8/8, `ARM=classes` PASS 3/3 + 8/8 (tags
 `prodmerge-0925-{split,classes}`). No re-mint: the uniform layout builds the identical graph and every one-slot arm is
-that graph. Open: put `ARM=classes` into the mint's multi-slot call once the pick uses a size list. Worktree
-`llama.cpp-kvclass` removed, branch kept.
+that graph. ~~Open: put `ARM=classes` into the mint's multi-slot call once the pick uses a size list.~~ DONE 2026-09-25
+(owner: "Make it so", prod `8ccffca2e`): `run-prod-pick.sh` runs the classes arm after the split arm; first mint with it
+`prodpick-sep25-kvclass-{q4,ud}` (cool day): all 16 multi-slot shas PASS on both lines, one-slot shas canonical, t/s
+at the Sep 18 level (README "The prod pick"). Worktree `llama.cpp-kvclass` removed, branch kept.
