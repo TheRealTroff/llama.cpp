@@ -54,6 +54,47 @@ kernels. FINDING: the ud f16 arm's harness depth 4 (`F16_DEPTH=4`, the n4+w5r4h 
 controller was "a wash" on ud against depth 4, not against depth 3). `F16_DEPTH` is now overridable in `run-prod-pick.sh`.
 
 
+**2026-09-25 afternoon (owner: "then do so now"): the ud verify width re-priced three ways - fixed depth 3 (width 4), the
+f16 arm's harness depth 4 (width 5, the Aug 28 n4+w5r4h pick), and the `LLAMA_SPEC_EV` controller (cap 7, widths {3,7});
+prod `9e88f1b0f`, binary 04:10, cool day, TAGs `udepth-sep25-{d3,d4,ev}-p{1,2,3}` (f16), `udepth-sep25-{t3,tev}-p{1,2,3}`
+(Turbo4), `specev-w37-sep25-ud-*` (corpus, LV 5 tax harness) and `specev-w37clean-sep25-ud-*` (corpus, LV 3).** Three
+interleaved passes per arm on benchprompt, `run-prod-pick.sh` ARMS pick-n6-300/600 (f16) and turbo4-n3-300/600, MULTISLOT=0:
+
+| ud, benchprompt, 3 passes | 300 | 600 | shas |
+|---|--:|--:|---|
+| f16 fixed depth 3 | 29.8 / 29.8 (+ a 27.9 first-server outlier) | 29.3 / 29.3 / 29.2 | canonical both |
+| f16 fixed depth 4 (`F16_DEPTH=4`, the harness default) | 27.2 / 27.2 / 28.2 | 27.7 / 27.7 / 27.5 | canonical both |
+| f16 controller {3,7} (`F16_DEPTH=7` + `LLAMA_SPEC_EV=1 LLAMA_SPEC_EV_WIDTHS=3,7`) | 30.3 / 30.3 / 30.3 | 30.2 / 29.6 / 30.2 | canonical both, no fork in 6 runs |
+| Turbo4 fixed depth 3 (the pick) | 29.9 / 30.0 / 30.0 | 29.0 / 29.0 / 28.9 | canonical both |
+| Turbo4 controller {3,7} (`PICK_DEPTH=7` + the two flags) | 30.9 / 30.8 / 30.8 | 28.6 / 29.1 / 29.1 | 300 canonical; 600 forks (`dec1618d2bf6` x1, `64fbb927b28d` x2) |
+
+- **f16: depth 4 is the worst of the three at both lengths.** Depth 3 = +6..9% over it, the controller +9..10%; acceptance
+  70.7% at depth 3 vs 65.1% at depth 4 (the width-5 kernel is not the problem - the fourth drafted token is). The controller
+  engaged as intended (`n_max=7`, 7-entry cost table, k hist 3:68 7:15 at 300; learned cost[3] 106-108 ms, cost[7] 156-163
+  = 1.5x, down from the 1.72x of Sep 17). The f16 controller's shas equal the fixed arms' at both lengths in all six runs.
+- **Turbo4 (the pick's cache): controller +3.0% at 300 on the canonical sha, a wash at 600 (28.6 / 29.1 / 29.1 vs 29.0)
+  where it forks on timing** - the SPEC-lineage behaviour the q4 mint's 600 arm shows (`mint-controller-arm-is-statistical`).
+- **Corpus (the Sep 17 table re-run, 7 prompts, 300 tokens, Turbo4, fixed 3 = mean of two arms):** the tax harness (LV 5,
+  `LLAMA_SPEC_EV_DBG=1`, `LLAMA_DECODE_PROF=1`) gives fixed 29.46 vs {3,7} 30.87 = **+4.8%** (Sep 17: +1.1%); the same
+  three arms at LV 3 without the debug lines give fixed 29.58 vs {3,7} **31.26 = +5.7%**: benchprompt +2.7, prose -3.2, chat
+  -1.9, math +6.5, JSON +23.7, algorithms +3.0, story -1.7. The per-round DBG logging costs the CONTROLLER arm ~5% on
+  benchprompt (29.3 vs 30.8) and the fixed arm nothing (29.97 vs 30.04) - the Sep 17 table understated the controller by
+  about that. Shas: prose and story fork (as on Sep 17), the other five equal fixed 3.
+- **Why it moved since Sep 17:** the ud deep round got cheaper (w8-decomp levers 3+4 and the q6_K head, Sep 18; the conv-carry
+  fix at cap 7, Sep 18; TOPK_STREAM, Sep 19) and the chat-template lineage accepts better; free-form still pays 2-3%.
+
+**Decision = owner (a SPEC-class manifest change on ud: the two `LLAMA_SPEC_EV` lines to `pick`, `PICK_DEPTH_EV=7` applies
+by construction; the ud decode-kernel union is priced already, section 10). Separately, the harness's f16 reference depth
+(`F16_DEPTH` default 4 in `run-prod-pick.sh`) is 6-9% below its own depth-3 form; moving the default to 3 changes the
+mint's f16 reference numbers (a harness change, not a pick change).** HARNESS TRAP found on the way, unfixed: `run-prod-pick.sh`
+lines 82-83 call `pick_env f16` then `pick_env turbo4`, and the second call overwrites the global `PICK_ENV` - the f16
+arms have run under the TURBO4 flag set since 2026-09-07 (the header's `env :` line shows `GGML_FA_TR=9 GGML_FA_GQA_HEADS=4,6
+TURBO_AUTO_ASYMMETRIC=0 ...`). `GGML_FA_TR`, `GGML_FA_TURBO_NWG` and `TURBO_AUTO_ASYMMETRIC` are type-gated in the source
+(inert on f16); `GGML_FA_GQA_W3_NWG=13` is NOT (it applies to any GQA-reuse call at width 3, so f16 depth-2 / controller
+width-3 rounds run nwg 13 instead of `GGML_FA_MM_NWG=8`); `GGML_FA_GQA4_NWG` needs gqa 4 (not this model). Every f16 sha on
+record was minted under this env, so the fix (`pick_env f16` into a local, or save before the turbo4 call) is a
+potential f16 width-3 lineage move and waits for the owner. Notes: `spec-verify-narrow.md` section 12.
+
 
 **2026-09-18 MERGED (owner: "I am all for bringing both into prod"): the conv+carry+silu fusion takes 8 carry copies
 (`exp/conv-carry-slots`) and the controller's pick-trace record/replay (`exp/spec-ev-replay`).** The q4 pick's block cap 7

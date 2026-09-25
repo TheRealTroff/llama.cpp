@@ -371,6 +371,8 @@ two-dispatch design the owner put on hold at width 4 (1.09 ms then).
   (conf = the sampled dist's max prob, untested)~~ (2026-09-07: the sampled path pushed conf
   TWICE per position, fixed on `spec-heated`; heated acceptance at the pick measured in
   `spec-heated.md` - the controller itself still unrun heated), the f16 line.
+- 2026-09-25: the ud verdict re-priced (section 12): the controller is +5.7% on the ud corpus today, the ud f16
+  reference arm's depth 4 is stale (depth 3 +6..9%), and `run-prod-pick.sh` runs its f16 arms under the Turbo4 env. Owner decides.
 - Trajectory noise: free-form per-prompt cells fork sha and swing +/-10%; a corpus-level number
   needs more prompts or longer completions to tighten below the ~3% the mean carries now.
 - 07-shell-script emits EOS first on raw `/completion` at temperature 0; excluded throughout.
@@ -473,7 +475,7 @@ rows decide; fixed 3 repeated first and last = drift check, 30.75 / 30.63 q4, 28
 **Decision (2026-09-17 afternoon): picked on q4 - `LLAMA_SPEC_EV=1|SPEC|q4|pick`, `LLAMA_SPEC_EV_WIDTHS=3,7|SPEC|q4|pick`,
 `PICK_DEPTH_EV=7` (pick_args uses it for a line that picks the controller; `PICK_SPEC_EV=0` opts a fixed-depth arm
 out). On ud the entry stays `proposed` with these numbers: +1.1% mean is a free-form cost of 3-7% bought back on
-saturated text, and the owner's UD standard is conservative; picking it there is the same two manifest lines.**
+saturated text, and the owner's UD standard is conservative; picking it there is the same two manifest lines.** ~~(Sep 17 numbers)~~ RE-PRICED 2026-09-25, section 12: corpus +5.7% on ud (clean LV 3), free-form -2..-3%; owner decides.
 The remaining gate steps for the q4 form (agreement corpora fixed 3 vs the controller scored against q8_0, the 96K
 pair, the mint `prodpick-sep17-specev-q4`) follow below.
 
@@ -660,3 +662,38 @@ Turbo4 33.51 at 300 / 33.26 / 33.12 at 600, f16 31.50 / 31.70 at 300, 32.69 / 32
 (29.70 / 28.80 / 28.71 Turbo4, 27.89 / 27.40 f16, b1 12.91). The fusion fires on prod at the q4 pick: 432 fused
 conv dispatches per 9 graphs at `-lv 5` (the fusion-debug lines are DEBUG level: a count at `-lv 3` reads 0 and means
 nothing), 0 guard hits.
+
+### 12. The ud verdict re-priced (2026-09-25, owner: "then do so now")
+
+The Sep 17 decision kept the controller `proposed` on ud at +1.1% corpus mean. Two things were wrong with that comparison by
+Sep 25: (a) the ud f16 reference arm of every mint runs the harness default `F16_DEPTH=4` (width 5, the Aug 28 pick) and
+the Turbo4 arm depth 3, so the f16-vs-Turbo4 delta in the mints was mostly the depth policy (README 2026-09-25, the
+acceptance decomposition); (b) the ud deep round got cheaper after Sep 17 (`w8-decomp-sep18.md` levers, the conv-carry
+fix of section 11, `topk-stream.md`) and the chat-template lineage accepts better. Re-run on prod `9e88f1b0f` (binary
+04:10), cool day, three interleaved passes per benchprompt arm, then the section-10 corpus twice (the LV-5 tax harness
+and a clean LV-3 pass). TAGs `udepth-sep25-*`, `specev-w37-sep25-ud-*`, `specev-w37clean-sep25-ud-*`. Full tables in the
+README "The prod pick" 2026-09-25 afternoon entry.
+
+| ud, benchprompt (3 passes) | 300 | 600 |
+|---|--:|--:|
+| f16 fixed 3 / fixed 4 / controller {3,7} | 29.8 / 27.5 / 30.3 | 29.3 / 27.6 / 30.0 |
+| Turbo4 fixed 3 / controller {3,7} | 30.0 / 30.9 | 29.0 / 29.0 (forks) |
+
+**Corpus, Turbo4, 300 tokens, clean LV 3 (fixed 3 = mean of two arms):** fixed 29.58 vs widths {3,7} 31.26 = **+5.7%**
+(benchprompt +2.7, prose -3.2, chat -1.9, math +6.5, JSON +23.7, algorithms +3.0, story -1.7; prose and story fork, the
+rest equal fixed 3). The LV-5 tax harness gives +4.8% for the same arms: its per-round DBG lines cost the controller arm
+~5% on benchprompt and the fixed arm nothing, so the Sep 17 table (same harness) understated the controller by about that.
+The learned cost table on ud today: cost[3] 106-108 ms, cost[7] 156-163 = 1.5x (1.72x on Sep 17).
+
+**Findings.** (1) On the f16 cache depth 4 is the worst of the three at both lengths (acc 65% vs 71% at depth 3): the ud
+f16 pick width of Aug 28 is stale, and the harness default `F16_DEPTH=4` prices the f16 reference 6-9% under its own
+depth-3 form. (2) On the pick's Turbo4 cache the controller is +3% at 300 on the canonical sha and a wash at 600, where
+it forks on timing like the q4 mint's 600 arm. (3) The controller's free-form price on ud is now -2..-3% (was -3..-7%),
+bought back at +6..+24% on math/JSON; corpus +5.7%.
+
+**Decision = owner.** Picking it on ud is the same two manifest lines as q4 (`LLAMA_SPEC_EV=1|SPEC|ud|pick`,
+`LLAMA_SPEC_EV_WIDTHS=3,7|SPEC|ud|pick`; `PICK_DEPTH_EV=7` then applies to the ud arms by construction and the multi-slot
+gate's refs need re-recording); the ud decode-kernel union is priced (section 10). Independently of the pick, the
+harness's `F16_DEPTH` default 4 -> 3 is a reference-arm change that moves the mint's f16 numbers up ~6%. Harness trap
+found on the way (README entry): `run-prod-pick.sh` runs the f16 arms under the Turbo4 flag set (`pick_env turbo4`
+overwrites `PICK_ENV`); inert except `GGML_FA_GQA_W3_NWG=13` on f16 width-3 calls, unfixed pending the owner.
