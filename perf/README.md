@@ -42,7 +42,17 @@ SHA mints): q4 f16 31.27 / 32.20 at 300 (`d2953fccfb41`), 33.45 / 33.34 at 600 (
 canonical); b1 14.41, MTP 23.68; multi-slot split PASS 3/3 + 8/8, classes PASS 3/3 + 8/8. ud f16 28.52 / 28.54 at 300
 (`9c53aaade052`), 27.93 / 27.90 at 600 (`86b6e9b02cf0`); Turbo4 29.94 at 300 (`ce826d8a3cbd`), 28.89 / 29.31 at 600
 (`7eaeffa2a01e`); b1 13.04, MTP 19.55; multi-slot split PASS + classes PASS, both arms. Every sha = the Sep 18/24 lineage;
-t/s at or slightly above the Sep 18 mint on both lines (q4 600 +2%, ud 600 +2%).**
+t/s at or slightly above the Sep 18 mint on both lines (q4 600 +2%, ud 600 +2%).** Follow-up the same day (owner: "how much
+of that is acceptance rates?"), the mint arms decomposed (tok/round = 600/rounds, ms/round from t/s): q4 controller f16
+3.44 tok/round at 103 ms vs Turbo4 3.61 at 107 (+5% tokens, +4% cost, net +1%); ud f16 depth 4 3.48 at 125 vs Turbo4 depth 3
+3.81 at 131 (+10% / +5%). MATCHED PAIR at fixed depth 3 (`F16_DEPTH=3 PICK_SPEC_EV=0`, TAGs `accpair-sep25-{q4,ud}`): q4 f16
+32.97 / 32.93 vs Turbo4 32.85 / 32.96 (acc 65.3 vs 66.9%, tok/round 3.19 vs 3.23, ms/round 96.9 vs 98.3); ud f16 29.60 / 29.68
+vs Turbo4 29.37 / 29.32 (acc 68.9 vs 69.5%, tok/round 3.73 vs 3.80, ms/round 125.8 vs 129.5). So Turbo4's rounds cost +1.5%
+(q4) / +3% (ud) and its acceptance gives back +1.3% / +1.9%: a wash on q4, -1% on ud - "free" is the acceptance, not the
+kernels. FINDING: the ud f16 arm's harness depth 4 (`F16_DEPTH=4`, the n4+w5r4h pick of Aug 28) loses to depth 3 today:
+29.6 vs 27.9 t/s (+6%), same sha `86b6e9b02cf0`; the ud f16 pick depth is an open item (`spec-verify-narrow.md`: the
+controller was "a wash" on ud against depth 4, not against depth 3). `F16_DEPTH` is now overridable in `run-prod-pick.sh`.
+
 
 
 **2026-09-18 MERGED (owner: "I am all for bringing both into prod"): the conv+carry+silu fusion takes 8 carry copies
