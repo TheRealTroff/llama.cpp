@@ -691,7 +691,7 @@ depth-3 form. (2) On the pick's Turbo4 cache the controller is +3% at 300 on the
 it forks on timing like the q4 mint's 600 arm. (3) The controller's free-form price on ud is now -2..-3% (was -3..-7%),
 bought back at +6..+24% on math/JSON; corpus +5.7%.
 
-**Decision = owner.** Picking it on ud is the same two manifest lines as q4 (`LLAMA_SPEC_EV=1|SPEC|ud|pick`,
+**DECIDED 2026-09-25 (owner: "I want all three"): picked on ud (manifest lines `both|pick`), `F16_DEPTH` default 3, the `PICK_ENV` overwrite fixed; no mint yet (the next one is a new SPEC lineage on ud).** ~~Decision = owner.~~ Picking it on ud is the same two manifest lines as q4 (`LLAMA_SPEC_EV=1|SPEC|ud|pick`,
 `LLAMA_SPEC_EV_WIDTHS=3,7|SPEC|ud|pick`; `PICK_DEPTH_EV=7` then applies to the ud arms by construction and the multi-slot
 gate's refs need re-recording); the ud decode-kernel union is priced (section 10). Independently of the pick, the
 harness's `F16_DEPTH` default 4 -> 3 is a reference-arm change that moves the mint's f16 numbers up ~6%. Harness trap

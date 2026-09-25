@@ -73,8 +73,12 @@ mkdir -p "$OUT"
 LINE=${LINE:-q4}
 source "$B/perf/pick.sh"
 pick_check "$LINE" || exit 1
-pick_env "$LINE" f16;    PICK_ENV=("${PICK_ENV[@]}")
+# pick_env writes the global PICK_ENV each call: save the f16 form BEFORE the turbo4 call. TRAP fixed 2026-09-25: the
+# second call overwrote it and every f16 arm since 2026-09-07 ran under the Turbo4 flag set (type-gated = inert, except
+# GGML_FA_GQA_W3_NWG on f16 width-3 GQA calls; README 2026-09-25 afternoon).
+pick_env "$LINE" f16;    F16_PICK_ENV=("${PICK_ENV[@]}")
 pick_env "$LINE" turbo4; TURBO_PICK_ENV=("${PICK_ENV[@]}")
+PICK_ENV=("${F16_PICK_ENV[@]}")
 pick_args "$LINE" f16;   M=$PICK_MODEL; MD=$PICK_DRAFTER
 TURBO=${TURBO:-0}
 # LV=5 (with GGML_METAL_LOG_LEVEL=2 in the environment) makes the server log name every
@@ -86,13 +90,15 @@ MD_TURBO=${MD_TURBO:-$PICK_DRAFTER}
 # What the older harnesses set, kept to show the delta is the missing flags.
 PART_ENV=(GGML_MV_NC=2 GGML_MM_SKINNY=5)
 
-# Depths: the f16 pick is dflash n4 (verify width 5, m4-width5-crossover.md), the Turbo4 pick is the manifest's
-# PICK_DEPTH (3). When the line's manifest carries the LLAMA_SPEC_EV controller (2026-09-17, q4), both arms run its
-# block cap PICK_DEPTH_EV (7): the controller picks the verify width per round from that block.
+# Depths: the f16 reference arm ran dflash n4 (verify width 5, m4-width5-crossover.md) from 2026-08-28 to 2026-09-25;
+# since 2026-09-25 (owner) its fixed-depth form is depth 3 like the Turbo4 arm (depth 4 measured 6-9% under it on ud,
+# README 2026-09-25 afternoon). The Turbo4 pick is the manifest's PICK_DEPTH (3). When the line's manifest carries the
+# LLAMA_SPEC_EV controller (q4 since 2026-09-17, ud since 2026-09-25), both arms run its block cap PICK_DEPTH_EV (7):
+# the controller picks the verify width per round from that block.
 # pick_args set PICK_DEPTH_LINE (PICK_DEPTH_EV for such a line). TRAP (the first sep17 mint): the global PICK_DEPTH is
 # the fixed-depth default and confines the controller to width 3 silently - the server log's spec-ev summary shows a
 # 3-entry cost table; the guard below refuses that.
-F16_DEPTH=${F16_DEPTH:-4}   # override from the environment for a matched-depth f16 vs Turbo4 pair (with PICK_SPEC_EV=0 on an EV line)
+F16_DEPTH=${F16_DEPTH:-3}   # the fixed-depth f16 form (was 4 until 2026-09-25); override for a matched-depth pair (with PICK_SPEC_EV=0 on an EV line)
 if printf '%s\n' "${TURBO_PICK_ENV[@]}" | grep -qx 'LLAMA_SPEC_EV=1'; then
   F16_DEPTH=$PICK_DEPTH_LINE
   [ "$PICK_DEPTH_LINE" -ge 7 ] || { echo "ABORT: the $LINE line picks LLAMA_SPEC_EV but the block cap is $PICK_DEPTH_LINE (PICK_DEPTH_EV=7 expected)"; exit 1; }
