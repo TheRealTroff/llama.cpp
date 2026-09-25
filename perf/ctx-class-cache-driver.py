@@ -20,7 +20,7 @@ prompt cache on a hybrid (GDN + attention) model:
                    then prints the comparison table.
 stdlib only.
 """
-import argparse, hashlib, json, os, sys, threading, time, urllib.request
+import argparse, hashlib, json, os, re, sys, threading, time, urllib.request
 
 MARKERS = ("selected slot by", "restored context checkpoint", "created context checkpoint", "found better prompt",
            "forcing full prompt re-processing", "cache state:", "saving prompt with length", "cached n_tokens =",
@@ -34,6 +34,7 @@ SYSTEMS = {"A": "You are a concise archivist. Answer in plain prose.",
 FOLLOW2 = "Which of the people mentioned had the longest career? Answer briefly."
 FOLLOW3 = "List the years mentioned in the text, most recent first, in one line."
 FOLLOW5 = "Thanks. One more: name the earliest event in the text and its year."
+FOLLOW6 = "Good. Now give the same answer as a single bullet list."
 
 
 def post(port, path, body, timeout=36000):
@@ -202,8 +203,24 @@ def run_cached(args):
               + (f"  ERROR {r['error']}" if "error" in r else ""), flush=True)
     for m in marks:
         print(f"        | {m}", flush=True)
+    # --- T6: the T2 branch of B comes back. B3 overwrote it in the slot keeping 99% (B2's 48-token reply + the
+    #     follow-up = ~70 decoded tokens lost): an idle-slot save keeps a copy the similarity pick never loads;
+    #     LLAMA_CACHE_SAVE_TAIL saves it at B3 and B6 loads it; otherwise B6 resumes from a checkpoint in the slot.
+    #     (Stream B, not C: C2's reply was 4 tokens, under a 32-token threshold.)
+    print("--- T6: B's T2 branch returns (was overwritten in the slot by B3)", flush=True)
+    log.take()
+    turn("B", "B6", convs["B"]["t2"] + [("user", FOLLOW6)])
+    # the RAM cache's peak from the server log
+    peak = {"entries": 0, "mib": 0.0}
+    if args.log and os.path.exists(args.log):
+        for line in open(args.log, encoding="utf-8", errors="replace"):
+            m = re.search(r"cache state: (\d+) prompts, ([0-9.]+) MiB", line)
+            if m:
+                peak["entries"] = max(peak["entries"], int(m.group(1)))
+                peak["mib"] = max(peak["mib"], float(m.group(2)))
+    print(f"  RAM prompt cache peak: {peak['entries']} entries, {peak['mib']:.0f} MiB", flush=True)
     json.dump({"k": args.k, "streams": {n: {k2: v for k2, v in s.items() if k2 != "doc"} for n, s in streams.items()},
-               "results": R}, open(args.out, "w"), indent=1)
+               "results": R, "cache_peak": peak}, open(args.out, "w"), indent=1)
     print(f"wrote {args.out}", flush=True)
 
 
@@ -227,8 +244,9 @@ def run_control(args):
               f"sha {r.get('sha1')}", flush=True)
         for m in r.get("markers", []):
             print(f"        | {m}", flush=True)
-    print("--- control (b): every sequential prompt with cache_prompt=false (the uncached reference)", flush=True)
-    seq = [l for l in R if not l.endswith("5")]
+    seq = [] if args.no_uncached else [l for l in R if not l.endswith("5") and not l.endswith("6")]
+    if seq:
+        print("--- control (b): every sequential prompt with cache_prompt=false (the uncached reference)", flush=True)
     for label in seq:
         r = completion(args.port, R[label]["prompt"], args.n_predict, False, label + "u", log)
         out[label + "u"] = r
@@ -265,9 +283,11 @@ def verdict(ref, out):
         elif acc < 30: flag = "LOW ACC"; fails.append(f"{label}: acceptance {acc:.1f}%")
         t = label[-1]
         if not flag and t == "1" and r.get("cache_n") != 0: flag = "T1 CACHED?"; fails.append(f"{label}: cache_n {r.get('cache_n')} on a fresh prompt")
-        if not flag and t in "235" and (r.get("cache_n") or 0) < 0.9 * r.get("total_n", 1):
+        if not flag and t in "2356" and (r.get("cache_n") or 0) < 0.9 * r.get("total_n", 1):
             if label == "A5" and r.get("cache_n") == 0:
                 flag = "reset (A4's partial-match load consumed A's RAM entry; see the note)"
+            elif label == "B6":
+                flag = "resumed from a checkpoint in the slot (see the C6 line below)"
             else:
                 flag = "NO REUSE"; fails.append(f"{label}: cache_n {r.get('cache_n')} of {r.get('total_n')}")
         # T4: a divergence inside the first user message has no checkpoint before it (the first batch has nothing
@@ -275,13 +295,18 @@ def verdict(ref, out):
         if not flag and t == "4" and not (r.get("cache_n") == 0 and any("forcing full" in m for m in r.get("markers", []))): flag = "T4 EXPECTED RESET"; fails.append(f"{label}: cache_n {r.get('cache_n')}, no reset marker")
         if not flag and u and same != "IDENTICAL" and (cmp_lp(r.get("logprobs"), u.get("logprobs"))[0] or 9) > 0.5: flag = "DIVERGED"; fails.append(f"{label}: cached text differs from uncached beyond numerics")
         print(f"{label:5} {r.get('id_slot')!s:>4} {exp_slot:>3} {r.get('cache_n')!s:>7} {r.get('total_n')!s:>6} {acc:5.1f}  {same:19} {ds:13}  {mech} {flag}")
+    if "B6" in R:
+        c6 = R["B6"]; back = any("found better prompt" in m for m in c6.get("markers", []))
+        print(f"\nB6 (the overwritten T2 branch): {'RETURNED FROM THE RAM CACHE' if back else 'NOT loaded from the RAM cache (resumed from a checkpoint in the slot)'}, cache_n {c6.get('cache_n')} of {c6.get('total_n')}")
+    if "cache_peak" in ref:
+        print(f"RAM prompt cache peak: {ref['cache_peak']['entries']} entries, {ref['cache_peak']['mib']:.0f} MiB")
     a3, a3c = R["A3"], out["A3c"]
     st = "IDENTICAL" if a3["sha1"] == a3c["sha1"] else "DIFFERS"
     d, n = cmp_lp(a3.get("logprobs"), a3c.get("logprobs"))
     print(f"\nA3 RAM-cache restored (server 1) vs A3 in slot (server 2): {st}, max|dlogprob| {d if d is None else f'{d:.2e}'} over {n} tokens, cache_n {a3.get('cache_n')} vs {a3c.get('cache_n')}")
     if st != "IDENTICAL": fails.append("A3: the RAM-cache round trip changed the text")
     for label in ("A1", "B1", "C1", "D1"):
-        if out[label + "u"]["sha1"] != R[label]["sha1"]:
+        if label + "u" in out and out[label + "u"]["sha1"] != R[label]["sha1"]:
             fails.append(f"{label}: two fresh prefills disagree (determinism control)")
     print("\nVERDICT: " + ("PASS" if not fails else "FAIL"))
     for f in fails: print("  - " + f)
@@ -298,6 +323,7 @@ def main():
     ap.add_argument("--k", type=int, default=4096)
     ap.add_argument("--material", default="/Users/troff/play/kvquant-experiments/data/longprompt-96k.txt")
     ap.add_argument("--n-predict", type=int, default=48)
+    ap.add_argument("--no-uncached", action="store_true", help="control: skip the uncached reference replay")
     a = ap.parse_args()
     if a.phase == "cached":
         run_cached(a); return 0

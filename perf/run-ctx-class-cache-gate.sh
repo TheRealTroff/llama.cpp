@@ -21,6 +21,7 @@ EXTRA_ENV=${EXTRA_ENV:-}
 EXTRA_ARGS=${EXTRA_ARGS:-}
 OUT=/Users/troff/play/kvquant-experiments/results
 TAG=${TAG:-ctxcache-$(date +%m%d-%H%M)}
+CONTROL=${CONTROL:-full}   # short = the control server replays A1-A3 in slot only (no uncached reference; ~10 min per run)
 mkdir -p "$OUT"
 
 stuck_servers() { ps -axo pid=,stat=,command= | awk '$2 ~ /E/ && $0 ~ /llama-server/ {print $1}'; }
@@ -46,7 +47,7 @@ for a in "${PICK_ARGS[@]}"; do   # the context comes from the size list, not the
 done
 SIZES="$K,$((2*K)),$((4*K)),$((8*K))"
 
-echo "=== ctx-class cache gate $TAG: line=$LINE kv=$KV --ctx-seq-sizes $SIZES, depth ${PICK_DEPTH_LINE}, n_predict $NPRED"
+echo "=== ctx-class cache gate $TAG: line=$LINE kv=$KV --ctx-seq-sizes $SIZES, depth ${PICK_DEPTH_LINE}, n_predict $NPRED, control=$CONTROL; extra: $EXTRA_ENV $EXTRA_ARGS"
 echo "commit : $(cd "$B" && git rev-parse --short HEAD) on $(cd "$B" && git rev-parse --abbrev-ref HEAD); binary $BIN; driver $SD"
 echo "model  : $PICK_MODEL"
 echo "env    : ${PICK_ENV[*]}"
@@ -85,7 +86,7 @@ slog2="$OUT/$TAG.control.server.log"
 echo; echo "--- server 2 (control: in-slot A1-A3, then the uncached reference), log $slog2"
 start_server "$slog2" || { kill_server $pid; exit 1; }
 t0=$(date +%s)
-python3 "$SD/ctx-class-cache-driver.py" --port $PORT --phase control --log "$slog2" --ref "$OUT/$TAG.cached.json" --out "$OUT/$TAG.control.json" --k "$K" --n-predict "$NPRED"
+python3 "$SD/ctx-class-cache-driver.py" --port $PORT --phase control --log "$slog2" --ref "$OUT/$TAG.cached.json" --out "$OUT/$TAG.control.json" --k "$K" --n-predict "$NPRED" $([ "$CONTROL" = short ] && echo --no-uncached)
 rc=$?
 echo "  wall $(( $(date +%s) - t0 )) s"
 check_server "$slog2"

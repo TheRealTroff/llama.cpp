@@ -106,3 +106,44 @@ Also seen, benign: A'1 into a slot holding A hit "forcing full prompt re-process
 
 `K=` scales the four classes; the documents scale with them (0.6 of each class), so K=8192 is ~2 h of prefill.
 `--phase verdict --ref <cached.json> --out <control.json>` re-prints the table from the two result files.
+
+## The slot/RAM duplicate, and two rules that replace it (2026-09-25 evening, owner: "Let's see where it brings us")
+
+In split mode (what the size classes need) `--cache-idle-slots` serializes every idle slot into the RAM cache on
+each launch and leaves the slot untouched: the copy costs the full state (KV + recurrent + checkpoints) a second
+time and, as the arms below show, is never read. The cache is only consulted when the slot being taken is saved
+(LRU pick, or a similarity pick keeping under half of its context); a similarity pick that keeps 99% never saves,
+so it never loads either - the T2 branch of C sat in the cache in arm A and C6 resumed from a checkpoint in the
+slot regardless. Two opt-in rules on this branch make the idle-slot save unnecessary and fix the partial-match
+waste found in the morning:
+
+- **`LLAMA_CACHE_SAVE_TAIL=N`** (`get_available_slot`): save the chosen slot's state whenever the task will
+  overwrite at least N *decoded* tokens of it (`slot tokens - 1 - common prefix`; the last sampled token is
+  never decoded, so a plain continuation counts 0), whichever way the slot was picked. Costs one serialization
+  (~100 ms, the entry's size) per real overwrite; the cache drops an entry contained in a newer one, so it stays
+  one entry per branch.
+- **`LLAMA_CACHE_LOAD_CKPT=1`** (`server_prompt_cache::effective_reuse`): on a context whose partial state cannot
+  be truncated (recurrent / SWA), score a cached prompt by the tokens the server can actually resume from - the
+  newest checkpoint at or before the common prefix, or the prefix itself when it reaches the entry's decoded
+  end - instead of the raw prefix. An entry with nothing to resume from is left in the list.
+
+Three arms, same plan plus T6 (the T2 branch of a stream returns after T3 overwrote it in the slot), short
+control (in-slot A1-A3 only). Every T1-T4 request gave the morning's shas in every arm: the unflagged path is
+unchanged and the flags change what is saved and loaded, not what is computed.
+
+| arm | config | RAM cache peak | A5 (entry consumed by A4?) | T5 round, 4 slots | T6 branch return |
+|---|---|---|---|---|---|
+| A | today's defaults | 10 entries, 7879 MiB | reset, 0 / 2639 | 22 s (A5's full prefill in the batch) | C6 from a slot checkpoint (9382 / 10003); the cache copy existed, never loaded |
+| B | `--no-cache-idle-slots` | 3 entries, 2110 MiB | reset, 0 / 2639 | 22 s | C6 from a slot checkpoint, same |
+| C | B + `SAVE_TAIL=32` + `LOAD_CKPT=1` | 5 entries, 3601 MiB | **restored, 2608 / 2639** | **3.1-3.9 s** | C6 from a slot checkpoint: C2's reply was 4 tokens, 28 lost < 32 (rule correct, test wrong) |
+| C2 | arm C, T6 on stream B | 4 entries, 3042 MiB | restored, 2608 / 2639 | 3.1-3.9 s | **B6 from the RAM cache, 5086 / 5114** (`found better prompt f_keep 1.000`; saved at B3: 68 tokens overwritten) |
+
+TAGs `ctxcache-arm{A,B,C,C2}`, all PASS, A3's RAM round trip byte-identical in each. The tail rule fired exactly
+where it should: B3 (68 decoded tokens overwritten) and the T6 request itself (120); not on C3/D3 (28). Arm B
+alone already removes the duplicate with no loss on this plan (displacement is covered by the eviction-path
+save); arm C is arm B plus the two cases upstream's rules miss: the branch overwritten in place (B6) and the
+partial match with no checkpoint under it (A5, whose 2.6K-token prefill also stalled the concurrent round 22 -> 3 s).
+
+Recommendation for the size-class servers: `--no-cache-idle-slots`, `LLAMA_CACHE_SAVE_TAIL=64` (32 was the test
+value; a 64-token tail is ~0.5 s of prefill against a ~100 ms save), `LLAMA_CACHE_LOAD_CKPT=1`. Both flags are
+inert without `--cache-ram`. Owner decides; not on prod.

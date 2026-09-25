@@ -1684,6 +1684,13 @@ private:
             SRV_TRC("%s", "use `--cache-ram 0` to disable the prompt cache\n");
 
             prompt_cache = std::make_unique<server_prompt_cache>(params_base.cache_ram_mib, n_ctx);
+
+            // LLAMA_CACHE_LOAD_CKPT=1: score cached prompts by their resumable tokens on a context whose partial
+            // state cannot be truncated (see server_prompt_cache::effective_reuse)
+            const bool partial_fixed = ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL ||
+                                       ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_RS   || n_swa > 0;
+            prompt_cache->ckpt_aware = partial_fixed && getenv("LLAMA_CACHE_LOAD_CKPT") && atoi(getenv("LLAMA_CACHE_LOAD_CKPT")) != 0;
+            SRV_INF("prompt cache: checkpoint-aware load = %d (LLAMA_CACHE_LOAD_CKPT, partial state fixed = %d)\n", (int) prompt_cache->ckpt_aware, (int) partial_fixed);
         } else {
             SRV_TRC("%s", "prompt cache is disabled - use `--cache-ram N` to enable it\n");
         }
@@ -1990,6 +1997,21 @@ private:
         }
 
         if (ret) {
+            // LLAMA_CACHE_SAVE_TAIL=N (2026-09-25, perf/ctx-class-cache.md): save the slot's state to the prompt cache
+            // whenever the task will overwrite at least N decoded tokens of it, whichever way the slot was picked
+            // (similarity keeping over half of it, or a requested id_slot - the paths that lose the tail unsaved).
+            // With it, --no-cache-idle-slots loses nothing: in split mode the idle-slot save is a duplicate of a
+            // state that stays live in its slot, and it fills the cache with copies nobody restores.
+            static const int save_tail = getenv("LLAMA_CACHE_SAVE_TAIL") ? atoi(getenv("LLAMA_CACHE_SAVE_TAIL")) : 0;
+            if (save_tail > 0 && !update_cache && !ret->prompt.tokens.empty()) {
+                const int lcp  = ret->prompt.tokens.get_common_prefix(task.tokens);
+                const int lost = (int) ret->prompt.tokens.size() - 1 - lcp;   // decoded tokens beyond the prefix (the last sampled token never is)
+                if (lost >= save_tail) {
+                    SLT_INF(*ret, "saving to the prompt cache: the task overwrites %d decoded tokens (LLAMA_CACHE_SAVE_TAIL = %d)\n", lost, save_tail);
+                    update_cache = true;
+                }
+            }
+
             update_cache = update_cache && prompt_cache;
 
             // cache prompts only for completion tasks

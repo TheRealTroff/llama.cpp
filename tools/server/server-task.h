@@ -618,6 +618,14 @@ struct server_prompt_cache {
     // in tokens, 0 = no limit
     size_t limit_tokens = 0;
 
+    // LLAMA_CACHE_LOAD_CKPT=1 on a context whose partial state cannot be truncated (recurrent / SWA): a cached
+    // prompt is scored by the tokens the server can actually resume from - the newest checkpoint at or before
+    // the common prefix - instead of the common prefix itself (2026-09-25, perf/ctx-class-cache.md: a 42% match
+    // with no checkpoint under it was loaded, erased from the list and thrown away by the reset that followed)
+    bool ckpt_aware = false;
+
+    int effective_reuse(const server_prompt & prompt, int lcp) const;
+
     size_t size() const;
 
     size_t n_tokens() const;
