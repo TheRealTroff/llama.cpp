@@ -179,3 +179,14 @@ bits). Not free; a numerics lever to price if the 144 MiB per checkpoint ever ma
 MiB (arm C2: 169.7-189.7), every request's sha, `cache_n` and acceptance identical to arm C2, the RAM cache peak
 3042 -> 2723 MiB (the saved entries carry their checkpoints). Byte-identical as expected: -21% per checkpoint,
 a fixed size at every position. Proposed with the arm C flags; owner decides.
+
+**Caveat on `LLAMA_CKPT_NO_DFT` (owner's question, same evening: "doesn't the drafter only look at the last 1024
+tokens anyway?").** The drafter's cache is its own f16 context (`-ctkd f16 -ctvd f16`; the Turbo4 type is the
+target's), and `LLAMA_DRAFT_WINDOW=1024` is a sink + window: during decode the drafter frees cells older than the
+last 1024 each round and keeps a ring of the last 1024 injected feature rows. The 2048 cells in the dump are the
+prefill high-water mark, up to twice what the drafter attends. Target output is unaffected by the flag (drafts are
+proposals), but a restore to a checkpoint more than ~1024 tokens behind the drafter's current end finds those
+window cells already freed and the feature ring rolled past them: with the drafter blob they come back, without it
+the drafter drafts from a short view until it refills - an acceptance dip for up to a window of tokens, no text
+change. Every restore in the gate was within 120 tokens of the end (acceptance identical), so arm D did not price
+this. The precise form: checkpoint only the sink + last `n_window` cells (~20 MiB) instead of nothing. Not built.
