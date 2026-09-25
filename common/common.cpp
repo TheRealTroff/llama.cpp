@@ -1696,6 +1696,17 @@ struct llama_context_params common_context_params_to_llama(const common_params &
 
     cparams.n_ctx             = params.n_ctx;
     cparams.n_seq_max         = params.n_parallel;
+    if (!params.n_ctx_seq_list.empty()) {
+        // per-sequence context sizes (--ctx-seq-sizes): the list lives in params, which outlives the context creation
+        if (params.n_ctx_seq_list.size() != (size_t) params.n_parallel) {
+            throw std::runtime_error(string_format("--ctx-seq-sizes has %zu entries but n_parallel is %d",
+                    params.n_ctx_seq_list.size(), params.n_parallel));
+        }
+        if (params.kv_unified) {
+            throw std::runtime_error("--ctx-seq-sizes needs split mode (drop --kv-unified)");
+        }
+        cparams.ctx_seq_sizes = params.n_ctx_seq_list.data();
+    }
     cparams.n_rs_seq          = params.speculative.need_n_rs_seq();
     cparams.n_outputs_max     = std::max(params.n_outputs_max, 0);
     cparams.n_outputs_max_per_seq = std::max(params.n_outputs_max_per_seq, 0);

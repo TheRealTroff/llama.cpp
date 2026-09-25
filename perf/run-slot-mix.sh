@@ -4,6 +4,7 @@
 # perf/slot-mix-driver.py (executors alone -> coordinator alone -> both). One fresh server per ARM:
 #   unified   -np N+1 --kv-unified  -c CTX_COORD + N*CTX_EXEC   (what you would run today for mixed sizes)
 #   split     -np N+1               -c (N+1)*CTX_COORD          (today's per-slot caches: every slot the long size)
+#   classes   --ctx-seq-sizes CTX_COORD,CTX_EXEC,...            (per-slot context sizes: split mode, each slot pays for its own cache)
 # The gap between the executors' "execs" and "mix" rates is the extent cost of decoding beside a long stream;
 # the coordinator's "overlap" vs "tail"/"solo" rate is what the executors cost it. The split arm is the layout
 # the size-class work must reproduce byte for byte at a single class.
@@ -87,6 +88,8 @@ for arm in $ARMS; do
   case "$arm" in
     unified) ctx=$((CTX_COORD + N_EXEC*CTX_EXEC)); arm_args=(-np "$NSLOT" -c "$ctx" --kv-unified) ;;
     split)   ctx=$((NSLOT*CTX_COORD));             arm_args=(-np "$NSLOT" -c "$ctx") ;;
+    classes) sizes="$CTX_COORD"; for i in $(seq 1 "$N_EXEC"); do sizes="$sizes,$CTX_EXEC"; done   # per-slot context sizes (exp/kv-size-classes, 2026-09-25):
+             arm_args=(--ctx-seq-sizes "$sizes") ;;                                            # slot 0 the long size, the executors their own; sets -np and -c
     *) echo "unknown arm $arm"; continue ;;
   esac
   slog="$OUT/$TAG-$arm.server.log"

@@ -28,7 +28,8 @@ public:
                llama_memory_t   mem_other,
         const layer_filter_cb & filter,
         const  layer_reuse_cb & reuse,
-        const  layer_share_cb & share);
+        const  layer_share_cb & share,
+        const std::vector<uint32_t> & kv_sizes = {}); // per-sequence context sizes (see llama_kv_cache); the SWA cache clamps each to its window
 
     llama_kv_cache_iswa(
             const llama_model & model,
@@ -46,7 +47,8 @@ public:
                llama_memory_t   mem_other,
         const layer_filter_cb & filter,
         const  layer_reuse_cb & reuse,
-        const  layer_share_cb & share);
+        const  layer_share_cb & share,
+        const std::vector<uint32_t> & kv_sizes = {}); // per-sequence context sizes (see llama_kv_cache); the SWA cache clamps each to its window
 
     ~llama_kv_cache_iswa() = default;
 

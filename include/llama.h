@@ -408,6 +408,11 @@ extern "C" {
         // a source/target/parent context
         // can be utilized in various ways, for example by sharing results or llama_memory between 2 contexts
         struct llama_context * ctx_other;
+
+        // per-sequence context sizes (split mode only, kv_unified = false): n_seq_max entries, each padded to 256;
+        // n_ctx becomes their sum and llama_n_ctx_seq() their maximum. The KV cache packs the sequences back to back,
+        // so a sequence pays only for its own context (one long coordinator beside short executors). NULL = uniform.
+        const uint32_t * ctx_seq_sizes;
     };
 
     struct llama_model_tensor_override {
@@ -557,6 +562,8 @@ extern "C" {
     //       ref: https://github.com/ggml-org/llama.cpp/pull/17046#discussion_r2503085732
     LLAMA_API uint32_t llama_n_ctx      (const struct llama_context * ctx);
     LLAMA_API uint32_t llama_n_ctx_seq  (const struct llama_context * ctx);
+    // the context size of one sequence (per-sequence context sizes; equals llama_n_ctx_seq() for a uniform cache)
+    LLAMA_API uint32_t llama_n_ctx_seq_id(const struct llama_context * ctx, llama_seq_id seq_id);
     LLAMA_API uint32_t llama_n_batch    (const struct llama_context * ctx);
     LLAMA_API uint32_t llama_n_ubatch   (const struct llama_context * ctx);
     LLAMA_API uint32_t llama_n_seq_max  (const struct llama_context * ctx);

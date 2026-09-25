@@ -5093,6 +5093,12 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
     // GGML_FA_KVLEN=0: ignore the extent (the kernels loop to ne11 as before) - the kernel-level kill switch
     static const bool env_fa_kvlen = getenv("GGML_FA_KVLEN") ? atoi(getenv("GGML_FA_KVLEN")) != 0 : true;
     const bool has_kvlen = env_fa_kvlen && op->src[5] != NULL && op->src[5]->ne[0] == ne03 && ne13 == ne03 && (!op->src[3] || ne33 == ne03);
+    // src[6] = the per-stream KV cell offset (ggml_flash_attn_ext_set_kv_off): stream s's K/V rows start kv_off[s] rows
+    // from the K/V view base instead of s*nb13 (per-slot context sizes: streams of different sizes packed back to back).
+    // It is not optional: a graph that sets it has no uniform stride to fall back on
+    const bool has_kvoff = op->src[6] != NULL && op->src[6]->ne[0] == ne03 && ne13 == ne03;
+    GGML_ASSERT(!has_kvoff || has_kvlen);
+    GGML_ASSERT(has_kvoff == (op->src[6] != NULL));
 
     const uint32_t n_head      = op->src[0]->ne[2];
     const  int32_t n_head_log2 = 1u << (uint32_t) floorf(log2f((float) n_head));
@@ -5108,6 +5114,7 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
     ggml_metal_buffer_id bid_src3 = has_mask  ? ggml_metal_get_buffer_id(op->src[3]) : bid_src0;
     ggml_metal_buffer_id bid_src4 = has_sinks ? ggml_metal_get_buffer_id(op->src[4]) : bid_src0;
     ggml_metal_buffer_id bid_src5 = has_kvlen ? ggml_metal_get_buffer_id(op->src[5]) : bid_src0;
+    ggml_metal_buffer_id bid_src6 = has_kvoff ? ggml_metal_get_buffer_id(op->src[6]) : bid_src0;
 
     ggml_metal_buffer_id bid_dst = ggml_metal_get_buffer_id(op);
 
@@ -5227,7 +5234,7 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
                 /*.nb33    =*/nb33,
             };
 
-            auto pipeline0 = ggml_metal_library_get_pipeline_flash_attn_ext_pad(lib, op, has_mask, ncpsg);
+            auto pipeline0 = ggml_metal_library_get_pipeline_flash_attn_ext_pad(lib, op, has_mask, has_kvoff, ncpsg);
 
             ggml_metal_encoder_set_pipeline(enc, pipeline0);
             ggml_metal_encoder_set_bytes   (enc, &args0, sizeof(args0), 0);
@@ -5235,6 +5242,7 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
             ggml_metal_encoder_set_buffer  (enc, bid_src2, 2);
             ggml_metal_encoder_set_buffer  (enc, bid_src3, 3);
             ggml_metal_encoder_set_buffer  (enc, bid_pad,  4);
+            ggml_metal_encoder_set_buffer  (enc, bid_src6, 5);
 
             assert(ne12 == ne22);
             assert(ne13 == ne23);
@@ -5417,7 +5425,7 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
         }
 
         auto pipeline = ggml_metal_library_get_pipeline_flash_attn_ext(
-                lib, op, has_mask, has_sinks, has_bias, has_scap, has_kvpad, has_kvlen, nsg, nwg, gqa_heads, nqptg);
+                lib, op, has_mask, has_sinks, has_bias, has_scap, has_kvpad, has_kvlen, has_kvoff, nsg, nwg, gqa_heads, nqptg);
 
         ggml_metal_encoder_set_pipeline(enc, pipeline);
         ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);
@@ -5430,6 +5438,7 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
         ggml_metal_encoder_set_buffer  (enc, bid_blk,  7);
         ggml_metal_encoder_set_buffer  (enc, nwg == 1 ? bid_dst : bid_tmp, 8);
         ggml_metal_encoder_set_buffer  (enc, bid_src5, 9);
+        ggml_metal_encoder_set_buffer  (enc, bid_src6, 10);
 
         ggml_metal_encoder_set_threadgroup_memory_size(enc, smem, 0);
 
@@ -5481,7 +5490,7 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
                 args.iqr_off = row0;
 
                 auto pipeline_t = ggml_metal_library_get_pipeline_flash_attn_ext(
-                        lib, op, has_mask, has_sinks, has_bias, has_scap, has_kvpad, has_kvlen, nsg_t, nwg, gqa_heads, q_t);
+                        lib, op, has_mask, has_sinks, has_bias, has_scap, has_kvpad, has_kvlen, has_kvoff, nsg_t, nwg, gqa_heads, q_t);
 
                 ggml_metal_encoder_set_pipeline(enc, pipeline_t);
                 ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);
@@ -5574,7 +5583,7 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
                 /*.nb33    =*/nb33,
             };
 
-            auto pipeline0 = ggml_metal_library_get_pipeline_flash_attn_ext_pad(lib, op, has_mask, ncpsg);
+            auto pipeline0 = ggml_metal_library_get_pipeline_flash_attn_ext_pad(lib, op, has_mask, has_kvoff, ncpsg);
 
             ggml_metal_encoder_set_pipeline(enc, pipeline0);
             ggml_metal_encoder_set_bytes   (enc, &args0, sizeof(args0), 0);
@@ -5582,6 +5591,7 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
             ggml_metal_encoder_set_buffer  (enc, bid_src2, 2);
             ggml_metal_encoder_set_buffer  (enc, bid_src3, 3);
             ggml_metal_encoder_set_buffer  (enc, bid_pad,  4);
+            ggml_metal_encoder_set_buffer  (enc, bid_src6, 5);
 
             assert(ne12 == ne22);
             assert(ne13 == ne23);
@@ -5676,7 +5686,7 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
             /*.logit_softcap =*/ logit_softcap,
         };
 
-        auto pipeline = ggml_metal_library_get_pipeline_flash_attn_ext_vec(lib, op, has_mask, has_sinks, has_bias, has_scap, has_kvpad, has_kvlen, nsg, nwg, nqptg);
+        auto pipeline = ggml_metal_library_get_pipeline_flash_attn_ext_vec(lib, op, has_mask, has_sinks, has_bias, has_scap, has_kvpad, has_kvlen, has_kvoff, nsg, nwg, nqptg);
 
         GGML_ASSERT(nsg*32 <= ggml_metal_pipeline_max_theads_per_threadgroup(pipeline));
 
@@ -5688,6 +5698,7 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
         ggml_metal_encoder_set_buffer  (enc, bid_src3, 4);
         ggml_metal_encoder_set_buffer  (enc, bid_src4, 5);
         ggml_metal_encoder_set_buffer  (enc, bid_src5, 8);
+        ggml_metal_encoder_set_buffer  (enc, bid_src6, 9);
 
         const size_t smem = FATTN_SMEM(nsg);
 

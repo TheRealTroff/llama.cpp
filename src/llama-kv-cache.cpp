@@ -77,7 +77,8 @@ llama_kv_cache::llama_kv_cache(
            llama_memory_t   mem_other,
     const layer_filter_cb & filter,
     const  layer_reuse_cb & reuse,
-    const  layer_share_cb & share) :
+    const  layer_share_cb & share,
+    const std::vector<uint32_t> & kv_sizes) :
     model(model), hparams(hparams), v_trans(v_trans),
     n_seq_max(n_seq_max), n_stream(unified ? 1 : n_seq_max), n_pad(n_pad), n_swa(n_swa), swa_type(swa_type),
     other(static_cast<llama_kv_cache *>(mem_other)),
@@ -96,6 +97,31 @@ llama_kv_cache::llama_kv_cache(
     }
 
     GGML_ASSERT(kv_size % n_pad == 0);
+
+    // per-slot context sizes: one cell count per stream, packed back to back per layer (v_offs = prefix sums).
+    // A shared-cells cache (other) mirrors the source layout; a unified cache has one stream and no list.
+    std::vector<uint32_t> sizes(n_stream, kv_size);
+    if (other) {
+        for (uint32_t s = 0; s < n_stream; ++s) {
+            sizes[s] = other->get_size_stream(s);
+        }
+    } else if (!kv_sizes.empty()) {
+        GGML_ASSERT(n_stream > 1 && "per-stream context sizes need split mode (no --kv-unified)");
+        GGML_ASSERT(kv_sizes.size() == n_stream && "one context size per sequence");
+        for (uint32_t s = 0; s < n_stream; ++s) {
+            GGML_ASSERT(kv_sizes[s] > 0 && kv_sizes[s] % n_pad == 0);
+            sizes[s] = kv_sizes[s];
+        }
+    }
+    v_offs.resize(n_stream + 1);
+    v_offs[0] = 0;
+    for (uint32_t s = 0; s < n_stream; ++s) {
+        v_offs[s + 1] = v_offs[s] + sizes[s];
+        sizes_uniform = sizes_uniform && sizes[s] == sizes[0];
+    }
+    if (!sizes_uniform) {
+        GGML_ASSERT(!v_trans && "per-stream context sizes need flash attention (the transposed V layout has no per-stream offset path)");
+    }
 
     // TurboQuant auto-asymmetric: symmetric turbo K+V on a high-GQA model amplifies the
     // K quantization error across all query heads sharing each KV head. Measured on this
@@ -163,7 +189,7 @@ llama_kv_cache::llama_kv_cache(
 
     v_cells.resize(n_stream);
     for (uint32_t s = 0; s < n_stream; ++s) {
-        v_cells[s].resize(kv_size);
+        v_cells[s].resize(sizes[s]);
     }
 
     // by default, all sequence ids are mapped to the 0th stream
@@ -267,18 +293,29 @@ llama_kv_cache::llama_kv_cache(
             }
         }
 
-        ggml_tensor * k = has_k ? ggml_new_tensor_3d(ctx, type_k, n_embd_k_gqa, kv_size, n_stream) : nullptr;
-        ggml_tensor * v = has_v ? ggml_new_tensor_3d(ctx, layer_type_v, n_embd_v_gqa, kv_size, n_stream) : nullptr;
+        // the streams are packed back to back: [n_embd, sum of the stream sizes]; stream s = rows [v_offs[s], v_offs[s+1])
+        // (the classic uniform layout is the special case v_offs[s] = s*kv_size, the same bytes as the old 3D tensor)
+        const uint32_t n_cells = v_offs[n_stream];
+
+        ggml_tensor * k = has_k ? ggml_new_tensor_2d(ctx, type_k, n_embd_k_gqa, n_cells) : nullptr;
+        ggml_tensor * v = has_v ? ggml_new_tensor_2d(ctx, layer_type_v, n_embd_v_gqa, n_cells) : nullptr;
 
         has_k && ggml_format_name(k, "cache_k_l%d", il);
         has_v && ggml_format_name(v, "cache_v_l%d", il);
+
+        if (!sizes_uniform) {
+            // the attention views of a packed cache are [.., n_kv, n_stream] with a zero stream stride (get_k/get_v):
+            // their shape product exceeds the buffer, their real extent does not - see the flag in ggml.h
+            has_k && (k->flags |= GGML_TENSOR_FLAG_LOOSE_VIEWS);
+            has_v && (v->flags |= GGML_TENSOR_FLAG_LOOSE_VIEWS);
+        }
 
         std::vector<ggml_tensor *> k_stream;
         std::vector<ggml_tensor *> v_stream;
 
         for (uint32_t s = 0; s < n_stream; ++s) {
-            k_stream.push_back(has_k ? ggml_view_2d(ctx, k, n_embd_k_gqa, kv_size, k->nb[1], s*k->nb[2]) : nullptr);
-            v_stream.push_back(has_v ? ggml_view_2d(ctx, v, n_embd_v_gqa, kv_size, v->nb[1], s*v->nb[2]) : nullptr);
+            k_stream.push_back(has_k ? ggml_view_2d(ctx, k, n_embd_k_gqa, sizes[s], k->nb[1], (size_t) v_offs[s]*k->nb[1]) : nullptr);
+            v_stream.push_back(has_v ? ggml_view_2d(ctx, v, n_embd_v_gqa, sizes[s], v->nb[1], (size_t) v_offs[s]*v->nb[1]) : nullptr);
         }
 
         map_layer_ids[il] = layers.size();
@@ -336,9 +373,18 @@ llama_kv_cache::llama_kv_cache(
         const size_t memory_size_v = size_v_bytes();
 
         LLAMA_LOG_INFO("%s: size = %7.2f MiB (%6u cells, %3d layers, %2u/%u seqs), K (%s): %7.2f MiB, V (%s): %7.2f MiB\n", __func__,
-                (float)(memory_size_k + memory_size_v) / (1024.0f * 1024.0f), kv_size, (int) layers.size(), n_seq_max, n_stream,
+                (float)(memory_size_k + memory_size_v) / (1024.0f * 1024.0f), sizes_uniform ? kv_size : v_offs[n_stream], (int) layers.size(), n_seq_max, n_stream,
                 ggml_type_name(type_k), (float)memory_size_k / (1024.0f * 1024.0f),
                 ggml_type_name(type_v), (float)memory_size_v / (1024.0f * 1024.0f));
+
+        if (!sizes_uniform) {
+            std::string str;
+            for (uint32_t s = 0; s < n_stream; ++s) {
+                str += (s ? "," : "") + std::to_string(sizes[s]);
+            }
+            LLAMA_LOG_INFO("%s: per-stream context sizes = %s (total %u cells, vs %u uniform)\n", __func__,
+                    str.c_str(), v_offs[n_stream], kv_size*n_stream);
+        }
     }
 
     // TODO: refactor [TAG_KV_CACHE_SHARE_CELLS]
@@ -537,11 +583,11 @@ void llama_kv_cache::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id_dst, ll
 
     bool is_full = true;
 
-    if (p0 > 0 && p0 + 1 < (int) get_size()) {
+    if (p0 > 0 && p0 + 1 < (int) v_cells[s0].size()) {
         is_full = false;
     }
 
-    if (p1 > 0 && p1 + 1 < (int) get_size()) {
+    if (p1 > 0 && p1 + 1 < (int) v_cells[s0].size()) {
         is_full = false;
     }
 
@@ -551,8 +597,14 @@ void llama_kv_cache::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id_dst, ll
     sc_info.ssrc.push_back(s0);
     sc_info.sdst.push_back(s1);
 
+    // per-slot context sizes: a copy keeps cell indices, so the source's used cells must lie inside the destination
+    if (v_cells[s0].size() > v_cells[s1].size()) {
+        GGML_ASSERT(v_cells[s0].used_max_p1() <= v_cells[s1].size() &&
+                "seq_cp: the source sequence does not fit the destination slot's context size");
+    }
+
     v_cells[s1].reset();
-    for (uint32_t i = 0; i < v_cells[s0].size(); ++i) {
+    for (uint32_t i = 0; i < std::min(v_cells[s0].size(), v_cells[s1].size()); ++i) {
         if (v_cells[s0].seq_has(i, seq_id_src)) {
             llama_pos pos   = v_cells[s0].pos_get(i);
             llama_pos shift = v_cells[s0].get_shift(i);
@@ -884,13 +936,27 @@ bool llama_kv_cache::update(llama_context * lctx, bool do_shift, const stream_co
 
             assert(ssrc != sdst);
 
+            // per-slot context sizes: streams of different sizes copy the row prefix the destination can hold
+            // (seq_cp checked that the source's used cells fit); the non-transposed layout keeps rows contiguous
+            auto copy_stream = [&](ggml_tensor * src, ggml_tensor * dst) {
+                if (src->ne[1] == dst->ne[1]) {
+                    ggml_backend_tensor_copy(src, dst);
+                    return;
+                }
+                GGML_ASSERT(!v_trans);
+                const size_t nbytes = std::min(ggml_nbytes(src), ggml_nbytes(dst));
+                std::vector<uint8_t> tmp(nbytes);
+                ggml_backend_tensor_get(src, tmp.data(), 0, nbytes);
+                ggml_backend_tensor_set(dst, tmp.data(), 0, nbytes);
+            };
+
             for (uint32_t il = 0; il < layers.size(); ++il) {
                 const auto & layer = layers[il];
 
-                ggml_backend_tensor_copy(layer.k_stream[ssrc], layer.k_stream[sdst]);
+                copy_stream(layer.k_stream[ssrc], layer.k_stream[sdst]);
 
                 if (layer.v_stream[ssrc]) {
-                    ggml_backend_tensor_copy(layer.v_stream[ssrc], layer.v_stream[sdst]);
+                    copy_stream(layer.v_stream[ssrc], layer.v_stream[sdst]);
                 }
             }
         }
@@ -1235,6 +1301,24 @@ uint32_t llama_kv_cache::get_n_stream() const {
     return n_stream;
 }
 
+uint32_t llama_kv_cache::get_size_stream(uint32_t strm) const {
+    GGML_ASSERT(strm < n_stream);
+    return v_cells[strm].size();
+}
+
+uint32_t llama_kv_cache::get_offs_stream(uint32_t strm) const {
+    GGML_ASSERT(strm < n_stream);
+    return v_offs[strm];
+}
+
+uint32_t llama_kv_cache::get_size_total() const {
+    return v_offs[n_stream];
+}
+
+bool llama_kv_cache::is_uniform() const {
+    return sizes_uniform;
+}
+
 bool llama_kv_cache::get_has_shift() const {
     bool result = false;
 
@@ -1304,6 +1388,23 @@ ggml_tensor * llama_kv_cache::get_k(ggml_context * ctx, int32_t il, uint32_t n_k
 
     const uint32_t ns = sinfo.s1 - sinfo.s0 + 1;
 
+    if (!sizes_uniform) {
+        // per-slot context sizes: no uniform stream stride exists. The view starts at the buffer base with a zero
+        // stream stride (so its byte extent is one stream's n_kv rows) and the flash-attention kv_off input
+        // (set_input_kv_off) carries each stream's first cell; only ggml_flash_attn_ext reads such a view.
+        // ggml_view_4d sizes a view as if contiguous (ns*n_kv rows, more than the packed buffer holds), so the
+        // view is made at one stream and widened in place - its byte extent (ggml_nbytes) stays n_kv rows
+        ggml_tensor * res = ggml_view_4d(ctx, k,
+                hparams.n_embd_head_k(il), hparams.n_head_kv(il), n_kv, 1,
+                ggml_row_size(k->type, hparams.n_embd_head_k(il)),
+                ggml_row_size(k->type, n_embd_k_gqa),
+                0,
+                0);
+        res->ne[3] = ns;
+        res->nb[3] = 0;
+        return res;
+    }
+
     return ggml_view_4d(ctx, k,
             hparams.n_embd_head_k(il), hparams.n_head_kv(il), n_kv, ns,
             ggml_row_size(k->type, hparams.n_embd_head_k(il)),
@@ -1324,6 +1425,20 @@ ggml_tensor * llama_kv_cache::get_v(ggml_context * ctx, int32_t il, uint32_t n_k
     assert(n_embd_v_gqa >= hparams.n_embd_v_gqa(il));
 
     const uint32_t ns = sinfo.s1 - sinfo.s0 + 1;
+
+    if (!sizes_uniform) {
+        // per-slot context sizes: see get_k (kv_off carries the stream bases; the ctor refuses v_trans)
+        GGML_ASSERT(!v_trans);
+        ggml_tensor * res = ggml_view_4d(ctx, v,
+                hparams.n_embd_head_v(il), hparams.n_head_kv(il), n_kv, 1,
+                ggml_row_size(v->type, hparams.n_embd_head_v(il)),
+                ggml_row_size(v->type, n_embd_v_gqa),
+                0,
+                0);
+        res->ne[3] = ns;
+        res->nb[3] = 0;
+        return res;
+    }
 
     if (!v_trans) {
         // note: v->nb[1] <= v->nb[2]
@@ -1363,17 +1478,9 @@ ggml_tensor * llama_kv_cache::cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggm
 
     k_cur = ggml_view_2d(ctx, k_cur, n_embd_gqa, n_tokens, k_cur->nb[2], 0);
 
-    const int64_t n_stream = k->ne[2];
-
-    if (n_stream > 1) {
-        const int64_t kv_size = get_size();
-
-        assert(n_embd_gqa == k->ne[0]);
-        assert(kv_size    == k->ne[1]);
-
-        // merge the buffer across all streams because the idxs are global
-        k = ggml_reshape_2d(ctx, k, n_embd_gqa, kv_size*n_stream);
-    }
+    // the cache is one 2D buffer over all streams ([n_embd_gqa, sum of the stream sizes]) and the idxs are global
+    assert(n_embd_gqa == k->ne[0]);
+    assert((int64_t) v_offs[n_stream] == k->ne[1]);
 
     // store the current K values into the cache
     return ggml_set_rows(ctx, k, k_cur, k_idxs);
@@ -1395,21 +1502,13 @@ ggml_tensor * llama_kv_cache::cpy_v(ggml_context * ctx, ggml_tensor * v_cur, ggm
     // we can merge dims 0 and 1
     GGML_ASSERT(ggml_row_size(v_cur->type, n_embd_head) == v_cur->nb[1]);
 
-    const int64_t n_stream = v->ne[2];
-
     // take this branch when FA is enabled (the V cache is not transposed)
     if (!v_trans) {
         v_cur = ggml_view_2d(ctx, v_cur, n_embd_gqa, n_tokens, v_cur->nb[2], 0);
 
-        if (n_stream > 1) {
-            const int64_t kv_size = get_size();
-
-            assert(n_embd_gqa == v->ne[0]);
-            assert(kv_size    == v->ne[1]);
-
-            // merge the buffer across all streams because the idxs are global
-            v = ggml_reshape_2d(ctx, v, n_embd_gqa, kv_size*n_stream);
-        }
+        // one 2D buffer over all streams, global idxs (see cpy_k)
+        assert(n_embd_gqa == v->ne[0]);
+        assert((int64_t) v_offs[n_stream] == v->ne[1]);
 
         return ggml_set_rows(ctx, v, v_cur, v_idxs);
     }
@@ -1510,7 +1609,7 @@ void llama_kv_cache::set_input_k_idxs(ggml_tensor * dst, const llama_ubatch * ub
     int64_t * data = (int64_t *) dst->data;
 
     for (uint32_t s = 0; s < sinfo.n_stream(); ++s) {
-        const int64_t offs = sinfo.strm[s]*get_size();
+        const int64_t offs = v_offs[sinfo.strm[s]];
 
         for (uint32_t i = 0; i < sinfo.size(); ++i) {
             data[s*sinfo.size() + i] = offs + sinfo.idxs[s][i];
@@ -1527,7 +1626,7 @@ void llama_kv_cache::set_input_v_idxs(ggml_tensor * dst, const llama_ubatch * ub
 
     if (!v_trans) {
         for (uint32_t s = 0; s < sinfo.n_stream(); ++s) {
-            const int64_t offs = sinfo.strm[s]*get_size();
+            const int64_t offs = v_offs[sinfo.strm[s]];
 
             for (uint32_t i = 0; i < sinfo.size(); ++i) {
                 data[s*sinfo.size() + i] = offs + sinfo.idxs[s][i];
@@ -1535,12 +1634,12 @@ void llama_kv_cache::set_input_v_idxs(ggml_tensor * dst, const llama_ubatch * ub
         }
     } else {
         // note: the V cache is transposed when not using flash attention
-        const int64_t kv_size = get_size();
-
         const int64_t n_embd_v_gqa = hparams.n_embd_v_gqa_max();
 
         for (uint32_t s = 0; s < sinfo.n_stream(); ++s) {
-            const int64_t offs = sinfo.strm[s]*kv_size*n_embd_v_gqa;
+            // stream block = [kv_size of the stream, n_embd_v_gqa] transposed, at element v_offs[s]*n_embd_v_gqa
+            const int64_t kv_size = v_cells[sinfo.strm[s]].size();
+            const int64_t offs    = (int64_t) v_offs[sinfo.strm[s]]*n_embd_v_gqa;
 
             for (uint32_t i = 0; i < sinfo.size(); ++i) {
                 for (uint32_t j = 0; j < n_embd_v_gqa; ++j) {
@@ -1560,7 +1659,7 @@ void llama_kv_cache::set_input_k_shift(ggml_tensor * dst) const {
         const auto & cells = v_cells[s];
 
         for (uint32_t i = 0; i < cells.size(); ++i) {
-            data[s*cells.size() + i] = cells.is_empty(i) ? 0 : cells.get_shift(i);
+            data[v_offs[s] + i] = cells.is_empty(i) ? 0 : cells.get_shift(i);
         }
     }
 }
@@ -1668,6 +1767,11 @@ static void set_input_kq_mask_impl(const args_set_input_kq_mask & args, T * data
 
                         j = idxs[jj];
                     }
+                }
+
+                // per-slot context sizes: n_kv is the ubatch's longest stream, a shorter stream has no cell j
+                if (j >= cells.size()) {
+                    goto skip;
                 }
 
                 if (cells.is_empty(j)) {
@@ -1834,6 +1938,27 @@ void llama_kv_cache::set_input_kv_len(ggml_tensor * dst, const llama_ubatch * ub
     }
 }
 
+// per-slot context sizes: the first cell of each ubatch stream in the packed layer buffer (the K/V views of a
+// non-uniform cache start at the buffer base, see get_k); the same stream order as the mask and kv_len
+void llama_kv_cache::set_input_kv_off(ggml_tensor * dst, const llama_ubatch * ubatch) const {
+    GGML_ASSERT(ggml_backend_buffer_is_host(dst->buffer));
+    GGML_ASSERT(!sizes_uniform);
+
+    const int64_t n_stream_ub = dst->ne[0];
+
+    int32_t * data = (int32_t *) dst->data;
+
+    GGML_ASSERT(ubatch->n_tokens % n_stream_ub == 0);
+    const int64_t n_tps = ubatch->n_tokens/n_stream_ub;
+
+    for (int64_t s = 0; s < n_stream_ub; ++s) {
+        const llama_seq_id seq_id = ubatch->seq_id[s*n_tps][0];
+        const uint32_t strm = n_stream == 1 ? 0 : seq_to_stream[seq_id];
+
+        data[s] = (int32_t) v_offs[strm];
+    }
+}
+
 void llama_kv_cache::set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const {
     const int64_t n_tokens = ubatch->n_tokens;
 
@@ -1995,7 +2120,7 @@ ggml_cgraph * llama_kv_cache::build_graph_shift(llm_graph_result * res, llama_co
 
     auto inp = std::make_unique<llm_graph_input_k_shift>(this);
 
-    inp->k_shift = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, (int64_t) get_size()*n_stream);
+    inp->k_shift = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, (int64_t) v_offs[n_stream]);
     ggml_set_input(inp->k_shift);
 
     inp->k_rot = build_input_k_rot(ctx);
@@ -2023,7 +2148,7 @@ ggml_cgraph * llama_kv_cache::build_graph_shift(llm_graph_result * res, llama_co
 
         ggml_tensor * k =
             ggml_view_3d(ctx, layer.k,
-                n_rot, n_head_kv, get_size()*n_stream,
+                n_rot, n_head_kv, v_offs[n_stream],
                 ggml_row_size(layer.k->type, n_embd_head_k),
                 ggml_row_size(layer.k->type, n_embd_k_gqa),
                 ggml_row_size(layer.k->type, n_embd_nope));
@@ -2583,9 +2708,13 @@ llama_kv_cache_context::llama_kv_cache_context(llama_memory_status status) : sta
 
 llama_kv_cache_context::llama_kv_cache_context(
         llama_kv_cache * kv) : status(LLAMA_MEMORY_STATUS_SUCCESS), kv(kv) {
-    n_kv = kv->get_size();
-
     const uint32_t n_stream = kv->get_n_stream();
+
+    // the reserve graph must cover the largest stream (per-slot context sizes: get_size() is stream 0's)
+    n_kv = 0;
+    for (uint32_t s = 0; s < n_stream; ++s) {
+        n_kv = std::max<uint32_t>(n_kv, kv->get_size_stream(s));
+    }
 
     // create a dummy slot info - the actual data is irrelevant. we just need to build the graph
     sinfos.resize(1);
@@ -2714,6 +2843,14 @@ void llama_kv_cache_context::set_input_kq_mask(ggml_tensor * dst, const llama_ub
 
 void llama_kv_cache_context::set_input_kv_len(ggml_tensor * dst, const llama_ubatch * ubatch) const {
     kv->set_input_kv_len(dst, ubatch);
+}
+
+void llama_kv_cache_context::set_input_kv_off(ggml_tensor * dst, const llama_ubatch * ubatch) const {
+    kv->set_input_kv_off(dst, ubatch);
+}
+
+bool llama_kv_cache_context::is_uniform() const {
+    return kv->is_uniform();
 }
 
 uint32_t llama_kv_cache_context::get_n_stream() const {

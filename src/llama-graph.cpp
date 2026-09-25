@@ -544,6 +544,10 @@ void llm_graph_input_attn_kv::set_input(const llama_ubatch * ubatch) {
         mctx->set_input_kv_len(self_kv_len, ubatch);
     }
 
+    if (self_kv_off && self_kv_off->buffer) {
+        mctx->set_input_kv_off(self_kv_off, ubatch);
+    }
+
     if (self_k_rot && self_k_rot->buffer) {
         mctx->set_input_k_rot(self_k_rot);
     }
@@ -567,6 +571,10 @@ bool llm_graph_input_attn_kv::can_reuse(const llm_graph_params & params) {
 
     if (self_kv_len) {
         res &= self_kv_len->ne[0] == (params.cparams.kv_unified ? 1 : params.ubatch.n_seqs_unq);
+    }
+
+    if (self_kv_off) {
+        res &= self_kv_off->ne[0] == (params.cparams.kv_unified ? 1 : params.ubatch.n_seqs_unq);
     }
 
     return res;
@@ -1143,6 +1151,10 @@ void llm_graph_input_mem_hybrid::set_input(const llama_ubatch * ubatch) {
         mctx->get_attn()->set_input_kv_len(inp_attn->self_kv_len, ubatch);
     }
 
+    if (inp_attn->self_kv_off && inp_attn->self_kv_off->buffer) {
+        mctx->get_attn()->set_input_kv_off(inp_attn->self_kv_off, ubatch);
+    }
+
     if (inp_attn->self_k_rot) {
         mctx->get_attn()->set_input_k_rot(inp_attn->self_k_rot);
     }
@@ -1170,6 +1182,10 @@ bool llm_graph_input_mem_hybrid::can_reuse(const llm_graph_params & params) {
 
     if (inp_attn->self_kv_len) {
         res &= inp_attn->self_kv_len->ne[0] == (params.cparams.kv_unified ? 1 : params.ubatch.n_seqs_unq);
+    }
+
+    if (inp_attn->self_kv_off) {
+        res &= inp_attn->self_kv_off->ne[0] == (params.cparams.kv_unified ? 1 : params.ubatch.n_seqs_unq);
     }
 
     res &= inp_rs->can_reuse_rs(mctx->get_recr(), params.ubatch); // view offset / gather / replay shape are topology
@@ -2564,8 +2580,12 @@ ggml_tensor * llm_graph_context::build_attn_mha(
          ggml_tensor * v_mla,
                float   kq_scale,
                  int   il,
-         ggml_tensor * kv_len) const {
+         ggml_tensor * kv_len,
+         ggml_tensor * kv_off) const {
     const bool v_trans = v->nb[1] > v->nb[2];
+
+    // per-slot context sizes: a non-uniform cache view has no stream stride, only flash attention can read it
+    GGML_ASSERT(kv_off == nullptr || (cparams.flash_attn && kq_b == nullptr));
 
     // split the batch into streams if needed
     const auto n_stream = k->ne[3];
@@ -2601,6 +2621,7 @@ ggml_tensor * llm_graph_context::build_attn_mha(
 
         ggml_flash_attn_ext_add_sinks(cur, sinks);
         ggml_flash_attn_ext_set_kv_len(cur, kv_len);
+        ggml_flash_attn_ext_set_kv_off(cur, kv_off);
         ggml_flash_attn_ext_set_prec (cur, GGML_PREC_F32);
 
         // TurboQuant V stays in the rotated domain; undo the rotation on the attention output
@@ -2809,6 +2830,16 @@ static std::unique_ptr<llm_graph_input_attn_kv> build_attn_inp_kv_impl(
             inp->self_kv_len = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_stream);
             ggml_set_input(inp->self_kv_len);
             ggml_set_name(inp->self_kv_len, "attn_inp_kv_len");
+
+            // per-slot context sizes: a cache whose streams differ in size has no uniform stream stride; the K/V
+            // views start at the buffer base and this input carries each stream's first cell (set_input_kv_off)
+            if (!mctx_cur->is_uniform()) {
+                inp->self_kv_off = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_stream);
+                ggml_set_input(inp->self_kv_off);
+                ggml_set_name(inp->self_kv_off, "attn_inp_kv_off");
+            }
+        } else {
+            GGML_ASSERT(mctx_cur->is_uniform() && "per-slot context sizes need the kv_len input (LLAMA_ATTN_KV_LEN=0 is not possible)");
         }
     }
 
@@ -2885,7 +2916,7 @@ ggml_tensor * llm_graph_context::build_attn(
         cb(q, "q_turbo_wht", il);
     }
 
-    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, kq_scale, il, inp->self_kv_len);
+    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, kq_scale, il, inp->self_kv_len, inp->self_kv_off);
     cb(cur, "kqv_out", il);
 
     if (inp->self_v_rot) {

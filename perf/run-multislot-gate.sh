@@ -17,11 +17,12 @@ case "$LINE" in   # slot 1 = 01-code-explain, 2 = 02-prose-creative, 3 = 03-chat
   ud) REF="fa07afbb6c44 ff519f555a75 68e5283468ff" ;;   # slot 2 a3c90139bbfd -> ff519f555a75 2026-09-24 evening (GGML_FA_GQA_WMIN=1: the f16 width-2 calls at 512 cells left the vec kernel; stable x4, mint prodpick-sep24-gqaw12-ud); slots 1/3 = the first ud run, mint prodpick-sep23-multislot-ud
   *) echo "unknown LINE $LINE"; exit 1 ;;
 esac
-export B LINE PORT TAG="$TAG-multislot-$LINE" KV=f16 ARMS=split PHASES=execs EXEC_ROUNDS=1 NPRED_EXEC=16 CTX_COORD=8192 \
+ARM=${ARM:-split}   # ARM=classes runs the per-slot context sizes layout (--ctx-seq-sizes) against the split arm's references (exp/kv-size-classes)
+export B LINE PORT TAG="$TAG-multislot-$LINE" KV=f16 ARMS=$ARM PHASES=execs EXEC_ROUNDS=1 NPRED_EXEC=16 CTX_COORD=8192 \
        SYNC_TIMEOUT=12 PICK_SPEC_EV=0 N_EXEC=3 DEPTH=1 EXTRA_ENV="GGML_TOPK_STREAM=0"
 bash "$B/perf/run-slot-mix.sh" > "$OUT/$TAG.console.log" 2>&1
 rc=$?
-python3 - "$OUT/$TAG-split.json" "$REF" <<'PY'
+python3 - "$OUT/$TAG-$ARM.json" "$REF" <<'PY'
 import json, sys
 try: rs = json.load(open(sys.argv[1]))['results']
 except Exception as e: print(f'  multislot gate: NO RESULT ({e}) - the server died or hung, read the console log'); sys.exit(2)
@@ -40,7 +41,7 @@ print('  multislot gate: ' + ('PASS' if ok else 'FAIL') + ('' if len(ref) == 3 e
 sys.exit(0 if ok else 1)
 PY
 prc=$?
-grep -q 'sync-guard: backend' "$OUT/$TAG-split.server.log" 2>/dev/null && { echo "  multislot gate: THE SYNC GUARD FIRED (GPU hang) - FAIL"; exit 2; }
+grep -q 'sync-guard: backend' "$OUT/$TAG-$ARM.server.log" 2>/dev/null && { echo "  multislot gate: THE SYNC GUARD FIRED (GPU hang) - FAIL"; exit 2; }
 rc_short=$prc
 
 # LONG=1: the long-extent arm (2026-09-24, perf/per-slot-ctx.md) - a 32K coordinator (slot 0, Turbo4) beside three
@@ -61,7 +62,7 @@ if [ "${LONG:-0}" = 1 ]; then
          CTX_COORD=32768 CTX_EXEC=8192 COORD_PROMPT=/Users/troff/play/kvquant-experiments/data/longprompt-32k.txt \
          SYNC_TIMEOUT=15 PICK_SPEC_EV=0 N_EXEC=3 DEPTH= EXTRA_ENV="GGML_FA_DEBUG=1 ${LONG_EXTRA:-}" PORT=$((PORT + 1))
   bash "$B/perf/run-slot-mix.sh" > "$OUT/$TAG.console.log" 2>&1
-  python3 - "$OUT/$TAG-split.json" "$REF_LONG" <<'PY'
+  python3 - "$OUT/$TAG-$ARM.json" "$REF_LONG" <<'PY'
 import json, sys
 try: rs = json.load(open(sys.argv[1]))['results']
 except Exception as e: print(f'  multislot long arm: NO RESULT ({e}) - the server died or hung, read the console log'); sys.exit(2)

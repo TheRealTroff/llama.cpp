@@ -187,10 +187,11 @@ requests and a round boundary, and a mix-phase sha is only evidence when it recu
 - The slot budget (depth 1 at 3+ slots) is the policy that puts the coordinator on the width-2 route and caps
   tok/round at ~1.8; `LLAMA_SPEC_SLOT_BUDGET_WIDE=16` + `GGML_MM_SKINNY_N16=1` exists (parallel-streams work) and is
   the next thing to price for this use case once the FA route is fixed.
-- The memory layout (size classes): today one `[embd, kv_size, n_stream]` tensor per layer with a uniform stride
+- ~~The memory layout (size classes): today one `[embd, kv_size, n_stream]` tensor per layer with a uniform stride
   (`get_k/get_v` view a contiguous stream range, `cpy_k/cpy_v` use global indices). Per-class sizes need a per-stream
   offset table in the FA kernels (the same input as `kv_len`, `[2, n_stream]`) and offset-based indices; the value on
-  this 48 GB box is memory (4 x 1.6 GB Turbo4 at 96K today vs 1.6 + 3 x 0.13), not speed.
+  this 48 GB box is memory (4 x 1.6 GB Turbo4 at 96K today vs 1.6 + 3 x 0.13), not speed.~~ BUILT 2026-09-25, see
+  "Per-slot context sizes: the packed layout" at the end of this note (branch `exp/kv-size-classes`).
 
 ## The proposed configuration, gated (`gqaw2k8-96k`, 01:32-01:52)
 
@@ -219,9 +220,11 @@ executors, `PHASES=execs,solo,mix`, ~6 min) so this route is gated from now on.
 **Open after this:**
 - width 1 (5+ slots, the budget turns speculation off): `GGML_FA_GQA_WMIN_MS=1` puts the 6 GQA rows in one 8-row
   tile per KV head; untested (the owner's use case is 1 + 3).
-- the size-class memory layout: memory only (48 GB box: 4 x 1.6 GB Turbo4 at 96K + the drafter's f16 per slot);
+- ~~the size-class memory layout: memory only (48 GB box: 4 x 1.6 GB Turbo4 at 96K + the drafter's f16 per slot);
   design = a per-stream offset table beside `kv_len` in the FA op, offset-based `k_idxs`/`v_idxs`, per-stream cell
-  counts, a per-slot cap list in the server. Start it when the owner wants more executor slots than the box holds.
+  counts, a per-slot cap list in the server. Start it when the owner wants more executor slots than the box holds.~~
+  BUILT 2026-09-25 (owner: "what's the point of a smaller max context size if I allocate the same amount anyway?"),
+  the section at the end of this note.
 - the slot budget policy for 2-3 generating slots (depth 1 today, 8/n - 1): the width-3 GQA route at 2 slots
   (budget 8 -> depth 3, width 4) is already the single-stream route; nothing to do there.
 
@@ -509,3 +512,49 @@ Open after this: (1) the f16 GQA tile at widths 1-2 runs its generic split (`GGM
 (3) `GGML_FA_VEC_MAX=3` is now inert for GQA-6 shapes on both caches (widths 1-2 go to the tile before the vec rule is
 consulted) and only routes non-GQA or hsk >= 512 shapes; (4) `GGML_FA_GQA_WMIN_MS/_KVMIN/_ALL` are subsumed by `_WMIN=1` in
 the pick and stay as the narrower rules.
+
+## Per-slot context sizes: the packed layout (2026-09-25, branch `exp/kv-size-classes`, tree `~/play/llama.cpp-kvclass`)
+
+**Ask (owner):** "what's the point of a smaller max context size if I allocate the same amount anyway?" - split mode gave
+every slot the coordinator's cache. **Built:** `--ctx-seq-sizes 98304,8192,8192,8192` (server: per slot; sets `-np` to the
+count and `-c` to the sum; suffix `k`; needs split mode and flash attention; C API `llama_context_params.ctx_seq_sizes` +
+`llama_n_ctx_seq_id()`). Each stream gets its own cell count and the streams are packed back to back per layer.
+
+**Measured, q4 line, 96K + 3 x 8K vs 4 x 96K** (`-ctk/-ctv turbo4` outside the pick env, so auto-asymmetric K = q8_0;
+the pick's Turbo4 K is smaller in absolute terms, the ratio is the layout's):
+
+| layout | cells | KV buffer | recurrent state (unchanged) |
+|---|---|---|---|
+| split, 4 x 96K (before) | 393216 | 9696 MiB | 598.5 MiB |
+| packed, 96K + 3 x 8K | 122880 | **3030 MiB (-69%)** | 598.5 MiB |
+
+With the pick's Turbo4 K and V (`TURBO_AUTO_ASYMMETRIC=0`): 4 x 96K = 6336 MiB (3168 K + 3168 V), 96K + 3 x 8K = **1980 MiB**
+(990 + 990), the same -69%; 16.5 MiB per 1K cells, so an 8K executor slot costs 132 MiB.
+
+**Gate = byte identity against the split arm** (this is the whole point: the same text, a third of the memory). q4 line,
+prod `49bda3039` references, both on the new binary: `run-multislot-gate.sh` split arm PASS (3/3 short, 8/8 long),
+`ARM=classes` (the new arm: `--ctx-seq-sizes 32768,8192,8192,8192`, a 32K coordinator beside three 8K executors) PASS
+3/3 short + 8/8 long - every sha (execs, solo, mix coordinator, mix executors) equals the recorded split references.
+`test-backend-ops FLASH_ATTN_EXT` 4869/4869. Speed unchanged (mix coordinator 17.2 vs 17.1 t/s, executors 12.5-12.9
+vs 12.4-12.9): the executors already read only their own cells through the per-stream `kv_len` extent.
+
+**Design as built.** `llama_kv_cache`: one 2D `[n_embd, sum of the sizes]` tensor per layer, `v_offs` prefix sums,
+`v_cells[s]` sized per stream; `k_stream/v_stream` views, `set_input_k_idxs/v_idxs` (global rows = `v_offs[strm] + idx`),
+the K-shift input and graph, the mask (`n_kv` is the ubatch's longest stream, a shorter stream's missing cells are
+dropped), state I/O and cross-stream `seq_cp` (row-prefix copy, the source's used cells must fit) all run off the
+offsets. The uniform layout is the old bytes and the old graph (no new input, no kernel variant) - hence the split arm's
+byte identity. A non-uniform cache has no uniform stream stride, so `get_k/get_v` return a view at the buffer base with
+a zero stream stride, widened to `ns` streams in place (`ggml_view_4d` sizes a view as if contiguous - the packed tensors
+carry `GGML_TENSOR_FLAG_LOOSE_VIEWS`, which relaxes that one check; the Metal per-view bounds check on the real strided
+extent stays), and a new input `attn_inp_kv_off` (`ggml_flash_attn_ext_set_kv_off`, src[6], beside `kv_len` src[5])
+carries each stream's first cell; the Metal `ext`/`vec`/`pad` kernels take a `kvoff` table under function constant +6
+(`_kvo=1` in the route name) and replace `ikv3*nb13` by `kvoff[ikv3]*nb11`; the CPU FA asserts it away. The reserve
+graph sizes `n_kv` by the largest stream. The drafter's SWA cache (`llama_kv_cache_iswa`) clamps each size to its window.
+Server: slot i = sequence i; an unpinned task goes to the smallest idle slot whose context holds its prompt (LRU inside
+that size class; an LCP-similar slot must also hold it); `id_slot` pinning unchanged; a prompt no slot holds reports the
+old context error; if every slot that could hold it is busy the task is deferred. Exercised on `16384,4096,4096`: a 5.6K
+prompt took slot 0, two short ones slots 1-2, the next short one slot 2 (LRU), a 20K prompt got HTTP 400.
+
+**Not covered:** the transposed (non-FA) V layout and non-Metal backends refuse a mixed list; `llama_kv_cache_msa/dsa/dsv4`
+refuse it (create_memory guard); `--kv-unified` refuses it. Adoption = owner (merge to prod; the gate's `ARM=classes`
+arm can join the mint if the pick starts using the list).
