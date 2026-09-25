@@ -212,6 +212,10 @@ if [ "${MULTISLOT:-1}" = 1 ]; then
   echo "    sequence and cannot see a multi-sequence-graph defect (perf/slot-mix.md, 2026-09-23); MULTISLOT=0 skips it;"
   echo "    then the long-extent arm (LONG=1: a 32K Turbo4 coordinator beside the executors, per-slot-ctx.md 2026-09-24) ---"
   LINE="$LINE" TAG="$TAG" B="$B" PORT=$(( ${PORT:-8093} + 1 )) LONG="${LONG:-1}" bash "$B/perf/run-multislot-gate.sh"
+  echo
+  echo "--- multi-slot classes arm: the same gate on the packed per-slot layout (--ctx-seq-sizes 8192,8192,8192,8192 short,"
+  echo "    32768,8192,8192,8192 long; per-slot-ctx.md 'the packed layout', MERGED 2026-09-25) - must equal the split arm's shas ---"
+  LINE="$LINE" TAG="$TAG" B="$B" PORT=$(( ${PORT:-8093} + 1 )) LONG="${LONG:-1}" ARM=classes bash "$B/perf/run-multislot-gate.sh"
 fi
 
 echo

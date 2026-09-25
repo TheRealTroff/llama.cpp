@@ -17,8 +17,8 @@ case "$LINE" in   # slot 1 = 01-code-explain, 2 = 02-prose-creative, 3 = 03-chat
   ud) REF="fa07afbb6c44 ff519f555a75 68e5283468ff" ;;   # slot 2 a3c90139bbfd -> ff519f555a75 2026-09-24 evening (GGML_FA_GQA_WMIN=1: the f16 width-2 calls at 512 cells left the vec kernel; stable x4, mint prodpick-sep24-gqaw12-ud); slots 1/3 = the first ud run, mint prodpick-sep23-multislot-ud
   *) echo "unknown LINE $LINE"; exit 1 ;;
 esac
-ARM=${ARM:-split}   # ARM=classes runs the per-slot context sizes layout (--ctx-seq-sizes) against the split arm's references (exp/kv-size-classes)
-export B LINE PORT TAG="$TAG-multislot-$LINE" KV=f16 ARMS=$ARM PHASES=execs EXEC_ROUNDS=1 NPRED_EXEC=16 CTX_COORD=8192 \
+ARM=${ARM:-split}   # ARM=classes runs the per-slot context sizes layout (--ctx-seq-sizes) against the split arm's references (exp/kv-size-classes, MERGED 2026-09-25)
+export B LINE PORT TAG="$TAG-multislot-$LINE$([ "$ARM" = split ] || echo "-$ARM")" KV=f16 ARMS=$ARM PHASES=execs EXEC_ROUNDS=1 NPRED_EXEC=16 CTX_COORD=8192 \
        SYNC_TIMEOUT=12 PICK_SPEC_EV=0 N_EXEC=3 DEPTH=1 EXTRA_ENV="GGML_TOPK_STREAM=0"
 bash "$B/perf/run-slot-mix.sh" > "$OUT/$TAG.console.log" 2>&1
 rc=$?
