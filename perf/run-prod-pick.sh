@@ -92,7 +92,7 @@ PART_ENV=(GGML_MV_NC=2 GGML_MM_SKINNY=5)
 # pick_args set PICK_DEPTH_LINE (PICK_DEPTH_EV for such a line). TRAP (the first sep17 mint): the global PICK_DEPTH is
 # the fixed-depth default and confines the controller to width 3 silently - the server log's spec-ev summary shows a
 # 3-entry cost table; the guard below refuses that.
-F16_DEPTH=4
+F16_DEPTH=${F16_DEPTH:-4}   # override from the environment for a matched-depth f16 vs Turbo4 pair (with PICK_SPEC_EV=0 on an EV line)
 if printf '%s\n' "${TURBO_PICK_ENV[@]}" | grep -qx 'LLAMA_SPEC_EV=1'; then
   F16_DEPTH=$PICK_DEPTH_LINE
   [ "$PICK_DEPTH_LINE" -ge 7 ] || { echo "ABORT: the $LINE line picks LLAMA_SPEC_EV but the block cap is $PICK_DEPTH_LINE (PICK_DEPTH_EV=7 expected)"; exit 1; }
