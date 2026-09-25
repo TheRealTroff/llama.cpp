@@ -190,3 +190,65 @@ window cells already freed and the feature ring rolled past them: with the draft
 the drafter drafts from a short view until it refills - an acceptance dip for up to a window of tokens, no text
 change. Every restore in the gate was within 120 tokens of the end (acceptance identical), so arm D did not price
 this. The precise form: checkpoint only the sink + last `n_window` cells (~20 MiB) instead of nothing. Not built.
+
+## The lossy-checkpoint experiment (owner: "Hypothesize away ... Let's try it and see what we learn", 2026-09-25 night)
+
+Is the delta-net state compressible by a change of basis? Per-head SVD of the dumped 128x128 states says the
+energy is: effective rank (exp of the spectral entropy, median over heads) 1.0-3.7 per layer at 2.2K tokens,
+1.0-6.8 at 8.5K; the top 8 singular triplets hold 88-100% of the energy. Lossless is impossible either way (the
+mantissas are full-entropy: zstd 92.7% of raw, ~27.5 bits of entropy per f32; the conv state R is ~14 bits per
+value, f16-shaped). So the question is what the readout tolerates. Tools: `LLAMA_CKPT_LOAD_DIR=<dir>` (the
+server restores `<dir>/ckpt-slot<id>-n<tokens>.tgt` in place of the in-memory blob when the file exists),
+`perf/ckpt-lowrank.py` (rank-k truncation / f16 round trip of every head's state, layout byte-exact),
+`perf/ckpt-lowrank-driver.py` (per variant: a fresh full re-prefill of the slot, then a request that restores the
+n-4-ubatch checkpoint = the variant blob, 522 tokens of re-prefill, 128 greedy tokens with top-20 probs; the
+`exact` variant is the file round trip of the untouched dump and reproduces the in-memory restore byte for byte).
+KL = KL(exact || variant) over the union of the two top-20 sets, mean over the tokens before the first fork.
+
+| variant | S storage | S rel. error | 2228-token prompt: text / fork / mean KL / max KL | 8991-token prompt: text / fork / mean KL / max KL |
+|---|---|---|---|---|
+| rank 32 | 50% | 2.5-3.1% | differs @32 / 1.0e-4 / 3.2e-3 | differs @66 / 5.6e-4 / 3.7e-2 |
+| rank 16 | 25% | 4.5-5.3% | **identical** / 8.2e-5 / 1.1e-2 | differs @66 / 8.3e-4 / 5.5e-2 |
+| rank 8 | 12.5% | 6.8-7.7% | **identical** / 2.2e-4 / 2.9e-2 | differs @66 / 1.9e-3 / 1.2e-1 |
+| rank 4 | 6.3% | 9.3-10% | **identical** / 7.1e-5 / 9.1e-3 | differs @29 / 6.0e-3 / 1.8e-1 |
+| rank 2 | 3.1% | 12-13% | differs @60 / 4.1e-4 / 2.5e-2 | differs @26 / 8.2e-3 / 2.1e-1 |
+| rank 1 | 1.6% | 15-16% | differs @0 | differs @26 / 7.8e-3 / 2.0e-1 |
+| f16 | 50% | 0.02% | differs @32 / 2.2e-4 / 6.9e-3 | **identical** / 2.4e-5 / 2.1e-3 |
+
+What we learned: (1) the energy criterion is the wrong one - at 2.2K tokens rank 4 keeps 90% of the energy and
+the exact text, at 8.5K rank 32 keeps 99% and forks at token 66 with a 5.6e-4 mean KL; the query readout weights
+directions by relevance, not by singular value, and the state accumulates directions with context. (2) The price
+grows with context: 5-50x between 2.2K and 8.5K at every rank. For scale, the pick's decode-kernel classes are
+5e-6 pairwise and the Turbo4 cache itself 0.006 vs f16: rank 32 at 8.5K sits between them, rank 4 at 8.5K equals
+the Turbo4 cache's price for a 16x smaller checkpoint. (3) f16 is not a free half: it forks the 2.2K case (the
+same near-tie token 32 as rank 32; 11% of the elements are below f16's normal range) and is benign at 8.5K -
+noise-level, not a trend, and the fork positions are ties (`check-logit-margin-before-hunting`). (4) Every fork
+here is a single flipped near-tie; no variant produced garbage above rank 1. One prompt per size, 128 tokens,
+top-20 KL: a first look, not a pricing. The pricing recipe if any of this is wanted: the paired KLD pair over the
+model's own text with restores at several depths.
+
+**Regenerate mode** (`--mode near`: the variant request repeats the reset prompt exactly, so the server restores
+the n-4 checkpoint and re-prefills 4 tokens before generating; 2228-token prompt, 128 tokens of a low-confidence
+"describe in detail" answer):
+
+| variant | text | fork | mean KL | max KL |
+|---|---|---|---|---|
+| rank 32 | identical | - | 6.9e-7 | 8.8e-5 |
+| rank 16 | differs | 44 | 5.3e-7 | 2.3e-5 |
+| rank 8 | differs | 20 | 1.8e-5 | 3.7e-4 |
+| rank 4 | differs | 20 | 6.0e-5 | 1.2e-3 |
+| rank 2 | differs | 20 | 7.3e-5 | 1.5e-3 |
+| rank 1 | differs | 20 | 4.5e-4 | 9.0e-3 |
+| f16 | identical | - | 1.7e-7 | 2.2e-5 |
+
+The forks sit at tokens 20 and 44 with mean KLs of 1e-7..1e-5: ties in a low-confidence text, not damage. The
+surprise is the direction: with 4 tokens of re-prefill the truncation costs 10-100x LESS than with 522 (far
+mode, same prompt). The 522-token re-prefill does not wash the state error out, it compounds it - the delta rule
+updates the state against its own (wrong) prediction at every step. One sample per mode; a hypothesis to test
+with restores at several depths before it is believed. Results: `kvquant-experiments/results/ckpt-lowrank-sep25.*`
+(far) and `ckpt-lowrank-near-sep25.*`; the dumps used are in the session scratch, not kept.
+
+Bottom line for the checkpoint-memory question: a per-head rank-8..16 factorization is a 4-8x lever on the 144
+MiB S state whose price is a NUM-TG class between the decode kernels and the Turbo4 cache at 2K context and grows
+with context; f16 is a 2x lever at noise level in two of three cases and a tie-flip in the third. Neither is
+adopted; the drafter fix (`LLAMA_CKPT_NO_DFT`) is the only checkpoint lever that is free.

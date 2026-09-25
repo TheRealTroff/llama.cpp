@@ -3838,6 +3838,24 @@ private:
                                     bool do_reset = it == slot.prompt.checkpoints.rend();
 
                                     if (!do_reset) {
+                                        // LLAMA_CKPT_LOAD_DIR=<dir>: restore the target blob from <dir>/ckpt-slot<id>-n<tokens>.tgt when
+                                        // that file exists (same size) - the lossy-checkpoint experiment (perf/ctx-class-cache.md:
+                                        // rank-k truncated states written by perf/ckpt-lowrank.py in place of the exact dump)
+                                        if (const char * dir = getenv("LLAMA_CKPT_LOAD_DIR")) {
+                                            const std::string path = std::string(dir) + "/ckpt-slot" + std::to_string(slot.id) + "-n" + std::to_string(it->n_tokens) + ".tgt";
+                                            if (FILE * f = fopen(path.c_str(), "rb")) {
+                                                std::vector<uint8_t> buf(it->data_tgt.size());
+                                                const size_t n = fread(buf.data(), 1, buf.size(), f);
+                                                const bool eof = fgetc(f) == EOF;
+                                                fclose(f);
+                                                if (n == buf.size() && eof) {
+                                                    it->data_tgt.swap(buf);
+                                                    SLT_INF(slot, "checkpoint target blob replaced from %s (%zu bytes)\n", path.c_str(), n);
+                                                } else {
+                                                    SLT_WRN(slot, "checkpoint file %s has the wrong size (read %zu, want %zu) - ignored\n", path.c_str(), n, buf.size());
+                                                }
+                                            }
+                                        }
                                         // restore the context checkpoint
                                         it->load_tgt(ctx_tgt, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
                                         it->load_dft(ctx_dft, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
