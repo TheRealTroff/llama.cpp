@@ -280,7 +280,7 @@ def verdict(ref, out):
         flag = ""
         if "error" in r: flag = "ERROR"; fails.append(f"{label}: {r['error']}")
         elif r.get("id_slot") != exp_slot: flag = "WRONG SLOT"; fails.append(f"{label}: slot {r.get('id_slot')} != {exp_slot}")
-        elif acc < 30: flag = "LOW ACC"; fails.append(f"{label}: acceptance {acc:.1f}%")
+        elif acc < 30 and (r.get("predicted_n") or 0) >= 24: flag = "LOW ACC"; fails.append(f"{label}: acceptance {acc:.1f}%")   # a garbage detector; meaningless on a 6-token reply
         t = label[-1]
         if not flag and t == "1" and r.get("cache_n") != 0: flag = "T1 CACHED?"; fails.append(f"{label}: cache_n {r.get('cache_n')} on a fresh prompt")
         if not flag and t in "2356" and (r.get("cache_n") or 0) < 0.9 * r.get("total_n", 1):

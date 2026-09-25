@@ -22,6 +22,7 @@ EXTRA_ARGS=${EXTRA_ARGS:-}
 OUT=/Users/troff/play/kvquant-experiments/results
 TAG=${TAG:-ctxcache-$(date +%m%d-%H%M)}
 CONTROL=${CONTROL:-full}   # short = the control server replays A1-A3 in slot only (no uncached reference; ~10 min per run)
+MATERIAL=${MATERIAL:-/Users/troff/play/kvquant-experiments/data/longprompt-96k.txt}   # K >= 8192 needs longprompt-yarn-486k.txt (the streams take ~0.6 of each class)
 mkdir -p "$OUT"
 
 stuck_servers() { ps -axo pid=,stat=,command= | awk '$2 ~ /E/ && $0 ~ /llama-server/ {print $1}'; }
@@ -77,7 +78,7 @@ echo; echo "--- server 1 (the cached plan), log $slog1"
 start_server "$slog1" || { kill_server $pid; exit 1; }
 grep -E "n_ctx_seq|kv_unified|llama_kv_cache: size|llama_memory_recurrent: size|prompt cache is|context checkpoints|n_rs_seq" "$slog1" | sed -E 's/^[0-9.]+ [A-Z] //' | head -12
 t0=$(date +%s)
-python3 "$SD/ctx-class-cache-driver.py" --port $PORT --phase cached --log "$slog1" --out "$OUT/$TAG.cached.json" --k "$K" --n-predict "$NPRED"
+python3 "$SD/ctx-class-cache-driver.py" --port $PORT --phase cached --log "$slog1" --out "$OUT/$TAG.cached.json" --k "$K" --n-predict "$NPRED" --material "$MATERIAL"
 echo "  wall $(( $(date +%s) - t0 )) s"
 check_server "$slog1"
 kill_server $pid
@@ -86,7 +87,7 @@ slog2="$OUT/$TAG.control.server.log"
 echo; echo "--- server 2 (control: in-slot A1-A3, then the uncached reference), log $slog2"
 start_server "$slog2" || { kill_server $pid; exit 1; }
 t0=$(date +%s)
-python3 "$SD/ctx-class-cache-driver.py" --port $PORT --phase control --log "$slog2" --ref "$OUT/$TAG.cached.json" --out "$OUT/$TAG.control.json" --k "$K" --n-predict "$NPRED" $([ "$CONTROL" = short ] && echo --no-uncached)
+python3 "$SD/ctx-class-cache-driver.py" --port $PORT --phase control --log "$slog2" --ref "$OUT/$TAG.cached.json" --out "$OUT/$TAG.control.json" --k "$K" --n-predict "$NPRED" --material "$MATERIAL" $([ "$CONTROL" = short ] && echo --no-uncached)
 rc=$?
 echo "  wall $(( $(date +%s) - t0 )) s"
 check_server "$slog2"

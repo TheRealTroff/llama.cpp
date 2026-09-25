@@ -252,3 +252,30 @@ Bottom line for the checkpoint-memory question: a per-head rank-8..16 factorizat
 MiB S state whose price is a NUM-TG class between the decode kernels and the Turbo4 cache at 2K context and grows
 with context; f16 is a 2x lever at noise level in two of three cases and a tie-flip in the third. Neither is
 adopted; the drafter fix (`LLAMA_CKPT_NO_DFT`) is the only checkpoint lever that is free.
+
+## Longer lengths: 12K / 24K / 48K / 96K classes (owner: "Should we see what happens at longer lengths?", 2026-09-25 night)
+
+`K=12288 MATERIAL=longprompt-yarn-486k.txt CONTROL=short`, streams 7.2K / 7.1K / 14.4K / 28.5K / 57.3K tokens, two
+arms: A = today's defaults, P = the proposed set (`--no-cache-idle-slots LLAMA_CACHE_SAVE_TAIL=64
+LLAMA_CACHE_LOAD_CKPT=1 LLAMA_CKPT_NO_DFT=1`). TAGs `ctxcache-long-arm{A,P}`, both PASS (the driver's acceptance
+guard now applies only to replies of >= 24 tokens - a 6-token reply at 2/9 accepted drafts is not a signal), A3's
+RAM round trip byte-identical in both, every T1-T5 sha identical between the arms, D1 = 57K tokens in 541 s.
+
+| | arm A (defaults) | arm P (proposed) |
+|---|---|---|
+| RAM cache peak | 7 entries, 7984 MiB (**at the 8 GB cap, 2 evictions**) | 4 entries, 2875 MiB, no eviction |
+| a 57K-token saved entry | 1095 MiB | 1095 MiB (minus the drafter blobs in its checkpoints) |
+| eviction-path save + load, max | 103 ms (11 saves) | 105 ms (12 saves) |
+| idle-slot save attempts | 60 | 0 |
+| checkpoint at 57K tokens | 169.7-189.7 MiB | 149.6 MiB (fixed) |
+| A5 (entry consumed by A4?) | reset: 7379 tokens re-prefilled | restored, 7350 / 7379 |
+| **the concurrent T5 round** | **59 s** (A5's re-prefill holds all four streams) | **4-5 s** |
+| B6 (branch overwritten at B3) | slot checkpoint (13907 / 14530) | slot checkpoint: B2's reply was 6 tokens, 30 lost < 64, the rule correctly did not save |
+
+What the length changes: nothing in the mechanisms (every restore, including D3 from a 57K state in 0.9 s, and A3
+through the RAM cache, behaves as at 4K), and the costs of the defaults get worse exactly where predicted - the
+duplicates push the cache to its cap and start evicting, and the partial-match consumption turns a 22 s stall
+into a 59 s one because the re-prefill it forces is a 7K-token one. A save is still ~100 ms even at 1.1 GB.
+Checkpoints stay at 2 per single-message slot at any length (the spacing rule), so the checkpoint memory of a
+long slot is 300 MiB, not the 32 x 190 MiB worst case; the RAM cache is where a long slot's memory goes (1.1 GB
+per saved 57K state), and with the defaults that cache was full.
