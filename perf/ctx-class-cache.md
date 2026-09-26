@@ -1,5 +1,13 @@
 # Prompt caching under per-slot context sizes: the gate (2026-09-25)
 
+**Status 2026-09-26: THE FOUR BEHAVIOURS ARE CODE DEFAULTS on the branch (owner: "2, while accepting loss of acceptance"):
+save-on-overwrite at 64 decoded tokens (`LLAMA_CACHE_SAVE_TAIL=0` = upstream's rule), checkpoint-aware cache scoring
+on a recurrent/SWA context (`LLAMA_CACHE_LOAD_CKPT=0` = raw prefix), no drafter blob in checkpoints when the drafter
+can truncate (`LLAMA_CKPT_NO_DFT=0` keeps it; the deep-restore acceptance dip is accepted), and no idle-slot saves in
+split mode (`LLAMA_CACHE_IDLE_SPLIT=1` restores the copies; unchanged under `--kv-unified`). Gates on the default
+binary: the cache gate with no flags (must equal arm D) + the multi-slot gate short and long arms on both lines -
+see "Defaults" at the end. Earlier status lines below stand as the record.**
+
 **Status: VERIFIED on the q4 line, prod `ed2215f3e` (binary `dc02ff4d6`, no code change between them), four slots of
 4K / 8K / 16K / 32K tokens (`--ctx-seq-sizes 4096,8192,16384,32768`), the Turbo4 pick at fixed DFlash depth 3.
 Every layer of the server's prompt cache works with the size classes, and the cached path reproduces the
@@ -279,3 +287,21 @@ into a 59 s one because the re-prefill it forces is a 7K-token one. A save is st
 Checkpoints stay at 2 per single-message slot at any length (the spacing rule), so the checkpoint memory of a
 long slot is 300 MiB, not the 32 x 190 MiB worst case; the RAM cache is where a long slot's memory goes (1.1 GB
 per saved 57K state), and with the defaults that cache was full.
+
+## Defaults (2026-09-26, owner: "2, while accepting loss of acceptance")
+
+The owner chose code defaults over flags. `server-context.cpp`: `save_tail` defaults to 64, `ckpt_aware` defaults to on
+for a context whose partial state is fixed, `ckpt_no_dft` defaults to on when the drafter's memory supports partial
+removal, and the idle-slot save pass runs only under `--kv-unified` (where it is a move that frees shared cells) or
+`LLAMA_CACHE_IDLE_SPLIT=1`. The startup line `prompt cache: checkpoint-aware load = 1 ..., idle-slot saves = off (split
+mode ...)` says what is in force. `--cache-idle-slots` keeps its meaning under unified KV. Nothing else in the server
+changed; the four off-switches restore upstream's behaviour one rule at a time.
+
+Accepted with it: a restore further back than the drafter's window (1024) from its current end finds the drafter's
+window cells freed and drafts from a short view until it refills - an acceptance dip, no text change. The precise
+form (checkpoint the sink + last 1024 cells, ~20 MiB) was not built.
+
+Gates on the default binary (2026-09-26, no flags): the cache gate `ctxcache-defaults` = arm D line for line (A5 restored
+2608/2639, B6 from the cache 5086/5114, peak 4 entries / 2723 MiB, all shas, A3 round trip identical) - PASS; the
+multi-slot gate `defaults-0926` q4 short + long PASS, ud short + long PASS (every reference sha held: the defaults touch
+only what is saved and loaded). Merged to prod the same morning; post-merge gates on the prod binary recorded below.

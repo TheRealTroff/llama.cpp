@@ -1689,8 +1689,12 @@ private:
             // state cannot be truncated (see server_prompt_cache::effective_reuse)
             const bool partial_fixed = ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL ||
                                        ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_RS   || n_swa > 0;
-            prompt_cache->ckpt_aware = partial_fixed && getenv("LLAMA_CACHE_LOAD_CKPT") && atoi(getenv("LLAMA_CACHE_LOAD_CKPT")) != 0;
-            SRV_INF("prompt cache: checkpoint-aware load = %d (LLAMA_CACHE_LOAD_CKPT, partial state fixed = %d)\n", (int) prompt_cache->ckpt_aware, (int) partial_fixed);
+            // DEFAULT on for such a context since 2026-09-26; LLAMA_CACHE_LOAD_CKPT=0 restores upstream's raw-prefix scoring
+            prompt_cache->ckpt_aware = partial_fixed && !(getenv("LLAMA_CACHE_LOAD_CKPT") && atoi(getenv("LLAMA_CACHE_LOAD_CKPT")) == 0);
+            SRV_INF("prompt cache: checkpoint-aware load = %d (LLAMA_CACHE_LOAD_CKPT, partial state fixed = %d), idle-slot saves = %s (--cache-idle-slots %d, kv_unified %d)\n",
+                    (int) prompt_cache->ckpt_aware, (int) partial_fixed,
+                    params_base.cache_idle_slots && (params_base.kv_unified || (getenv("LLAMA_CACHE_IDLE_SPLIT") && atoi(getenv("LLAMA_CACHE_IDLE_SPLIT")) != 0)) ? "on" : "off (split mode: a duplicate; save-on-overwrite covers it)",
+                    (int) params_base.cache_idle_slots, (int) params_base.kv_unified);
         } else {
             SRV_TRC("%s", "prompt cache is disabled - use `--cache-ram N` to enable it\n");
         }
@@ -2002,7 +2006,9 @@ private:
             // (similarity keeping over half of it, or a requested id_slot - the paths that lose the tail unsaved).
             // With it, --no-cache-idle-slots loses nothing: in split mode the idle-slot save is a duplicate of a
             // state that stays live in its slot, and it fills the cache with copies nobody restores.
-            static const int save_tail = getenv("LLAMA_CACHE_SAVE_TAIL") ? atoi(getenv("LLAMA_CACHE_SAVE_TAIL")) : 0;
+            // DEFAULT 64 since 2026-09-26 (owner: "2, while accepting loss of acceptance" = the rules are code defaults);
+            // LLAMA_CACHE_SAVE_TAIL=0 restores upstream's rule (save only when under half of the slot would be kept)
+            static const int save_tail = getenv("LLAMA_CACHE_SAVE_TAIL") ? atoi(getenv("LLAMA_CACHE_SAVE_TAIL")) : 64;
             if (save_tail > 0 && !update_cache && !ret->prompt.tokens.empty()) {
                 const int lcp  = ret->prompt.tokens.get_common_prefix(task.tokens);
                 const int lost = (int) ret->prompt.tokens.size() - 1 - lcp;   // decoded tokens beyond the prefix (the last sampled token never is)
@@ -2721,7 +2727,9 @@ private:
         // token on the DFlash drafter: 40 MiB at 2K tokens, ~1.3 GB at 96K - more than the recurrent state it exists
         // for). A drafter whose memory supports partial removal needs nothing checkpointed: the normal seq_rm to
         // n_past truncates its KV on restore, exactly as it does on every cached prefix.
-        static const bool ckpt_no_dft = getenv("LLAMA_CKPT_NO_DFT") && atoi(getenv("LLAMA_CKPT_NO_DFT")) != 0;
+        // DEFAULT on since 2026-09-26 (owner accepted the deep-restore acceptance dip: a restore more than the drafter's
+        // window behind its end drafts from a short view until it refills); LLAMA_CKPT_NO_DFT=0 keeps the drafter blob
+        static const bool ckpt_no_dft = !(getenv("LLAMA_CKPT_NO_DFT") && atoi(getenv("LLAMA_CKPT_NO_DFT")) == 0);
         if (ckpt_no_dft && ctx_dft_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_PART) {
             cur.data_dft.clear();
         } else {
@@ -2810,7 +2818,13 @@ private:
                         break; // drop the task
                     }
 
-                    if (params_base.cache_idle_slots) {
+                    // in split mode (per-slot caches) the idle-slot save is a copy of a state that stays live in its slot and
+                    // is never loaded (a similarity pick keeping over half of a slot never saves, so never loads); the
+                    // save-on-overwrite rule above covers the one case it did. Skipped there since 2026-09-26
+                    // (perf/ctx-class-cache.md); LLAMA_CACHE_IDLE_SPLIT=1 restores the copies. Under unified KV the save is
+                    // a move that frees the shared cells, unchanged.
+                    static const bool idle_split = getenv("LLAMA_CACHE_IDLE_SPLIT") && atoi(getenv("LLAMA_CACHE_IDLE_SPLIT")) != 0;
+                    if (params_base.cache_idle_slots && (params_base.kv_unified || idle_split)) {
                         for (auto & slot : slots) {
                             if (!slot.is_processing()) {
                                 SLT_TRC(slot, "%s", "saving idle slot to prompt cache\n");
