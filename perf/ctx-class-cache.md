@@ -309,3 +309,48 @@ only what is saved and loaded). Merged to prod the same morning; post-merge gate
 Post-merge on the prod binary (prod `4770657a2`, rebuilt 2026-09-26 morning): cache gate `ctxcache-postmerge` PASS
 (= arm D line for line, peak 4 entries / 2723 MiB, B6 from the cache, A3 round trip identical), multi-slot gate
 `postmerge-0926` q4 short arm PASS on its references. The defaults are live on prod.
+
+## Cold state on disk (2026-09-26 morning, owner: "move everything except the kv cache to disk", branch `exp/cold-state-spill`)
+
+The owner's framing, which is the right one: three copies of sequence state exist and only one is hot. The live KV in
+the slot sits in Metal buffers and is read every decode step. A **checkpoint** is a host-side snapshot of the GDN state
+at a mid-prompt position, written once and read only on a rollback. A **RAM prompt-cache entry** is a host-side copy
+of a displaced slot's whole state (Turbo4 KV + end-of-prompt GDN state + drafter KV + the slot's checkpoint list),
+written once and read at most once, if that conversation returns. On unified memory every cold MiB held in host RAM
+is a MiB the model, the KV and the size classes cannot use. So: the cold copies go to disk, the live KV stays.
+
+**Build** (commit `c0ca0afba`): `common_cold_blob` (common.h) = a blob written to an `mkstemp` file that is **unlinked
+at creation** - it lives exactly as long as the last `shared_ptr` (a slot's list and a cache entry share one file), a
+crash leaves nothing behind, `ls` never shows it, and its pages sit in the OS buffer cache until memory pressure moves
+them to flash (so the OS runs the tier). `common_prompt_checkpoint::spill()` moves `data_tgt`/`data_dft` to files right
+after `create_checkpoint` captures them (after the `LLAMA_CKPT_DUMP` hook); `load_tgt`/`load_dft` read a spilled blob
+into a temporary buffer for `llama_state_seq_set_data`. `server_prompt_data::spill()` does the same for a cache entry
+in `prompt_save`; `server_prompt_cache::load` reads it back. The per-round `spec_ckpt` (hot) is untouched. `size()`
+counts cold bytes, so `--cache-ram` and `--ctx-checkpoints` keep their meaning (a byte cap on the cache wherever it
+lives). **Default on**; `LLAMA_COLD_STATE=0` keeps everything in RAM, `LLAMA_COLD_STATE_DIR=<dir>` moves the files off
+the OS temp dir (`$TMPDIR`, the same SSD). Startup INF line `cold state: ...`; `-lv 5` shows `spill N ms` on every
+checkpoint line, `cached state spilled to disk` / `read from disk` and `checkpoint restored from disk` with ms.
+
+**Smoke** (q4 pick, `--ctx-seq-sizes 4096,4096`, seven chat requests: a 1.5K prompt, a continuation, a different
+follow-up = rollback, two fresh chats that displace it, its return = cache load + checkpoint, a rollback on the loaded
+entry), RAM arm vs disk arm: all seven texts byte-identical. Costs on this SSD:
+
+| operation | size | time |
+|---|---|---|
+| checkpoint spill (write, no fsync) | 149.6 MiB | 14.2-15.3 ms |
+| checkpoint restore from disk (read + set_data) | 149.6 MiB | 10.7-11.2 ms |
+| cache entry spill | 196 MiB (KV 175 + drafter 21) | 18.7-19.2 ms |
+| cache entry read back | 175 MiB | 9.7-10.1 ms |
+
+(The reads are page-cache hits: the file was written seconds before. A cold-from-flash read of 150 MiB measured
+~50 ms with `cat` on this box.) The `TMPDIR` listing showed 0 `llama-cold-*` files during and after the run.
+
+Two pre-existing behaviours seen in the smoke, unrelated to the tier, noted for whoever reads the log: (1) with 4K
+classes the min-step rule (8192) erases every checkpoint of an earlier task except the first, so a returning chat's
+second rollback goes to the system-prompt checkpoint; (2) a fresh 70-token chat is placed by LCP similarity on the
+1.5K slot (f_sim 0.74 on the shared system prompt, f_keep 0.03) rather than the empty slot - the save-on-overwrite
+rule then saves the 1.5K state, which is what makes its return cheap.
+
+**Gate**: `run-ctx-class-cache-gate.sh` (LINE=q4 K=4096, full control) twice on the branch binary, disk arm
+`coldspill-q4-disk` and RAM arm `coldspill-q4-ram` (`EXTRA_ENV=LLAMA_COLD_STATE=0`); the script now samples the
+server's RSS every 2 s and prints the peak per phase plus the disk-path counts. Results: PENDING (running).
