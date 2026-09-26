@@ -1684,6 +1684,17 @@ private:
             SRV_TRC("%s", "use `--cache-ram 0` to disable the prompt cache\n");
 
             prompt_cache = std::make_unique<server_prompt_cache>(params_base.cache_ram_mib, n_ctx);
+
+            // LLAMA_CACHE_LOAD_CKPT=1: score cached prompts by their resumable tokens on a context whose partial
+            // state cannot be truncated (see server_prompt_cache::effective_reuse)
+            const bool partial_fixed = ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL ||
+                                       ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_RS   || n_swa > 0;
+            // DEFAULT on for such a context since 2026-09-26; LLAMA_CACHE_LOAD_CKPT=0 restores upstream's raw-prefix scoring
+            prompt_cache->ckpt_aware = partial_fixed && !(getenv("LLAMA_CACHE_LOAD_CKPT") && atoi(getenv("LLAMA_CACHE_LOAD_CKPT")) == 0);
+            SRV_INF("prompt cache: checkpoint-aware load = %d (LLAMA_CACHE_LOAD_CKPT, partial state fixed = %d), idle-slot saves = %s (--cache-idle-slots %d, kv_unified %d)\n",
+                    (int) prompt_cache->ckpt_aware, (int) partial_fixed,
+                    params_base.cache_idle_slots && (params_base.kv_unified || (getenv("LLAMA_CACHE_IDLE_SPLIT") && atoi(getenv("LLAMA_CACHE_IDLE_SPLIT")) != 0)) ? "on" : "off (split mode: a duplicate; save-on-overwrite covers it)",
+                    (int) params_base.cache_idle_slots, (int) params_base.kv_unified);
         } else {
             SRV_TRC("%s", "prompt cache is disabled - use `--cache-ram N` to enable it\n");
         }
@@ -1990,6 +2001,23 @@ private:
         }
 
         if (ret) {
+            // LLAMA_CACHE_SAVE_TAIL=N (2026-09-25, perf/ctx-class-cache.md): save the slot's state to the prompt cache
+            // whenever the task will overwrite at least N decoded tokens of it, whichever way the slot was picked
+            // (similarity keeping over half of it, or a requested id_slot - the paths that lose the tail unsaved).
+            // With it, --no-cache-idle-slots loses nothing: in split mode the idle-slot save is a duplicate of a
+            // state that stays live in its slot, and it fills the cache with copies nobody restores.
+            // DEFAULT 64 since 2026-09-26 (owner: "2, while accepting loss of acceptance" = the rules are code defaults);
+            // LLAMA_CACHE_SAVE_TAIL=0 restores upstream's rule (save only when under half of the slot would be kept)
+            static const int save_tail = getenv("LLAMA_CACHE_SAVE_TAIL") ? atoi(getenv("LLAMA_CACHE_SAVE_TAIL")) : 64;
+            if (save_tail > 0 && !update_cache && !ret->prompt.tokens.empty()) {
+                const int lcp  = ret->prompt.tokens.get_common_prefix(task.tokens);
+                const int lost = (int) ret->prompt.tokens.size() - 1 - lcp;   // decoded tokens beyond the prefix (the last sampled token never is)
+                if (lost >= save_tail) {
+                    SLT_INF(*ret, "saving to the prompt cache: the task overwrites %d decoded tokens (LLAMA_CACHE_SAVE_TAIL = %d)\n", lost, save_tail);
+                    update_cache = true;
+                }
+            }
+
             update_cache = update_cache && prompt_cache;
 
             // cache prompts only for completion tasks
@@ -2694,9 +2722,33 @@ private:
         cur.update_pos(slot.prompt.n_tokens() - n_tokens_cur, pos_min, pos_max);
 
         cur.update_tgt(ctx_tgt, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
-        cur.update_dft(ctx_dft, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+        // LLAMA_CKPT_NO_DFT=1 (2026-09-25, perf/ctx-class-cache.md "What a checkpoint is made of"): a plain KV cache
+        // ignores PARTIAL_ONLY and writes every cell, so a checkpoint carried the drafter's whole KV cache (~13 KB per
+        // token on the DFlash drafter: 40 MiB at 2K tokens, ~1.3 GB at 96K - more than the recurrent state it exists
+        // for). A drafter whose memory supports partial removal needs nothing checkpointed: the normal seq_rm to
+        // n_past truncates its KV on restore, exactly as it does on every cached prefix.
+        // DEFAULT on since 2026-09-26 (owner accepted the deep-restore acceptance dip: a restore more than the drafter's
+        // window behind its end drafts from a short view until it refills); LLAMA_CKPT_NO_DFT=0 keeps the drafter blob
+        static const bool ckpt_no_dft = !(getenv("LLAMA_CKPT_NO_DFT") && atoi(getenv("LLAMA_CKPT_NO_DFT")) == 0);
+        if (ckpt_no_dft && ctx_dft_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_PART) {
+            cur.data_dft.clear();
+        } else {
+            cur.update_dft(ctx_dft, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+        }
         // stash the draft's speculative state with the checkpoint
         common_speculative_get_state(spec.get(), slot.id, cur.data_spec);
+
+        // LLAMA_CKPT_DUMP=<dir>: write the checkpoint's three blobs to disk (2026-09-25, perf/ctx-class-cache.md:
+        // what the 170-190 MiB per checkpoint is made of; perf/ckpt-dump-decode.py parses the target blob)
+        if (const char * dir = getenv("LLAMA_CKPT_DUMP")) {
+            const std::string base = std::string(dir) + "/ckpt-slot" + std::to_string(slot.id) + "-n" + std::to_string(cur.n_tokens);
+            const std::pair<const char *, const std::vector<uint8_t> *> parts[] = {{"tgt", &cur.data_tgt}, {"dft", &cur.data_dft}, {"spec", &cur.data_spec}};
+            for (const auto & p : parts) {
+                FILE * f = fopen((base + "." + p.first).c_str(), "wb");
+                if (f) { fwrite(p.second->data(), 1, p.second->size(), f); fclose(f); }
+            }
+            SLT_INF(slot, "checkpoint dumped to %s.{tgt,dft,spec} (%zu + %zu + %zu bytes)\n", base.c_str(), cur.data_tgt.size(), cur.data_dft.size(), cur.data_spec.size());
+        }
 
         SLT_TRC(slot,
                 "created context checkpoint %d of %d (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB)\n",
@@ -2766,7 +2818,13 @@ private:
                         break; // drop the task
                     }
 
-                    if (params_base.cache_idle_slots) {
+                    // in split mode (per-slot caches) the idle-slot save is a copy of a state that stays live in its slot and
+                    // is never loaded (a similarity pick keeping over half of a slot never saves, so never loads); the
+                    // save-on-overwrite rule above covers the one case it did. Skipped there since 2026-09-26
+                    // (perf/ctx-class-cache.md); LLAMA_CACHE_IDLE_SPLIT=1 restores the copies. Under unified KV the save is
+                    // a move that frees the shared cells, unchanged.
+                    static const bool idle_split = getenv("LLAMA_CACHE_IDLE_SPLIT") && atoi(getenv("LLAMA_CACHE_IDLE_SPLIT")) != 0;
+                    if (params_base.cache_idle_slots && (params_base.kv_unified || idle_split)) {
                         for (auto & slot : slots) {
                             if (!slot.is_processing()) {
                                 SLT_TRC(slot, "%s", "saving idle slot to prompt cache\n");
@@ -3794,6 +3852,24 @@ private:
                                     bool do_reset = it == slot.prompt.checkpoints.rend();
 
                                     if (!do_reset) {
+                                        // LLAMA_CKPT_LOAD_DIR=<dir>: restore the target blob from <dir>/ckpt-slot<id>-n<tokens>.tgt when
+                                        // that file exists (same size) - the lossy-checkpoint experiment (perf/ctx-class-cache.md:
+                                        // rank-k truncated states written by perf/ckpt-lowrank.py in place of the exact dump)
+                                        if (const char * dir = getenv("LLAMA_CKPT_LOAD_DIR")) {
+                                            const std::string path = std::string(dir) + "/ckpt-slot" + std::to_string(slot.id) + "-n" + std::to_string(it->n_tokens) + ".tgt";
+                                            if (FILE * f = fopen(path.c_str(), "rb")) {
+                                                std::vector<uint8_t> buf(it->data_tgt.size());
+                                                const size_t n = fread(buf.data(), 1, buf.size(), f);
+                                                const bool eof = fgetc(f) == EOF;
+                                                fclose(f);
+                                                if (n == buf.size() && eof) {
+                                                    it->data_tgt.swap(buf);
+                                                    SLT_INF(slot, "checkpoint target blob replaced from %s (%zu bytes)\n", path.c_str(), n);
+                                                } else {
+                                                    SLT_WRN(slot, "checkpoint file %s has the wrong size (read %zu, want %zu) - ignored\n", path.c_str(), n, buf.size());
+                                                }
+                                            }
+                                        }
                                         // restore the context checkpoint
                                         it->load_tgt(ctx_tgt, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
                                         it->load_dft(ctx_dft, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);

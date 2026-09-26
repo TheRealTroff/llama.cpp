@@ -1787,8 +1787,26 @@ server_prompt_cache_state * server_prompt_cache::alloc(const server_prompt & pro
     return &states.back();
 }
 
+int server_prompt_cache::effective_reuse(const server_prompt & prompt, int lcp) const {
+    // the last sampled token of a finished request is never decoded: a prefix that reaches it needs no restore
+    if (!ckpt_aware || lcp <= 0 || lcp >= (int) prompt.tokens.size() - 1) {
+        return lcp;
+    }
+
+    // the recurrent/SWA state sits at the end of the prompt; a divergence inside it resumes from the newest
+    // checkpoint at or before the common prefix (server_context's checkpoint search), or from zero
+    int res = 0;
+    for (const auto & ckpt : prompt.checkpoints) {
+        if (ckpt.n_tokens <= lcp) {
+            res = std::max<int>(res, (int) ckpt.n_tokens);
+        }
+    }
+
+    return res;
+}
+
 bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tokens_new, llama_context * ctx_tgt, llama_context * ctx_dft, int32_t id_slot) {
-    const int lcp_best = prompt.tokens.get_common_prefix(tokens_new);
+    const int lcp_best = effective_reuse(prompt, prompt.tokens.get_common_prefix(tokens_new));
 
     float f_keep_best = prompt.tokens.size() > 0 ? float(lcp_best) / prompt.tokens.size() : -1.0f; // empty slot: any cache entry wins
     float f_sim_best  = float(lcp_best) / tokens_new.size();
@@ -1799,7 +1817,7 @@ bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tok
 
     // find the most similar cached prompt, that would also preserve the most context
     for (auto it = states.begin(); it != states.end(); ++it) {
-        const int lcp_cur = it->prompt.tokens.get_common_prefix(tokens_new);
+        const int lcp_cur = effective_reuse(it->prompt, it->prompt.tokens.get_common_prefix(tokens_new));
 
         const float f_keep_cur = float(lcp_cur) / it->prompt.tokens.size();
         const float f_sim_cur  = float(lcp_cur) / tokens_new.size();
