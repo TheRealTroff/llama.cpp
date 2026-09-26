@@ -353,4 +353,19 @@ rule then saves the 1.5K state, which is what makes its return cheap.
 
 **Gate**: `run-ctx-class-cache-gate.sh` (LINE=q4 K=4096, full control) twice on the branch binary, disk arm
 `coldspill-q4-disk` and RAM arm `coldspill-q4-ram` (`EXTRA_ENV=LLAMA_COLD_STATE=0`); the script now samples the
-server's RSS every 2 s and prints the peak per phase plus the disk-path counts. Results: PENDING (running).
+server's RSS every 2 s and prints the peak per phase plus the disk-path counts. **Both arms PASS** (2026-09-26,
+09:04-09:51): all 22 cached-phase shas identical between the arms, cached = uncached in each, A3's RAM round trip
+byte-identical (max |dlogprob| 0), cache peak 4 entries / 2723 MiB in both (the same bytes, in files vs in RAM).
+
+| | disk arm | RAM arm (`LLAMA_COLD_STATE=0`) |
+|---|---|---|
+| server RSS peak, cached phase (5 streams, 4 entries) | **20.30 GiB** | 24.34 GiB |
+| server RSS peak, control phase | 19.81 GiB | 23.02 GiB |
+| spills / reads from disk | 84 checkpoints (mean 15.7 ms, max 59.6), 16 entries (mean 30 ms, max 141 at 252 MiB) | 0 |
+| restores from disk | 6 checkpoints mean 11.4 ms; 7 entry reads mean 14.5 ms, max 23.4 | - |
+
+The spill takes 4.0 GiB off the process at the peak - the cache (2.7 GiB) plus the in-slot checkpoints. The fixed
+part (model 14.8 + drafter 1.0 + GDN state 1.2 + KV 1.2 + compute arenas 2.3 GiB) is what remains, see the memory
+breakdown discussion above. The mid-prefill costs are 15 ms per checkpoint and 30 ms per entry save, and all reads
+were page-cache hits; a cold-from-flash read is ~50 ms per 150 MiB. Adoption = owner (merge to prod as a default like
+the other four); off-switch `LLAMA_COLD_STATE=0`. Not on prod.
