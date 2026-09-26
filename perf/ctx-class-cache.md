@@ -305,3 +305,7 @@ Gates on the default binary (2026-09-26, no flags): the cache gate `ctxcache-def
 2608/2639, B6 from the cache 5086/5114, peak 4 entries / 2723 MiB, all shas, A3 round trip identical) - PASS; the
 multi-slot gate `defaults-0926` q4 short + long PASS, ud short + long PASS (every reference sha held: the defaults touch
 only what is saved and loaded). Merged to prod the same morning; post-merge gates on the prod binary recorded below.
+
+Post-merge on the prod binary (prod `4770657a2`, rebuilt 2026-09-26 morning): cache gate `ctxcache-postmerge` PASS
+(= arm D line for line, peak 4 entries / 2723 MiB, B6 from the cache, A3 round trip identical), multi-slot gate
+`postmerge-0926` q4 short arm PASS on its references. The defaults are live on prod.
