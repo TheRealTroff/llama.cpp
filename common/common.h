@@ -14,6 +14,7 @@
 #include <string_view>
 #include <vector>
 #include <map>
+#include <memory>
 #include <algorithm>
 #include <fstream>
 
@@ -1134,6 +1135,31 @@ enum ggml_opt_optimizer_type common_opt_get_optimizer(const char *);
 // prompt utils
 //
 
+// A byte blob spilled to an unlinked temporary file (2026-09-26, perf/ctx-class-cache.md "Cold state on disk"):
+// sequence state that is written once and read at most a few times - the prompt checkpoints (recurrent state at a
+// past position, read on a rollback) and the RAM prompt-cache entries (a displaced slot's state, read if that
+// conversation returns) - kept out of RAM. The live KV never comes here. The file is unlinked at creation, so it
+// lives exactly as long as the last reference and leaves nothing behind on a crash; its pages stay in the OS buffer
+// cache while memory is plentiful and go to flash under pressure.
+struct common_cold_blob {
+    int    fd = -1;
+    size_t n  = 0;
+
+    ~common_cold_blob();
+
+    // write n bytes to a fresh unlinked file in dir; nullptr on any failure (the caller keeps the bytes in RAM)
+    static std::shared_ptr<common_cold_blob> create(const std::string & dir, const char * hint, const uint8_t * data, size_t n);
+
+    // read the whole blob into out (resized to n); false on a short read
+    bool read(std::vector<uint8_t> & out) const;
+};
+
+using common_cold_blob_ptr = std::shared_ptr<common_cold_blob>;
+
+// the directory cold state spills to; "" = keep everything in RAM.
+// LLAMA_COLD_STATE=0 keeps everything in RAM, LLAMA_COLD_STATE_DIR=<dir> overrides the OS temp dir
+const std::string & common_cold_state_dir();
+
 struct common_prompt_checkpoint {
     int64_t n_tokens;
 
@@ -1150,10 +1176,20 @@ struct common_prompt_checkpoint {
     // (e.g. eagle3's deferred-boundary g_embd row)
     std::vector<uint8_t> data_spec;
 
+    // the target / drafter blobs when spilled to disk (data_tgt / data_dft are then empty); shared between
+    // copies of the checkpoint (a slot's list and a prompt-cache entry hold the same file)
+    common_cold_blob_ptr cold_tgt;
+    common_cold_blob_ptr cold_dft;
+
     size_t size() const;
+    size_t size_tgt() const;
+    size_t size_dft() const;
 
     bool empty() const;
     void clear();
+
+    // move data_tgt / data_dft to unlinked files in dir (no-op for empty blobs or an empty dir); returns the bytes moved
+    size_t spill(const std::string & dir);
 
     void update_pos(
             int64_t n_tokens,

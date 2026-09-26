@@ -11,6 +11,7 @@
 #include "unicode.h"
 
 #include <algorithm>
+#include <cerrno>
 #include <cinttypes>
 #include <climits>
 #include <cmath>
@@ -2250,12 +2251,117 @@ bool common_prompt_batch_decode(
     return true;
 }
 
+//
+// cold state (unlinked temp files)
+//
+
+common_cold_blob::~common_cold_blob() {
+#ifndef _WIN32
+    if (fd >= 0) {
+        close(fd);
+    }
+#endif
+}
+
+std::shared_ptr<common_cold_blob> common_cold_blob::create(const std::string & dir, const char * hint, const uint8_t * data, size_t n) {
+#ifdef _WIN32
+    GGML_UNUSED(dir); GGML_UNUSED(hint); GGML_UNUSED(data); GGML_UNUSED(n);
+    return nullptr;
+#else
+    if (dir.empty() || n == 0) {
+        return nullptr;
+    }
+
+    std::string path = dir + "/llama-cold-" + hint + "-XXXXXX";
+    const int fd = mkstemp(&path[0]);
+    if (fd < 0) {
+        LOG_WRN("%s: mkstemp(%s) failed: %s - keeping the blob in RAM\n", __func__, path.c_str(), strerror(errno));
+        return nullptr;
+    }
+    unlink(path.c_str());   // the file lives as long as the descriptor: nothing to clean up, ever
+
+    auto res = std::make_shared<common_cold_blob>();
+    res->fd = fd;
+    res->n  = n;
+
+    size_t off = 0;
+    while (off < n) {
+        const ssize_t w = write(fd, data + off, n - off);
+        if (w <= 0) {
+            if (w < 0 && errno == EINTR) {
+                continue;
+            }
+            LOG_WRN("%s: write(%s) failed at %zu of %zu: %s - keeping the blob in RAM\n", __func__, path.c_str(), off, n, strerror(errno));
+            return nullptr;
+        }
+        off += (size_t) w;
+    }
+
+    return res;
+#endif
+}
+
+bool common_cold_blob::read(std::vector<uint8_t> & out) const {
+#ifdef _WIN32
+    GGML_UNUSED(out);
+    return false;
+#else
+    out.resize(n);
+
+    size_t off = 0;
+    while (off < n) {
+        const ssize_t r = pread(fd, out.data() + off, n - off, (off_t) off);
+        if (r <= 0) {
+            if (r < 0 && errno == EINTR) {
+                continue;
+            }
+            LOG_ERR("%s: pread failed at %zu of %zu: %s\n", __func__, off, n, r < 0 ? strerror(errno) : "EOF");
+            return false;
+        }
+        off += (size_t) r;
+    }
+
+    return true;
+#endif
+}
+
+const std::string & common_cold_state_dir() {
+    static const std::string dir = []() -> std::string {
+        if (const char * e = getenv("LLAMA_COLD_STATE"); e && atoi(e) == 0) {
+            return "";
+        }
+        if (const char * e = getenv("LLAMA_COLD_STATE_DIR"); e && *e) {
+            return e;
+        }
+        std::error_code ec;
+        const auto tmp = std::filesystem::temp_directory_path(ec);
+        if (ec) {
+            return "";
+        }
+        std::string res = tmp.string();
+        while (res.size() > 1 && res.back() == '/') {
+            res.pop_back();
+        }
+        return res;
+    }();
+
+    return dir;
+}
+
 size_t common_prompt_checkpoint::size() const {
-    return data_tgt.size() + data_dft.size() + data_spec.size();
+    return size_tgt() + size_dft() + data_spec.size();
+}
+
+size_t common_prompt_checkpoint::size_tgt() const {
+    return cold_tgt ? cold_tgt->n : data_tgt.size();
+}
+
+size_t common_prompt_checkpoint::size_dft() const {
+    return cold_dft ? cold_dft->n : data_dft.size();
 }
 
 bool common_prompt_checkpoint::empty() const {
-    return data_tgt.empty();
+    return data_tgt.empty() && !cold_tgt;
 }
 
 void common_prompt_checkpoint::clear() {
@@ -2267,6 +2373,33 @@ void common_prompt_checkpoint::clear() {
     data_tgt.clear();
     data_dft.clear();
     data_spec.clear();
+
+    cold_tgt.reset();
+    cold_dft.reset();
+}
+
+size_t common_prompt_checkpoint::spill(const std::string & dir) {
+    size_t res = 0;
+
+    if (!data_tgt.empty()) {
+        if (auto cold = common_cold_blob::create(dir, "ckpt-tgt", data_tgt.data(), data_tgt.size())) {
+            res += data_tgt.size();
+            cold_tgt = std::move(cold);
+            data_tgt.clear();
+            data_tgt.shrink_to_fit();
+        }
+    }
+
+    if (!data_dft.empty()) {
+        if (auto cold = common_cold_blob::create(dir, "ckpt-dft", data_dft.data(), data_dft.size())) {
+            res += data_dft.size();
+            cold_dft = std::move(cold);
+            data_dft.clear();
+            data_dft.shrink_to_fit();
+        }
+    }
+
+    return res;
 }
 
 void common_prompt_checkpoint::update_pos(
@@ -2288,6 +2421,7 @@ void common_prompt_checkpoint::update_tgt(
 
     const size_t ckpt_size = llama_state_seq_get_size_ext(ctx, seq_id, flags);
 
+    cold_tgt.reset();
     data_tgt.resize(ckpt_size);
 
     const size_t n = llama_state_seq_get_data_ext(ctx, data_tgt.data(), ckpt_size, seq_id, flags);
@@ -2306,6 +2440,7 @@ void common_prompt_checkpoint::update_dft(
 
     const size_t ckpt_size = llama_state_seq_get_size_ext(ctx, seq_id, flags);
 
+    cold_dft.reset();
     data_dft.resize(ckpt_size);
 
     const size_t n = llama_state_seq_get_data_ext(ctx, data_dft.data(), ckpt_size, seq_id, flags);
@@ -2319,6 +2454,19 @@ void common_prompt_checkpoint::load_tgt(
         llama_seq_id seq_id,
         llama_state_seq_flags flags) const {
     if (ctx == nullptr) {
+        return;
+    }
+
+    if (cold_tgt) {
+        // spilled: read the blob back into a temporary buffer (the file stays; a later rollback may need it again)
+        std::vector<uint8_t> buf;
+        if (!cold_tgt->read(buf)) {
+            GGML_ABORT("checkpoint read from disk failed (%zu bytes)\n", cold_tgt->n);
+        }
+        const size_t n = llama_state_seq_set_data_ext(ctx, buf.data(), buf.size(), seq_id, flags);
+        if (n != buf.size()) {
+            GGML_ABORT("checkpoint size mismatch: expected %zu, got %zu\n", buf.size(), n);
+        }
         return;
     }
 
@@ -2340,6 +2488,19 @@ void common_prompt_checkpoint::load_dft(
         return;
     }
 
+    if (cold_dft) {
+        // spilled: read the blob back into a temporary buffer (the file stays; a later rollback may need it again)
+        std::vector<uint8_t> buf;
+        if (!cold_dft->read(buf)) {
+            GGML_ABORT("checkpoint read from disk failed (%zu bytes)\n", cold_dft->n);
+        }
+        const size_t n = llama_state_seq_set_data_ext(ctx, buf.data(), buf.size(), seq_id, flags);
+        if (n != buf.size()) {
+            GGML_ABORT("checkpoint size mismatch: expected %zu, got %zu\n", buf.size(), n);
+        }
+        return;
+    }
+
     if (data_dft.empty()) {
         return;
     }
@@ -2352,9 +2513,11 @@ void common_prompt_checkpoint::load_dft(
 
 void common_prompt_checkpoint::clear_tgt() {
     data_tgt.clear();
+    cold_tgt.reset();
 }
 
 void common_prompt_checkpoint::clear_dft() {
     data_dft.clear();
     data_spec.clear();
+    cold_dft.reset();
 }

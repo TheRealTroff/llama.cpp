@@ -584,8 +584,37 @@ struct server_prompt_data {
     std::vector<uint8_t> main;
     std::vector<uint8_t> drft;
 
+    // the blobs when spilled to disk (main / drft are then empty) - see common_cold_blob
+    common_cold_blob_ptr cold_main;
+    common_cold_blob_ptr cold_drft;
+
     size_t size() const {
-        return main.size() + drft.size();
+        return size_main() + size_drft();
+    }
+
+    size_t size_main() const { return cold_main ? cold_main->n : main.size(); }
+    size_t size_drft() const { return cold_drft ? cold_drft->n : drft.size(); }
+
+    // move main / drft to unlinked files in dir; returns the bytes moved
+    size_t spill(const std::string & dir) {
+        size_t res = 0;
+        if (!main.empty()) {
+            if (auto cold = common_cold_blob::create(dir, "cache-main", main.data(), main.size())) {
+                res += main.size();
+                cold_main = std::move(cold);
+                main.clear();
+                main.shrink_to_fit();
+            }
+        }
+        if (!drft.empty()) {
+            if (auto cold = common_cold_blob::create(dir, "cache-drft", drft.data(), drft.size())) {
+                res += drft.size();
+                cold_drft = std::move(cold);
+                drft.clear();
+                drft.shrink_to_fit();
+            }
+        }
+        return res;
     }
 };
 

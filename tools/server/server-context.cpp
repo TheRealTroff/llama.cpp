@@ -631,6 +631,14 @@ struct server_slot {
             llama_state_seq_get_data_ext(ctx_dft, cur->data.drft.data(), cur_size_dft, id, LLAMA_STATE_SEQ_FLAGS_NONE);
         }
 
+        // cold state on disk (2026-09-26): a cache entry is read at most once, if the conversation returns - spill it
+        // (its checkpoints were spilled when they were made and share their files with the slot's list)
+        if (const auto & dir = common_cold_state_dir(); !dir.empty()) {
+            const int64_t t0 = ggml_time_us();
+            const size_t n = cur->data.spill(dir);
+            SRV_DBG(" - cached state spilled to disk: %.1f MiB in %.1f ms\n", n / (1024.0 * 1024.0), (ggml_time_us() - t0) / 1000.0);
+        }
+
         return true;
     }
 
@@ -1700,6 +1708,13 @@ private:
         }
         SRV_TRC("%s", "for more info see https://github.com/ggml-org/llama.cpp/pull/16391\n");
 
+        // cold state on disk (2026-09-26): prompt checkpoints and prompt-cache entries spill to unlinked temp files
+        if (const auto & dir = common_cold_state_dir(); !dir.empty()) {
+            SRV_INF("cold state: checkpoints + prompt-cache entries spill to %s (LLAMA_COLD_STATE=0 keeps them in RAM, LLAMA_COLD_STATE_DIR=<dir> moves them)\n", dir.c_str());
+        } else {
+            SRV_INF("%s", "cold state: checkpoints + prompt-cache entries stay in RAM (LLAMA_COLD_STATE=0)\n");
+        }
+
         if (params_base.n_ctx_checkpoints > 0) {
             SRV_TRC("context checkpoints enabled, max = %d, min spacing = %d\n",
                     params_base.n_ctx_checkpoints, params_base.checkpoint_min_step);
@@ -2750,10 +2765,19 @@ private:
             SLT_INF(slot, "checkpoint dumped to %s.{tgt,dft,spec} (%zu + %zu + %zu bytes)\n", base.c_str(), cur.data_tgt.size(), cur.data_dft.size(), cur.data_spec.size());
         }
 
+        // cold state on disk (2026-09-26, perf/ctx-class-cache.md "Cold state on disk"): a checkpoint is read only
+        // on a rollback - move its blobs to an unlinked temp file right away (the per-round spec_ckpt stays in RAM)
+        double t_spill_ms = 0.0;
+        if (const auto & dir = common_cold_state_dir(); !dir.empty()) {
+            const int64_t t0 = ggml_time_us();
+            cur.spill(dir);
+            t_spill_ms = (ggml_time_us() - t0) / 1000.0;
+        }
+
         SLT_TRC(slot,
-                "created context checkpoint %d of %d (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB)\n",
+                "created context checkpoint %d of %d (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB%s, spill %.1f ms)\n",
                 (int) slot.prompt.checkpoints.size(), params_base.n_ctx_checkpoints, cur.pos_min,
-                cur.pos_max, cur.n_tokens, (float) cur.size() / 1024 / 1024);
+                cur.pos_max, cur.n_tokens, (float) cur.size() / 1024 / 1024, cur.cold_tgt ? " on disk" : "", t_spill_ms);
     }
 
     // returns false to decline the task, it is offered again after the decode is done
@@ -3573,7 +3597,7 @@ private:
                     SLT_DBG(slot, "created speculative checkpoint (pos_min = %d, pos_max = %d, n_tokens = %d, size = %.3f MiB, draft = %.3f MiB)\n",
                             ckpt.pos_min, ckpt.pos_max, slot.prompt.n_tokens(),
                             (float) ckpt.size() / 1024 / 1024,
-                            (float) ckpt.data_dft.size() / 1024 / 1024);
+                            (float) ckpt.size_dft() / 1024 / 1024);
                 }
 
                 if (use_ckpt_dft) {
@@ -3858,21 +3882,25 @@ private:
                                         if (const char * dir = getenv("LLAMA_CKPT_LOAD_DIR")) {
                                             const std::string path = std::string(dir) + "/ckpt-slot" + std::to_string(slot.id) + "-n" + std::to_string(it->n_tokens) + ".tgt";
                                             if (FILE * f = fopen(path.c_str(), "rb")) {
-                                                std::vector<uint8_t> buf(it->data_tgt.size());
+                                                std::vector<uint8_t> buf(it->size_tgt());
                                                 const size_t n = fread(buf.data(), 1, buf.size(), f);
                                                 const bool eof = fgetc(f) == EOF;
                                                 fclose(f);
                                                 if (n == buf.size() && eof) {
                                                     it->data_tgt.swap(buf);
+                                                    it->cold_tgt.reset();   // the replacement is resident
                                                     SLT_INF(slot, "checkpoint target blob replaced from %s (%zu bytes)\n", path.c_str(), n);
                                                 } else {
                                                     SLT_WRN(slot, "checkpoint file %s has the wrong size (read %zu, want %zu) - ignored\n", path.c_str(), n, buf.size());
                                                 }
                                             }
                                         }
-                                        // restore the context checkpoint
+                                        // restore the context checkpoint (from its disk file when spilled)
+                                        const int64_t t_restore0 = ggml_time_us();
                                         it->load_tgt(ctx_tgt, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
                                         it->load_dft(ctx_dft, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+                                        SLT_DBG(slot, "checkpoint restored%s: %.1f MiB in %.1f ms\n", it->cold_tgt ? " from disk" : "",
+                                                (float) it->size() / 1024 / 1024, (ggml_time_us() - t_restore0) / 1000.0);
                                         // restore the draft's speculative state
                                         common_speculative_set_state(spec.get(), slot.id, it->data_spec);
 

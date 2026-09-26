@@ -1843,6 +1843,16 @@ bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tok
         {
             auto & data = it_best->data.main;
 
+            // spilled to disk: read it back into the (empty) vector first; the file goes with the entry
+            if (it_best->data.cold_main) {
+                const int64_t t0 = ggml_time_us();
+                if (!it_best->data.cold_main->read(data)) {
+                    SRV_ERR("failed to read cached state from disk (%zu bytes)\n", it_best->data.cold_main->n);
+                    return false;
+                }
+                SRV_DBG(" - cached state read from disk: %.1f MiB in %.1f ms\n", data.size() / (1024.0 * 1024.0), (ggml_time_us() - t0) / 1000.0);
+            }
+
             const size_t size = data.size();
             const size_t n = llama_state_seq_set_data_ext(ctx_tgt, data.data(), size, id_slot, 0);
             if (n != size) {
@@ -1857,6 +1867,13 @@ bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tok
 
         {
             auto & data = it_best->data.drft;
+
+            if (it_best->data.cold_drft) {
+                if (!it_best->data.cold_drft->read(data)) {
+                    SRV_ERR("failed to read cached draft state from disk (%zu bytes)\n", it_best->data.cold_drft->n);
+                    return false;
+                }
+            }
 
             if (!data.empty()) {
                 GGML_ASSERT(ctx_dft);

@@ -60,6 +60,9 @@ start_server() {  # start_server <log> -> pid in $pid
   env "${PICK_ENV[@]}" GGML_METAL_SYNC_TIMEOUT=$SYNC_TIMEOUT $EXTRA_ENV "$BIN/llama-server" -m "$PICK_MODEL" "${ARGS[@]}" \
     --ctx-seq-sizes "$SIZES" "${PICK_SPEC[@]}" $EXTRA_ARGS -lv 5 --port $PORT >"$slog" 2>&1 &
   pid=$!
+  # sample the server's resident set every 2 s (cold state on disk, 2026-09-26: unlinked-file pages sit in the OS
+  # buffer cache, not in the process RSS); the phase prints the peak
+  ( while kill -0 $pid 2>/dev/null; do ps -o rss= -p $pid 2>/dev/null; sleep 2; done ) > "$slog.rss" &
   for i in $(seq 1 300); do
     curl -sf -o /dev/null "http://127.0.0.1:$PORT/health" && return 0
     sleep 2; kill -0 $pid 2>/dev/null || { echo "server died:"; tail -6 "$slog"; return 1; }
@@ -69,6 +72,10 @@ start_server() {  # start_server <log> -> pid in $pid
 check_server() {  # after a phase: died? sync guard?
   local slog=$1
   grep -ciE "error|failed" "$slog" | sed 's/^/  server log error lines: /'
+  [ -s "$slog.rss" ] && awk 'BEGIN{m=0} {if ($1>m) m=$1} END{printf "  server RSS peak: %.2f GiB (%d samples)\n", m/1048576, NR}' "$slog.rss"
+  grep -m1 "cold state:" "$slog" | sed -E 's/^[0-9.]+ [A-Z] /  /'
+  grep -cE "spilled to disk|on disk, spill" "$slog" | sed 's/^/  spills logged: /'
+  grep -E "restored from disk|read from disk" "$slog" | sed -E 's/^.*(restored from disk|read from disk)/\1/' | sort | uniq -c | sed 's/^/  /' | head -4
   if ! kill -0 $pid 2>/dev/null; then echo "  SERVER DIED DURING THE PHASE (log $slog)"; grep -m3 "sync-guard" "$slog" | sed 's/^/    /'; fi
   grep -q "sync-guard: backend" "$slog" && { echo "  THE SYNC GUARD FIRED - GPU hang. Stopping."; kill_server $pid; exit 2; }
 }
