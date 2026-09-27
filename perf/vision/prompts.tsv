@@ -1,0 +1,41 @@
+# image	size	qid	kind	n	prompt	expect
+# kind: fact = exact substring(s) (';'-separated, all required) | edit = edit-distance ratio vs expect | abstract = required facts ('|' = any-of within a group, ';' between groups) | desc = no expectation, sha only | control
+# size: which rung of images/prepared/<image>/<image>-<size>; 'none' = no image; 'unrot' = the unrotated control
+IMG_3334	1024	label	fact	64	What is printed on the label of the large bottle the man is holding? Answer with the label text only.	Feuillien
+IMG_3334	1024	desc	desc	160	Describe this image in two sentences.	
+IMG_3334	1024	scene	abstract	300	What is going on in this picture, and where do you think it was taken?	bottle|beer|bar
+IMG_3355	full	fr	edit	200	Transcribe the French paragraph on the sign exactly as written.	Avec ses assises de dimensions diverses permettant de s'installer facilement et confortablement, ses bornes d'arcade et ses tables de jeux pour amuser petits et grands, la salle d'embarquement permet d'offrir à chaque passager l'avant-vol dont il rêve.
+IMG_3355	2048	fr	edit	200	Transcribe the French paragraph on the sign exactly as written.	Avec ses assises de dimensions diverses permettant de s'installer facilement et confortablement, ses bornes d'arcade et ses tables de jeux pour amuser petits et grands, la salle d'embarquement permet d'offrir à chaque passager l'avant-vol dont il rêve.
+IMG_3355	1024	fr	edit	200	Transcribe the French paragraph on the sign exactly as written.	Avec ses assises de dimensions diverses permettant de s'installer facilement et confortablement, ses bornes d'arcade et ses tables de jeux pour amuser petits et grands, la salle d'embarquement permet d'offrir à chaque passager l'avant-vol dont il rêve.
+IMG_3355	512	fr	edit	200	Transcribe the French paragraph on the sign exactly as written.	Avec ses assises de dimensions diverses permettant de s'installer facilement et confortablement, ses bornes d'arcade et ses tables de jeux pour amuser petits et grands, la salle d'embarquement permet d'offrir à chaque passager l'avant-vol dont il rêve.
+IMG_3355	unrot	fr	edit	200	Transcribe the French paragraph on the sign exactly as written.	Avec ses assises de dimensions diverses permettant de s'installer facilement et confortablement, ses bornes d'arcade et ses tables de jeux pour amuser petits et grands, la salle d'embarquement permet d'offrir à chaque passager l'avant-vol dont il rêve.
+IMG_3355	1024	desc	desc	160	Describe this image in two sentences.	
+IMG_3364	1024	event	abstract	300	What event is this? Explain what in the image supports your answer.	surf|competition|contest|championship
+IMG_3364	1024	desc	desc	160	Describe this image in two sentences.	
+IMG_3364	full	desc	desc	160	Describe this image in two sentences.	
+IMG_3414	1024	name	fact	64	What is the name of the surfer in the headline? Answer with the name only.	Kale Brock
+IMG_3414	full	name	fact	64	What is the name of the surfer in the headline? Answer with the name only.	Kale Brock
+IMG_3414	1024	desc	desc	160	Describe this image in two sentences.	
+IMG_3428	full	table	fact	64	What number is written on the table card? Answer with the number only.	702
+IMG_3428	2048	table	fact	64	What number is written on the table card? Answer with the number only.	702
+IMG_3428	1024	table	fact	64	What number is written on the table card? Answer with the number only.	702
+IMG_3428	512	table	fact	64	What number is written on the table card? Answer with the number only.	702
+IMG_3428	1024	meal	abstract	300	What cut of meat is being eaten and what are the sides?	rib|côte|bone;potato;salad|green
+IMG_3428	1024	desc	desc	160	Describe this image in two sentences.	
+IMG_3430	1024	business	abstract	300	What kind of business is this and what would you do here?	surf;board
+IMG_3430	1024	desc	desc	160	Describe this image in two sentences.	
+gdn	full	layers	fact	64	How many layers does each of the two models have? Answer with the two numbers only.	48;27
+gdn	1024	layers	fact	64	How many layers does each of the two models have? Answer with the two numbers only.	48;27
+gdn	full	psi	fact	64	In the legend of the Gated DeltaNet block, what does the symbol ψ stand for? Answer briefly.	SiLU
+gdn	2048	psi	fact	64	In the legend of the Gated DeltaNet block, what does the symbol ψ stand for? Answer briefly.	SiLU
+gdn	1024	psi	fact	64	In the legend of the Gated DeltaNet block, what does the symbol ψ stand for? Answer briefly.	SiLU
+gdn	512	psi	fact	64	In the legend of the Gated DeltaNet block, what does the symbol ψ stand for? Answer briefly.	SiLU
+gdn	full	compare	abstract	400	What is this diagram comparing, and what is the main architectural difference between the two models?	Qwen3|Qwen;Kimi;Delta|delta;latent|MLA|gated attention
+gdn	1024	desc	desc	160	Describe this image in two sentences.	
+rome	full	low14	fact	64	What is the low temperature on October 14? Answer with the number only.	13
+rome	1024	low14	fact	64	What is the low temperature on October 14? Answer with the number only.	13
+rome	512	low14	fact	64	What is the low temperature on October 14? Answer with the number only.	13
+rome	full	storms	fact	64	Which dates show a thunderstorm icon? Answer with the dates only.	29;30
+rome	full	pack	abstract	400	I'm going to Rome October 8-12. Based on this forecast, what kind of clothes should I pack?	rain|umbrella|jacket|waterproof;25|26|warm;13|14|cool|evening
+rome	1024	desc	desc	160	Describe this image in two sentences.	
+# none/textonly control = SERVER PHASE ONLY (the CLI has no single-turn text mode; it drops into chat mode and loops on stdin)
