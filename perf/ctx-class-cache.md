@@ -368,7 +368,9 @@ The spill takes 4.0 GiB off the process at the peak - the cache (2.7 GiB) plus t
 part (model 14.8 + drafter 1.0 + GDN state 1.2 + KV 1.2 + compute arenas 2.3 GiB) is what remains, see the memory
 breakdown discussion above. The mid-prefill costs are 15 ms per checkpoint and 30 ms per entry save, and all reads
 were page-cache hits; a cold-from-flash read is ~50 ms per 150 MiB. **MERGED TO PROD 2026-09-26 (owner: 'Yes do it')** as a default like the other
-four; off-switch `LLAMA_COLD_STATE=0`. **OPEN: the prod binary was NOT rebuilt at the merge (owner packing the box) - run
+four; off-switch `LLAMA_COLD_STATE=0`. ~~OPEN: the prod binary was NOT rebuilt at the merge (owner packing the box) - run
 `cmake --build build --target llama-server -j 12` in llama.cpp-prod, then the multi-slot gate (run-multislot-gate.sh) on
 both lines; expected: every reference sha held (the change touches only what is saved and loaded) plus the
-`cold state:` startup line.**
+`cold state:` startup line.~~ **CLOSED 2026-09-27 02:15-02:24: prod rebuilt (f516876f1), multi-slot gate
+`coldspill-rebuild-0927` q4 short + long PASS, ud short + long PASS, every reference sha held, the `cold state:`
+startup line in all four server logs (spill dir = $TMPDIR). Nothing open on this note.**
