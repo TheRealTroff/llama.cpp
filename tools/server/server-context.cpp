@@ -215,6 +215,9 @@ struct server_slot {
     std::vector<int32_t> spec_i_batch;
     common_prompt_checkpoint spec_ckpt;
     bool spec_is_replay = false;
+    // set when the drafter could not ingest this request's prompt (an image chunk it has no room for, 2026-09-27):
+    // the request generates undrafted instead of failing; cleared on release
+    bool spec_off_request = false;
 
     // adaptive speculation depth (LLAMA_SPEC_ADAPTIVE=1): throughput-driven
     // base/probe controller over draft depth in [1, --spec-draft-n-max]
@@ -707,6 +710,7 @@ struct server_slot {
             spec_adaptive.inited = false;
             spec_conf.clear();
             spec_accept_route = 0;
+            spec_off_request = false;
             if (spec_ev.inited) {
                 spec_ev.begin_request();
             }
@@ -1069,7 +1073,7 @@ struct server_slot {
 // note: this is not a member of server_slot because we want to run it inside yield_to_queue
 //       slot is passed as const to avoid accidental modification of the slot state
 //       some pointers are allowed to be used, they are not used by to_json()
-static int process_mtmd_chunk(const server_slot & slot, mtmd::batch_ptr & mbatch, size_t idx, size_t & n_tokens_out) {
+static int process_mtmd_chunk(server_slot & slot, mtmd::batch_ptr & mbatch, size_t idx, size_t & n_tokens_out) {  // non-const: may set slot.spec_off_request
     GGML_ASSERT(slot.mctx);
     const auto & mctx = slot.mctx;
     const auto & input_tokens = slot.task->tokens;
@@ -1080,11 +1084,16 @@ static int process_mtmd_chunk(const server_slot & slot, mtmd::batch_ptr & mbatch
         if (mbatch) {
             float * embd = mtmd_batch_get_output_embd(mbatch.get(), chunk.get());
             if (embd) {
-                void * cb_data = slot.spec;
+                // the drafter sees the image embeddings too (its cache must not have a hole). If it cannot ingest
+                // them (2026-09-27: a 3072-token image overflows the windowed draft KV), that is the drafter's
+                // problem, not the request's: note it, keep decoding, and generate this request undrafted.
+                struct cb_state { common_speculative * spec; bool failed; };
+                cb_state cbs = { slot.spec, false };
+                void * cb_data = &cbs;
                 static auto cb = [](llama_batch batch, void * user_data) {
-                    common_speculative * spec = static_cast<common_speculative *>(user_data);
-                    if (!common_speculative_process(spec, batch)) {
-                        return 1;
+                    auto * st = static_cast<cb_state *>(user_data);
+                    if (st->spec && !st->failed && !common_speculative_process(st->spec, batch)) {
+                        st->failed = true;
                     }
                     return 0;
                 };
@@ -1105,6 +1114,10 @@ static int process_mtmd_chunk(const server_slot & slot, mtmd::batch_ptr & mbatch
                 if (res != 0) {
                     SLT_ERR(slot, "failed to decode mtmd chunk, idx = %zu, res = %d\n", idx, res);
                     return -1;
+                }
+                if (cbs.failed && !slot.spec_off_request) {
+                    SLT_WRN(slot, "%s", "the drafter could not ingest an image chunk: this request generates without speculation\n");
+                    slot.spec_off_request = true;
                 }
                 n_tokens_out = mtmd_input_chunk_get_n_tokens(chunk.get());
                 return 0; // success
@@ -3471,6 +3484,9 @@ private:
                 const bool use_ckpt_dft = ctx_dft_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL;
 
                 int n_draft_max = slot.get_n_draft_max();
+                if (slot.spec_off_request) {
+                    n_draft_max = 0;
+                }
 
                 // adaptive speculation depth (LLAMA_SPEC_ADAPTIVE=1)
                 static const bool env_spec_adaptive = getenv("LLAMA_SPEC_ADAPTIVE") ? atoi(getenv("LLAMA_SPEC_ADAPTIVE")) : 0;
@@ -3522,7 +3538,10 @@ private:
                         common_speculative_get_draft_params(spec.get(), slot.id) = {
                             /* .drafting = */ true,
                             /* .n_max    = */ n_draft_max,
-                            /* .n_past   = */ slot.prompt.n_tokens(),
+                            // the sequence position, not the token count: an image chunk advances the position by its grid
+                            // extent (mrope), which is what the drafter's cache was filled with; the token count overshoots by
+                            // the image's tokens minus that extent and every draft decode is rejected (2026-09-27)
+                            /* .n_past   = */ slot.prompt.tokens.pos_next(),
                             /* .id_last  = */ slot.sampled,
                             /* .prompt   = */ &slot.spec_prompt,
                             /* .result   = */ &slot.spec_draft,

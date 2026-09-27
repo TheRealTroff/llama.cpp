@@ -33,7 +33,8 @@ def main():
     print(f"{'image':9} {'size':5} {'qid':9} {'kind':8} {'enc_ms':>6} {'wall':>5} {'score':>7}  {'sha':12} {'ref':5}  answer")
     for key, r in got.items():
         kind, expect = rows.get(key, ('?', ''))
-        ans = open(os.path.join(a.dir, r['file'])).read()
+        fp = os.path.join(a.dir, r['file'])
+        ans = open(fp).read() if os.path.exists(fp) else ''   # a missing file = the request errored; scores as a fail, shows MISSING
         score = ''
         if kind in ('fact', 'control'):
             ok = all(norm(e) in norm(ans) for e in expect.split(';')); score = 'PASS' if ok else 'FAIL'
@@ -51,7 +52,7 @@ def main():
         rs = ''
         if ref:
             rr = ref.get(key); rs = '-' if rr is None else ('same' if rr['sha12'] == r['sha12'] else 'DIFF')
-        first = ans.strip().splitlines()[0][:70] if ans.strip() else ''
+        first = ans.strip().splitlines()[0][:70] if ans.strip() else 'MISSING'
         print(f"{key[0]:9} {key[1]:5} {key[2]:9} {kind:8} {r['encode_ms']:>6} {r['wall_s']:>5} {score:>7}  {r['sha12']:12} {rs:5}  {first}")
     print(f"\nscored: {npass} pass, {nfail} fail" + (f"; sha vs ref: {sum(1 for k,r in got.items() if k in ref and ref[k]['sha12']==r['sha12'])}/{sum(1 for k in got if k in ref)} same" if ref else ''))
 
