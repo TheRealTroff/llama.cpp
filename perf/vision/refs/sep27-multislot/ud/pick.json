@@ -1,0 +1,143 @@
+{
+ "alone": {
+  "img-menu": {
+   "sha": "3b8174923ba6",
+   "wall": 15.5,
+   "prompt_ms": 7408,
+   "gen_n": 200,
+   "gen_ms": 8076,
+   "acc": 51.0,
+   "text": "Since you don\u2019t drink alcohol, you have several great non-alcoholic options on this menu \u2014 mostly under the **\u201cNON-ALCOHOLIC\u201d** and **\u201cSNACKS\u201d** sections. Here\u2019s what you can order and what it costs:\n\n---\n\n### \ud83e\udd64 **Non-Alcoholic Drinks**\n\n1. **Soda**  \n   - Coke, Diet Coke, Gingerale, Sprite, San Pellegrino  \n   \u2192 **$3**\n\n2. **Namalie\u2019s Juice**  \n   - Orange + Pineapple + Strawberry + Lemonade  \n   \u2192 **+$5** (so total $8 if you want to add it to a soda? Or maybe it\u2019s a standalone drink \u2014 clarify with staff, but likely $5 for the juice itself)\n\n3. **Mocktails**  \n   - Margarita (0% ABV)  \n   \u2192 **$6**\n\n> \u2705 *Note: The \u201cDraft Cocktails\u201d section (Flying Saucer,"
+  },
+  "img-steak": {
+   "sha": "5cfc2af73acd",
+   "wall": 15.4,
+   "prompt_ms": 7143,
+   "gen_n": 200,
+   "gen_ms": 8280,
+   "acc": 48.8,
+   "text": "Based on the visual evidence in the image, here\u2019s a breakdown of what\u2019s being served:\n\n---\n\n### \ud83e\udd69 **Main Cut of Meat:**\n\nThis is a **T-Bone Steak** (or possibly a **Porterhouse**, depending on the size of the tenderloin portion \u2014 but from the angle and proportions, it\u2019s most likely a T-bone).\n\n- You can clearly see the **T-shaped bone** running through the center.\n- On one side of the bone is the **strip steak** (New York strip), which has been sliced and shows a medium-rare doneness with a pink center.\n- On the other side is the **tenderloin** (filet mignon portion), which appears more tender and slightly less cooked than the strip.\n- The steak is well-seared with a dark crust, indicating it was grilled or pan-seared at high heat.\n\n> *Note: A Porterhouse is essentially a"
+  },
+  "img-bar": {
+   "sha": "db9384bbc003",
+   "wall": 15.4,
+   "prompt_ms": 7142,
+   "gen_n": 200,
+   "gen_ms": 8204,
+   "acc": 48.8,
+   "text": "This is a fun, playful, and likely staged photo taken in what appears to be a **specialty beer store or craft beer bar** \u2014 possibly one that also offers tastings or has a taproom area.\n\n### What\u2019s happening:\n- A man in a black apron (likely an employee or bartender) is holding a giant bottle of **St. Gallen Triple** \u2014 a Belgian-style strong ale \u2014 and pretending to pour it directly into the mouth of another man.\n- The second man, wearing glasses and a light-colored shirt, is leaning back with his mouth wide open, eyes closed, as if he\u2019s about to take a massive gulp \u2014 clearly for comedic effect.\n- Both are smiling/laughing, suggesting this is a lighthearted moment, not a real drinking contest or accident.\n- In the foreground, there\u2019s a stainless steel sink with a faucet and some empty bottles \u2014 reinforcing the idea that this might be near a cleaning station"
+  },
+  "img-rome": {
+   "sha": "4127c3564c8b",
+   "wall": 11.7,
+   "prompt_ms": 4943,
+   "gen_n": 200,
+   "gen_ms": 6730,
+   "acc": 66.5,
+   "text": "Based on the 10-day forecast for Rome from **October 8\u201312, 2026**, here\u2019s what you should pack:\n\n---\n\n### \ud83c\udf24\ufe0f **Weather Summary (Oct 8\u201312):**\n- **Highs:** 24\u00b0C \u2013 25\u00b0C (75\u00b0F \u2013 77\u00b0F)\n- **Lows:** 13\u00b0C \u2013 14\u00b0C (55\u00b0F \u2013 57\u00b0F)\n- **Conditions:** Mostly sunny or partly cloudy, with a chance of light rain on Oct 9 and possibly Oct 10.\n- **Overall:** Mild, pleasant autumn weather \u2014 warm days, cool evenings.\n\n---\n\n### \ud83d\udc55 **Clothing Recommendations:**\n\n#### \u2705 **Daytime (Warm & Sunny):**\n- Light layers: T-shirts, blouses, lightweight long-sleeve shirts\n- Shorts, skirts, or light pants (chinos, linen trousers"
+  },
+  "txt-code": {
+   "sha": "c491c821ebb9",
+   "wall": 8.4,
+   "prompt_ms": 1619,
+   "gen_n": 200,
+   "gen_ms": 6798,
+   "acc": 67.9,
+   "text": "### Function Explanation\n\nThis function implements a **single-producer, single-consumer (SPSC) lock-free ring buffer** push operation. It attempts to copy `n` bytes from the source buffer `src` into the ring buffer `r`.\n\n1.  **Read State**: It atomically reads the current `head` (write index) and `tail` (read index).\n2.  **Check Space**: It calculates the available space (`free`) and returns `-EAGAIN` if there isn't enough room for `n` bytes.\n3.  **Calculate Offset**: It determines the current write position within the circular buffer using a bitmask (`head & (r->cap - 1)`), which implies `r->cap` must be a power of two.\n4.  **Handle Wrap-around**: It splits the copy into two parts if the data crosses the end of the buffer:\n    *   `first`: The number of bytes to copy to"
+  },
+  "txt-prose": {
+   "sha": "7d678a414d85",
+   "wall": 9.3,
+   "prompt_ms": 883,
+   "gen_n": 200,
+   "gen_ms": 8375,
+   "acc": 47.2,
+   "text": "The wind did not howl; it screamed. It was a high, thin shriek that tore through the salt-crusted shutters of the keeper\u2019s cottage, rattling the glass in its frames until the whole structure seemed to vibrate with a low, bone-deep hum. Outside, the sea was a churning mass of slate and foam, throwing itself against the black rocks of the island\u2019s edge with a violence that felt personal.\n\nElara moved through the small, circular room with the mechanical precision of a metronome. It was 04:00. The time for the wick. She climbed the spiral stairs, her boots clicking against the iron treads, the sound swallowed instantly by the gale outside. The lamp room was a cathedral of light and heat, the great Fresnel lens rotating with a slow, hypnotic *whir-click, whir-click*. She adjusted the wick, trimmed the flame, and checked the oil gauge. Her hands"
+  },
+  "txt-chat": {
+   "sha": "71212738614d",
+   "wall": 2.5,
+   "prompt_ms": 894,
+   "gen_n": 43,
+   "gen_ms": 1621,
+   "acc": 54.2,
+   "text": "That can be really frustrating, especially when the status hasn't updated in a few days. Let me check the carrier's latest scan data to see if there are any specific delays or issues noted on their end."
+  }
+ },
+ "mixed": {
+  "txt-chat": {
+   "sha": "71212738614d",
+   "wall": 14.6,
+   "prompt_ms": 10490,
+   "gen_n": 43,
+   "gen_ms": 4002,
+   "acc": 75.0,
+   "text": "That can be really frustrating, especially when the status hasn't updated in a few days. Let me check the carrier's latest scan data to see if there are any specific delays or issues noted on their end."
+  },
+  "txt-code": {
+   "sha": "06c0930c22a9",
+   "wall": 31.1,
+   "prompt_ms": 10489,
+   "gen_n": 200,
+   "gen_ms": 20533,
+   "acc": 87.7,
+   "text": "### Function Explanation\n\nThis function implements a **single-producer, single-consumer (SPSC) lock-free ring buffer** push operation. It attempts to copy `n` bytes from the source buffer `src` into the ring buffer `r`.\n\n1.  **Read State**: It atomically reads the current `head` (write index) and `tail` (read index).\n2.  **Check Space**: It calculates the available space (`free`) and returns `-EAGAIN` if there isn't enough room for `n` bytes.\n3.  **Calculate Offset**: It determines the current write position within the circular buffer using a bitmask (`head & (r->cap - 1)`). This implies `r->cap` must be a power of two.\n4.  **Handle Wrap-around**: It splits the copy into two parts if the data crosses the end of the buffer:\n    *   `first`: The number of bytes to copy to"
+  },
+  "img-menu": {
+   "sha": "28e1a85255b5",
+   "wall": 31.7,
+   "prompt_ms": 10752,
+   "gen_n": 200,
+   "gen_ms": 20877,
+   "acc": 80.5,
+   "text": "Since you don\u2019t drink alcohol, you have several great non-alcoholic options on this menu \u2014 mostly under the **\u201cNON-ALCOHOLIC\u201d** and **\u201cSNACKS\u201d** sections. Here\u2019s what you can order and what it costs:\n\n---\n\n### \ud83e\udd64 **NON-ALCOHOLIC DRINKS**\n\n1. **SODA**  \n   - Coke, Diet Coke, Gingerale, Sprite, San Pellegrino  \n   \u2192 **$3**\n\n2. **NAMALIE\u2019S JUICE**  \n   - Orange + Pineapple + Strawberry + Lemonade  \n   \u2192 **+$5** (so total $8 if you want to add it to a soda? Or maybe it\u2019s a standalone juice \u2014 but priced as an add-on. Clarify with staff if unsure.)\n\n3. **MOCKTAILS**  \n   - Margarita (0% ABV)  \n   \u2192 **$6**\n\n> \u2705 *Note: The"
+  },
+  "txt-prose": {
+   "sha": "7d678a414d85",
+   "wall": 31.9,
+   "prompt_ms": 10489,
+   "gen_n": 200,
+   "gen_ms": 21324,
+   "acc": 74.6,
+   "text": "The wind did not howl; it screamed. It was a high, thin shriek that tore through the salt-crusted shutters of the keeper\u2019s cottage, rattling the glass in its frames until the whole structure seemed to vibrate with a low, bone-deep hum. Outside, the sea was a churning mass of slate and foam, throwing itself against the black rocks of the island\u2019s edge with a violence that felt personal.\n\nElara moved through the small, circular room with the mechanical precision of a metronome. It was 04:00. The time for the wick. She climbed the spiral stairs, her boots clicking against the iron treads, the sound swallowed instantly by the gale outside. The lamp room was a cathedral of light and heat, the great Fresnel lens rotating with a slow, hypnotic *whir-click, whir-click*. She adjusted the wick, trimmed the flame, and checked the oil gauge. Her hands"
+  }
+ },
+ "quad": {
+  "img-rome": {
+   "sha": "4127c3564c8b",
+   "wall": 43.9,
+   "prompt_ms": 26226,
+   "gen_n": 200,
+   "gen_ms": 17601,
+   "acc": 84.3,
+   "text": "Based on the 10-day forecast for Rome from **October 8\u201312, 2026**, here\u2019s what you should pack:\n\n---\n\n### \ud83c\udf24\ufe0f **Weather Summary (Oct 8\u201312):**\n- **Highs:** 24\u00b0C \u2013 25\u00b0C (75\u00b0F \u2013 77\u00b0F)\n- **Lows:** 13\u00b0C \u2013 14\u00b0C (55\u00b0F \u2013 57\u00b0F)\n- **Conditions:** Mostly sunny or partly cloudy, with a chance of light rain on Oct 9 and possibly Oct 10.\n- **Overall:** Mild, pleasant autumn weather \u2014 warm days, cool evenings.\n\n---\n\n### \ud83d\udc55 **Clothing Recommendations:**\n\n#### \u2705 **Daytime (Warm & Sunny):**\n- Light layers: T-shirts, blouses, lightweight long-sleeve shirts\n- Shorts, skirts, or light pants (chinos, linen trousers"
+  },
+  "img-menu": {
+   "sha": "753ef06178cc",
+   "wall": 44.5,
+   "prompt_ms": 26226,
+   "gen_n": 200,
+   "gen_ms": 18186,
+   "acc": 80.0,
+   "text": "Since you don\u2019t drink alcohol, you have several great non-alcoholic options on this menu \u2014 mostly under the **\u201cNON-ALCOHOLIC\u201d** and **\u201cSNACKS\u201d** sections. Here\u2019s what you can order and what it costs:\n\n---\n\n### \ud83e\udd64 **NON-ALCOHOLIC DRINKS**\n\n1. **SODA**  \n   - Coke, Diet Coke, Gingerale, Sprite, San Pellegrino  \n   \u2192 **$3**\n\n2. **NAMALIE\u2019S JUICE**  \n   - Orange + Pineapple + Strawberry + Lemonade  \n   \u2192 **$5**\n\n3. **MOCKTAILS**  \n   - Margarita (0% ABV)  \n   \u2192 **$6**\n\n> \u2705 These are all clearly labeled as non-alcoholic or 0% alcohol.\n\n---\n\n### \ud83c\udf5f **SNACKS** (Great to pair with your drink!)\n\n1. **POT"
+  },
+  "img-steak": {
+   "sha": "5cfc2af73acd",
+   "wall": 45.1,
+   "prompt_ms": 26225,
+   "gen_n": 200,
+   "gen_ms": 18725,
+   "acc": 73.9,
+   "text": "Based on the visual evidence in the image, here\u2019s a breakdown of what\u2019s being served:\n\n---\n\n### \ud83e\udd69 **Main Cut of Meat:**\n\nThis is a **T-Bone Steak** (or possibly a **Porterhouse**, depending on the size of the tenderloin portion \u2014 but from the angle and proportions, it\u2019s most likely a T-bone).\n\n- You can clearly see the **T-shaped bone** running through the center.\n- On one side of the bone is the **strip steak** (New York strip), which has been sliced and shows a medium-rare doneness with a pink center.\n- On the other side is the **tenderloin** (filet mignon portion), which appears more tender and slightly less cooked than the strip.\n- The steak is well-seared with a dark crust, indicating it was grilled or pan-seared at high heat.\n\n> *Note: A Porterhouse is essentially a"
+  },
+  "img-bar": {
+   "sha": "db9384bbc003",
+   "wall": 45.3,
+   "prompt_ms": 26225,
+   "gen_n": 200,
+   "gen_ms": 19001,
+   "acc": 65.6,
+   "text": "This is a fun, playful, and likely staged photo taken in what appears to be a **specialty beer store or craft beer bar** \u2014 possibly one that also offers tastings or has a taproom area.\n\n### What\u2019s happening:\n- A man in a black apron (likely an employee or bartender) is holding a giant bottle of **St. Gallen Triple** \u2014 a Belgian-style strong ale \u2014 and pretending to pour it directly into the mouth of another man.\n- The second man, wearing glasses and a light-colored shirt, is leaning back with his mouth wide open, eyes closed, as if he\u2019s about to take a massive gulp \u2014 clearly for comedic effect.\n- Both are smiling/laughing, suggesting this is a lighthearted moment, not a real drinking contest or accident.\n- In the foreground, there\u2019s a stainless steel sink with a faucet and some empty bottles \u2014 reinforcing the idea that this might be near a cleaning station"
+  }
+ }
+}

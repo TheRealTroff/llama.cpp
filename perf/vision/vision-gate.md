@@ -89,10 +89,30 @@ as the sober-order row and the KLD ordering (UD closer to bf16), but 16 items an
 More handwritten boards would make it a trend. The owner's point: KLD says the lines differ, this says what
 that costs in what a person sees.
 
-## Open (server phase)
-1. Serve the pick with --mmproj (plain, spec off) and compare shas with refs/sep27-cli; then spec on.
-2. Text-only control on a projector-loaded server.
-3. Multi-slot: one image slot + text slots (stall vs tokens); several image slots (scratch/route bugs).
-4. --image-max-tokens 1024 as the served default; bottle label at full.
+## Final spec arms (both fixes, vision-srv-fix2-{q4,ud}-spec, refs/sep27-srv/*-spec-final)
+shas vs base 43/50 (q4) and 44/50 (ud); every differing row is a long answer under the depth controller; every
+checklist verdict equals base; zero fallback warnings. Generation t/s base -> spec (acc): q4 512-rung 15.1 -> 35.7
+(67%), 1024 15.0 -> 30.0 (63%), 2048 15.2 -> 42.4 (74%), full 14.7 -> 36.3 (67%); ud 13.9 -> 33.1, 13.7 -> 26.0,
+13.8 -> 35.1 (89%), 13.6 -> 28.6. Large images now draft.
+
+## Multi-slot arm (run-vision-multislot.sh, refs/sep27-multislot) - PASS
+4 slots, full pick + --mmproj. A) each request alone, B) one image + three text requests at once, C) four image
+requests at once. Concurrent shas DIFFER from the alone shas (q4: all 7; ud: 3 of 8) - that is the multi-slot
+numerics class (batched routes), exactly as the text line: the text multislot gate compares against a
+multi-slot reference, never against alone. The gate here = REPEATABILITY + no garbage + checklists: q4 at fixed
+depth 1 with the controller off, two consecutive runs byte-identical on every concurrent request (and the same
+concurrent shas as under the full pick), every checklist verdict unchanged, one server E line = the benign
+ctx_other memory-fit warning. THE STALL, measured: mixed arm, the three text requests' prompt phase 0.8-1.5 s
+alone -> 9.7 s (waiting for the image's private encode+decode), the image 7.0 -> 9.9 s; quad arm, all four
+images' prompt phase 24.5 s (serialized, ~6.5 s each), then ~12-14 t/s per slot (~50 t/s aggregate) at 65-86%
+acceptance. A vision multi-slot reference (recorded shas per slot mix) is the next thing to mint if this ships.
+
+## Open
+1. Owner decision: merge the two server fixes (3a4aae0f1 + a9dbc0377) to prod - text-only paths untouched by
+   construction (pos_next() == n_tokens() without media; the cache growth is gated on --mmproj), but a text mint
+   arm on the merged prod is the proof.
+2. --image-max-tokens 1024 as the served default (every fact except the bottle label passes at 768 tokens; the
+   stall drops from ~40 s to ~7 s); the owner's call.
+3. A vision multi-slot reference + a vision arm in the mint, if vision ships on the pick.
 5. Optional: thinking arm on the abstract rows (-n 1500) for drafter acceptance on long image-conditioned text;
    encoder-pooled features as an image-similarity probe (small tool against libmtmd, no hook today).

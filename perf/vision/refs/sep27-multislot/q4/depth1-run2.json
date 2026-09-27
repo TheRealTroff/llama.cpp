@@ -1,0 +1,143 @@
+{
+ "alone": {
+  "img-menu": {
+   "sha": "73ed87ca1ec3",
+   "wall": 15.4,
+   "prompt_ms": 6736,
+   "gen_n": 200,
+   "gen_ms": 8599,
+   "acc": 83.3,
+   "text": "Since you don\u2019t drink alcohol, you have several great non-alcoholic options on this menu. Here\u2019s what you can order and what it would cost:\n\n---\n\n### \ud83c\udf79 **NON-ALCOHOLIC DRINKS**\n\n1. **SODA**  \n   - Coke, Diet Coke, Ginger Ale, Tonic Water  \n   \u2192 **$3**\n\n2. **NAMALIE\u2019S JUICE**  \n   - Orange + Pineapple + Strawberry + Lemonade  \n   \u2192 **$5**\n\n3. **MOCKTAILS**  \n   - Margarita (0% ABV)  \n   \u2192 **$6**\n\n---\n\n### \ud83e\udd68 **SNACKS** (Great to pair with your drink!)\n\n- Potato Chips \u2192 **$3**\n- Cashews \u2192 **$4**\n- Zapp\u2019s Pretzel Sticks \u2192 **$7**\n- Born Popcorn \u2192 **$7**\n\n*(Note"
+  },
+  "img-steak": {
+   "sha": "0572bf414f01",
+   "wall": 15.9,
+   "prompt_ms": 6647,
+   "gen_n": 200,
+   "gen_ms": 9190,
+   "acc": 71.6,
+   "text": "Based on the visual evidence in the image, here\u2019s a breakdown:\n\n---\n\n**Main Cut of Meat:**\n\nThe meat being eaten is a **bone-in ribeye steak**, specifically a **Tomahawk Ribeye** or **Cowboy Ribeye**.\n\n- It features a long, prominent rib bone extending from the main muscle \u2014 characteristic of a Tomahawk cut.\n- The steak has been sliced into thick, juicy pieces, revealing a medium-rare to medium doneness (pink center, browned exterior).\n- The marbling and thickness are consistent with a high-quality ribeye.\n- The bone is left attached for presentation and flavor, which is typical for this cut.\n\n> *Note: While \u201cTomahawk\u201d often implies a very long bone (10+ inches), even shorter-boned versions are commonly called Tomahawk or Cowboy Ribeye. This appears to be a standard restaurant-style Tomahawk.*\n\n---\n\n**Sides:**"
+  },
+  "img-bar": {
+   "sha": "29c0409c92a8",
+   "wall": 15.7,
+   "prompt_ms": 6645,
+   "gen_n": 200,
+   "gen_ms": 9013,
+   "acc": 75.2,
+   "text": "This is a humorous, staged photo taken in what appears to be a **beer store or specialty liquor shop** \u2014 likely one that specializes in craft beer and hard seltzers.\n\n### What\u2019s Going On:\n- A man in a black apron (likely an employee or bartender) is playfully pretending to pour a giant bottle of **St. Germain Elderflower Liqueur** into the open mouth of another man.\n- The second man, wearing a white shirt and glasses, has his head tilted back with his mouth wide open, as if he\u2019s about to drink from the bottle \u2014 but it\u2019s clearly a joke. St. Germain is not meant to be consumed like beer, and the bottle is far too large for that.\n- Both men are smiling and laughing, indicating this is a lighthearted, fun moment \u2014 probably for social media or a promotional photo.\n- In the foreground, there\u2019s a sink with a faucet and some empty"
+  },
+  "img-rome": {
+   "sha": "be6739848633",
+   "wall": 12.8,
+   "prompt_ms": 4476,
+   "gen_n": 200,
+   "gen_ms": 8357,
+   "acc": 87.7,
+   "text": "Based on the 10-day forecast for Rome in October 2026 (specifically covering your trip dates of **October 8\u201312**), here\u2019s what you should pack:\n\n---\n\n### \ud83c\udf21\ufe0f **Temperature Range:**\n- **Highs:** 24\u00b0C \u2013 25\u00b0C (75\u00b0F \u2013 77\u00b0F)\n- **Lows:** 13\u00b0C \u2013 14\u00b0C (55\u00b0F \u2013 57\u00b0F)\n\n\u2192 This is a **mild, pleasant autumn climate** \u2014 warm during the day, cool at night.\n\n---\n\n### \u2601\ufe0f **Weather Conditions:**\n- **Oct 8:** Partly sunny, 25\u00b0/14\u00b0\n- **Oct 9:** Rainy (clouds with rain), 25\u00b0/13\u00b0\n- **Oct 10:** Cloudy, 25\u00b0/14\u00b0\n- **"
+  },
+  "txt-code": {
+   "sha": "16e57d37f9b4",
+   "wall": 10.1,
+   "prompt_ms": 1464,
+   "gen_n": 200,
+   "gen_ms": 8554,
+   "acc": 83.3,
+   "text": "### Function Explanation\n\nThis function implements a **lock-free, single-producer, single-consumer (SPSC) ring buffer** push operation. It is designed to be safe for concurrent access where one thread writes (pushes) and another thread reads (pops), without using mutexes.\n\nKey characteristics:\n1. **Atomic Operations**: It uses `atomic_load` and `atomic_store` to safely read and write the `head` and `tail` indices, ensuring visibility across threads.\n2. **Power-of-Two Capacity**: The use of `r->cap - 1` as a bitmask (`&`) implies that `r->cap` must be a power of two. This allows efficient index wrapping using bitwise AND instead of modulo.\n3. **Wrap-Around Handling**: The buffer is treated as a circular array. When data crosses the end of the buffer, it is split into two `memcpy` calls: one to the end of the buffer and one"
+  },
+  "txt-prose": {
+   "sha": "1c69ba67f8c8",
+   "wall": 10.4,
+   "prompt_ms": 794,
+   "gen_n": 200,
+   "gen_ms": 9593,
+   "acc": 65.0,
+   "text": "The wind did not blow on Blackwood Island; it screamed. It tore through the salt-crusted shutters of the keeper\u2019s cottage with a sound like tearing canvas, rattling the kerosene lamps until their flames danced in erratic, violent spasms. Outside, the sea was a churning wall of slate and foam, crashing against the basalt cliffs with a rhythmic, bone-deep thud that Maren felt in her teeth.\n\nIt was 04:00. The hour of the check.\n\nMaren moved through the small, cluttered room with the mechanical precision of a machine. She checked the oil levels in the great Fresnel lens, wiping the glass with a chamois cloth that smelled of lemon oil and old sweat. She logged the barometric pressure, noting the sharp drop that promised a storm worse than the one currently battering the coast. She ate a cold slice of hardtack, the dry bread crumbling between her teeth, and drank"
+  },
+  "txt-chat": {
+   "sha": "2ca2755fa463",
+   "wall": 3.1,
+   "prompt_ms": 803,
+   "gen_n": 51,
+   "gen_ms": 2300,
+   "acc": 75.9,
+   "text": "That can be really frustrating, especially when the status hasn't updated in a few days. Let me check the carrier's system directly to see if there are any specific delays or if the package is stuck at a local facility. One moment, please."
+  }
+ },
+ "mixed": {
+  "txt-chat": {
+   "sha": "264e0e98e975",
+   "wall": 13.6,
+   "prompt_ms": 9641,
+   "gen_n": 51,
+   "gen_ms": 3861,
+   "acc": 70.0,
+   "text": "That can be really frustrating, especially when the tracking hasn't updated in a few days. Let me check the carrier's system directly to see if there are any specific delays or if the package is stuck at a local facility. One moment, please."
+  },
+  "img-menu": {
+   "sha": "20cf47c123e7",
+   "wall": 26.9,
+   "prompt_ms": 9866,
+   "gen_n": 200,
+   "gen_ms": 16922,
+   "acc": 86.0,
+   "text": "Since you don\u2019t drink alcohol, you have several great non-alcoholic options on this menu. Here\u2019s what you can order and what it would cost:\n\n---\n\n### \ud83c\udf79 **NON-ALCOHOLIC DRINKS**\n\n1. **SODA**  \n   - Coke, Diet Coke, Ginger Ale, or Sparkling Water  \n   \u2192 **$3**\n\n2. **NAMALIE\u2019S JUICE**  \n   - Orange + Pineapple + Strawberry + Lemonade (a custom juice blend)  \n   \u2192 **$5**\n\n3. **MOCKTAILS**  \n   - Margarita (0% alcohol)  \n   \u2192 **$6**\n\n---\n\n### \ud83e\udd68 **SNACKS** (Great to pair with your drink!)\n\n- Potato Chips \u2192 **$3**\n- Cashews \u2192 **$4**\n- Zapp\u2019s Pretzel Sticks \u2192 **$7**\n- Born Popcorn \u2192 **"
+  },
+  "txt-code": {
+   "sha": "231240cb6b3e",
+   "wall": 27.3,
+   "prompt_ms": 9641,
+   "gen_n": 200,
+   "gen_ms": 17561,
+   "acc": 78.4,
+   "text": "### Function Explanation\n\nThis function implements a **lock-free, single-producer, single-consumer (SPSC) ring buffer** push operation. It is designed to be safe for concurrent access where one thread writes (pushes) and another thread reads (pops), without using mutexes.\n\nKey characteristics:\n1.  **Power-of-Two Capacity**: The use of `r->cap - 1` as a mask (`&`) implies that `r->cap` must be a power of two. This allows efficient index wrapping using bitwise AND instead of modulo.\n2.  **Monotonic Counters**: `head` and `tail` are monotonically increasing counters (not wrapped indices). The actual buffer index is derived via `head & (cap - 1)`.\n3.  **Atomic Operations**: It uses `atomic_load` and `atomic_store` to ensure visibility of `head` and `tail` across threads.\n4."
+  },
+  "txt-prose": {
+   "sha": "8fa89a66edd0",
+   "wall": 27.4,
+   "prompt_ms": 9641,
+   "gen_n": 200,
+   "gen_ms": 17642,
+   "acc": 76.1,
+   "text": "The wind did not blow on Blackwood Island; it hammered. It was a relentless, gray assault that turned the sea into a churning wall of slate and foam, battering the limestone cliffs until the very foundations of the lighthouse groaned in protest. Inside the keeper\u2019s cottage, the air was thick with the smell of damp wool, burning kerosene, and the metallic tang of salt that no amount of scrubbing could fully remove.\n\nElara moved through the small, cluttered space with the mechanical precision of a metronome. She checked the barometer, noting the slow, ominous drop in pressure. She trimmed the wick of the oil lamp on the desk, the flame steadying into a warm, amber glow that pushed back the encroaching twilight. She swept the hearth, banked the fire, and polished the brass fittings until they reflected her own tired face. It was a ritual of survival, a loop of small, necessary actions that kept the chaos"
+  }
+ },
+ "quad": {
+  "img-rome": {
+   "sha": "29d6d85c3d80",
+   "wall": 37.7,
+   "prompt_ms": 24367,
+   "gen_n": 200,
+   "gen_ms": 13166,
+   "acc": 89.5,
+   "text": "Based on the 10-day forecast for **Rome, October 8\u201312, 2026**, here\u2019s what you should pack:\n\n---\n\n### \ud83c\udf21\ufe0f **Temperature Range (Oct 8\u201312):**\n- **Highs:** 24\u00b0C \u2013 25\u00b0C (75\u00b0F \u2013 77\u00b0F)\n- **Lows:** 13\u00b0C \u2013 14\u00b0C (55\u00b0F \u2013 57\u00b0F)\n\n\u2192 This is a **mild autumn climate** \u2014 warm days, cool evenings.\n\n---\n\n### \u2601\ufe0f **Weather Conditions:**\n- **Oct 8:** Partly sunny, 25\u00b0/14\u00b0\n- **Oct 9:** Rain likely (clouds with rain), 25\u00b0/13\u00b0\n- **Oct 10:** Cloudy/rainy, 25\u00b0/14\u00b0\n- **Oct"
+  },
+  "img-menu": {
+   "sha": "7dc23a2a2b35",
+   "wall": 38.4,
+   "prompt_ms": 24367,
+   "gen_n": 200,
+   "gen_ms": 13851,
+   "acc": 82.6,
+   "text": "Since you don\u2019t drink alcohol, you have several great non-alcoholic options on this menu \u2014 mostly under the **\u201cNON-ALCOHOLIC\u201d** and **\u201cSNACKS\u201d** sections. Here\u2019s what you can order and what it costs:\n\n---\n\n### \ud83e\udd64 **NON-ALCOHOLIC DRINKS**\n\n1. **SODA**  \n   - Coke, Diet Coke, Ginger Ale, Tonic Water  \n   \u2192 **$3**\n\n2. **NAMALIE\u2019S JUICE**  \n   - Orange + Pineapple + Strawberry + Lemonade (a house-made juice blend)  \n   \u2192 **$5**\n\n3. **MOCKTAILS**  \n   - **Margarita 0% \u2013 $6**  \n     *(Non-alcoholic version of a margarita \u2014 likely lime, agave, salt rim, etc.)*\n\n---\n\n### \ud83c\udf5f **SNACKS** *(Great to pair with your drink"
+  },
+  "img-steak": {
+   "sha": "7c39e1e2822c",
+   "wall": 39.2,
+   "prompt_ms": 24366,
+   "gen_n": 200,
+   "gen_ms": 14709,
+   "acc": 69.2,
+   "text": "Based on the visual evidence in the image, here's a breakdown of what is being eaten:\n\n---\n\n**Main Cut of Meat:**\n\nThe main dish is a **large, bone-in ribeye steak** (also known as a \u201crib steak\u201d or \u201cbone-in ribeye\u201d). You can clearly see:\n\n- The prominent **rib bone** running along one side.\n- The meat has been **sliced against the grain** after cooking, revealing a **medium-rare to medium doneness** (pink center, browned exterior).\n- It\u2019s served on a black plate with a small ramekin of what appears to be **aioli or garlic butter sauce**.\n\nThis cut is popular for its rich marbling and flavor, often grilled or pan-seared.\n\n---\n\n**Sides:**\n\nThere are two distinct sides visible:\n\n1. **Roasted Potatoes (or \u201cDutch Potatoes\u201d / \u201cHome Fries\u201d):**\n   -"
+  },
+  "img-bar": {
+   "sha": "d16d3feb22cf",
+   "wall": 39.3,
+   "prompt_ms": 24366,
+   "gen_n": 200,
+   "gen_ms": 14790,
+   "acc": 67.2,
+   "text": "This is a humorous, staged photo taken in what appears to be a **beer store or specialty liquor shop** \u2014 likely one that specializes in craft beer and hard seltzers.\n\n### What\u2019s Going On:\n- A man in a black apron (likely an employee or bartender) is playfully pretending to pour a giant bottle of **Stellarton Triple** (a Belgian-style strong ale) into the open mouth of another man.\n- The second man, wearing a white shirt and glasses, has his head tilted back with his mouth wide open, as if he\u2019s about to drink directly from the bottle \u2014 but it\u2019s clearly a joke. No liquid is actually being poured; the bottle is held at an angle for comedic effect.\n- Both men are smiling and enjoying the moment \u2014 this is a lighthearted, fun interaction, probably for social media or a promotional photo.\n- In the foreground, there\u2019s a stainless steel sink with a faucet and some"
+  }
+ }
+}
