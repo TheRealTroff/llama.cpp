@@ -5,17 +5,23 @@ pick files. Inputs: `images/preprocess.sh` (HEIC/WebP via sips, EXIF rotation ba
 full/2048/1024/512). One image token per 32x32 px; the loader caps 8..4096 tokens per image.
 
 ## Reference set (CLI, plain build, no drafter, greedy, thinking off) - refs/sep27-cli/{q4,ud}
-Runner `run-vision-ref.sh`, scorer `score.py`, prompts `prompts.tsv`. 42 rows per line. Verdicts identical on
-both lines. Sign-off by the owner PENDING (beach event, fact lists, bottle-label full rung).
+Runner `run-vision-ref.sh`, scorer `score.py`, prompts `prompts.tsv`. 49 rows per line (afternoon: + label full rung, + IMG_2924 chalkboard menu, beach checklist set). Verdicts identical on
+both lines. Fact lists laid out for the owner 2026-09-27 afternoon; sign-off pending on the lists as drafted.
 
 PASS both lines: table card 702 at every rung incl. 192 tokens; magazine headline name; diagram layer counts
 48/27 (full, 1024) and psi = SiLU (full, 2048, 1024); weather low-on-14th = 13 (full, 1024), storms 29/30;
 every checklist row (meal 3/3, surf camp 2/2, packing 3/3, diagram comparison 4/4); CDG sign paragraph
 1.000 at all four rungs AND the unrotated control; the SYNTHETIC sign (text that exists nowhere) 1.000 at all
 four rungs on both lines, byte-identical across rungs -> the OCR is real at 192 tokens, not recall.
-FAIL both lines: bottle label at 1024 ("St. Germain" for St Feuillien; small in frame - full rung not yet run);
+Bottle label: FAIL at 1024 ("St. Germain"), PASS at full ("St. Feuillien") on both lines = the one row that needs 4096 tokens.
+Handwritten chalk menu (IMG_2924): Garden Tonic $15 and wine 14/42 PASS at 768 tokens both lines; at 192 tokens both
+confabulate a neighbour ("Flying Squirrel/Sausage, $12" from "Flying Saucer"); the sober-order checklist 4/4 on ud, 3/4 on q4
+(q4 skips the mocktails, misreads Natalie's as Namalie's, invents a $1 outside-food fee) = chalk at 768 tokens is where the
+lines start to differ in reading, not only in wording.
+FAIL both lines:
 psi at 512 ("Gating"/"Gated Delta Rule"); low-on-14th at 512 (14); beach event = "solar eclipse viewing"
-(q4 invents the April 2024 eclipse and California) - the owner knows the event, checklist to be set.
+(q4 invents the April 2024 eclipse and California). Owner: the Quiksilver Festival surf competition, La Nord, Hossegor,
+2026-09-20; checklist = surf + competition|contest|festival|championship (nothing in frame names the brand); 0/2 both lines.
 Cross-line: 15/37 answers byte-identical (the short ones); long answers differ = two quantizations, not a signal.
 ud at full/2048/unrot transcribes WITH the sign's line breaks and hyphens ("exactly as written"); scorer undoes
 printed hyphenation before comparing.

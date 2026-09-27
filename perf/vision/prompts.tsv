@@ -10,7 +10,7 @@ IMG_3355	1024	fr	edit	200	Transcribe the French paragraph on the sign exactly as
 IMG_3355	512	fr	edit	200	Transcribe the French paragraph on the sign exactly as written.	Avec ses assises de dimensions diverses permettant de s'installer facilement et confortablement, ses bornes d'arcade et ses tables de jeux pour amuser petits et grands, la salle d'embarquement permet d'offrir à chaque passager l'avant-vol dont il rêve.
 IMG_3355	unrot	fr	edit	200	Transcribe the French paragraph on the sign exactly as written.	Avec ses assises de dimensions diverses permettant de s'installer facilement et confortablement, ses bornes d'arcade et ses tables de jeux pour amuser petits et grands, la salle d'embarquement permet d'offrir à chaque passager l'avant-vol dont il rêve.
 IMG_3355	1024	desc	desc	160	Describe this image in two sentences.	
-IMG_3364	1024	event	abstract	300	What event is this? Explain what in the image supports your answer.	surf|competition|contest|championship
+IMG_3364	1024	event	abstract	300	What event is this? Explain what in the image supports your answer.	surf;competition|contest|festival|championship
 IMG_3364	1024	desc	desc	160	Describe this image in two sentences.	
 IMG_3364	full	desc	desc	160	Describe this image in two sentences.	
 IMG_3414	1024	name	fact	64	What is the name of the surfer in the headline? Answer with the name only.	Kale Brock
@@ -44,3 +44,10 @@ synth_sign	2048	fr	edit	200	Transcribe the French paragraph on the sign exactly 
 synth_sign	1024	fr	edit	200	Transcribe the French paragraph on the sign exactly as written.	Avec ses fauteuils orientés vers la piste, ses prises murales numérotées de sept à trente-deux et son distributeur de cartes postales gratuites, la salle d'attente du quai nord propose à chaque voyageur un quart d'heure de calme avant le passage de la douane.
 synth_sign	512	fr	edit	200	Transcribe the French paragraph on the sign exactly as written.	Avec ses fauteuils orientés vers la piste, ses prises murales numérotées de sept à trente-deux et son distributeur de cartes postales gratuites, la salle d'attente du quai nord propose à chaque voyageur un quart d'heure de calme avant le passage de la douane.
 synth_sign	1024	gate	fact	64	What gate and time are printed at the bottom of the sign? Answer briefly.	C 17;11
+IMG_3334	full	label	fact	64	What is printed on the label of the large bottle the man is holding? Answer with the label text only.	Feuillien
+IMG_2924	full	tonic	fact	64	Which cocktail is made with gin infused with tomato leaf, and what does it cost? Answer briefly.	Garden Tonic;15
+IMG_2924	1024	tonic	fact	64	Which cocktail is made with gin infused with tomato leaf, and what does it cost? Answer briefly.	Garden Tonic;15
+IMG_2924	512	tonic	fact	64	Which cocktail is made with gin infused with tomato leaf, and what does it cost? Answer briefly.	Garden Tonic;15
+IMG_2924	1024	wine	fact	64	What does a glass of wine cost, and a bottle? Answer with the two prices only.	14;42
+IMG_2924	1024	sober	abstract	300	I don't drink alcohol. What could I order here, and what would it cost?	soda|coke;juice|Natalie;mocktail|margarita;3|5|6
+IMG_2924	1024	desc	desc	160	Describe this image in two sentences.	

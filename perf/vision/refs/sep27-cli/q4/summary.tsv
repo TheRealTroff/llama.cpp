@@ -41,3 +41,11 @@ synth_sign	2048	fr	edit	7fe30270beee	7153	37.5	43	synth_sign-2048-fr.txt
 synth_sign	1024	fr	edit	7fe30270beee	916	13.1	43	synth_sign-1024-fr.txt
 synth_sign	512	fr	edit	7fe30270beee	242	7.8	43	synth_sign-512-fr.txt
 synth_sign	1024	gate	fact	f2df3df96b6c	886	9.5	7	synth_sign-1024-gate.txt
+IMG_3364	1024	event	abstract	2dd5e8e786f3	896	31.0	228	IMG_3364-1024-event.txt
+IMG_3334	full	label	fact	57934f6913a3	11337	45.0	2	IMG_3334-full-label.txt
+IMG_2924	full	tonic	fact	12a008e44543	11339	45.2	3	IMG_2924-full-tonic.txt
+IMG_2924	1024	tonic	fact	12a008e44543	889	9.0	3	IMG_2924-1024-tonic.txt
+IMG_2924	512	tonic	fact	0e054b860012	218	3.9	3	IMG_2924-512-tonic.txt
+IMG_2924	1024	wine	fact	449e43a632d1	888	8.9	2	IMG_2924-1024-wine.txt
+IMG_2924	1024	sober	abstract	c7375cd5e8b2	885	26.0	143	IMG_2924-1024-sober.txt
+IMG_2924	1024	desc	desc	00ed503eebe1	913	14.6	55	IMG_2924-1024-desc.txt
