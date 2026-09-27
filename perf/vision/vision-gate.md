@@ -74,8 +74,11 @@ The served pick (manifest env, Turbo4 KV, ctx 102400) with --mmproj and the same
   rows are long answers under the depth controller. Generation with an image in context (t/s, base -> spec):
   q4 512-rung 15.1 -> 33.7 (acc 69%), 1024-rung 15.0 -> 29.1 (acc 65%); ud 13.9 -> 32.7, 13.7 -> 25.8 (acc 62-70%);
   rows above n_batch (3072/4096 tokens) generate undrafted (14 per line, warned once each) until the draft KV is
-  windowed during ingestion; a 1770-token full-rung row drafts at 71%. OPEN: apply the drafter's sink+window
-  during image ingestion so large images draft too (today they generate undrafted).
+  windowed during ingestion; a 1770-token full-rung row drafts at 71%. The large-image cause FOUND: the dflash drafter's memory is an iswa cache whose SWA part holds
+  n_swa + n_ubatch = 2048 + 512 = 2560 cells (5 layers, 50 MiB); position-based windowing cannot bound image
+  cells (an image's cells share a few mrope positions), so a 3072-token chunk never fit. FIX (branch, pending
+  gate): with --mmproj the server grows the drafter's n_ubatch (and n_batch) to the image cap (4096 default,
+  --image-max-tokens if set) -> SWA cache 6144 cells, ~+70 MiB; one injection slice per image.
 
 ## Open (server phase)
 1. Serve the pick with --mmproj (plain, spec off) and compare shas with refs/sep27-cli; then spec on.

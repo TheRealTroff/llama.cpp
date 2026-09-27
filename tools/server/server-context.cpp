@@ -1421,6 +1421,15 @@ private:
                 bool measure_model_bytes = has_draft;
 
                 common_params params_dft = common_base_params_to_speculative(params_base);
+                // with a projector the drafter must ingest whole image chunks: its SWA cache holds n_swa + n_ubatch cells
+                // (2048 + 512 = 2560 for dflash), position-based windowing cannot bound image cells (they share mrope
+                // positions), so a 3072-token image never fit. Grow the micro-batch term to the image cap (2026-09-27):
+                // +~70 MiB for the 5-layer drafter, large images draft instead of generating undrafted.
+                if (!params_base.mmproj.path.empty()) {
+                    const int32_t n_img = params_base.image_max_tokens > 0 ? params_base.image_max_tokens : 4096;
+                    params_dft.n_ubatch = std::max(params_dft.n_ubatch, n_img);
+                    params_dft.n_batch  = std::max(params_dft.n_batch,  params_dft.n_ubatch);
+                }
 
                 auto mparams_dft = common_model_params_to_llama(params_dft);
                 auto cparams_dft = common_context_params_to_llama(params_dft);
@@ -1505,6 +1514,15 @@ private:
 
             {
                 common_params params_dft = common_base_params_to_speculative(params_base);
+                // with a projector the drafter must ingest whole image chunks: its SWA cache holds n_swa + n_ubatch cells
+                // (2048 + 512 = 2560 for dflash), position-based windowing cannot bound image cells (they share mrope
+                // positions), so a 3072-token image never fit. Grow the micro-batch term to the image cap (2026-09-27):
+                // +~70 MiB for the 5-layer drafter, large images draft instead of generating undrafted.
+                if (!params_base.mmproj.path.empty()) {
+                    const int32_t n_img = params_base.image_max_tokens > 0 ? params_base.image_max_tokens : 4096;
+                    params_dft.n_ubatch = std::max(params_dft.n_ubatch, n_img);
+                    params_dft.n_batch  = std::max(params_dft.n_batch,  params_dft.n_ubatch);
+                }
 
                 // progress callback
                 params_dft.load_progress_callback           = load_progress_callback;
