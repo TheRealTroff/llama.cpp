@@ -68,7 +68,13 @@ The served pick (manifest env, Turbo4 KV, ctx 102400) with --mmproj and the same
   drops speculation for that request (spec_off_request) with one warning. After the fix (q4): acceptance
   44-64% on 300-token answers after a 768-token image (meal 300 tok 20 s -> 11.5 s, sober 9.8 s); short facts
   byte-identical to base; one long fork = a controller pick (gone at PICK_SPEC_EV=0), one = a 0.104-nat tie
-  (' T'onic vs ' or', base-arm top-2 logprobs) = the rounding band. OPEN: apply the drafter's sink+window
+  (' T'onic vs ' or', base-arm top-2 logprobs) = the rounding band.
+  FULL FIXED SPEC ARMS (vision-srv-fix-{q4,ud}-spec, summaries in refs/sep27-srv): shas vs the base arm 42/50 (q4) and
+  46/50 (ud) identical; every short fact identical; every checklist verdict identical (35/5, 34/6); the differing
+  rows are long answers under the depth controller. Generation with an image in context (t/s, base -> spec):
+  q4 512-rung 15.1 -> 33.7 (acc 69%), 1024-rung 15.0 -> 29.1 (acc 65%); ud 13.9 -> 32.7, 13.7 -> 25.8 (acc 62-70%);
+  rows above n_batch (3072/4096 tokens) generate undrafted (14 per line, warned once each) until the draft KV is
+  windowed during ingestion; a 1770-token full-rung row drafts at 71%. OPEN: apply the drafter's sink+window
   during image ingestion so large images draft too (today they generate undrafted).
 
 ## Open (server phase)
