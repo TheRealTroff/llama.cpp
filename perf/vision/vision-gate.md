@@ -6,7 +6,7 @@ full/2048/1024/512). One image token per 32x32 px; the loader caps 8..4096 token
 
 ## Reference set (CLI, plain build, no drafter, greedy, thinking off) - refs/sep27-cli/{q4,ud}
 Runner `run-vision-ref.sh`, scorer `score.py`, prompts `prompts.tsv`. 49 rows per line (afternoon: + label full rung, + IMG_2924 chalkboard menu, beach checklist set). Verdicts identical on
-both lines. Fact lists laid out for the owner 2026-09-27 afternoon; sign-off pending on the lists as drafted.
+both lines. SIGNED OFF by the owner 2026-09-27 ("I can't find anything off about your facts"): refs/sep27-cli is the vision reference for both lines.
 
 PASS both lines: table card 702 at every rung incl. 192 tokens; magazine headline name; diagram layer counts
 48/27 (full, 1024) and psi = SiLU (full, 2048, 1024); weather low-on-14th = 13 (full, 1024), storms 29/30;
