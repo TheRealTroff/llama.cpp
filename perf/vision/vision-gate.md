@@ -80,6 +80,15 @@ The served pick (manifest env, Turbo4 KV, ctx 102400) with --mmproj and the same
   gate): with --mmproj the server grows the drafter's n_ubatch (and n_batch) to the image cap (4096 default,
   --image-max-tokens if set) -> SWA cache 6144 cells, ~+70 MiB; one injection slice per image.
 
+## Marginal-band reading set (prompts-menu.tsv, refs/sep27-menu) - the first task-level quality number between the lines
+Every chalk-menu item at 768 tokens (hard) and 3072 tokens (control), CLI plain build. Misread rows (a wrong
+digit, a dropped word or a misspelled name counts): 768 tokens q4 9/16 vs ud 7/16 (q4's extra two = a chip
+price and the stout's ABV, both small digits; on the beer row q4 also misprices where ud is right);
+3072 tokens 3/16 on both, IDENTICAL answers (Rose omitted, San Benedetto missed, "Contreau"). Same direction
+as the sober-order row and the KLD ordering (UD closer to bf16), but 16 items and a two-row gap = suggestive.
+More handwritten boards would make it a trend. The owner's point: KLD says the lines differ, this says what
+that costs in what a person sees.
+
 ## Open (server phase)
 1. Serve the pick with --mmproj (plain, spec off) and compare shas with refs/sep27-cli; then spec on.
 2. Text-only control on a projector-loaded server.

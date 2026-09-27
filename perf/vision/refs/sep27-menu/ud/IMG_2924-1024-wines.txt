@@ -1,0 +1,8 @@
+Here are the wines offered by the glass, as listed on the menu:
+
+- Sauvignon Blanc
+- Chardonnay
+- Rosé
+- Pinot Noir
+- Cab Franc
+- Chardonnay de Bourgogne (Sav.)

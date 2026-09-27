@@ -1,0 +1,8 @@
+Based on the menu in the image, the wines offered by the glass are:
+
+*   Sauvignon Blanc
+*   Chardonnay
+*   Rosé
+*   Pinot Noir
+*   Cab Franc
+*   Gamay de Bourgogne (Bd1)

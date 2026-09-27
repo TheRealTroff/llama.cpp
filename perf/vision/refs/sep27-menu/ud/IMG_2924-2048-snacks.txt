@@ -1,0 +1,5 @@
+Based on the "SNACKS" section of the menu board:
+
+- Cashews cost **$4**.
+- Zapp's Pretzel Sticks cost **$7**.
+- Bjorn Popcorn costs **$7**.

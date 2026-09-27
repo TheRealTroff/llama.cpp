@@ -1,0 +1,7 @@
+Based on the "WINE" section of the menu, the wines offered by the glass are:
+
+*   Sauvignon Blanc
+*   Chardonnay
+*   Pinot Noir
+*   Cab Franc
+*   Crémant de Bourgogne (Brut)

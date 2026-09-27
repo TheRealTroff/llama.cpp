@@ -8,7 +8,7 @@ IMG_2924	1024	ryez	fact	64	What are the ingredients of the High Ryez, and what d
 IMG_2924	1024	marg	fact	64	What are the ingredients of the Margarita, and what does it cost? Answer briefly.	tequila;lime;agave;Cointreau;15
 IMG_2924	1024	wines	fact	80	List all the wines offered by the glass. Names only.	Sauvignon Blanc;Chardonnay;Ros;Pinot Noir;Cab Franc;Bourgogne
 IMG_2924	1024	sodas	fact	64	Which sodas are offered, and at what price? Answer briefly.	Coke;Diet Coke;Ginger Ale;Sprite;San Benedetto;3
-IMG_2924	1024	juice	fact	64	What are the two Natalie's Juice flavours, and what does a juice cost? Answer briefly.	orange;pineapple;strawberry lemonade;5
+IMG_2924	1024	juice	fact	64	What are the two Natalie's Juice flavours, and what does a juice cost? Answer briefly.	orange;pineapple;strawberry;lemonade;5
 IMG_2924	1024	mock	fact	64	What is the mocktail on the menu, and what does it cost? Answer briefly.	Margarita;6
 IMG_2924	1024	chips	fact	64	Which two brands of potato chips are offered, and at what price? Answer briefly.	Zapp;Utz;3
 IMG_2924	1024	snacks	fact	64	What do the cashews, the pretzel sticks and the popcorn cost? Answer with the three prices.	4;7;7
@@ -24,7 +24,7 @@ IMG_2924	2048	ryez	fact	64	What are the ingredients of the High Ryez, and what d
 IMG_2924	2048	marg	fact	64	What are the ingredients of the Margarita, and what does it cost? Answer briefly.	tequila;lime;agave;Cointreau;15
 IMG_2924	2048	wines	fact	80	List all the wines offered by the glass. Names only.	Sauvignon Blanc;Chardonnay;Ros;Pinot Noir;Cab Franc;Bourgogne
 IMG_2924	2048	sodas	fact	64	Which sodas are offered, and at what price? Answer briefly.	Coke;Diet Coke;Ginger Ale;Sprite;San Benedetto;3
-IMG_2924	2048	juice	fact	64	What are the two Natalie's Juice flavours, and what does a juice cost? Answer briefly.	orange;pineapple;strawberry lemonade;5
+IMG_2924	2048	juice	fact	64	What are the two Natalie's Juice flavours, and what does a juice cost? Answer briefly.	orange;pineapple;strawberry;lemonade;5
 IMG_2924	2048	mock	fact	64	What is the mocktail on the menu, and what does it cost? Answer briefly.	Margarita;6
 IMG_2924	2048	chips	fact	64	Which two brands of potato chips are offered, and at what price? Answer briefly.	Zapp;Utz;3
 IMG_2924	2048	snacks	fact	64	What do the cashews, the pretzel sticks and the popcorn cost? Answer with the three prices.	4;7;7

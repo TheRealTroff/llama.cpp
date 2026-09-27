@@ -1,0 +1,7 @@
+Based on the "SNACKS" section of the menu in the image, the prices are:
+
+*   **Cashews:** $4
+*   **Pretzel Sticks:** $7
+*   **Popcorn:** $7
+
+So, the three prices are **$4, $7,
