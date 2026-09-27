@@ -1,0 +1,4 @@
+Based on the diagram, the number of layers for each model is indicated by the "x" notation next to the layer stack:
+
+*   **Qwen3 Next 80B-A3B:** 48 layers
+*   **Kimi Linear 48B-A3B:** 27

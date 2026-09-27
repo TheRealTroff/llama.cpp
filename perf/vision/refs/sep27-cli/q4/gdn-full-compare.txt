@@ -1,0 +1,25 @@
+This diagram compares the internal architectures of two large language models (LLMs):
+
+1.  **Qwen3 Next 80B-A3B** (left side, teal/blue)
+2.  **Kimi Linear 48B-A3B** (right side, blue)
+
+Both are Mixture-of-Experts (MoE) models with a similar high-level structure: token embedding → multiple transformer layers (each containing an attention mechanism and a MoE block) → final RMSNorm → linear output layer.
+
+---
+
+## Main Architectural Difference
+
+The **primary architectural difference** lies in the **type of attention mechanism used within each transformer layer**, specifically how they handle long-range dependencies and computational efficiency.
+
+### Qwen3 Next 80B-A3B:
+- Uses a **hybrid attention scheme** with a **3:1 ratio** of linear attention to full attention.
+- In every group of 4 layers:
+  - Layers 1, 2, 3 → **Gated DeltaNet** (a form of *linear attention*)
+  - Layer 4 → **Gated Attention** (standard scaled dot-product attention)
+- The “Gated DeltaNet” is a novel linear attention variant that uses convolutional components and gating mechanisms (σ = Sigmoid, ψ = SiLU, φ = Softplus) to model state updates efficiently.
+- This design aims for **linear complexity** in sequence length for most layers, while retaining some full attention for critical context modeling.
+
+### Kimi Linear 48B-A3B:
+- Also uses a **3:1 ratio** of linear attention to full attention.
+- In every group of 4 layers:
+  - Layers 1, 2, 3 → **Kimi Delta Attention** (another variant of *linear attention*, structurally similar to Gated DeltaNet but with different gating functions — σ = S

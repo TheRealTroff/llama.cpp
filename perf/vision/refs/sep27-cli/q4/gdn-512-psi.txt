@@ -1,0 +1,1 @@
+In the legend for the "Gated DeltaNet" block, the symbol **ψ** stands for **Gating**.

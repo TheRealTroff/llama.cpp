@@ -1,0 +1,1 @@
+The symbol ψ stands for "Gated Delta Rule".

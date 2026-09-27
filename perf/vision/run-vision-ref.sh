@@ -20,7 +20,7 @@ case "$LINE" in
 esac
 D=$OUT/$TAG-$LINE; mkdir -p "$D"
 echo "tree $B  line $LINE  model $M  mmproj $MMPROJ  out $D"
-printf 'image\tsize\tqid\tkind\tsha12\tencode_ms\twall_s\tn_out\tfile\n' > "$D/summary.tsv"
+[ -s "$D/summary.tsv" ] || printf 'image\tsize\tqid\tkind\tsha12\tencode_ms\twall_s\tn_out\tfile\n' > "$D/summary.tsv"   # append when the run already exists (a ROWS= pass adds rows)
 grep -v '^#' "$PROMPTS" | grep -E "$ROWS" | while IFS=$'\t' read -r image size qid kind n prompt expect; do
   [ -n "$image" ] || continue
   name="$image-$size-$qid"

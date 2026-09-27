@@ -10,6 +10,7 @@ usage: score.py <results dir> [--ref <reference results dir>] [--prompts prompts
 import sys, os, csv, difflib, re, argparse
 
 def norm(s):
+    s = re.sub(r'-\n\s*', '', s)        # undo printed hyphenation: a faithful transcript keeps the sign's line breaks
     return re.sub(r'\s+', ' ', s.strip()).lower()
 
 def load_summary(d):

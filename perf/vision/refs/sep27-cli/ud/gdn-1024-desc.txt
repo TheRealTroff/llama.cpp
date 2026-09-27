@@ -1,0 +1,1 @@
+This image compares the architectural designs of two large language models: Qwen3 Next 80B-A3B and Kimi Linear 48B-A3B. It illustrates their respective layer structures, attention mechanisms (including gated attention, gated DeltaNet, and multi-head latent attention), and the 3:1 ratio of linear attention to full attention layers in both models.

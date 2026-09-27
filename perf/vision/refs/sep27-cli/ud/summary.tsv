@@ -1,0 +1,43 @@
+image	size	qid	kind	sha12	encode_ms	wall_s	n_out	file
+IMG_3334	1024	label		a83ac7530f20	899	15.0	2	IMG_3334-1024-label.txt
+IMG_3334	1024	desc		86b5dd9e4355	893	15.3	70	IMG_3334-1024-desc.txt
+IMG_3334	1024	scene		c50d93cda669	896	31.1	218	IMG_3334-1024-scene.txt
+IMG_3355	full	fr		72fe6338af6e	11427	52.0	43	IMG_3355-full-fr.txt
+IMG_3355	2048	fr		72fe6338af6e	7095	39.7	43	IMG_3355-2048-fr.txt
+IMG_3355	1024	fr		95eb2ebe1a33	896	13.3	37	IMG_3355-1024-fr.txt
+IMG_3355	512	fr		95eb2ebe1a33	229	8.2	37	IMG_3355-512-fr.txt
+IMG_3355	unrot	fr		72fe6338af6e	900	15.0	43	IMG_3355-unrot-fr.txt
+IMG_3355	1024	desc		8c0c73b59244	919	13.9	57	IMG_3355-1024-desc.txt
+IMG_3364	1024	event		c9f875755e32	896	30.8	224	IMG_3364-1024-event.txt
+IMG_3364	1024	desc		7caa61839f3a	896	13.5	58	IMG_3364-1024-desc.txt
+IMG_3364	full	desc		a4aab729c851	11417	49.3	40	IMG_3364-full-desc.txt
+IMG_3414	1024	name		1bfb2d9653f6	896	9.1	2	IMG_3414-1024-name.txt
+IMG_3414	full	name		1bfb2d9653f6	11383	46.0	2	IMG_3414-full-name.txt
+IMG_3414	1024	desc		dc4989c41877	894	13.6	54	IMG_3414-1024-desc.txt
+IMG_3428	full	table		73445aa688fd	11397	46.1	1	IMG_3428-full-table.txt
+IMG_3428	2048	table		73445aa688fd	7117	34.0	1	IMG_3428-2048-table.txt
+IMG_3428	1024	table		73445aa688fd	904	9.1	1	IMG_3428-1024-table.txt
+IMG_3428	512	table		73445aa688fd	234	3.9	1	IMG_3428-512-table.txt
+IMG_3428	1024	meal		f6f83a81d470	904	31.3	183	IMG_3428-1024-meal.txt
+IMG_3428	1024	desc		18eed3bab76f	893	13.3	54	IMG_3428-1024-desc.txt
+IMG_3430	1024	business		9310db529d09	892	30.9	218	IMG_3430-1024-business.txt
+IMG_3430	1024	desc		a7152cdaeab8	919	14.6	54	IMG_3430-1024-desc.txt
+gdn	full	layers		b5d69afccc0d	11253	45.0	2	gdn-full-layers.txt
+gdn	1024	layers		ae9b805095dc	760	12.7	33	gdn-1024-layers.txt
+gdn	full	psi		d2f12644280e	10573	43.6	2	gdn-full-psi.txt
+gdn	2048	psi		d2f12644280e	5761	29.5	2	gdn-2048-psi.txt
+gdn	1024	psi		4ca8b8f3b50b	757	8.3	2	gdn-1024-psi.txt
+gdn	512	psi		6295933d2882	202	4.2	8	gdn-512-psi.txt
+gdn	full	compare		6d6c3bf9e4b2	10435	73.8	220	gdn-full-compare.txt
+gdn	1024	desc		95b74284f2a7	756	13.6	49	gdn-1024-desc.txt
+rome	full	low14		1a252402972f	3066	19.5	1	rome-full-low14.txt
+rome	1024	low14		1a252402972f	551	6.7	1	rome-1024-low14.txt
+rome	512	low14		9a92adbc0cee	179	3.3	1	rome-512-low14.txt
+rome	full	storms		ed08e7c3c851	2951	20.0	2	rome-full-storms.txt
+rome	full	pack		d9917afdb52a	3026	50.0	219	rome-full-pack.txt
+rome	1024	desc		ca66cc4bcd51	556	13.0	66	rome-1024-desc.txt
+synth_sign	full	fr	edit	7fe30270beee	11527	58.7	43	synth_sign-full-fr.txt
+synth_sign	2048	fr	edit	7fe30270beee	7185	38.6	43	synth_sign-2048-fr.txt
+synth_sign	1024	fr	edit	7fe30270beee	895	13.9	43	synth_sign-1024-fr.txt
+synth_sign	512	fr	edit	7fe30270beee	227	8.4	43	synth_sign-512-fr.txt
+synth_sign	1024	gate	fact	f2df3df96b6c	921	9.8	7	synth_sign-1024-gate.txt
