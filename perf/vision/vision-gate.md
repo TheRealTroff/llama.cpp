@@ -53,6 +53,24 @@ classes / checkpoints / prompt cache never exercised with them.
 - Never launch a second pass with a TAG whose summary exists (fixed: the runner appends now); kill runners by
   PID - killing only the CLI child makes the loop move to the next row.
 
+## Server phase (2026-09-27 afternoon) - run-vision-server.sh, results vision-srv-sep27-{q4,ud}-{base,spec}
+The served pick (manifest env, Turbo4 KV, ctx 102400) with --mmproj and the same no-think template text.
+- base arms (no drafter): every row completes; the text-only control = "Paris"; 768-token image = 6.4-7.1 s prompt,
+  4096 tokens = 34-42 s. Verdicts vs the checklists match the CLI on the short facts; the long answers differ in
+  wording from the CLI refs (20/49 q4 and 14/49 ud shas equal) = the pick's numerics class (SoA/acch prefill,
+  Turbo4 KV) vs the plain CLI kernels, the same cross-class gap as the text lineage. THE SHA GATE FOR THE SERVED
+  PICK IS base-arm vs spec-arm (same class); the CLI refs are the correctness (checklist) reference.
+- spec arms (the full pick) on the prod build: TWO DEFECTS. (1) after any image the drafter never drafted:
+  the server handed it slot.prompt.n_tokens() (804) as its position while its cache held the mrope grid
+  positions (67) -> every draft decode rejected, 15 t/s undrafted, silent. (2) images above n_batch
+  (3072/4096 tokens) overflowed the windowed draft KV during ingestion and the whole request died HTTP 500
+  (14 rows per line). FIXED on the branch (3a4aae0f1): drafter position = pos_next(); a failed ingestion
+  drops speculation for that request (spec_off_request) with one warning. After the fix (q4): acceptance
+  44-64% on 300-token answers after a 768-token image (meal 300 tok 20 s -> 11.5 s, sober 9.8 s); short facts
+  byte-identical to base; one long fork = a controller pick (gone at PICK_SPEC_EV=0), one = a 0.104-nat tie
+  (' T'onic vs ' or', base-arm top-2 logprobs) = the rounding band. OPEN: apply the drafter's sink+window
+  during image ingestion so large images draft too (today they generate undrafted).
+
 ## Open (server phase)
 1. Serve the pick with --mmproj (plain, spec off) and compare shas with refs/sep27-cli; then spec on.
 2. Text-only control on a projector-loaded server.
