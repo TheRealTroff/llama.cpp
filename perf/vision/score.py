@@ -35,7 +35,7 @@ def main():
         kind, expect = rows.get(key, ('?', ''))
         ans = open(os.path.join(a.dir, r['file'])).read()
         score = ''
-        if kind == 'fact':
+        if kind in ('fact', 'control'):
             ok = all(norm(e) in norm(ans) for e in expect.split(';')); score = 'PASS' if ok else 'FAIL'
         elif kind == 'edit':
             ratio = difflib.SequenceMatcher(None, norm(ans), norm(expect)).ratio(); score = f'{ratio:.3f}' + ('' if ratio >= 0.95 else '!')

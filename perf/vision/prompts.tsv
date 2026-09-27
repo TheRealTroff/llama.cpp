@@ -38,7 +38,7 @@ rome	512	low14	fact	64	What is the low temperature on October 14? Answer with th
 rome	full	storms	fact	64	Which dates show a thunderstorm icon? Answer with the dates only.	29;30
 rome	full	pack	abstract	400	I'm going to Rome October 8-12. Based on this forecast, what kind of clothes should I pack?	rain|umbrella|jacket|waterproof;25|26|warm;13|14|cool|evening
 rome	1024	desc	desc	160	Describe this image in two sentences.	
-# none/textonly control = SERVER PHASE ONLY (the CLI has no single-turn text mode; it drops into chat mode and loops on stdin)
+none	none	textonly	control	64	What is the capital of France? Answer with the name only.	Paris
 synth_sign	full	fr	edit	200	Transcribe the French paragraph on the sign exactly as written.	Avec ses fauteuils orientés vers la piste, ses prises murales numérotées de sept à trente-deux et son distributeur de cartes postales gratuites, la salle d'attente du quai nord propose à chaque voyageur un quart d'heure de calme avant le passage de la douane.
 synth_sign	2048	fr	edit	200	Transcribe the French paragraph on the sign exactly as written.	Avec ses fauteuils orientés vers la piste, ses prises murales numérotées de sept à trente-deux et son distributeur de cartes postales gratuites, la salle d'attente du quai nord propose à chaque voyageur un quart d'heure de calme avant le passage de la douane.
 synth_sign	1024	fr	edit	200	Transcribe the French paragraph on the sign exactly as written.	Avec ses fauteuils orientés vers la piste, ses prises murales numérotées de sept à trente-deux et son distributeur de cartes postales gratuites, la salle d'attente du quai nord propose à chaque voyageur un quart d'heure de calme avant le passage de la douane.

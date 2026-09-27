@@ -22,7 +22,7 @@ D=$OUT/$TAG-$LINE; mkdir -p "$D"
 echo "tree $B  line $LINE  model $M  mmproj $MMPROJ  out $D"
 [ -s "$D/summary.tsv" ] || printf 'image\tsize\tqid\tkind\tsha12\tencode_ms\twall_s\tn_out\tfile\n' > "$D/summary.tsv"   # append when the run already exists (a ROWS= pass adds rows)
 grep -v '^#' "$PROMPTS" | grep -E "$ROWS" | while IFS=$'\t' read -r image size qid kind n prompt expect; do
-  [ -n "$image" ] || continue
+  [ -n "$image" ] || continue; [ "$size" = none ] && continue   # text-only control = server phase only (the CLI has no single-turn text mode)
   name="$image-$size-$qid"
   args=(-m "$M" --mmproj "$MMPROJ" -p "$prompt" -n "$n" --temp 0 -ngl 99 -c 8192 --no-warmup --jinja --chat-template "$(cat "$(dirname "$0")/chat-template-nothink.jinja")")
   if [ "$size" != none ]; then
