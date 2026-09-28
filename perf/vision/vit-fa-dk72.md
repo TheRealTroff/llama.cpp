@@ -85,6 +85,7 @@ Answer shas (64 greedy tokens after the image) identical generic vs qt0 on all 6
 Branch exp/vit-fa-dk72, tree llama.cpp-vitfa. Default route with the pick's `GGML_FA_QT=1`: dk 72 takes
 `kernel_flash_attn_ext_qt_f16_dk72_dv72` (qr 0, PV 96, nsg 4); off-switches `GGML_FA_QT_DK72=0`,
 `GGML_FA_QR_DK72`, `GGML_FA_Q16_DK72` (default off), `GGML_FA_Q16_NSG_DK72`. BI class (byte-identical op-level
-and e2e). Adoption = owner; the served proof would be the vision arm of the mint (run-vision-gate-arm.sh,
-refs recorded on prod f114a0086 - shas must hold since the encoder output is bit-identical).
+and e2e). Adoption = owner. SERVED PROOF DONE (2026-09-28, branch build 5ea0dd3de, results vitfa-arm-*): the mint's vision
+arm (run-vision-gate-arm.sh: served pick + projector, 12 one-slot rows + the mixed/quad multi-slot arms) PASS on
+BOTH lines, every sha equal to the references recorded on prod.
 Open: nsg 2 (PV 80 = one padding tile instead of three; the dispatch switch has no NSG 2 case).
