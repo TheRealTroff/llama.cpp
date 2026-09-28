@@ -152,8 +152,28 @@ llama_model_qwen35::graph::graph(const llama_model & model, const llm_graph_para
 
     auto * inp = build_inp_mem_hybrid();
 
+    static const bool prune_empty_tail = getenv("LLAMA_QWEN35_PRUNE_EMPTY_TAIL") && atoi(getenv("LLAMA_QWEN35_PRUNE_EMPTY_TAIL")) != 0;
+    static const bool trace_tail = getenv("LLAMA_QWEN35_TRACE_TAIL") && atoi(getenv("LLAMA_QWEN35_TRACE_TAIL")) != 0;
+    const bool skip_tail = prune_empty_tail && !hparams.is_recr(n_layer - 1) && n_outputs == 0 &&
+            params.gtype == LLM_GRAPH_TYPE_DEFAULT && cparams.causal_attn && !cparams.embeddings && !cparams.embeddings_nextn;
+
     ggml_tensor * inp_pos     = build_inp_pos();
-    ggml_tensor * inp_out_ids = build_inp_out_ids();
+    ggml_tensor * inp_out_ids = skip_tail ? nullptr : build_inp_out_ids();
+
+    int tail_begin = 0;
+    auto trace = [&](bool pruned) {
+        if (!trace_tail) {
+            return;
+        }
+        const int n_nodes = ggml_graph_n_nodes(gf);
+        LLAMA_LOG_INFO("qwen35-tail: tokens=%lld outputs=%lld pruned=%d nodes=%d tail_begin=%d embeddings=%d nextn=%d\n",
+                (long long) n_tokens, (long long) n_outputs, pruned, n_nodes, tail_begin, cparams.embeddings, cparams.embeddings_nextn);
+        for (int i = tail_begin; i < n_nodes; ++i) {
+            const auto * node = ggml_graph_node(gf, i);
+            LLAMA_LOG_INFO("qwen35-tail-node: %d %s %s [%lld,%lld,%lld,%lld]\n", i, ggml_op_name(node->op), node->name,
+                    (long long) node->ne[0], (long long) node->ne[1], (long long) node->ne[2], (long long) node->ne[3]);
+        }
+    };
 
     // MTP/NextN layers are loaded as extra decoder blocks but not executed in the main pass.
     for (int il = 0; il < n_layer; ++il) {
@@ -166,6 +186,10 @@ llama_model_qwen35::graph::graph(const llama_model & model, const llm_graph_para
 
         ggml_build_forward_expand(gf, cur);
 
+        if (il == n_layer - 1) {
+            tail_begin = ggml_graph_n_nodes(gf);
+        }
+
         // Determine layer type and build appropriate attention mechanism
         if (hparams.is_recr(il)) {
             // Linear attention layer (gated delta net)
@@ -173,6 +197,12 @@ llama_model_qwen35::graph::graph(const llama_model & model, const llm_graph_para
         } else {
             // Full attention layer
             cur = build_layer_attn(inp->get_attn(), cur, inp_pos, sections, il);
+        }
+
+        // Attention and cache writes are already rooted. Keep all layer-input taps.
+        if (skip_tail && il == n_layer - 1) {
+            trace(true);
+            return;
         }
 
         if (il == n_layer - 1 && inp_out_ids && cparams.embeddings_nextn_masked) {
@@ -226,6 +256,7 @@ llama_model_qwen35::graph::graph(const llama_model & model, const llm_graph_para
     res->t_logits = cur;
 
     ggml_build_forward_expand(gf, cur);
+    trace(false);
 }
 
 std::pair<ggml_tensor *, ggml_tensor *> llama_model_qwen35::graph::build_qkvz(
