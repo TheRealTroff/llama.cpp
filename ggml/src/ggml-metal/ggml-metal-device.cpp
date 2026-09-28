@@ -2004,6 +2004,11 @@ bool ggml_metal_flash_attn_ext_q16(const ggml_tensor * op, int32_t gqa_heads) {
     // pays from ~32K cache entries up (-12..-16% at 48K, -21% at 96K), flat at 24K, +7% at 8K: the 16-row
     // tile halves the cache stream per query, which is the bound only at long context
     static const int fa_q16_kvmin = getenv("GGML_FA_Q16_KVMIN") != nullptr ? atoi(getenv("GGML_FA_Q16_KVMIN")) : 32768;
+    // dk 72 (the ViT head, perf/vision/vit-fa-dk72.md): GGML_FA_Q16_DK72=1 takes the 16-row tile at every length (prefill only)
+    static const bool fa_q16_dk72 = getenv("GGML_FA_Q16_DK72") != nullptr && atoi(getenv("GGML_FA_Q16_DK72")) != 0;
+    if (fa_q16_dk72 && op->src[0]->ne[0] == 72 && op->src[2]->ne[0] == 72 && !tr16) {
+        return op->src[0]->ne[1] >= 32;
+    }
     if (op->src[0]->ne[0] != 256 || op->src[2]->ne[0] != 256 || op->src[1]->ne[1] <= fa_q16_kvmin) {
         return false;
     }
@@ -2109,7 +2114,9 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext(
 
     // transposed-Q QK form for the f16 mm kernel (perf/ud-model.md step 9); "=0" means off
     static const bool fa_qt = getenv("GGML_FA_QT") != nullptr && atoi(getenv("GGML_FA_QT")) != 0;
-    if (fa_qt && !fa_acc_half && op->src[1]->type == GGML_TYPE_F16 && op->src[2]->type == GGML_TYPE_F16 && dk == dv && (dk == 128 || dk == 256)) {
+    // dk 72 = the Qwen3-VL vision encoder head (perf/vision/vit-fa-dk72.md); GGML_FA_QT_DK72=0 keeps the generic kernel there
+    static const bool fa_qt_dk72 = getenv("GGML_FA_QT_DK72") == nullptr || atoi(getenv("GGML_FA_QT_DK72")) != 0;
+    if (fa_qt && !fa_acc_half && op->src[1]->type == GGML_TYPE_F16 && op->src[2]->type == GGML_TYPE_F16 && dk == dv && (dk == 128 || dk == 256 || (dk == 72 && fa_qt_dk72))) {
         snprintf(base, 256, "kernel_flash_attn_ext_qt_f16_dk%d_dv%d", dk, dv);
     }
     if (ggml_metal_flash_attn_ext_q16(op, gqa_heads)) {
@@ -2147,6 +2154,12 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext(
     static const int fa_qr_kvmax = getenv("GGML_FA_QR_KVMAX") != nullptr ? atoi(getenv("GGML_FA_QR_KVMAX")) : 65536;
     const bool qr_len_ok = nwg > 1 || op->src[1]->ne[1] <= fa_qr_kvmax;
     int qr = (fa_qr > 0 && qr_len_ok && strstr(base, "_qt") != nullptr) ? std::min(fa_qr, dk/8) : 0;
+    // dk 72 (the ViT head): the register head costs here (qr 8: +4%, qr 9: +1% vs qr 0 per call, perf/vision/vit-fa-dk72.md);
+    // GGML_FA_QR_DK72 sets it separately from the LLM's GGML_FA_QR, default 0
+    static const int fa_qr_dk72 = getenv("GGML_FA_QR_DK72") != nullptr ? atoi(getenv("GGML_FA_QR_DK72")) : 0;
+    if (dk == 72 && strstr(base, "_qt") != nullptr) {
+        qr = std::min(fa_qr_dk72, dk/8);
+    }
     // the 24-row tile's register head is its own knob (three query tiles per dim tile): GGML_FA_Q24_QR
     static const int fa_q24_qr = getenv("GGML_FA_Q24_QR") != nullptr ? atoi(getenv("GGML_FA_Q24_QR")) : -1;
     if (fa_q24_qr >= 0 && (nqptg == 24 || nqptg == 16) && ggml_metal_flash_attn_ext_q24(op, gqa_heads) > 0) {

@@ -13812,7 +13812,11 @@ void kernel_flash_attn_ext_impl(
   //constexpr short DV8  = DV/8;
     constexpr short DV16 = DV/16;
 
-    constexpr short PV   = PAD2(DV, 64);
+    // the O scratch width: 64-padded for the 64-dim TR chunks and the 16-row tile, 32-padded otherwise so a
+    // 72-wide V head (the ViT) carries 3 column tiles per simdgroup, not 4 (perf/vision/vit-fa-dk72.md)
+    // (every NSG is instantiated by the dispatch switch, so the padding is a function of NSG: an odd tile
+    // count per simdgroup is fine in the 8-row loop, the 16-row loop needs a multiple of 4)
+    constexpr short PV   = DV % 64 == 0 ? PAD2(DV, 64) : Q > 8 ? PAD2(DV, 32*NSG) : PAD2(DV, 8*NSG);
     constexpr short PV4  = PV/4;
     constexpr short PV8  = PV/8;
   //constexpr short PV16 = PV/16;
@@ -14120,11 +14124,12 @@ void kernel_flash_attn_ext_impl(
                 ps += sgitg*(8*1);
 
                                 static_assert((C/8) % NSG == 0, "");
-                static_assert(!QT || (DK % 16 == 0 && Q % 8 == 0), "QT form assumes 8-row query tiles and DK % 16 == 0");
+                static_assert(!QT || (DK % 8 == 0 && Q % 8 == 0), "QT form assumes 8-row query tiles and DK % 8 == 0");
                 constexpr short NC  = (C/8)/NSG;
                 constexpr short NQT = Q/8; // query tiles per threadgroup (16-row form: perf/fa-long-context.md)
 
-                if (QT && (FC_flash_attn_ext_qr > 0 || NQT > 1) && DK % 16 == 0) {
+                // DK % 16 != 0 (the ViT head, dk = 72): the pair loop covers DK8 - 1 tiles and the odd tile follows
+                if (QT && (FC_flash_attn_ext_qr > 0 || NQT > 1 || DK % 16 != 0)) {
                     // QR form (perf/fa-long-context.md): each Q^T tile load feeds all NC score tiles of this
                     // simdgroup (the baseline reloads Q per score tile), and the first FC_flash_attn_ext_qr
                     // tiles come from registers loaded once before the KV loop. K tiles untransposed. With
@@ -14173,6 +14178,32 @@ void kernel_flash_attn_ext_impl(
                             FOR_UNROLL (short qt = 0; qt < NQT; ++qt) {
                                 simdgroup_multiply_accumulate(mqk[cc*NQT + qt], mk[0], mq[0*NQT + qt], mqk[cc*NQT + qt]);
                                 simdgroup_multiply_accumulate(mqk[cc*NQT + qt], mk[1], mq[1*NQT + qt], mqk[cc*NQT + qt]);
+                            }
+                        }
+                    }
+
+                    if constexpr (DK % 16 != 0) {
+                        // the odd trailing 8-dim tile (perf/vision/vit-fa-dk72.md): one K tile per score tile,
+                        // the Q^T tile from the register set when it is there, last in k order as in the baseline
+                        constexpr short io = DK8 - 1;
+
+                        simdgroup_barrier(mem_flags::mem_none);
+
+                        FOR_UNROLL (short qt = 0; qt < NQT; ++qt) {
+                            if (io < FC_flash_attn_ext_qr) {
+                                mq[qt] = mqr[io*NQT + qt];
+                            } else {
+                                simdgroup_load(mq[qt], pq + (8*io)*Q + 8*qt, Q);
+                            }
+                        }
+
+                        FOR_UNROLL (short cc = 0; cc < NC; ++cc) {
+                            simdgroup_load(mk[0], pk + cc*8*(NSG*NS10) + 8*io, NS10, 0, false);
+
+                            simdgroup_barrier(mem_flags::mem_none);
+
+                            FOR_UNROLL (short qt = 0; qt < NQT; ++qt) {
+                                simdgroup_multiply_accumulate(mqk[cc*NQT + qt], mk[0], mq[qt], mqk[cc*NQT + qt]);
                             }
                         }
                     }
@@ -14601,6 +14632,17 @@ void kernel_flash_attn_ext_impl(
                                     simdgroup_multiply_accumulate(lo[2*ii + 1], vs[0], mv[1], lo[2*ii + 1]);
                                     simdgroup_multiply_accumulate(lo[2*ii + 0], vs[1], mv[2], lo[2*ii + 0]);
                                     simdgroup_multiply_accumulate(lo[2*ii + 1], vs[1], mv[3], lo[2*ii + 1]);
+                                }
+
+                                if constexpr (NO % 2 != 0) {
+                                    // the odd trailing column tile (PV = 96: 3 tiles per simdgroup), same key order
+                                    v8x8_t mv[2];
+
+                                    simdgroup_load(mv[0], pv + 16*(NO/2)*NSG + 0*8*NS20, NS20, 0, false);
+                                    simdgroup_load(mv[1], pv + 16*(NO/2)*NSG + 1*8*NS20, NS20, 0, false);
+
+                                    simdgroup_multiply_accumulate(lo[NO - 1], vs[0], mv[0], lo[NO - 1]);
+                                    simdgroup_multiply_accumulate(lo[NO - 1], vs[1], mv[1], lo[NO - 1]);
                                 }
 
                                 pv  += 2*8*NS20;
@@ -15099,10 +15141,12 @@ template [[host_name("kernel_flash_attn_ext_acch_f16_dk128_dv128")]] kernel flas
 template [[host_name("kernel_flash_attn_ext_acch_f16_dk256_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES_ACCH, half4x4, 1, dequantize_f16, half4x4, 1, dequantize_f16, 256, 256>;
 // transposed-Q QK form (GGML_FA_QT=1, perf/ud-model.md step 9): the f16 K tiles load untransposed and the
 // score tile is stored transposed once per key tile; same products in the same order (byte-identical gate).
+template [[host_name("kernel_flash_attn_ext_qt_f16_dk72_dv72")]]   kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, half4x4, 1, dequantize_f16, half4x4, 1, dequantize_f16,  72,  72, OP_FLASH_ATTN_EXT_NQPSG, OP_FLASH_ATTN_EXT_NCPSG, true>;
 template [[host_name("kernel_flash_attn_ext_qt_f16_dk128_dv128")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, half4x4, 1, dequantize_f16, half4x4, 1, dequantize_f16, 128, 128, OP_FLASH_ATTN_EXT_NQPSG, OP_FLASH_ATTN_EXT_NCPSG, true>;
 template [[host_name("kernel_flash_attn_ext_qt_f16_dk256_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, half4x4, 1, dequantize_f16, half4x4, 1, dequantize_f16, 256, 256, OP_FLASH_ATTN_EXT_NQPSG, OP_FLASH_ATTN_EXT_NCPSG, true>;
 // 16-row query tile of the transposed-Q form (GGML_FA_Q16=1, prefill only): each K and V tile load feeds two
 // query tiles; shared memory is exactly the 32 KB threadgroup limit at DK=DV=256 (perf/fa-long-context.md)
+template [[host_name("kernel_flash_attn_ext_qt16_f16_dk72_dv72")]]   kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, half4x4, 1, dequantize_f16, half4x4, 1, dequantize_f16,  72,  72, 16, OP_FLASH_ATTN_EXT_NCPSG, true>;
 template [[host_name("kernel_flash_attn_ext_qt16_f16_dk256_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, half4x4, 1, dequantize_f16, half4x4, 1, dequantize_f16, 256, 256, 16, OP_FLASH_ATTN_EXT_NCPSG, true>;
 
 #if defined(GGML_METAL_HAS_BF16)
