@@ -19091,8 +19091,13 @@ kernel void kernel_mul_mm(
     }
 
     for (int loop_k = 0; loop_k < args.ne00; loop_k += NK) {
+        // K bounds check only on the partial tail step (perf/vision/vit-ffn-down.md): with ne00 % 16 == 0 the full
+        // 32-wide steps take the vector loads below, which read exactly the values the checked loads read
+        // (ViT ffn_down, K = 4304 = 134 x 32 + 16); other ne00 keep the checked loads on every step
+        const bool bc_step = FC_mul_mm_bc_inp && (args.ne00 % 16 != 0 || loop_k + NK > args.ne00);
+
         // load data and store to threadgroup memory
-        if (is_same<T0_4x4, block_q>::value && FC_mul_mm_bc_inp) {
+        if (is_same<T0_4x4, block_q>::value && bc_step) {
             threadgroup_barrier(mem_flags::mem_threadgroup);
 
             // no need for dequantization
@@ -19151,7 +19156,7 @@ kernel void kernel_mul_mm(
             }
         }
 
-        if (FC_mul_mm_bc_inp) {
+        if (bc_step) {
             FOR_UNROLL (short jc = 0; jc < NR1/32; jc++) {
                 device const T1 * yj = (device const T1 *)((device const char *) y + 32*jc*args.nb11);
 
