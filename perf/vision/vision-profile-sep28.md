@@ -50,4 +50,7 @@ Kernel levers, if wanted, are encoder-only: (1) a dk=72 instantiation of the for
 (ceiling ~30% of the attention time = ~2.6 s of the 11.5 s full-rung encoder, ~0.1 s at 1024); (2) the
 K=4304 ffn_down route (~0.3 s full, ~0.05 s at 1024). Neither touches the LLM half or the pick numerics
 (the encoder output would need its own gate: CLI refs + the served sha gate, vision-gate.md).
-Not built; owner decides.
+~~Not built; owner decides.~~ (1) BUILT AND MERGED 2026-09-28: `vit-fa-dk72.md` - the fork's transposed-Q form at
+dk 72, two simdgroups, PV 80: 5.6-5.7 TFLOPS, encoder 11.4 -> 8.6 s at the full rung (-25%), 0.92 -> 0.79 s at 768
+tokens, byte-identical. With it the full-rung split is ~29.3 s LLM prefill + ~8.6 s encoder. (2) the ffn_down row is
+still open.

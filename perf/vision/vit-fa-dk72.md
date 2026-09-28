@@ -135,4 +135,8 @@ dk 72 default on the branch: `kernel_flash_attn_ext_qt_f16_dk72_dv72` nsg 2 (PV 
 nsg 4 qt form below 33 queries. Off-switches: `GGML_FA_QT_DK72=0` (generic kernel), `GGML_FA_NSG_DK72=4`,
 `GGML_FA_QR_DK72`, `GGML_FA_Q16_DK72` (off; refuted). Encoder -25% at the full rung (11.4 -> 8.6 s), -14% at 768
 tokens; byte-identical (op-level vs prod on real Metal output, 12 e2e answer shas, the served vision arm on both lines).
-Adoption = owner. The dump-hook fix rides this branch; merging it fixes the tool on prod.
+~~Adoption = owner.~~ MERGED TO PROD 2026-09-28 (owner: "Prod it."), fast-forward to 233156814, prod rebuilt; the
+dump-hook fix is on prod with it. Branch exp/vit-fa-dk72 kept, tree llama.cpp-vitfa removed. Merged-prod proofs (prod
+233156814 rebuilt, results prod-vitfa-*): the mint's vision arm PASS on both lines (one slot + multi-slot, every sha =
+its reference) and the text multi-slot gate PASS on both lines (every slot sha = its reference: the LLM's own FA
+routes are untouched, as the dk 72 gates promise by construction).

@@ -36,7 +36,7 @@ ud at full/2048/unrot transcribes WITH the sign's line breaks and hyphens ("exac
 printed hyphenation before comparing.
 
 ## Encoder cost (F16 projector, Metal, this box) - superlinear in tokens
-2026-09-28 PROFILED per op: `vision-profile-sep28.md` (encoder = the generic dk72 FA kernel at 53-56% of the roof above ~1000 tokens; the 27B prefill of the image tokens is at the mul_mm roof; measured split 88/12 at 768 tokens, 72/28 at full).
+2026-09-28 encoder attention SPED UP -25% at the full rung, byte-identical, merged (`vit-fa-dk72.md`); the table below is pre-merge. 2026-09-28 PROFILED per op: `vision-profile-sep28.md` (encoder = the generic dk72 FA kernel at 53-56% of the roof above ~1000 tokens; the 27B prefill of the image tokens is at the mul_mm roof; measured split 88/12 at 768 tokens, 72/28 at full).
 | rung | tokens | encoder | est. 27B prefill @137 t/s | served stall (all slots) |
 | 512  |  192 | 0.22 s |  1.4 s |  ~2 s |
 | 1024 |  768 | 0.89 s |  5.6 s |  ~7 s |
