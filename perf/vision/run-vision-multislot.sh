@@ -61,8 +61,20 @@ def row(phase, k, r):
 for k,r in alone.items(): row('alone',k,r)
 for k,r in mixed.items(): row('mixed',k,r)
 for k,r in quad.items(): row('quad',k,r)
-bad=[k for k,r in list(mixed.items())+list(quad.items()) if r['sha']!=alone[k]['sha']]
-print('RESULT:', 'PASS - every concurrent sha equals its alone sha' if not bad else 'DIFF on ' + ', '.join(bad))
+# concurrent shas differ from the alone shas BY DESIGN (batched routes = the multi-slot numerics class, as on the text
+# line): the gate is a recorded reference per slot mix (REF_MS="mixed/txt-code:sha quad/img-menu:sha ..."), repeatable x2.
+import os
+ref = dict(kv.split(':') for kv in os.environ.get('REF_MS','').split() if ':' in kv)
+moved = []; rec = []
+for phase, res in (('mixed', mixed), ('quad', quad)):
+    for k, r in res.items():
+        key = f"{phase}/{k}"; rec.append(f"{key}:{r['sha']}")
+        if key in ref and ref[key] != r['sha']: moved.append(key)
+if ref: print('RESULT:', 'PASS - every concurrent sha equals its recorded reference' if not moved else 'FAIL - SHA MOVED on ' + ', '.join(moved))
+else: print('RESULT: no multi-slot reference given - record: MS-REF ' + ' '.join(rec))
+sys.exit(1 if moved else 0)
 PY
+prc=$?
 kill $PID 2>/dev/null; sleep 2; kill -9 $PID 2>/dev/null
 grep -c ' E ' "$SLOG" | sed 's/^/server E lines: /'; echo "done: $D"
+exit $prc

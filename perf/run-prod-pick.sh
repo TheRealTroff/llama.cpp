@@ -224,6 +224,14 @@ if [ "${MULTISLOT:-1}" = 1 ]; then
   LINE="$LINE" TAG="$TAG" B="$B" PORT=$(( ${PORT:-8093} + 1 )) LONG="${LONG:-1}" ARM=classes bash "$B/perf/run-multislot-gate.sh"
 fi
 
+if [ "${VISION:-1}" = 1 ]; then
+  echo
+  echo "--- vision arm: the pick served with the projector, fixed depth 1, controller off (perf/vision/run-vision-gate-arm.sh,"
+  echo "    owner 2026-09-28): 12 image rows + the text-only control, then one image beside three text requests and four"
+  echo "    images at once; every sha against the line's recorded reference; VISION=0 skips it, no projector file = skipped ---"
+  LINE="$LINE" TAG="$TAG" B="$B" PORT=$(( ${PORT:-8093} + 2 )) bash "$B/perf/vision/run-vision-gate-arm.sh"
+fi
+
 echo
 echo "--- output identity (same n_predict must share a sha) ---"
 for f in /tmp/prodpick-*.txt; do echo "  $(shasum "$f" | cut -c1-12)  $(wc -c <"$f" | tr -d ' ') B  $f"; done
