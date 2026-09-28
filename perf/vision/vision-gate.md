@@ -1,4 +1,13 @@
-# Vision gate (exp/vision-gate) - state as of 2026-09-27
+# Vision gate (exp/vision-gate) - state as of 2026-09-28
+
+2026-09-28 OWNER DECISIONS ("I'll take 1 and 3"): (1) the two server fixes MERGED to prod (fast-forward bf92ab864,
+prod rebuilt; text proof = the text multi-slot gate PASS on both lines, every slot sha = its reference, plus the
+one-slot Turbo4 arms below); (3) the VISION ARM is in the mint: run-vision-gate-arm.sh after the multi-slot classes
+arm of run-prod-pick.sh (VISION=0 skips), references recorded per line in the script; (2) NO global
+--image-max-tokens: the cap is per server instantiation (it goes into the projector context at load; a request
+carries only the image), so a low default would silently degrade the one request that needs full OCR - the
+client sizes the image instead (the cap is only a ceiling); a per-request override (downscale the decoded
+bitmap, ~40 lines) is possible and not built.
 
 Projector: `/Users/troff/play/qwen3.8-mmproj-F16.gguf` (Unsloth, qwen3vl_merger, 461M, out 5120). Loads with both
 pick files. Inputs: `images/preprocess.sh` (HEIC/WebP via sips, EXIF rotation baked, sRGB, alpha dropped, ladder
