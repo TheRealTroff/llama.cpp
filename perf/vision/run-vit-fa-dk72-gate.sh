@@ -23,7 +23,8 @@ for rep in $REPS_LIST; do
   done
 done
 echo "== op-level byte gate: eval cases hsk=72 (Metal vs CPU pass/fail per arm, then cmp of the dumped Metal outputs)"
-# base = BASE_T (default: prod + the dump-hook fix, the generic PV128 kernel); every other arm is compared against it
+# base = BASE_T (default: prod + the dump-hook fix, the generic PV128 kernel; that tree was removed 2026-09-28 - recreate
+# it as a detached worktree at prod with this branch's tests/test-backend-ops.cpp hook hunk, or pass BARMS without base)
 BASE_T=${BASE_T:-/Users/troff/play/llama.cpp-hookfix/build/bin/test-backend-ops}
 for arm in ${BARMS:-base gen qt0 qt8 qt9 q16}; do
   case $arm in base) E="X=1";; gen) E="GGML_FA_QT_DK72=0";; qt0) E="GGML_FA_QR_DK72=0";; qt8) E="GGML_FA_QR_DK72=8";; qt9) E="GGML_FA_QR_DK72=9";; q16) E="GGML_FA_QR_DK72=0 GGML_FA_Q16_DK72=1";; n2) E="GGML_FA_NSG_DK72=2";; n2g) E="GGML_FA_QT_DK72=0 GGML_FA_NSG_DK72=2";; esac
