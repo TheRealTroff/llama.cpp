@@ -48,4 +48,11 @@ With both levers the full-rung encoder is 11.45 s (morning) -> 8.35 s (-27%).
   text multi-slot gate PASS on both lines - every sha equal to its reference.
 
 ## State
-Branch exp/vit-ffn-down off prod 90ca3a33e, tree llama.cpp-vitffn. BI class. Adoption = owner.
+Branch exp/vit-ffn-down off prod 90ca3a33e, tree llama.cpp-vitffn. BI class. ~~Adoption = owner.~~
+MERGED TO PROD 2026-09-28 (owner: "Go ahead and merge."), fast-forward to ac6191e95, prod rebuilt. Merged-prod proofs
+(run-prod-pick.sh TURBO=1 ARMS=turbo4-n3-300 per line, TAGs prod-vitffn-{q4,ud}, which also run the multi-slot, long and
+vision arms): q4 Turbo4 300 `86213d038a29` (a recorded canonical sha of that arm; the controller forks it with
+`7c5254d01b12`), 34.2 t/s; ud Turbo4 300 `d180ae89f168` = the recorded NON-SPECULATIVE greedy sha of ud (`turbo4-b1-300`,
+README) - the Sep 25 mint's `ce826d8a3cbd` was a controller fork, and ud's controller {3,7} (picked 2026-09-25, mint
+pending) now lands on the greedy chain; 31.1 t/s vs the mint's 29.9, the controller's expected gain. Multi-slot split +
+long arms and classes arms PASS both lines, vision arm PASS both lines. Branch kept, tree llama.cpp-vitffn removed.

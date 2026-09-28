@@ -52,5 +52,5 @@ K=4304 ffn_down route (~0.3 s full, ~0.05 s at 1024). Neither touches the LLM ha
 (the encoder output would need its own gate: CLI refs + the served sha gate, vision-gate.md).
 ~~Not built; owner decides.~~ (1) BUILT AND MERGED 2026-09-28: `vit-fa-dk72.md` - the fork's transposed-Q form at
 dk 72, two simdgroups, PV 80: 5.6-5.7 TFLOPS, encoder 11.4 -> 8.6 s at the full rung (-25%), 0.92 -> 0.79 s at 768
-tokens, byte-identical. With it the full-rung split is ~29.3 s LLM prefill + ~8.6 s encoder. (2) the ffn_down row is
-still open.
+tokens, byte-identical. With it the full-rung split is ~29.3 s LLM prefill + ~8.6 s encoder. (2) ffn_down MERGED the same day (`vit-ffn-down.md`): the mul_mm K
+bounds check on the tail step only, -32% per call, encoder 8.66 -> 8.36 s. Full-rung encoder today: 11.45 -> 8.36 s (-27%).
