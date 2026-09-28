@@ -5332,6 +5332,13 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
         if (nqptg == 16 && ne00 == 72) {
             nsg = env_fa_q16_nsg_dk72;
         }
+        // dk 72 at the 8-row tile: 2 simdgroups (PV 80 instead of 96), default; GGML_FA_NSG_DK72=4 = the nsg 4 form; f16 K/V only
+        static const int env_fa_nsg_dk72 = getenv("GGML_FA_NSG_DK72") ? atoi(getenv("GGML_FA_NSG_DK72")) : 2;
+        // prefill-sized batches only: below 33 queries the split (nwg) and GQA-packed routes need gqah > 1 / nwg > 1
+        // instantiations the nsg 2 case does not have (8 decode-shaped eval cases failed without this)
+        if (nqptg == 8 && ne00 == 72 && ne20 == 72 && op->src[1]->type == GGML_TYPE_F16 && env_fa_nsg_dk72 == 2 && ne01 > 32) {
+            nsg = 2;
+        }
 
         const size_t smem = FATTN_SMEM(nsg);
 

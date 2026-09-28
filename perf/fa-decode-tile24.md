@@ -183,7 +183,7 @@ TR=9 tile, and the test env sets TR=9.
 How it was proven, because the first three tools said the opposite:
 
 - `test-backend-ops` bitwise comparison of the two routes (new `GGML_TEST_SEED`, `GGML_TEST_DUMP`): identical on
-  all 36 Turbo4 head-256 cases, with the server's 4-row mask and its padded twin.
+  all 36 Turbo4 head-256 cases, with the server's 4-row mask and its padded twin. [2026-09-28: that dump hook wrote the CPU reference, so this compared CPU with CPU; RE-RUN with the fixed hook on real Metal output: 24/24 identical on both lines, the claim stands - perf/vision/vit-fa-dk72.md]
 - A post-completion dump of the FA tensors inside the Metal backend: **invalid** - the graph allocator reuses a
   dead tensor's memory within the same graph, so Q and the FA output read back as later nodes' data. Only the
   persistent K/V cache views were trustworthy (layer 3 identical, layer 4+ different: the finger pointed at the
@@ -252,7 +252,7 @@ as four 8-row tiles in flight. The 8-row grid is 20 KB per threadgroup, also one
 ### Numerics
 
 `test-backend-ops` under both classes (TR 9 `qtl4w24`, TR 7 `qtnw24`), widths 3-6 at kv 512 / 8448: 8/8 vs CPU, and
-**bitwise identical** to the pick's routes (`GGML_TEST_SEED=7`, `GGML_TEST_DUMP`, 8/8 files per class). A row's
+**bitwise identical** to the pick's routes (`GGML_TEST_SEED=7`, `GGML_TEST_DUMP`, 8/8 files per class). [2026-09-28: that dump hook wrote the CPU reference, so this compared CPU with CPU; RE-RUN with the fixed hook on real Metal output: 24/24 identical on both lines, the claim stands - perf/vision/vit-fa-dk72.md] A row's
 arithmetic does not depend on which tile it sits in (same key order, same per-row softmax, same split width).
 
 ### E2e (UD line, Turbo4, 300 tokens, benchprompt at 8K, `perf/run-prod-pick.sh` with `PICK_DEPTH` overridden, ABAB)
@@ -300,7 +300,7 @@ dump files; the default rule re-checked below).
 | 5 | 279 -> 237 (**-15%**) | 780 -> 647 (**-17%**) | 3023 -> 2470 (**-18.3%**) | 3152 -> 2580 (-18.1%) |
 | 6 | 342 -> 305 (**-11%**) | | | 3865 -> 3528 (**-8.7%**) |
 
-Bitwise identical to the pick's routes under the rule in both classes (16/16 dump files, widths 3-6, kv 512 / 8448),
+Bitwise identical to the pick's routes under the rule in both classes (16/16 dump files, widths 3-6, kv 512 / 8448), [2026-09-28: that dump hook wrote the CPU reference, so this compared CPU with CPU; RE-RUN with the fixed hook on real Metal output: 24/24 identical on both lines, the claim stands - perf/vision/vit-fa-dk72.md]
 8/8 vs CPU per class. Width 4 is untouched by construction (one 24-row tile, the pick's own dispatch).
 
 ### E2e sha gate of the default rule at the other depths (UD, Turbo4, 300 tokens, benchprompt, the fa24 build - `repo :` line checked)

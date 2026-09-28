@@ -88,4 +88,51 @@ Branch exp/vit-fa-dk72, tree llama.cpp-vitfa. Default route with the pick's `GGM
 and e2e). Adoption = owner. SERVED PROOF DONE (2026-09-28, branch build 5ea0dd3de, results vitfa-arm-*): the mint's vision
 arm (run-vision-gate-arm.sh: served pick + projector, 12 one-slot rows + the mixed/quad multi-slot arms) PASS on
 BOTH lines, every sha equal to the references recorded on prod.
-Open: nsg 2 (PV 80 = one padding tile instead of three; the dispatch switch has no NSG 2 case).
+~~Open: nsg 2 (PV 80 = one padding tile instead of three; the dispatch switch has no NSG 2 case).~~ Done, step 4.
+
+## Step 4 - two simdgroups (nsg 2, PV 80) - ADOPTED ON THE BRANCH AS THE DK 72 DEFAULT (2026-09-28, owner: "Might as well try it")
+
+A `case 2` in the dispatch switch, instantiated only for DK = DV = 72, Q = 8, f16 K/V (`if constexpr`; no other kernel
+pays library load time), and the host picks nsg 2 for dk 72 prefill batches (`ne01 > 32`; `GGML_FA_NSG_DK72=4` = the
+nsg 4 form). PV = PAD2(72, 16) = 80: 5 column tiles per simdgroup (one padding tile of 10 instead of 3 of 12). The
+first build routed every dk 72 f16 call to nsg 2 and failed 8 eval cases (ERR inf / 2.5-3.2): the decode-shaped GQA
+(gqah 4) and split (nwg 6) routes need instantiations case 2 does not have - hence the `ne01 > 32` gate.
+
+| kv | generic (prod) | qt0 nsg 4 | qt nsg 2 | generic nsg 2 | qt nsg 2 vs prod |
+|---|---|---|---|---|---|
+|  3072 | 11.26 ms | 8.71 / 8.72 | 7.62 / 7.63 | 8.66 | -32% |
+| 12288 | 183.3 | 141.9 / 141.7 | 123.1 / 122.7 | 141.8 / 140.9 | -33% |
+| 16060 | 319.4 | 245.9 / 245.5 | 213.6 / 222.7 | 254.1 / 253.0 | -30..-33% |
+
+5.6-5.7 TFLOPS = 81% of the 6.96 roof (prod: 55%). E2e encoder (e2e-nsg2, same answer shas on all 6 rows):
+
+| rung | prod | qt nsg 4 (step 2) | qt nsg 2 |
+|---|---|---|---|
+| 768 tokens  |   924 |  829 |  792 (-14%) |
+| 3072 tokens |  7130 | 6036 | 5490 (-23%) |
+| full (4015) | 11446 | 9530 | 8598 / 8678 (-25%, -2.8 s) |
+
+Served proof on the nsg 2 default (branch build, results vitfa-n2-arm-*): the mint's vision arm PASS on both lines,
+one slot and multi-slot, every sha equal to prod's references.
+
+## TRAP FOUND: the GGML_TEST_DUMP hook dumped the CPU reference (fixed 2026-09-28)
+
+In eval mode `ggml_backend_compare_graph_backend(backend1 = tested, backend2 = CPU)` hands the callback t1 = Metal,
+t2 = CPU, and the hook wrote f2. Every "bitwise identical" op-level comparison made with it compared CPU with CPU -
+including this note's steps 1-3 as first written and the 2026-09-16 tile claim (perf/fa-decode-tile24.md). The
+tell: a 16-row-tile arm with 8 FAILs vs CPU still "matched" the passing arm 896/896. Fixed on this branch (the hook
+writes f1). Sanity: prod-plus-fix Metal dumps vs the old dumps of the same seed = 896/896 differ (CPU vs Metal).
+
+RE-RUN with the fix (`bytefix/`, GGML_TEST_SEED=1, baseline = prod 055d5eec4 + only the hook fix, the generic PV 128
+kernel): generic PV 96, qt0, qt qr 8, qt qr 9, q16, qt nsg 2, generic nsg 2 - **896/896 identical to prod on every
+arm**, 898/898 vs CPU each; each arm's log shows its own kernel loaded (qt nsg 2: 14 nsg=2 pipelines). The claims of
+steps 1-4 stand, now on real Metal outputs. The 2026-09-16 tile claim re-run the same way
+(`perf/vision/recheck-tile24-bytes.sh`): 24/24 identical on both lines, tile vs 8-row, each arm loading its own
+kernels - it stands too.
+
+## State (end of 2026-09-28)
+dk 72 default on the branch: `kernel_flash_attn_ext_qt_f16_dk72_dv72` nsg 2 (PV 80), qr 0, for prefill batches; the
+nsg 4 qt form below 33 queries. Off-switches: `GGML_FA_QT_DK72=0` (generic kernel), `GGML_FA_NSG_DK72=4`,
+`GGML_FA_QR_DK72`, `GGML_FA_Q16_DK72` (off; refuted). Encoder -25% at the full rung (11.4 -> 8.6 s), -14% at 768
+tokens; byte-identical (op-level vs prod on real Metal output, 12 e2e answer shas, the served vision arm on both lines).
+Adoption = owner. The dump-hook fix rides this branch; merging it fixes the tool on prod.

@@ -15035,6 +15035,13 @@ kernel void kernel_flash_attn_ext(
       // note: disabled cases to reduce library load time
       //case 1: kernel_flash_attn_ext_impl<FWD_TMPL, 1>(FWD_ARGS); break;
       //case 2: kernel_flash_attn_ext_impl<FWD_TMPL, 2>(FWD_ARGS); break;
+        case 2:
+            // the dk 72 ViT head only (GGML_FA_NSG_DK72=2, perf/vision/vit-fa-dk72.md): PV 80 = 5 column tiles per
+            // simdgroup instead of PV 96 at nsg 4; no other kernel instantiates it (library load time)
+            if constexpr (DK == 72 && DV == 72 && Q == 8 && is_same<kd4x4_t, k4x4_t>::value) {
+                kernel_flash_attn_ext_impl<FWD_TMPL, 1, 2, QT, TRM, VU, LD, OR>(FWD_ARGS);
+            }
+            break;
         case 4:
             switch (FC_flash_attn_ext_gqa_heads) {
                 case 4: kernel_flash_attn_ext_impl<FWD_TMPL, 4, 4, QT, TRM, VU, LD, OR>(FWD_ARGS); break;

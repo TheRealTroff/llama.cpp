@@ -1465,15 +1465,17 @@ struct test_case {
             std::vector<float> f2 = tensor_to_float(t2);
 
             // GGML_TEST_DUMP=<dir>: the tested backend's op outputs as raw floats, one file per op in
-            // encounter order, for bitwise comparison of two routings of the same case (perf/fa-decode-tile24.md)
+            // encounter order, for bitwise comparison of two routings of the same case (perf/fa-decode-tile24.md).
+            // t1/f1 = backend1 = the tested backend; t2/f2 = the CPU reference (2026-09-28: this dumped f2 until
+            // then, so every dump comparison before it compared CPU with CPU - perf/vision/vit-fa-dk72.md)
             {
                 static const char * dump_dir = getenv("GGML_TEST_DUMP");
                 static int dump_n = 0;
-                if (dump_dir && t2->op != GGML_OP_NONE) {
+                if (dump_dir && t1->op != GGML_OP_NONE) {
                     char fn[1024];
-                    snprintf(fn, sizeof(fn), "%s/%04d-%s.bin", dump_dir, dump_n++, ggml_op_name(t2->op));
+                    snprintf(fn, sizeof(fn), "%s/%04d-%s.bin", dump_dir, dump_n++, ggml_op_name(t1->op));
                     FILE * f = fopen(fn, "wb");
-                    if (f) { fwrite(f2.data(), sizeof(float), f2.size(), f); fclose(f); }
+                    if (f) { fwrite(f1.data(), sizeof(float), f1.size(), f); fclose(f); }
                 }
             }
 
