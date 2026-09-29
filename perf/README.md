@@ -32,6 +32,17 @@ one level down, and it bit the `GGML_MV_EXT_V2` work on 2026-08-22.
 
 ## The prod pick
 
+**2026-09-29 evening (owner: "I don't see why I wouldn't want this. Adopt away."): `exp/turbo4-plane` MERGED (`ca5519e90`) - the
+HEAD-MAJOR K/V CACHE, `LLAMA_KV_HEAD_MAJOR=1` PICKED on both lines (class BI, `kv-layout.md`).** Per layer and stream the cache is
+`[hs, kv, nh]` (each head's cells contiguous - the layout the FA kernels were always timed on: test-backend-ops' FA cases are
+head-major, the served cache was cell-major, f16 ~10% slower per call on it). Same bytes, no file or state format touched (the
+serializer gathers per head). Gated byte-identical: fixed-depth 8K shas, the 96K sha x8, multi-slot split + long PASS; 96K e2e
+f16 decode +2.6% / prefill -1.3%, Turbo4 +0.3% / -0.9% (two reps agree to 0.1%). Uniform stream sizes only: the `--ctx-seq-sizes`
+packed layout falls back to cell-major with a warning (its per-stream head stride is not built - the owner has memory-pattern
+concerns about that scenario anyway, "for a different day"). Also in the merge: the Turbo4 norm-plane relayout REFUTED by its ceiling
+probe (`GGML_FA_T4_PROBE=1`, timing only, 0.98-1.02x), the cell-major FA perf cases and `run-fa-layout-timing.sh`. Mint
+`prodpick-sep29-headmajor-{q4,ud}` running at merge time; result recorded below when it lands.
+
 **2026-09-29 afternoon (owner: "Absolutely. Let's merge it."): `exp/graph-reuse-cache` MERGED (`803fb4604`) - the recurrent-state VIEW
 SLIDE, a code default (`LLAMA_RS_SLIDE=0` the off-switch, no manifest line: CPU-only, no numerics class).** The decode graph was
 rebuilt on ~2 rounds in 3 because the state's source rows (the previous round's rollback) were graph topology; a miss = 0.37 ms

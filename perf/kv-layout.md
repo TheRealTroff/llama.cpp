@@ -1,6 +1,10 @@
 # The K/V cache's physical layout (2026-09-29, branch `exp/turbo4-plane`, tree `~/play/llama.cpp-t4plane`)
 
-**Status: OPEN - two layout effects measured per FA call, nothing adopted. Owner's ask (2026-09-29): "is the physical
+**Status 2026-09-29 evening: the head-major cache ADOPTED on both lines (owner: "I don't see why I wouldn't want this. Adopt
+away."), MERGED TO PROD `ca5519e90`, manifest `LLAMA_KV_HEAD_MAJOR=1|BI|both|pick`, mint `prodpick-sep29-headmajor-{q4,ud}`
+(result at the end of this note); worktree removed, branch `exp/turbo4-plane` kept. The norm-plane relayout stays refuted.
+Open: the packed (`--ctx-seq-sizes`) layout runs cell-major (per-stream head stride not built; owner: memory-pattern concerns
+there, "for a different day").** ~~Status: OPEN - two layout effects measured per FA call, nothing adopted. Owner's ask (2026-09-29): "is the physical
 layout of the KV cache in our llama.cpp fork optimal for cache locality?"; on the norm-plane proposal: "it is by design
 memory usage neutral. I like it" - go given at 13:30.** Sections below in the order they were found.
 
