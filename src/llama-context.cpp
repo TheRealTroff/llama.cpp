@@ -30,9 +30,11 @@
 // apply/reuse/set_inputs/submit/rest, accumulated per context and printed every
 // 64 decodes (env LLAMA_DECODE_PROF=1)
 struct llama_decode_prof {
-    // 0 apply, 1 reuse-check(+build+alloc on miss), 2 set_inputs, 3 compute submit, 4 process total, 5 decode total
-    int64_t t[6] = {};
+    // 0 apply, 1 reuse-check(+build+alloc on miss), 2 set_inputs, 3 compute submit, 4 process total, 5 decode total,
+    // 6 build_graph (misses only), 7 sched_alloc_graph (misses only)
+    int64_t t[8] = {};
     int     n    = 0;
+    int     n_miss = 0;
 };
 
 static bool llama_decode_prof_enabled() {
@@ -1837,6 +1839,8 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
 
         //const auto t_start_us = ggml_time_us();
 
+        const int64_t tb0 = dprof ? ggml_time_us() : 0;
+
         gf = model.build_graph(gparams);
 
         //LLAMA_LOG_INFO("graph build time: %.3f ms\n", (ggml_time_us() - t_start_us)/1000.0);
@@ -1847,10 +1851,19 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
             return nullptr;
         }
 
+        const int64_t tb1 = dprof ? ggml_time_us() : 0;
+
         if (!ggml_backend_sched_alloc_graph(sched.get(), gf)) {
             LLAMA_LOG_ERROR("%s: failed to allocate graph\n", __func__);
             ret = GGML_STATUS_ALLOC_FAILED;
             return nullptr;
+        }
+
+        if (dprof) {
+            auto & prof = llama_decode_prof_get(this);
+            prof.t[6] += tb1 - tb0;
+            prof.t[7] += ggml_time_us() - tb1;
+            prof.n_miss++;
         }
     }
 
@@ -2555,10 +2568,11 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
         if (prof.n % 64 == 0) {
             // fprintf: the server filters library-side LLAMA_LOG_INFO by default
-            fprintf(stderr, "decode-prof ctx=%p n=%d avg ms: apply %.3f reuse %.3f set_inputs %.3f submit %.3f rest %.3f decode %.3f\n",
+            fprintf(stderr, "decode-prof ctx=%p n=%d avg ms: apply %.3f reuse %.3f set_inputs %.3f submit %.3f rest %.3f decode %.3f | misses %d: build %.3f alloc %.3f ms each\n",
                     (void *) this, prof.n,
                     prof.t[0]/1000.0/prof.n, prof.t[1]/1000.0/prof.n, prof.t[2]/1000.0/prof.n,
-                    prof.t[3]/1000.0/prof.n, (prof.t[5] - prof.t[4])/1000.0/prof.n, prof.t[5]/1000.0/prof.n);
+                    prof.t[3]/1000.0/prof.n, (prof.t[5] - prof.t[4])/1000.0/prof.n, prof.t[5]/1000.0/prof.n,
+                    prof.n_miss, prof.n_miss ? prof.t[6]/1000.0/prof.n_miss : 0.0, prof.n_miss ? prof.t[7]/1000.0/prof.n_miss : 0.0);
         }
     }
 
