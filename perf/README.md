@@ -921,6 +921,14 @@ must be a separate checkout. Two arms that agree to the microsecond are a routin
 
 ## Methodology rules, learned the hard way
 
+- **`test-backend-ops` times the FA kernels on a K/V layout the cache never has (2026-09-29).** `test_flash_attn_ext`
+  allocates K/V head-major (each head's stream contiguous); the cache is cell-major (one row per cell, heads
+  concatenated), which only `permute={0,2,1,3}` + `kv_view=false` reproduces. The f16 kernels run ~10% slower on the
+  cache's layout at every decode extent and at 8K/24K prefill, Turbo4 0-2.5% - so a per-call FA number taken on the
+  default cases is not the served kernel's time. The Qwen3.8 shapes now exist in both layouts in the perf list; time
+  FA on the cache's layout (`run-fa-layout-timing.sh`), and a layout lever's ceiling with a kernel-side load-stream
+  probe before building the type (`kv-layout.md`: the Turbo4 norm-plane relayout was refuted that way in an hour).
+
 - **A pick change is a routing change, like a file swap.** The Sep 17 block-cap-7 pick silently turned the picked
   conv fusion off (the draft max sizes the recurrent snapshots, the snapshots size the carry copies, the copies
   overflowed the fusion's source cap) and nobody saw it for a day because the manifest said "picked" and the shas

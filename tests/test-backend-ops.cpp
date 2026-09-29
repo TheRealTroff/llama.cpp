@@ -10851,6 +10851,19 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
         }
     }
 
+    // The K/V cache's own layout (exp/turbo4-plane, perf/kv-layout.md): one row per cell with the KV heads
+    // concatenated (cell stride = nh head rows, head stride = one head row), which permute {0,2,1,3} over a
+    // contiguous [hs, nh, kv] tensor reproduces. The target-geometry cases above are head-major (each head's
+    // stream contiguous), a layout the cache never has - these pair them at the decode and prefill widths.
+    for (ggml_type type_KV : { GGML_TYPE_F16, GGML_TYPE_TURBO4_0 }) {
+        for (int64_t kv : { 8448, 24576, 98304 }) {
+            for (int nb : { 4, 512 }) {
+                test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {6, 1}, kv, nb, true, false, 0, 0,
+                                                                GGML_PREC_F32, type_KV, type_KV, {0, 2, 1, 3}, false));
+            }
+        }
+    }
+
     // DFlash2 depth 3 uses four noise-block rows (anchor + three drafts).
     // Pair the standard live window with longer contexts to expose the scaling
     // of its GQA4 Turbo4 route.

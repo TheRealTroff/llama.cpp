@@ -1190,6 +1190,31 @@ static inline void turbo4_chunk_bytes_s(device const char * row, short d0, short
 static inline float turbo4_norm_at(device const char * row, short d) {
     return (float) ((device const block_turbo4_0 *) row + d/QK_TURBO)->norm;
 }
+// exp/turbo4-plane CEILING PROBE (perf/kv-layout.md, 2026-09-29): the loads a norm-plane Turbo4 layout would issue -
+// 64-byte nibble blocks at row + 64*b (a head at DK/2 bytes, 16-byte aligned, two uint4 loads per 64-dim chunk in
+// place of four 2-byte-aligned packed_ushort4 loads), the block norms in a plane at the row's tail (nrm = the plane
+// offset from this head's nibble base) - issued over the STORED 66-byte layout's bytes: garbage values, the
+// instruction stream and the addresses of the relayout. GGML_FA_T4_PROBE=1 (function constant +7), timing only.
+static inline void turbo4p_chunk_bytes_w(device const char * row, short d0, short lc, thread uchar * b) {
+    device const uint4 * q = (device const uint4 *) (row + 64*(d0/QK_TURBO) + (d0%QK_TURBO)/2);
+    const uint4 u0 = q[0];
+    const uint4 u1 = q[1];
+    const ushort sh = 8*(lc/2);
+    b[0] = (uchar) ((u0.x >> sh) & 0xFF); b[1] = (uchar) ((u0.y >> sh) & 0xFF);
+    b[2] = (uchar) ((u0.z >> sh) & 0xFF); b[3] = (uchar) ((u0.w >> sh) & 0xFF);
+    b[4] = (uchar) ((u1.x >> sh) & 0xFF); b[5] = (uchar) ((u1.y >> sh) & 0xFF);
+    b[6] = (uchar) ((u1.z >> sh) & 0xFF); b[7] = (uchar) ((u1.w >> sh) & 0xFF);
+}
+static inline void turbo4p_chunk_bytes_w4(device const char * row, short d0, short lc, thread uchar * b) {
+    device const uint4 * q = (device const uint4 *) (row + 64*(d0/QK_TURBO) + (d0%QK_TURBO)/2);
+    const uint4 u0 = q[0];
+    const ushort sh = 8*(lc/2);
+    b[0] = (uchar) ((u0.x >> sh) & 0xFF); b[1] = (uchar) ((u0.y >> sh) & 0xFF);
+    b[2] = (uchar) ((u0.z >> sh) & 0xFF); b[3] = (uchar) ((u0.w >> sh) & 0xFF);
+}
+static inline float turbo4p_norm_at(device const char * row, short d, int nrm) {
+    return (float) *(device const half *) (row + nrm + 2*(d/QK_TURBO));
+}
 // same, with the pair table in threadgroup memory (TR_LUT_TG: the K scratch the TR path leaves unused)
 static inline half2 turbo4_pair_at_tg(device const char * row, short d, threadgroup const float2 * lut) {
     device const block_turbo4_0 * xb = (device const block_turbo4_0 *) row + d/QK_TURBO;
@@ -13709,6 +13734,7 @@ constant bool FC_flash_attn_ext_has_scap  [[function_constant(FC_FLASH_ATTN_EXT 
 constant bool FC_flash_attn_ext_has_kvpad [[function_constant(FC_FLASH_ATTN_EXT + 4)]];
 constant bool FC_flash_attn_ext_has_kvlen [[function_constant(FC_FLASH_ATTN_EXT + 5)]]; // per-stream KV extent buffer (kvlen[iq3])
 constant bool FC_flash_attn_ext_has_kvoff [[function_constant(FC_FLASH_ATTN_EXT + 6)]]; // per-stream KV cell offset buffer (kvoff[iq3], replaces iq3*nb13)
+constant bool FC_flash_attn_ext_t4probe  [[function_constant(FC_FLASH_ATTN_EXT + 7)]]; // exp/turbo4-plane ceiling probe (GGML_FA_T4_PROBE=1): the relayout's load stream on the stored bytes
 
 constant bool FC_flash_attn_ext_bc_mask [[function_constant(FC_FLASH_ATTN_EXT + 10)]];
 
@@ -13880,12 +13906,15 @@ void kernel_flash_attn_ext_impl(
 
         // per-slot context sizes: with the offset table, stream ikv3's rows start kvoff[ikv3] cells (K/V rows) from the
         // view base (streams of different sizes packed back to back have no uniform nb13/nb23)
+        // exp/turbo4-plane probe: the head at its nibble stride (DK/2 bytes), see turbo4p_chunk_bytes_w
+        const uint64_t t4p_nb12 = FC_flash_attn_ext_t4probe ? (uint64_t) (DK/2) : args.nb12;
+        const uint64_t t4p_nb22 = FC_flash_attn_ext_t4probe ? (uint64_t) (DV/2) : args.nb22;
         if (FC_flash_attn_ext_has_kvoff) {
-            k += ikv2*args.nb12 + (uint64_t) kvoff[ikv3]*args.nb11;
-            v += ikv2*args.nb22 + (uint64_t) kvoff[ikv3]*args.nb21;
+            k += ikv2*t4p_nb12 + (uint64_t) kvoff[ikv3]*args.nb11;
+            v += ikv2*t4p_nb22 + (uint64_t) kvoff[ikv3]*args.nb21;
         } else {
-            k += ikv2*args.nb12 + ikv3*args.nb13;
-            v += ikv2*args.nb22 + ikv3*args.nb23;
+            k += ikv2*t4p_nb12 + ikv3*args.nb13;
+            v += ikv2*t4p_nb22 + ikv3*args.nb23;
         }
     }
 
@@ -14300,7 +14329,9 @@ void kernel_flash_attn_ext_impl(
 #define TR_PAIR(row, d) (TRM == 1 ? turbo4_pair_at_tg(row, d, slut) : TRM == 2 ? turbo4_pair_at_h(row, d) : TRM == 3 ? turbo4_pair_raw(row, d, sluth) : TRM == 4 ? turbo4_pair_raw_c(row, d) : turbo4_pair_at(row, d))
                 // LD forms: the chunk's 8 bytes per lane first, then the table by byte (TRN arithmetic: TRM 3/4)
                 static_assert(LD == 0 || TRM != 2, "LD forms: the float table (constant or staged, byte-identical) or the TRN arithmetic");
-#define TR_BYTES(row, d0, b) { if (LD == 1) turbo4_chunk_bytes_w(row, d0, lc, b); else turbo4_chunk_bytes_s(row, d0, lc, tiisg, b); }
+#define TR_BYTES(row, d0, b) { if (LD == 1) { if (FC_flash_attn_ext_t4probe) turbo4p_chunk_bytes_w(row, d0, lc, b); else turbo4_chunk_bytes_w(row, d0, lc, b); } else turbo4_chunk_bytes_s(row, d0, lc, tiisg, b); }
+// exp/turbo4-plane probe: the block norm from the row's norm plane (t4p_nrm = plane offset from this head's nibble base)
+#define TR_NORM(row, d) (FC_flash_attn_ext_t4probe ? turbo4p_norm_at(row, d, t4p_nrm) : turbo4_norm_at(row, d))
 #define TR_PAIR_B(byte, nrm) (TRM == 3 ? sluth[byte] : TRM == 4 ? turbo_pairs_4bit_h[byte] : TRM == 1 ? half2(slut[byte]*(nrm)) : half2(turbo_pairs_4bit[byte]*(nrm)))
 
                 // TRN: one accumulator per 128-dim block (its own norm), scaled and summed per key tile
@@ -14308,6 +14339,9 @@ void kernel_flash_attn_ext_impl(
                 static_assert(TRM < 3 || DK % QK_TURBO == 0, "TRN form: whole blocks");
                 qk8x8_t mqk[NC*NQT*NB];
                 device const char * pkr[NC];
+                // exp/turbo4-plane probe: this KV head's norm-plane offset from its nibble base (row tail = 64 B per stored 66-B block)
+                const short t4p_h   = (GQAH == 1 ? iq2 : iqh0)/(args.ne02/args.ne_12_2);
+                const int   t4p_nrm = 64*(int)(args.nb11/66) - (DK/2)*t4p_h + 2*(DK/QK_TURBO)*t4p_h;
 
                 FOR_UNROLL (short ccc = 0; ccc < NC; ++ccc) {
                     FOR_UNROLL (short qt = 0; qt < NQT*NB; ++qt) {
@@ -14320,7 +14354,7 @@ void kernel_flash_attn_ext_impl(
                 uchar kb[NC][8];
                 float kn[NC];
                 if constexpr (LD > 0) {
-                    FOR_UNROLL (short ccc = 0; ccc < NC; ++ccc) { TR_BYTES(pkr[ccc], 0, kb[ccc]); kn[ccc] = TRM <= 1 ? turbo4_norm_at(pkr[ccc], 0) : 1.0f; }
+                    FOR_UNROLL (short ccc = 0; ccc < NC; ++ccc) { TR_BYTES(pkr[ccc], 0, kb[ccc]); kn[ccc] = TRM <= 1 ? TR_NORM(pkr[ccc], 0) : 1.0f; }
                 }
                 FOR_UNROLL (short tt = 0; tt < 4; ++tt) {
                     q8x8_t mq[2*NQT];
@@ -14350,7 +14384,7 @@ void kernel_flash_attn_ext_impl(
                 #pragma unroll 1
                 for (short ch = (bi == 0 ? 1 : bi*CPB); ch < (bi + 1)*CPB; ++ch) {
                     if constexpr (LD > 0) {
-                        FOR_UNROLL (short ccc = 0; ccc < NC; ++ccc) { TR_BYTES(pkr[ccc], 64*ch, kb[ccc]); kn[ccc] = TRM <= 1 ? turbo4_norm_at(pkr[ccc], 64*ch) : 1.0f; }
+                        FOR_UNROLL (short ccc = 0; ccc < NC; ++ccc) { TR_BYTES(pkr[ccc], 64*ch, kb[ccc]); kn[ccc] = TRM <= 1 ? TR_NORM(pkr[ccc], 64*ch) : 1.0f; }
                     }
                     FOR_UNROLL (short tt = 0; tt < 4; ++tt) {
                         q8x8_t mq[2*NQT];
@@ -14380,7 +14414,7 @@ void kernel_flash_attn_ext_impl(
                     if constexpr (TRM >= 3) {
                         // S^T row = this lane's key: sum the block accumulators scaled by that row's block norms
                         float nb_[NB];
-                        FOR_UNROLL (short bi = 0; bi < NB; ++bi) { nb_[bi] = turbo4_norm_at(pkr[ccc], bi*QK_TURBO); }
+                        FOR_UNROLL (short bi = 0; bi < NB; ++bi) { nb_[bi] = TR_NORM(pkr[ccc], bi*QK_TURBO); }
                         FOR_UNROLL (short qt = 0; qt < NQT; ++qt) {
                             thread float2 & e0 = (thread float2 &) mqk[ccc*NQT*NB + qt*NB + 0].thread_elements();
                             e0 *= nb_[0];
@@ -14671,6 +14705,10 @@ void kernel_flash_attn_ext_impl(
                     const short lr = ((tiisg >> 1) & 3) + 4*(tiisg >> 4);
                     const short lc = 2*(tiisg & 1) + 4*((tiisg >> 3) & 1);
 
+                    // exp/turbo4-plane probe: the V head's norm-plane offset (see the K loop)
+                    const short t4p_hv   = (GQAH == 1 ? iq2 : iqh0)/(args.ne02/args.ne_12_2);
+                    const int   t4p_nrmv = 64*(int)(args.nb21/66) - (DV/2)*t4p_hv + 2*(DV/QK_TURBO)*t4p_hv;
+#define TRV_NORM(row, d) (FC_flash_attn_ext_t4probe ? turbo4p_norm_at(row, d, t4p_nrmv) : turbo4_norm_at(row, d))
                     o8x8_t lo_[OR ? 1 : NQT*NO];
 #define LO(i) (OR ? lor[i] : lo_[i])
                     threadgroup const float2 * slut  = (threadgroup const float2 *) (shmem_f16 + Q*T + Q*TS);
@@ -14708,8 +14746,8 @@ void kernel_flash_attn_ext_impl(
                             // this lane's two P elements are keys lc, lc+1 of the tile: scale by those rows' norms
                             // for the block this simdgroup's dims lie in
                             const short  d0 = 8*NO*sgitg;
-                            const float2 nv = float2(turbo4_norm_at(v + (ic + 8*cc + lc + 0)*args.nb21, d0),
-                                                     turbo4_norm_at(v + (ic + 8*cc + lc + 1)*args.nb21, d0));
+                            const float2 nv = float2(TRV_NORM(v + (ic + 8*cc + lc + 0)*args.nb21, d0),
+                                                     TRV_NORM(v + (ic + 8*cc + lc + 1)*args.nb21, d0));
                             FOR_UNROLL (short qt = 0; qt < NQT; ++qt) {
                                 thread float2 & e = (thread float2 &) vs[qt].thread_elements();
                                 e *= nv;
@@ -14723,10 +14761,10 @@ void kernel_flash_attn_ext_impl(
                         float vn = 1.0f;
                         if constexpr (LD > 0 && NO == 8) {
                             TR_BYTES(pvr, 8*NO*sgitg, vb);
-                            if constexpr (TRM <= 1) { vn = turbo4_norm_at(pvr, 8*NO*sgitg); }
+                            if constexpr (TRM <= 1) { vn = TRV_NORM(pvr, 8*NO*sgitg); }
                         } else if constexpr (VW) {
-                            turbo4_chunk_bytes_w4(pvr, 8*NO*sgitg, lc, vb);
-                            if constexpr (TRM <= 1) { vn = turbo4_norm_at(pvr, 8*NO*sgitg); }
+                            if (FC_flash_attn_ext_t4probe) turbo4p_chunk_bytes_w4(pvr, 8*NO*sgitg, lc, vb); else turbo4_chunk_bytes_w4(pvr, 8*NO*sgitg, lc, vb);
+                            if constexpr (TRM <= 1) { vn = TRV_NORM(pvr, 8*NO*sgitg); }
                         }
                         FOR_UNROLL (short ii = 0; ii < NO; ++ii) {
                             v8x8_t mv;
