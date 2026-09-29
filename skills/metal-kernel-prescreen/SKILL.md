@@ -428,6 +428,47 @@ more for 2x the state registers. Three things the follow-ups taught:
   head 256 it lands on exactly the 32 KB threadgroup limit, which is why the tile was possible at all
   without moving the accumulator to registers.
 
+## Register-direct A tiles on the skinny MMA tile: what the count predicts and what it does not (2026-09-30, `perf/skinny-direct-mma.md`)
+
+The q4_0 SoA skinny tile (32 x 8 x 64, 2 simdgroups) had its A stage (dequant -> threadgroup `sa` -> barrier ->
+`simdgroup_load`) replaced by dequantizing each 8x8 K-tile straight into `simdgroup_half8x8::thread_elements()` by the
+measured lane map. Twenty-four standalone forms prescreened in one compile, all 0 spill; seven timed. Lessons:
+
+- **The direct `half2` dequant costs the same per ELEMENT as the staged `half4` one** (4 instructions/element: two
+  variable shifts, two masks, convert, arithmetic). Deleting the stores, loads and barriers alone was -22 of 367
+  instructions per K-step. `fma(half2(nib), d, -8d)` (exact: -8d is a power-of-two scale, the fma rounds the exact
+  (nib-8)*d once) folded the subtract and convert and made the pair 6 instead of 8. Every other spelling of the
+  extraction (`extract_bits`, exponent-bias `0x6400 | nib`, 16-bit shift vectors, the `* 0x1001` trick) compiled to the
+  same shifts and masks or worse - the compiler canonicalizes; 4 extraction instructions per pair is the floor from
+  source.
+- **Fewer instructions, slower: -46 static per K-step, +3..+7% per call** for the fma form while the B stage stayed
+  staged (two barriers per K-step). The direct kernel issues its pack loads after the barrier and nothing hoists a device
+  load across `threadgroup_barrier`; the staged kernel had prefetched the next slice's words before its MMAs. The only
+  form that paid was the fully direct one (B read straight from `src1` into the B tile too: no threadgroup memory in the
+  loop, no barriers): -5.5 / -3.4 / -1.5% on the three verify shapes at width 8, reproduced four times, from a 30%
+  smaller hot loop (228 -> 159 rows). The profile explains the ratio: issue 82.6 -> 86.0, stall 17.4 -> 14.0, the load
+  stall gone (5.1 -> 0.4) and the residual on the MMAs waiting for their operands (4.9 -> 8.5). Prescreen counts rank
+  the A-side forms; the barrier structure decides whether the saving shows, and only the timing pair sees it.
+- **Source order around `simdgroup_multiply_accumulate` is not a lever**: dequantizing 8 or 16 tiles ahead of their MMAs
+  compiled to a byte-identical instruction stream (or a register renaming) of the per-tile form. Check with
+  `agx-disasm.py --json` before timing a "live tiles" or "software pipelining" spelling - the scheduler already did it.
+- **Explicit next-block prefetch in the direct form: +40 instructions per K-step and +5..+20% per call.** The compiler's
+  own placement of the plain loads beats the staged kernel's prefetch pattern once the barriers are gone; the doubled
+  live word set costs more than it hides. (The same rule as the GDN scan's prefetch loss.)
+- **A 1 KB `constant half2[256]` pair table by runtime byte lost again** (+6..+13% here, vs +2..+4% on the iq4_xs tile
+  2026-09-18), with the fewest instructions of every form (3-4 per pair) - the third time the constant-footprint rule
+  beat the count; a threadgroup copy of the table lost the same way. Stop proposing byte-indexed pair tables for the
+  skinny tile.
+- **Geometry: one simdgroup per threadgroup owning 4 row tiles (15 instructions per MMA instead of 21, 0 spill) was
+  +10..+28%; four simdgroups per 64-row threadgroup timed the same as two per 32.** Fewer resident simdgroups lose;
+  more do not win. `dispatch_threadgroups` must take `nr0`/`nsg` from the pipeline for such arms, and a getter that
+  changes the threadgroup memory layout (a double-buffered `sb`) must size `smem` for it - the fixture passed with the
+  second buffer past the allocation, the compact `m=256,k=512` test shapes caught it. Run the small shapes too.
+- Harness traps that bit again: `env $E cmd` under zsh tested the staged kernel seven times with plausible output (the
+  gate script is bash now, `perf/run-skinny-direct-gate.sh`); `-p "m=[0-9]+,n=[678],"` matched five of the built-in
+  eval cases because the width-6..8 projection shapes live in the perf list - the 18-case fixture
+  `perf/skinny-soa-real-projections.ops` is the coverage.
+
 ## Quantized K/V tiles dequantized straight into the simdgroup matrix (2026-09-06, `perf/ud-model.md` step 16 B)
 
 - **The lane map holds for `simdgroup_half8x8` too, in both directions** (`perf/probe-thread-elements-half.*`
