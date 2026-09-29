@@ -4,8 +4,8 @@
 away."), MERGED TO PROD `ca5519e90`, manifest `LLAMA_KV_HEAD_MAJOR=1|BI|both|pick`, mint `prodpick-sep29-headmajor-{q4,ud}`
 (README pick block: q4 f16 34.5 at 600, ud 31.1; fixed-depth shas canonical; the two controller-arm shas replay-gated
 byte-identical on both lines, 0 desync) - CLOSED; worktree removed, branch `exp/turbo4-plane` kept. The norm-plane relayout stays refuted.
-Open: the packed (`--ctx-seq-sizes`) layout runs cell-major (per-stream head stride not built; owner: memory-pattern concerns
-there, "for a different day").** ~~Status: OPEN - two layout effects measured per FA call, nothing adopted. Owner's ask (2026-09-29): "is the physical
+~~Open: the packed (`--ctx-seq-sizes`) layout runs cell-major (per-stream head stride not built; owner: memory-pattern concerns
+there, "for a different day").~~ DECIDED 2026-09-29 late (owner: "you're right, good call"): NOT BUILT, the cell-major fallback stays. Reasoning: a head-major packed stream would be four contiguous per-head runs of that stream's own size; each FA threadgroup streams one (stream, head, cell range), so per threadgroup the packed head-major access is identical to the uniform head-major access just adopted (one extra per-(stream, head) row-offset lookup replacing kvoff) - the interleaving worry does not apply, and the per-call table in Finding 2 already IS the packed number. The payoff is the reason: Turbo4 (the pick on both lines) 0-2.5% per call, +0.3% e2e decode at 96K, under 1% on the mix round; only an f16-KV mixed-size server would see the 2-3%. Build cost ~a day (per-(stream, head) offset table in the three FA families, set_rows indices per stream size, state I/O gather per stream size, 8K/96K shas + classes arm + run-slot-mix A/B). Do not reopen without an f16 mixed-size use case.** ~~Status: OPEN - two layout effects measured per FA call, nothing adopted. Owner's ask (2026-09-29): "is the physical
 layout of the KV cache in our llama.cpp fork optimal for cache locality?"; on the norm-plane proposal: "it is by design
 memory usage neutral. I like it" - go given at 13:30.** Sections below in the order they were found.
 

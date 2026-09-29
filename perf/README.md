@@ -38,8 +38,9 @@ HEAD-MAJOR K/V CACHE, `LLAMA_KV_HEAD_MAJOR=1` PICKED on both lines (class BI, `k
 head-major, the served cache was cell-major, f16 ~10% slower per call on it). Same bytes, no file or state format touched (the
 serializer gathers per head). Gated byte-identical: fixed-depth 8K shas, the 96K sha x8, multi-slot split + long PASS; 96K e2e
 f16 decode +2.6% / prefill -1.3%, Turbo4 +0.3% / -0.9% (two reps agree to 0.1%). Uniform stream sizes only: the `--ctx-seq-sizes`
-packed layout falls back to cell-major with a warning (its per-stream head stride is not built - the owner has memory-pattern
-concerns about that scenario anyway, "for a different day"). Also in the merge: the Turbo4 norm-plane relayout REFUTED by its ceiling
+packed layout falls back to cell-major with a warning (its per-stream head stride is not built; DECIDED 2026-09-29 late, owner: not
+built - per threadgroup the packed head-major access equals the uniform one, so the per-call table already prices it: Turbo4 0-2.5%/call,
+under 1% on the mix round; reopen only for an f16-KV mixed-size server, `kv-layout.md` status). Also in the merge: the Turbo4 norm-plane relayout REFUTED by its ceiling
 probe (`GGML_FA_T4_PROBE=1`, timing only, 0.98-1.02x), the cell-major FA perf cases and `run-fa-layout-timing.sh`. **Mint
 `prodpick-sep29-headmajor-{q4,ud}` (prod `7204c2901`, evening, the first mint since the Sep 25 one - it also carries the view
 slide and the tail prune merged unminted the same day): q4 f16 32.72 / 33.00 at 300 (`d2953fccfb41`), 34.55 / 34.46 at 600
