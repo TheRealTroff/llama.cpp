@@ -105,3 +105,43 @@ route). Routes seen under the probe: `qtnw_turbo4 ... _t4p=1` (prefill), `qtnw16
    gated by byte identity (every one-slot sha, the multi-slot and classes arms, FA ops 4869/4869).
 2. Nothing for the Turbo4 line's FA from layout: its kernels are issue-bound; the levers there are the per-tile work
    (`longctx-inventory-sep15.md` item 1), unchanged.
+
+## Finding 4: the head-major cache, built and priced (owner 2026-09-29: "we might as well build it") - PROPOSED
+
+`LLAMA_KV_HEAD_MAJOR=1` (commit 5345f2e94 + the empty-cache fix): per layer and stream the cache is `[hs, kv, nh]` -
+head h of stream s at `s*kv_size` cell rows + `h*kv_size` head rows, so the FA op sees each head's stream contiguous
+(the layout the perf cases time by default). Uniform stream sizes + FA only (the `--ctx-seq-sizes` packed layout falls
+back to cell-major with a warning: its per-stream head stride would need a second per-stream table beside `kvoff`;
+not built). What changed: `get_k/get_v` swap the head/cell strides and tag the view `GGML_TENSOR_FLAG_KV_HEAD_MAJOR`
+(`build_attn_mha` infers the transposed-V cache from `nb[1] > nb[2]` - the first build aborted in a fused-op probe
+reserve with `ggml_can_mul_mat` because the head-major V was transposed a second time); `cpy_k/cpy_v` write one
+set_rows row per (token, head) into the cache reshaped `[hs, n_cells*nh]`, the index input holds `n_head_kv` entries per
+token and the graph-reuse checks scale by `get_idxs_per_token()` (a 1D index of `n_tokens*nh` would have failed
+`ne[0] == n_tokens` and rebuilt every graph); state write/read gather and scatter per head so the serialized bytes stay
+cell-major (prompt cache, checkpoints, slot files: no format change); the K-shift graph views per stream with a sliced
+shift input. The drafter's SWA cache takes the layout too; its layer-less non-SWA half is skipped. Proof the switch
+took: the `-lv 5` INFO line `head-major K/V layout ... n_head_kv = 4` on the target's cache (at the harness's default
+verbosity the library INFO lines are hidden - the first on-run's "needs one KV head count" WARN was the drafter's
+empty cache, and the fixed-depth shas alone could not tell an ignored switch from a byte-identical one).
+
+**Gate (q4, `PICK_SPEC_EV=0`, this tree's binary, switch off vs on):** `pick-n6-300` d2953fccfb41 / batch1
+d2953fccfb41 / `turbo4-n3-300` 86213d038a29 in both runs (TAGs `hm-0929-off`, `hm-0929-on2`); multi-slot split arm
+PASS 3/3 + long 8/8 with the switch exported (`hm-0929-on2-multislot`), the classes arm PASS on its fallback.
+
+**96K end to end** (`run-longctx-pick.sh`, q4 line, `longprompt-96k` = 95520 tokens, fixed depth 3, n_predict 300,
+two reps each, every sha 318524e3ecaa = the recorded 96K text):
+
+| cache | switch | prefill s (t/s) | decode t/s | acceptance |
+|---|---|---|---|---|
+| f16 | off | 1012.4 / 1012.1 (94.4) | 21.456 / 21.472 | 55.2% |
+| f16 | **on** | **999.6 / 999.2 (95.6, -1.3%)** | **22.027 / 22.011 (+2.6%)** | 55.2% |
+| Turbo4 | off | 1024.9 / 1025.2 (93.2) | 22.228 / 22.221 | 52.9% |
+| Turbo4 | **on** | **1015.6 / 1015.4 (94.0, -0.9%)** | 22.263 / 22.309 (+0.3%) | 52.9% |
+
+The reps agree to 0.1%, so the deltas are real: f16 decode +2.6% at 96K (the per-call 10% x the FA share of the round,
+as predicted), prefill -1.3% on f16 and -0.9% on Turbo4 (the prefill FA reads the cache too), Turbo4 decode within
+noise. At 8K the gate's single runs read pick-n6-300 33.26 -> 33.11, batch1 14.66 -> 14.64, turbo4-n3-300 32.97 ->
+33.33 - one run each, inside the day's spread, not an A/B (expected ~0.3%). Memory-neutral, no file or format
+touched. Manifest line `LLAMA_KV_HEAD_MAJOR=1|BI|both|proposed` added to `perf/pick.sh`; adoption = owner. If taken
+on a line that serves `--ctx-seq-sizes`, the packed layout needs the per-stream head-stride table first (the mint's
+classes arm runs on the fallback until then).
