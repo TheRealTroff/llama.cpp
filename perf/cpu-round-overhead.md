@@ -17,6 +17,40 @@ until this work lands - do both together.
 > `cpu-round-overhead`, off prod (prod fast-forwarded to the shortk tip `4defdc3b6`
 > the same day).
 
+## Addendum 2026-09-29: the target graph is REBUILT on ~2 rounds in 3 - ~2% of the round, GPU idle, unattacked
+
+Second-opinion pass over the five `exp/dflash-*` / `exp/qwen-final-row-prune` work-elimination branches of
+2026-09-28 (`perf/work-elimination-*.md` on those branches, evidence `kvquant-experiments/results/work-elimination-20260928/`).
+Those five sum to ~+1.5% prefill (final-tail prune -0.96%, deferred window injection -0.55%) and ~0 decode; the
+accounting below says why the pool they hunted is that small, and names the one item they did not look at.
+
+**Round budget today (q4 Turbo4 pick, controller on, 8K benchprompt, 300 tokens, TAG `secondop-0929`,
+`EXTRA="GGML_METAL_SUBMIT_PROF=1 LLAMA_DECODE_PROF=1"`, 34.34 t/s, ~97 ms/round):** dec_syn_tg 79.7 + dec_sub_tg 3.6 +
+draft_call 12.5 + accept_blk 0.46 + post_decode 0.5; loop_gap 0.001. Byte floors at 273 GB/s: target 14.7 GB streamed
+= 53.7 ms, drafter (893 MiB layers + 70 fc + the shared 715 MB head) = ~6 ms. So ~60 ms of the 97 is bytes, the rest is
+kernel economy (mv at 1.2-1.4x), FA + GDN + glue, and ~5-6 ms of GPU-idle CPU.
+
+**The new item: `decode-prof` target ctx `reuse 2.249 ms` avg per decode (n=64), `submit 1.248`, `rest 0.185`.** The
+`reuse` bracket (`llama-context.cpp` tp1->tp2) is the can_reuse check PLUS `build_graph` + `sched_alloc_graph` on a miss.
+`graphs reused` per 300-token request: 22 of ~90 rounds (this run, controller), **32 of ~98 at FIXED depth 3** and 11 of
+~75 at fixed depth 7 (Astra's `anchor-perf-q4-d3-1-0` / `-d7-1-0` logs) - the width mix is not the cause. The cause is in
+`llm_graph_input_rs::can_reuse_rs`: `view_row0`, and under `LLAMA_GDN_REPLAY` `view_row0_ss` / `xk_gather` / `n_keep`,
+are compared as topology ("view offset / gather / replay shape are topology"), and they follow the accepted count of the
+previous round, so consecutive rounds reuse only when they accepted the same k (P ~ 1/3 at 67% acceptance = the 32/98).
+Per miss ~2.9-3.4 ms of CPU while the GPU has nothing queued (the drafter graph is synchronous and done, the target
+cannot start before it is built): **~2 ms/round = ~2.2% of the q4 round at fixed depth, ~2.3% under the controller; ud
+runs the same code.** Nothing in the profile is reused across rounds for it. Two fixes, both CPU-only and byte-identical by
+construction: (a) keep a small cache of previous graph results keyed by these params (rollback offset x width = 8
+entries; the sched allocation is the part to think about - a cached graph's tensors must keep their addresses), or
+(b) turn the rollback offset / gather into set_inputs data so one graph serves every k. Unmeasured: the build vs alloc
+split of the 3 ms, and the reachable fraction. The drafter ctx shows the same pattern at 0.3 ms (480-node graph).
+
+Everything else on this pass is priced and small: prefill is GPU-busy end to end at the mm roof (the 4 s pre-batch-1 gap of
+Aug 28 is gone - batch 1 starts 0.6 ms after the task lands; checkpoints 20 ms each; drafter injection ~0.4 s/8K), the
+drafter draft graph is ~1.6x its byte floor with its inside already attributed (head 3.2, FFN 3.8, projections ~2, tail
+~1, top-k 0.07), and the per-request drafter ring rebuild after a checkpoint restore is 0.13-0.19 s (the
+`LLAMA_CKPT_NO_DFT=1` trade, the owner's).
+
 ## Why this is the frontier
 
 At the extended pick the round is ~116.5 ms and the two CPU-side lines are ~17 ms of it:
