@@ -41,4 +41,26 @@ Byte-identical (the canonical fixed-depth sha, acceptance 199/298 in every arm),
 submit -1.65 ms/round; the 4 remaining misses are the prefill-to-decode transitions. The slide itself costs ~0.04 ms
 (`set_inputs` 0.012 -> 0.05).
 
-Open here: the ud line, the controller arm (widths 4/8 alternate: those misses are real topology and stay), the multi-slot gate.
+| ud, TAG `rsslide2-0929` | sha | t/s | graphs reused | dec_sub_tg | target reuse bracket | misses |
+|---|---|--:|--:|--:|--:|---|
+| slide off (A1) | `ce826d8a3cbd` | 30.33 | 36 | 2.99 | 1.71 | 42: 0.37 / 2.23 |
+| slide on (B1) | `ce826d8a3cbd` | 30.74 | 91 | 1.35 | 0.19 | 4 |
+| slide on (B2) | `ce826d8a3cbd` | 30.84 | 91 | 1.39 | 0.19 | 4 |
+| slide off (A2) | `ce826d8a3cbd` | 30.25 | 36 | 2.96 | 1.70 | 42 |
+
+ud: byte-identical, **+1.7% e2e** (30.29 -> 30.79), submit -1.6 ms/round.
+
+## The pick's own gates on the branch binary (slide on by default, TAGs `rsslidegate-0929-{q4,ud}`)
+
+- **Controller arm `turbo4-n3-300`:** q4 34.05 t/s, `graphs reused` 77 (22 on prod this morning; the remaining misses are the
+  width-4/8 changes = real topology), sha `f07b0f8c58e6` = the sha the PROD binary produced this morning under the profiler
+  (`secondop-0929`), i.e. a known controller fork of the statistical arm (`mint-controller-arm-is-statistical`); the replay
+  gate (below) is the byte proof under the controller. ud 30.95 t/s, reused 61, sha `ce826d8a3cbd` canonical.
+- **`batch1-300`:** q4 `d2953fccfb41`, ud `9c53aaade052` - canonical (no rollback ever happens at batch 1: the slide is inert).
+- **Multi-slot gate short + long: PASS both lines** (3 executors + coordinator; non-uniform rollbacks across seqs give a gather
+  form (`view_row0 = -1`) and stay strict).
+- **Vision arm (one slot + multi-slot): PASS both lines.**
+- **Replay gate** (`run-specev-replay-gate.sh`, record with `LLAMA_RS_SLIDE=0`, 2 replays with it on, 1200 tokens): see below.
+
+Adoption = owner. Proposed form: code default (the slide on, `LLAMA_RS_SLIDE=0` the off-switch), no manifest line - a CPU-only
+change with no numerics class; worth +2.0% q4 / +1.7% ud at fixed depth, and more rounds reused under the controller.
