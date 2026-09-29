@@ -49,8 +49,11 @@ slide and the tail prune merged unminted the same day): q4 f16 32.72 / 33.00 at 
 fork), 29.38 / 29.48 at 600 (`abc0c5af7300` x2 - NEW, the controller arm); b1 13.31, MTP 19.80 (`9c53aaade052`), turbo4-b1 13.19
 (`d180ae89f168`). Multi-slot split + long PASS, classes PASS (on the cell-major fallback), vision PASS, both lines. Every
 fixed-depth sha = its record; the two new shas are both controller arms (statistical: `mint-controller-arm-is-statistical`),
-gated by the replay gate `replaygate-0929-headmajor` (record under `LLAMA_KV_HEAD_MAJOR=0`, replays under the pick; result
-below).**
+gated by the replay gate (record under `LLAMA_KV_HEAD_MAJOR=0`, three replays under the pick): ud `bd2db0854175` x4, 366
+picks, 0 desync (`replaygate-0929-headmajor`); q4 `10d0f1452d54` x4, 297 picks, 0 desync (`replaygate-0929-headmajor-q4`).
+CLOSED: the layout is byte-identical under the controller's widths on both lines. (The first two-line gate run showed a q4
+"fork" that was the harness: one trace file per tag, the ud record overwrote the q4 trace - fixed `70dfabedc`, one trace per
+line.)**
 
 **2026-09-29 afternoon (owner: "Absolutely. Let's merge it."): `exp/graph-reuse-cache` MERGED (`803fb4604`) - the recurrent-state VIEW
 SLIDE, a code default (`LLAMA_RS_SLIDE=0` the off-switch, no manifest line: CPU-only, no numerics class).** The decode graph was
