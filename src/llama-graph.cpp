@@ -16,6 +16,7 @@
 #include "llama-memory-recurrent.h"
 
 #include <cassert>
+#include <unordered_map>
 #include <cmath>
 #include <cstring>
 #include <numeric>
@@ -325,8 +326,72 @@ void llm_graph_input_cls::set_input(const llama_ubatch * ubatch) {
     }
 }
 
+// slide every view of the rows [row0, row0 + n_seqs) of the state tensors of family fam by drow rows:
+// the build_rs output view and every node reshaped, viewed or written in place from it. Views resolve
+// to the cache tensor (view_src) with an absolute byte offset, so the set is "same root, byte range
+// inside the seed's rows"; the zero cell and the displaced-cell copies live in other rows.
+void llm_graph_input_rs::slide(int fam, int32_t drow) {
+    GGML_ASSERT(gf != nullptr);
+    if (drow == 0) {
+        return;
+    }
+    // the set to move = the seeds and every view DERIVED from a moved tensor (the tensor a view
+    // aliases: src[1] for CPY, src[0] for every other view-producing op). The write-back views of
+    // the same rows (conv_state_update, the delta-net snapshot dst) are direct views of the cache
+    // tensor, not derived from the read view, and stay where they are - at rollback 0 they share
+    // the read view's bytes, which is why a byte-range rule moved them too (the first A/B: sha
+    // moved, acceptance halved).
+    struct range { size_t lo; size_t hi; ptrdiff_t delta; };
+    std::unordered_map<const ggml_tensor *, range> roots;
+    std::unordered_set<const ggml_tensor *> moved;
+    for (const auto & v : rs_views) {
+        if (v.fam != fam) {
+            continue;
+        }
+        const ggml_tensor * seed = v.t;
+        GGML_ASSERT(seed->view_src != nullptr);
+        const size_t nb1 = seed->nb[1];
+        const size_t lo  = seed->view_offs;
+        roots[seed->view_src] = { lo, lo + (size_t) seed->ne[1]*nb1, (ptrdiff_t) drow*(ptrdiff_t) nb1 };
+        moved.insert(seed);
+    }
+    const int n_nodes = ggml_graph_n_nodes(gf);
+    for (int i = 0; i < n_nodes; ++i) {
+        ggml_tensor * t = ggml_graph_node(gf, i);
+        if (!t->view_src) {
+            continue;
+        }
+        const auto it = roots.find(t->view_src);
+        if (it == roots.end()) {
+            continue;
+        }
+        const ggml_tensor * alias = t->op == GGML_OP_CPY ? t->src[1] : t->src[0];
+        const bool is_seed = moved.count(t) > 0;
+        if (!is_seed && !(alias && moved.count(alias) > 0)) {
+            continue;
+        }
+        const auto & r = it->second;
+        const size_t offs = t->view_offs;
+        GGML_ASSERT(offs >= r.lo && offs + ggml_nbytes(t) <= r.hi && "rs slide: a derived view outside its seed's rows");
+        t->view_offs = (size_t) ((ptrdiff_t) offs + r.delta);
+        t->data      = (char *) t->data + r.delta;
+        moved.insert(t);
+    }
+}
+
 void llm_graph_input_rs::set_input(const llama_ubatch * ubatch) {
     GGML_UNUSED(ubatch);
+
+    // a reused graph whose source rows moved (can_reuse_rs accepted the slide): move the views
+    // before mctx->s_copy() below resets the rollback index the rows came from
+    if (pending_row0 >= 0 && view_row0 >= 0 && pending_row0 != view_row0) {
+        slide(0, pending_row0 - view_row0);
+        view_row0 = pending_row0;
+    }
+    if (gdn_replay && pending_row0_ss >= 0 && view_row0_ss >= 0 && pending_row0_ss != view_row0_ss) {
+        slide(1, pending_row0_ss - view_row0_ss);
+        view_row0_ss = pending_row0_ss;
+    }
 
     const int64_t n_rs = mctx->get_n_rs();
 
@@ -411,10 +476,25 @@ bool llm_graph_input_rs::can_reuse_rs(const llama_memory_recurrent_context * mct
 
     res &= head == mctx->get_head();
     res &= rs_z == mctx->get_rs_z();
-    res &= view_row0 == mctx->s_copy_view_row0(ubatch.n_seqs);
+
+    static const bool rs_slide = getenv("LLAMA_RS_SLIDE") ? atoi(getenv("LLAMA_RS_SLIDE")) != 0 : true;
+
+    {
+        const int32_t row0 = mctx->s_copy_view_row0(ubatch.n_seqs);
+        if (row0 != view_row0) {
+            // a different run of rows: the views slide (set_input) when both forms are views and the
+            // graph holds them; a gather form on either side is a topology change
+            res &= rs_slide && gf && row0 >= 0 && view_row0 >= 0 && has_view(0);
+        }
+        pending_row0 = row0;
+    }
 
     if (gdn_replay) {
-        res &= view_row0_ss == mctx->s_copy_ss_view_row0(ubatch.n_seqs);
+        const int32_t row0_ss = mctx->s_copy_ss_view_row0(ubatch.n_seqs);
+        if (row0_ss != view_row0_ss) {
+            res &= rs_slide && gf && row0_ss >= 0 && view_row0_ss >= 0 && has_view(1);
+        }
+        pending_row0_ss = row0_ss;
         res &= xk_gather == mctx->xk_gather();
         const int32_t keep = ubatch.n_seq_tokens > 1 ? (int32_t) std::min<uint32_t>(ubatch.n_seq_tokens, mctx->get_n_rs_seq()) : 0;
         res &= n_keep == keep;
@@ -3534,10 +3614,12 @@ ggml_tensor * llm_graph_context::build_rs(
 
 static std::unique_ptr<llm_graph_input_rs> build_rs_inp_impl(
            ggml_context * ctx0,
+            ggml_cgraph * gf,
      const llama_ubatch & ubatch,
     const llama_memory_recurrent_context * mctx_cur) {
 
     auto inp = std::make_unique<llm_graph_input_rs>(mctx_cur);
+    inp->gf = gf;  // the view slide walks the graph the input belongs to
 
     const int64_t n_rs   = mctx_cur->get_n_rs();
     const int64_t n_seqs = ubatch.n_seqs;
@@ -3581,7 +3663,7 @@ static std::unique_ptr<llm_graph_input_rs> build_rs_inp_impl(
 llm_graph_input_rs * llm_graph_context::build_rs_inp() const {
     const auto * mctx_cur = static_cast<const llama_memory_recurrent_context *>(mctx);
 
-    auto inp = build_rs_inp_impl(ctx0, ubatch, mctx_cur);
+    auto inp = build_rs_inp_impl(ctx0, gf, ubatch, mctx_cur);
 
     return (llm_graph_input_rs *) res->add_input(std::move(inp));
 }
@@ -3606,12 +3688,19 @@ ggml_tensor * llm_graph_context::build_rs(
                         n_seqs, kv_state->get_head(), kv_state->get_size(), kv_state->get_rs_z(),
                         get_state_rows, view_row0);
         build_rs_extra_groups(inp, s, state_size, n_seqs, 1 + kv_state->get_n_rs_seq());
+        if (view_row0 >= 0 && out->op == GGML_OP_VIEW) {
+            inp->rs_views.push_back({out, 0});
+        }
         return out;
     }
 
-    return build_rs(s, inp->s_copy_main, inp->s_copy_extra, state_size, n_seqs,
+    ggml_tensor * out = build_rs(s, inp->s_copy_main, inp->s_copy_extra, state_size, n_seqs,
                     kv_state->get_n_rs(), kv_state->get_head(), kv_state->get_size(), kv_state->get_rs_z(),
                     get_state_rows, view_row0);
+    if (view_row0 >= 0 && out->op == GGML_OP_VIEW) {
+        inp->rs_views.push_back({out, 0});
+    }
+    return out;
 }
 
 // recompute-on-rollback: move all n_grp groups of the displaced cells (between n_seqs and n_rs)
@@ -3658,6 +3747,9 @@ ggml_tensor * llm_graph_context::build_rs_gdn(
     ggml_tensor * out = build_rs(s, inp->s_copy_ss, inp->s_copy_none, state_size, n_seqs,
                     n_seqs, kv_state->get_head(), kv_state->get_size(), kv_state->get_rs_z(),
                     ggml_get_rows, inp->view_row0_ss);
+    if (inp->view_row0_ss >= 0 && out->op == GGML_OP_VIEW) {
+        inp->rs_views.push_back({out, 1});
+    }
 
     // displaced cells: both state groups and both halves of the kept-input rows
     build_rs_extra_groups(inp, s, state_size, n_seqs, 2);
@@ -3710,7 +3802,7 @@ ggml_tensor * llm_graph_context::build_rwkv_token_shift_store(
 llm_graph_input_mem_hybrid * llm_graph_context::build_inp_mem_hybrid() const {
     const auto * mctx_cur = static_cast<const llama_memory_hybrid_context *>(mctx);
 
-    auto inp_rs   = build_rs_inp_impl     (ctx0, ubatch, mctx_cur->get_recr());
+    auto inp_rs   = build_rs_inp_impl     (ctx0, gf, ubatch, mctx_cur->get_recr());
     auto inp_attn = build_attn_inp_kv_impl(ctx0, ubatch, hparams, cparams, mctx_cur->get_attn());
 
     auto inp = std::make_unique<llm_graph_input_mem_hybrid>(cparams, std::move(inp_attn), std::move(inp_rs), mctx_cur);
@@ -3721,7 +3813,7 @@ llm_graph_input_mem_hybrid * llm_graph_context::build_inp_mem_hybrid() const {
 llm_graph_input_mem_hybrid_k * llm_graph_context::build_inp_mem_hybrid_k() const {
     const auto * mctx_cur = static_cast<const llama_memory_hybrid_context *>(mctx);
 
-    auto inp_rs   = build_rs_inp_impl     (ctx0, ubatch, mctx_cur->get_recr());
+    auto inp_rs   = build_rs_inp_impl     (ctx0, gf, ubatch, mctx_cur->get_recr());
     auto inp_attn = build_attn_inp_k_impl(ctx0, ubatch, hparams, cparams, mctx_cur->get_attn());
 
     auto inp = std::make_unique<llm_graph_input_mem_hybrid_k>(cparams, std::move(inp_attn), std::move(inp_rs), mctx_cur);
@@ -3732,7 +3824,7 @@ llm_graph_input_mem_hybrid_k * llm_graph_context::build_inp_mem_hybrid_k() const
 llm_graph_input_mem_hybrid_iswa * llm_graph_context::build_inp_mem_hybrid_iswa() const {
     const auto * mctx_cur = static_cast<const llama_memory_hybrid_iswa_context *>(mctx);
 
-    auto inp_rs = build_rs_inp_impl(ctx0, ubatch, mctx_cur->get_recr());
+    auto inp_rs = build_rs_inp_impl(ctx0, gf, ubatch, mctx_cur->get_recr());
 
     // build iswa attention input
     const auto * attn_ctx = mctx_cur->get_attn();

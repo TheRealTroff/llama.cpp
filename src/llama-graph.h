@@ -302,6 +302,20 @@ public:
     int32_t view_row0_ss = -1;
     bool    xk_gather    = false; // the kept inputs are gathered before the kernel (cell swap)
     int32_t n_keep       = 0;     // tokens the batch keeps (0: no kept-input write, K = 1)
+
+    // view slide (2026-09-29): view_row0 / view_row0_ss follow the previous round's rollback, so a
+    // strict check rebuilt the graph on ~2 rounds in 3 (perf/cpu-round-overhead.md addendum). When
+    // both the built and the requested row0 are views (>= 0), can_reuse_rs accepts the graph and
+    // set_input slides every view of those rows (the build_rs output and everything reshaped or
+    // viewed from it) by the row delta before the inputs are set - the same graph, new offsets.
+    // LLAMA_RS_SLIDE=0 restores the strict check (bisect knob).
+    struct rs_view { ggml_tensor * t; int fam; };  // fam 0: view_row0 (conv / plain state), 1: view_row0_ss
+    std::vector<rs_view> rs_views;
+    ggml_cgraph * gf = nullptr;
+    int32_t pending_row0    = -1;
+    int32_t pending_row0_ss = -1;
+    bool    has_view(int fam) const { for (const auto & v : rs_views) { if (v.fam == fam) return true; } return false; }
+    void    slide(int fam, int32_t drow);
 };
 
 class llm_graph_input_cross_embd : public llm_graph_input_i {
