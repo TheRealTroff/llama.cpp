@@ -182,6 +182,9 @@ public:
 
     uint32_t get_n_kv(const slot_info & sinfo) const;
 
+    bool     is_head_major()      const { return head_major; }
+    uint32_t get_idxs_per_token() const; // set_rows indices per token: n_head_kv when head-major, else 1
+
     // get views of the current state of the cache
     ggml_tensor * get_k(ggml_context * ctx, int32_t il, uint32_t n_kv, const slot_info & sinfo) const;
     ggml_tensor * get_v(ggml_context * ctx, int32_t il, uint32_t n_kv, const slot_info & sinfo) const;
@@ -297,6 +300,11 @@ private:
     // stream sizes, which live in v_cells[s].size()); v_offs[n_stream] = the total cell count
     std::vector<uint32_t> v_offs;
     bool sizes_uniform = true;
+    // head-major layout (perf/kv-layout.md): within a stream each KV head's cells are contiguous ([hs, kv, nh] per
+    // stream instead of [hs, nh, kv]); LLAMA_KV_HEAD_MAJOR=1, uniform stream sizes + flash attention only. The bytes
+    // on the wire (state I/O) stay cell-major.
+    bool     head_major   = false;
+    uint32_t n_head_kv_hm = 0; // the (uniform) KV head count the set_rows indices assume
 
     // pending stream copies that will be applied during the next update
     stream_copy_info sc_info;
@@ -382,6 +390,7 @@ public:
     //
 
     uint32_t get_n_kv() const;
+    uint32_t get_idxs_per_token() const;
     uint32_t get_n_stream() const;
     bool     is_uniform() const;   // per-slot context sizes: false = the streams have different sizes (kv_off input needed)
 

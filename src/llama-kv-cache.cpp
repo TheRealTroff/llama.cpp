@@ -123,6 +123,22 @@ llama_kv_cache::llama_kv_cache(
         GGML_ASSERT(!v_trans && "per-stream context sizes need flash attention (the transposed V layout has no per-stream offset path)");
     }
 
+    // head-major K/V layout (perf/kv-layout.md): LLAMA_KV_HEAD_MAJOR=1
+    {
+        const char * env = getenv("LLAMA_KV_HEAD_MAJOR");
+        if (env && atoi(env) > 0) {
+            if (other) {
+                head_major = other->head_major; // a shared-cells cache mirrors the source layout
+            } else if (v_trans) {
+                LLAMA_LOG_WARN("%s: LLAMA_KV_HEAD_MAJOR needs flash attention (the transposed V layout) - ignored\n", __func__);
+            } else if (!sizes_uniform) {
+                LLAMA_LOG_WARN("%s: LLAMA_KV_HEAD_MAJOR needs uniform stream sizes (per-slot context sizes: not built) - ignored\n", __func__);
+            } else {
+                head_major = true;
+            }
+        }
+    }
+
     // TurboQuant auto-asymmetric: symmetric turbo K+V on a high-GQA model amplifies the
     // K quantization error across all query heads sharing each KV head. Measured on this
     // machine: Qwen2.5-3B (8:1) symmetric turbo3 PPL 176 vs 8.17 with K upgraded to q8_0.
@@ -297,6 +313,14 @@ llama_kv_cache::llama_kv_cache(
         // (the classic uniform layout is the special case v_offs[s] = s*kv_size, the same bytes as the old 3D tensor)
         const uint32_t n_cells = v_offs[n_stream];
 
+        if (has_k) {
+            const uint32_t nh = hparams.n_head_kv(il);
+            if (head_major && n_head_kv_hm != 0 && n_head_kv_hm != nh) {
+                LLAMA_LOG_WARN("%s: layer %3d: n_head_kv %u differs from %u\n", __func__, il, nh, n_head_kv_hm);
+            }
+            n_head_kv_hm = n_head_kv_hm == 0 ? nh : (n_head_kv_hm == nh ? nh : UINT32_MAX);
+        }
+
         ggml_tensor * k = has_k ? ggml_new_tensor_2d(ctx, type_k, n_embd_k_gqa, n_cells) : nullptr;
         ggml_tensor * v = has_v ? ggml_new_tensor_2d(ctx, layer_type_v, n_embd_v_gqa, n_cells) : nullptr;
 
@@ -321,6 +345,18 @@ llama_kv_cache::llama_kv_cache(
         map_layer_ids[il] = layers.size();
 
         layers.push_back({ il, k, v, k_stream, v_stream, });
+    }
+
+    if (head_major && n_head_kv_hm == UINT32_MAX) {
+        LLAMA_LOG_WARN("%s: LLAMA_KV_HEAD_MAJOR needs one KV head count across the cache's layers - ignored\n", __func__);
+        head_major = false;
+    }
+    if (head_major && n_head_kv_hm == 0) {
+        head_major = false; // an empty cache (e.g. the drafter's layer-less non-SWA half): nothing to lay out
+    }
+    if (head_major) {
+        LLAMA_LOG_INFO("%s: head-major K/V layout (LLAMA_KV_HEAD_MAJOR=1): [hs, kv, nh] per stream, n_head_kv = %u, %u stream(s) of %u cells\n",
+                __func__, n_head_kv_hm, n_stream, kv_size);
     }
 
     if (reuse) {
@@ -1297,6 +1333,10 @@ uint32_t llama_kv_cache::get_size() const {
     return cells.size();
 }
 
+uint32_t llama_kv_cache::get_idxs_per_token() const {
+    return head_major ? n_head_kv_hm : 1;
+}
+
 uint32_t llama_kv_cache::get_n_stream() const {
     return n_stream;
 }
@@ -1405,6 +1445,20 @@ ggml_tensor * llama_kv_cache::get_k(ggml_context * ctx, int32_t il, uint32_t n_k
         return res;
     }
 
+    if (head_major) {
+        // head-major (perf/kv-layout.md): head h of stream s at s*kv_size cell rows + h*kv_size head rows; the FA op
+        // sees each head's stream contiguous (the layout test-backend-ops times by default)
+        const size_t rs = ggml_row_size(k->type, hparams.n_embd_head_k(il));
+        ggml_tensor * res = ggml_view_4d(ctx, k,
+                hparams.n_embd_head_k(il), hparams.n_head_kv(il), n_kv, ns,
+                kv_size*rs,
+                rs,
+                ggml_row_size(k->type, n_embd_k_gqa*kv_size),
+                ggml_row_size(k->type, n_embd_k_gqa*kv_size)*sinfo.s0);
+        res->flags |= GGML_TENSOR_FLAG_KV_HEAD_MAJOR;
+        return res;
+    }
+
     return ggml_view_4d(ctx, k,
             hparams.n_embd_head_k(il), hparams.n_head_kv(il), n_kv, ns,
             ggml_row_size(k->type, hparams.n_embd_head_k(il)),
@@ -1437,6 +1491,18 @@ ggml_tensor * llama_kv_cache::get_v(ggml_context * ctx, int32_t il, uint32_t n_k
                 0);
         res->ne[3] = ns;
         res->nb[3] = 0;
+        return res;
+    }
+
+    if (!v_trans && head_major) {
+        const size_t rs = ggml_row_size(v->type, hparams.n_embd_head_v(il));
+        ggml_tensor * res = ggml_view_4d(ctx, v,
+                hparams.n_embd_head_v(il), hparams.n_head_kv(il), n_kv, ns,
+                kv_size*rs,
+                rs,
+                ggml_row_size(v->type, n_embd_v_gqa*kv_size),
+                ggml_row_size(v->type, n_embd_v_gqa*kv_size)*sinfo.s0);
+        res->flags |= GGML_TENSOR_FLAG_KV_HEAD_MAJOR; // build_attn_mha: nb[1] > nb[2] here is the layout, not a transposed V
         return res;
     }
 
@@ -1476,6 +1542,18 @@ ggml_tensor * llama_kv_cache::cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggm
     // TODO: add ggml helper function for this?
     GGML_ASSERT(ggml_row_size(k_cur->type, n_embd_head) == k_cur->nb[1]);
 
+    if (head_major) {
+        // head-major: one set_rows row per (token, head) into the cache seen as [hs, n_cells*nh] (perf/kv-layout.md)
+        GGML_ASSERT(n_head == (int64_t) n_head_kv_hm);
+        const size_t rs = ggml_row_size(k_cur->type, n_embd_head);
+        if (k_cur->nb[2] != n_head*rs) {
+            k_cur = ggml_cont(ctx, k_cur);
+        }
+        k_cur = ggml_view_2d(ctx, k_cur, n_embd_head, n_head*n_tokens, rs, 0);
+        ggml_tensor * k_hm = ggml_reshape_2d(ctx, k, n_embd_head, (int64_t) k->ne[1]*n_head);
+        return ggml_set_rows(ctx, k_hm, k_cur, k_idxs);
+    }
+
     k_cur = ggml_view_2d(ctx, k_cur, n_embd_gqa, n_tokens, k_cur->nb[2], 0);
 
     // the cache is one 2D buffer over all streams ([n_embd_gqa, sum of the stream sizes]) and the idxs are global
@@ -1501,6 +1579,17 @@ ggml_tensor * llama_kv_cache::cpy_v(ggml_context * ctx, ggml_tensor * v_cur, ggm
 
     // we can merge dims 0 and 1
     GGML_ASSERT(ggml_row_size(v_cur->type, n_embd_head) == v_cur->nb[1]);
+
+    if (!v_trans && head_major) {
+        GGML_ASSERT(n_head == (int64_t) n_head_kv_hm);
+        const size_t rs = ggml_row_size(v_cur->type, n_embd_head);
+        if (v_cur->nb[2] != n_head*rs) {
+            v_cur = ggml_cont(ctx, v_cur);
+        }
+        v_cur = ggml_view_2d(ctx, v_cur, n_embd_head, n_head*n_tokens, rs, 0);
+        ggml_tensor * v_hm = ggml_reshape_2d(ctx, v, n_embd_head, (int64_t) v->ne[1]*n_head);
+        return ggml_set_rows(ctx, v_hm, v_cur, v_idxs);
+    }
 
     // take this branch when FA is enabled (the V cache is not transposed)
     if (!v_trans) {
@@ -1537,7 +1626,7 @@ ggml_tensor * llama_kv_cache::cpy_v(ggml_context * ctx, ggml_tensor * v_cur, ggm
 ggml_tensor * llama_kv_cache::build_input_k_idxs(ggml_context * ctx, const llama_ubatch & ubatch) const {
     const uint32_t n_tokens = ubatch.n_tokens;
 
-    ggml_tensor * k_idxs = ggml_new_tensor_1d(ctx, GGML_TYPE_I64, n_tokens);
+    ggml_tensor * k_idxs = ggml_new_tensor_1d(ctx, GGML_TYPE_I64, (int64_t) n_tokens*get_idxs_per_token());
 
     ggml_set_input(k_idxs);
 
@@ -1550,7 +1639,7 @@ ggml_tensor * llama_kv_cache::build_input_v_idxs(ggml_context * ctx, const llama
     ggml_tensor * v_idxs;
 
     if (!v_trans) {
-        v_idxs = ggml_new_tensor_1d(ctx, GGML_TYPE_I64, n_tokens);
+        v_idxs = ggml_new_tensor_1d(ctx, GGML_TYPE_I64, (int64_t) n_tokens*get_idxs_per_token());
     } else {
         v_idxs = ggml_new_tensor_1d(ctx, GGML_TYPE_I64, n_tokens*hparams.n_embd_v_gqa_max());
     }
@@ -1608,6 +1697,22 @@ void llama_kv_cache::set_input_k_idxs(ggml_tensor * dst, const llama_ubatch * ub
     GGML_ASSERT(ggml_backend_buffer_is_host(dst->buffer));
     int64_t * data = (int64_t *) dst->data;
 
+    if (head_major) {
+        // head-major: row (token, head) = stream base (in head rows) + head*stream size + cell (perf/kv-layout.md)
+        const int64_t nh = n_head_kv_hm;
+        for (uint32_t s = 0; s < sinfo.n_stream(); ++s) {
+            const int64_t strm = sinfo.strm[s];
+            const int64_t offs = (int64_t) v_offs[strm]*nh;
+            const int64_t sz   = v_cells[strm].size();
+            for (uint32_t i = 0; i < sinfo.size(); ++i) {
+                for (int64_t h = 0; h < nh; ++h) {
+                    data[((int64_t) s*sinfo.size() + i)*nh + h] = offs + h*sz + sinfo.idxs[s][i];
+                }
+            }
+        }
+        return;
+    }
+
     for (uint32_t s = 0; s < sinfo.n_stream(); ++s) {
         const int64_t offs = v_offs[sinfo.strm[s]];
 
@@ -1623,6 +1728,22 @@ void llama_kv_cache::set_input_v_idxs(ggml_tensor * dst, const llama_ubatch * ub
 
     GGML_ASSERT(ggml_backend_buffer_is_host(dst->buffer));
     int64_t * data = (int64_t *) dst->data;
+
+    if (!v_trans && head_major) {
+        // head-major: row (token, head) = stream base (in head rows) + head*stream size + cell (perf/kv-layout.md)
+        const int64_t nh = n_head_kv_hm;
+        for (uint32_t s = 0; s < sinfo.n_stream(); ++s) {
+            const int64_t strm = sinfo.strm[s];
+            const int64_t offs = (int64_t) v_offs[strm]*nh;
+            const int64_t sz   = v_cells[strm].size();
+            for (uint32_t i = 0; i < sinfo.size(); ++i) {
+                for (int64_t h = 0; h < nh; ++h) {
+                    data[((int64_t) s*sinfo.size() + i)*nh + h] = offs + h*sz + sinfo.idxs[s][i];
+                }
+            }
+        }
+        return;
+    }
 
     if (!v_trans) {
         for (uint32_t s = 0; s < sinfo.n_stream(); ++s) {
@@ -2146,6 +2267,20 @@ ggml_cgraph * llama_kv_cache::build_graph_shift(llm_graph_result * res, llama_co
 
         ggml_tensor * rope_factors = model.get_rope_factors(cparams, il);
 
+        if (head_major) {
+            // head-major: per stream, heads at kv_size head rows apart; the shift input sliced per stream
+            const size_t  rs = ggml_row_size(layer.k->type, n_embd_head_k);
+            const int64_t S  = get_size();
+            for (uint32_t s = 0; s < n_stream; ++s) {
+                ggml_tensor * k = ggml_view_3d(ctx, layer.k, n_rot, n_head_kv, S, S*rs, rs,
+                        (size_t) s*S*n_head_kv*rs + ggml_row_size(layer.k->type, n_embd_nope));
+                ggml_tensor * shift = ggml_view_1d(ctx, inp->k_shift, S, (size_t) s*S*ggml_element_size(inp->k_shift));
+                ggml_tensor * cur = build_rope_shift(cparams, ctx, k, shift, inp->k_rot, rope_factors, freq_base_l, freq_scale_l, il);
+                ggml_build_forward_expand(gf, cur);
+            }
+            continue;
+        }
+
         ggml_tensor * k =
             ggml_view_3d(ctx, layer.k,
                 n_rot, n_head_kv, v_offs[n_stream],
@@ -2314,6 +2449,28 @@ void llama_kv_cache::state_write_meta(llama_io_write_i & io, const cell_ranges_t
     }
 }
 
+// head-major state I/O (perf/kv-layout.md): the serialized bytes stay cell-major (one row per cell, the heads
+// concatenated - the format every reader and every existing file expects); gather/scatter per head over the stream view
+static void kv_hm_gather(ggml_tensor * t, size_t rs, uint32_t nh, uint32_t S, uint32_t c0, uint32_t n, uint8_t * dst) {
+    std::vector<uint8_t> tmp((size_t) n*rs);
+    for (uint32_t h = 0; h < nh; ++h) {
+        ggml_backend_tensor_get(t, tmp.data(), ((size_t) h*S + c0)*rs, (size_t) n*rs);
+        for (uint32_t i = 0; i < n; ++i) {
+            memcpy(dst + ((size_t) i*nh + h)*rs, tmp.data() + (size_t) i*rs, rs);
+        }
+    }
+}
+
+static void kv_hm_scatter(ggml_tensor * t, size_t rs, uint32_t nh, uint32_t S, uint32_t c0, uint32_t n, const uint8_t * src) {
+    std::vector<uint8_t> tmp((size_t) n*rs);
+    for (uint32_t h = 0; h < nh; ++h) {
+        for (uint32_t i = 0; i < n; ++i) {
+            memcpy(tmp.data() + (size_t) i*rs, src + ((size_t) i*nh + h)*rs, rs);
+        }
+        ggml_backend_tensor_set(t, tmp.data(), ((size_t) h*S + c0)*rs, (size_t) n*rs);
+    }
+}
+
 void llama_kv_cache::state_write_data(llama_io_write_i & io, const cell_ranges_t & cr) const {
     const auto & cells = v_cells[cr.strm];
 
@@ -2344,7 +2501,13 @@ void llama_kv_cache::state_write_data(llama_io_write_i & io, const cell_ranges_t
         for (const auto & range : cr.data) {
             const size_t range_size = range.second - range.first;
             const size_t buf_size = range_size * k_size_row;
-            io.write_tensor(k, range.first * k_size_row, buf_size);
+            if (head_major) {
+                std::vector<uint8_t> buf(buf_size);
+                kv_hm_gather(k, ggml_row_size(k->type, hparams.n_embd_head_k(il)), n_head_kv_hm, cells.size(), range.first, range_size, buf.data());
+                io.write(buf.data(), buf_size);
+            } else {
+                io.write_tensor(k, range.first * k_size_row, buf_size);
+            }
         }
     }
 
@@ -2371,7 +2534,13 @@ void llama_kv_cache::state_write_data(llama_io_write_i & io, const cell_ranges_t
             for (const auto & range : cr.data) {
                 const size_t range_size = range.second - range.first;
                 const size_t buf_size = range_size * v_size_row;
-                io.write_tensor(v, range.first * v_size_row, buf_size);
+                if (head_major) {
+                    std::vector<uint8_t> buf(buf_size);
+                    kv_hm_gather(v, ggml_row_size(v->type, hparams.n_embd_head_v(il)), n_head_kv_hm, cells.size(), range.first, range_size, buf.data());
+                    io.write(buf.data(), buf_size);
+                } else {
+                    io.write_tensor(v, range.first * v_size_row, buf_size);
+                }
             }
         }
     } else {
@@ -2582,7 +2751,21 @@ bool llama_kv_cache::state_read_data(llama_io_read_i & io, uint32_t strm, uint32
             return false;
         }
 
-        if (cell_count) {
+        if (cell_count && head_major) {
+            const size_t   rs = ggml_row_size(k->type, hparams.n_embd_head_k(il));
+            const uint32_t S  = v_cells[strm].size();
+            if (sinfo.is_contiguous()) {
+                std::vector<uint8_t> buf((size_t) cell_count * k_size_row);
+                io.read(buf.data(), buf.size());
+                kv_hm_scatter(k, rs, n_head_kv_hm, S, sinfo.head(), cell_count, buf.data());
+            } else {
+                std::vector<uint8_t> buf(k_size_row);
+                for (uint32_t i = 0; i < cell_count; ++i) {
+                    io.read(buf.data(), k_size_row);
+                    kv_hm_scatter(k, rs, n_head_kv_hm, S, sinfo.idxs[0][i], 1, buf.data());
+                }
+            }
+        } else if (cell_count) {
             if (sinfo.is_contiguous()) {
                 // Fast path: contiguous cells, single memcpy
                 io.read_tensor(k, sinfo.head() * k_size_row, cell_count * k_size_row);
@@ -2625,7 +2808,21 @@ bool llama_kv_cache::state_read_data(llama_io_read_i & io, uint32_t strm, uint32
                 return false;
             }
 
-            if (cell_count) {
+            if (cell_count && head_major) {
+                const size_t   rs = ggml_row_size(v->type, hparams.n_embd_head_v(il));
+                const uint32_t S  = v_cells[strm].size();
+                if (sinfo.is_contiguous()) {
+                    std::vector<uint8_t> buf((size_t) cell_count * v_size_row);
+                    io.read(buf.data(), buf.size());
+                    kv_hm_scatter(v, rs, n_head_kv_hm, S, sinfo.head(), cell_count, buf.data());
+                } else {
+                    std::vector<uint8_t> buf(v_size_row);
+                    for (uint32_t i = 0; i < cell_count; ++i) {
+                        io.read(buf.data(), v_size_row);
+                        kv_hm_scatter(v, rs, n_head_kv_hm, S, sinfo.idxs[0][i], 1, buf.data());
+                    }
+                }
+            } else if (cell_count) {
                 if (sinfo.is_contiguous()) {
                     // Fast path: contiguous cells, single memcpy
                     io.read_tensor(v, sinfo.head() * v_size_row, cell_count * v_size_row);
@@ -2779,6 +2976,10 @@ const llama_ubatch & llama_kv_cache_context::get_ubatch() const {
     assert(status == LLAMA_MEMORY_STATUS_SUCCESS);
 
     return ubatches[i_cur];
+}
+
+uint32_t llama_kv_cache_context::get_idxs_per_token() const {
+    return kv->get_idxs_per_token();
 }
 
 uint32_t llama_kv_cache_context::get_n_kv() const {

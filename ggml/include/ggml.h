@@ -678,6 +678,9 @@ extern "C" {
         GGML_TENSOR_FLAG_OUTPUT  =  2, // ...is an output for the GGML compute graph
         GGML_TENSOR_FLAG_PARAM   =  4, // ...contains trainable parameters
         GGML_TENSOR_FLAG_LOSS    =  8, // ...defines loss for numerical optimization (multiple loss tensors add up)
+        GGML_TENSOR_FLAG_KV_HEAD_MAJOR = 64, // a K/V cache view whose head stride exceeds its cell stride by layout, not by transposition
+                                             // (llama_kv_cache head-major layout, perf/kv-layout.md): the attention builder must not
+                                             // read nb[1] > nb[2] as the transposed-V cache
         GGML_TENSOR_FLAG_LOOSE_VIEWS = 16, // views of this tensor skip the contiguous-shape size check in ggml_new_tensor_impl:
                                            // a packed KV cache (streams of different sizes back to back) is read through
                                            // strided views whose shape product exceeds the buffer while their real byte

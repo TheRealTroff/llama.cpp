@@ -644,7 +644,7 @@ bool llm_graph_input_attn_kv::can_reuse(const llm_graph_params & params) {
 
     bool res = true;
 
-    res &= self_k_idxs->ne[0] == params.ubatch.n_tokens;
+    res &= self_k_idxs->ne[0] == (int64_t) params.ubatch.n_tokens*mctx->get_idxs_per_token();
   //res &= self_v_idxs->ne[0] == params.ubatch.n_tokens; // TODO: need to move this to the unified cache and check there
 
     res &= can_reuse_kq_mask(self_kq_mask, mctx, params.ubatch, params.cparams);
@@ -673,7 +673,7 @@ bool llm_graph_input_attn_k::can_reuse(const llm_graph_params & params) {
 
     bool res = true;
 
-    res &= self_k_idxs->ne[0] == params.ubatch.n_tokens;
+    res &= self_k_idxs->ne[0] == (int64_t) params.ubatch.n_tokens*mctx->get_idxs_per_token();
 
     res &= can_reuse_kq_mask(self_kq_mask, mctx, params.ubatch, params.cparams);
 
@@ -704,7 +704,7 @@ bool llm_graph_input_attn_kv_msa::can_reuse(const llm_graph_params & params) {
 
     bool res = true;
 
-    res &= self_k_idxs->ne[0] == params.ubatch.n_tokens;
+    res &= self_k_idxs->ne[0] == (int64_t) params.ubatch.n_tokens*mctx->get_idxs_per_token();
     if (self_k_idxs_idx) {
         res &= self_k_idxs_idx->ne[0] == params.ubatch.n_tokens;
     }
@@ -794,7 +794,7 @@ bool llm_graph_input_attn_kv_iswa::can_reuse(const llm_graph_params & params) {
 
     // base tensors may not be allocated if there are no non-SWA attention layers
     if (self_k_idxs && self_k_idxs->buffer) {
-        res &= self_k_idxs->ne[0] == params.ubatch.n_tokens;
+        res &= self_k_idxs->ne[0] == (int64_t) params.ubatch.n_tokens*mctx->get_base()->get_idxs_per_token();
       //res &= self_v_idxs->ne[0] == params.ubatch.n_tokens; // TODO: need to move this to the unified cache and check there
     }
 
@@ -853,7 +853,7 @@ bool llm_graph_input_attn_k_iswa::can_reuse(const llm_graph_params & params) {
 
     // base tensors may not be allocated if there are no non-SWA attention layers
     if (self_k_idxs && self_k_idxs->buffer) {
-        res &= self_k_idxs->ne[0] == params.ubatch.n_tokens;
+        res &= self_k_idxs->ne[0] == (int64_t) params.ubatch.n_tokens*mctx->get_base()->get_idxs_per_token();
     }
 
     if (self_kq_mask && self_kq_mask->buffer) {
@@ -1255,7 +1255,7 @@ bool llm_graph_input_mem_hybrid::can_reuse(const llm_graph_params & params) {
 
     bool res = true;
 
-    res &= inp_attn->self_k_idxs->ne[0] == params.ubatch.n_tokens;
+    res &= inp_attn->self_k_idxs->ne[0] == (int64_t) params.ubatch.n_tokens*mctx->get_attn()->get_idxs_per_token();
   //res &= inp_attn->self_v_idxs->ne[0] == params.ubatch.n_tokens; // TODO: need to move this to the unified cache and check there
 
     res &= can_reuse_kq_mask(inp_attn->self_kq_mask, mctx->get_attn(), params.ubatch, params.cparams);
@@ -1293,7 +1293,7 @@ bool llm_graph_input_mem_hybrid_k::can_reuse(const llm_graph_params & params) {
 
     bool res = true;
 
-    res &= inp_attn->self_k_idxs->ne[0] == params.ubatch.n_tokens;
+    res &= inp_attn->self_k_idxs->ne[0] == (int64_t) params.ubatch.n_tokens*mctx->get_attn()->get_idxs_per_token();
 
     res &= can_reuse_kq_mask(inp_attn->self_kq_mask, mctx->get_attn(), params.ubatch, params.cparams);
 
@@ -1357,7 +1357,7 @@ bool llm_graph_input_mem_hybrid_iswa::can_reuse(const llm_graph_params & params)
 
     // base tensors may not be allocated if there are no non-SWA attention layers
     if (inp_attn->self_k_idxs && inp_attn->self_k_idxs->buffer) {
-        res &= inp_attn->self_k_idxs->ne[0] == params.ubatch.n_tokens;
+        res &= inp_attn->self_k_idxs->ne[0] == (int64_t) params.ubatch.n_tokens*attn_ctx->get_base()->get_idxs_per_token();
       //res &= inp_attn->self_v_idxs->ne[0] == params.ubatch.n_tokens; // TODO: need to move this to the unified cache and check there
     }
 
@@ -2662,7 +2662,7 @@ ggml_tensor * llm_graph_context::build_attn_mha(
                  int   il,
          ggml_tensor * kv_len,
          ggml_tensor * kv_off) const {
-    const bool v_trans = v->nb[1] > v->nb[2];
+    const bool v_trans = v->nb[1] > v->nb[2] && !(v->flags & GGML_TENSOR_FLAG_KV_HEAD_MAJOR); // the head-major cache view is not a transposed V (perf/kv-layout.md)
 
     // per-slot context sizes: a non-uniform cache view has no stream stride, only flash attention can read it
     GGML_ASSERT(kv_off == nullptr || (cparams.flash_attn && kq_b == nullptr));
