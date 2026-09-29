@@ -4,7 +4,9 @@ Experiment `exp/qwen-final-row-prune`, based independently on production
 `a2d50249f6cda8f31d2d48093891e476c8918e17`. The production checkout and pick
 manifest are unchanged. All source changes are in the experiment worktree.
 
-**Assessment: validated candidate for the tested text/server configuration.**
+**ADOPTED 2026-09-29 (owner: "take the tail-prune"): merged to prod `c7f560114`, `LLAMA_QWEN35_PRUNE_EMPTY_TAIL=1` in both pick manifests (BI); gate TAGs `tailprune-0929-{q4,ud}`: no-spec + pick shas canonical, multi-slot short/long PASS, vision arm PASS, both lines (README pick block).**
+
+~~**Assessment: validated candidate for the tested text/server configuration.**~~
 Both lines save about 0.96% of fresh 8K prompt-processing time with matching
 output and draft behavior. The option remains default off; no production
 adoption is claimed.

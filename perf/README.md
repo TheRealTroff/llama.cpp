@@ -32,6 +32,17 @@ one level down, and it bit the `GGML_MV_EXT_V2` work on 2026-08-22.
 
 ## The prod pick
 
+**2026-09-29 (owner: "take the tail-prune"): `exp/qwen-final-row-prune` MERGED (`c7f560114`) and `LLAMA_QWEN35_PRUNE_EMPTY_TAIL=1`
+promoted to BOTH picks (BI).** A zero-output prefill batch stops after the last layer's attention and cache writes; the o-proj, FFN,
+final norm and empty head of 8295 of 8299 prompt rows had no consumer (`work-elimination-final-row-prune.md`, Astra's 2026-09-28
+branch: -0.96% fresh 8K prefill paired, 18/18 fixed-depth comparisons byte-identical). Gate on the merged prod binary, TAGs
+`tailprune-0929-{q4,ud}`: batch1 / turbo4-b1 / turbo4-n3-300 shas canonical on both lines (q4 `d2953fccfb41` / `7c5254d01b12` /
+`7c5254d01b12`, ud `9c53aaade052` / `d180ae89f168` / `ce826d8a3cbd`), multi-slot short + long PASS, vision arm PASS (one-slot + multi-slot),
+both lines. Prefill on the day: q4 batch1 59.18 s (60.50 at the Sep 25 mint, 60.15 the same morning without the flag), ud 62.50
+(64.46). No mint (a prefill-only BI flag; the next mint carries it). The same session's second opinion on the other four
+work-elimination branches and the NEW per-round finding (the target graph rebuilt on ~2 rounds in 3, ~2% GPU-idle) are in
+`cpu-round-overhead.md`'s 2026-09-29 addendum; the fix is on `exp/graph-reuse-cache`.
+
 **2026-09-25 MERGED (owner: "Bring it onto prod"): per-slot context sizes, the packed KV layout (`exp/kv-size-classes`,
 merge `dc02ff4d6`, `per-slot-ctx.md` "the packed layout").** `--ctx-seq-sizes 98304,8192,8192,8192` gives each slot its own
 cache: 96K + 3 x 8K = 1980 MiB Turbo4 KV vs 6336 for 4 x 96K (-69%), output byte-identical to the split layout. The mint's
