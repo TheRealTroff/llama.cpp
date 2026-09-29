@@ -40,8 +40,17 @@ serializer gathers per head). Gated byte-identical: fixed-depth 8K shas, the 96K
 f16 decode +2.6% / prefill -1.3%, Turbo4 +0.3% / -0.9% (two reps agree to 0.1%). Uniform stream sizes only: the `--ctx-seq-sizes`
 packed layout falls back to cell-major with a warning (its per-stream head stride is not built - the owner has memory-pattern
 concerns about that scenario anyway, "for a different day"). Also in the merge: the Turbo4 norm-plane relayout REFUTED by its ceiling
-probe (`GGML_FA_T4_PROBE=1`, timing only, 0.98-1.02x), the cell-major FA perf cases and `run-fa-layout-timing.sh`. Mint
-`prodpick-sep29-headmajor-{q4,ud}` running at merge time; result recorded below when it lands.
+probe (`GGML_FA_T4_PROBE=1`, timing only, 0.98-1.02x), the cell-major FA perf cases and `run-fa-layout-timing.sh`. **Mint
+`prodpick-sep29-headmajor-{q4,ud}` (prod `7204c2901`, evening, the first mint since the Sep 25 one - it also carries the view
+slide and the tail prune merged unminted the same day): q4 f16 32.72 / 33.00 at 300 (`d2953fccfb41`), 34.55 / 34.46 at 600
+(`441120c66064`); Turbo4 34.40 at 300 (`f07b0f8c58e6` - NEW, the controller arm), 33.65 / 34.02 at 600 (`801cb0758d4e` /
+`9e49b3d13b31`, the known pair); b1 14.59, MTP 24.09 (`d2953fccfb41`), turbo4-b1 14.51 (`7c5254d01b12`), partial 22.06. ud f16
+31.21 / 31.15 at 300 (`9c53aaade052`), 31.13 / 31.17 at 600 (`86b6e9b02cf0`); Turbo4 31.32 at 300 (`d180ae89f168`, the known
+fork), 29.38 / 29.48 at 600 (`abc0c5af7300` x2 - NEW, the controller arm); b1 13.31, MTP 19.80 (`9c53aaade052`), turbo4-b1 13.19
+(`d180ae89f168`). Multi-slot split + long PASS, classes PASS (on the cell-major fallback), vision PASS, both lines. Every
+fixed-depth sha = its record; the two new shas are both controller arms (statistical: `mint-controller-arm-is-statistical`),
+gated by the replay gate `replaygate-0929-headmajor` (record under `LLAMA_KV_HEAD_MAJOR=0`, replays under the pick; result
+below).**
 
 **2026-09-29 afternoon (owner: "Absolutely. Let's merge it."): `exp/graph-reuse-cache` MERGED (`803fb4604`) - the recurrent-state VIEW
 SLIDE, a code default (`LLAMA_RS_SLIDE=0` the off-switch, no manifest line: CPU-only, no numerics class).** The decode graph was
