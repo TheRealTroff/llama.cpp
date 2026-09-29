@@ -2166,7 +2166,12 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext(
         qr = std::min(fa_q24_qr, dk/8);
     }
 
-    snprintf(name, 256, "%s_mask=%d_sinks=%d_bias=%d_scap=%d_kvpad=%d_bcm=%d_ns10=%d_ns20=%d_nsg=%d_nwg=%d_gqah=%d%s%s%s%s",
+    // exp/turbo4-plane ceiling probe (perf/kv-layout.md): GGML_FA_T4_PROBE=1 runs the Turbo4 tile kernels with the
+    // norm-plane layout's load stream over the stored bytes (garbage output, timing only)
+    static const bool fa_t4probe_env = getenv("GGML_FA_T4_PROBE") != nullptr && atoi(getenv("GGML_FA_T4_PROBE")) > 0;
+    const bool t4probe = fa_t4probe_env && op->src[1]->type == GGML_TYPE_TURBO4_0 && op->src[2]->type == GGML_TYPE_TURBO4_0;
+
+    snprintf(name, 256, "%s_mask=%d_sinks=%d_bias=%d_scap=%d_kvpad=%d_bcm=%d_ns10=%d_ns20=%d_nsg=%d_nwg=%d_gqah=%d%s%s%s%s%s",
             base,
             has_mask,
             has_sinks,
@@ -2176,7 +2181,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext(
             bc_mask,
             ns10,
             ns20,
-            nsg, nwg, gqa_heads, qr ? "_qr=" : "", qr ? std::to_string(qr).c_str() : "", has_kvlen ? "_kvl=1" : "", has_kvoff ? "_kvo=1" : "");
+            nsg, nwg, gqa_heads, qr ? "_qr=" : "", qr ? std::to_string(qr).c_str() : "", has_kvlen ? "_kvl=1" : "", has_kvoff ? "_kvo=1" : "", t4probe ? "_t4p=1" : "");
 
     ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
     {
@@ -2197,6 +2202,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext(
         ggml_metal_cv_set_bool(cv, has_kvpad, FC_FLASH_ATTN_EXT + 4);
         ggml_metal_cv_set_bool(cv, has_kvlen, FC_FLASH_ATTN_EXT + 5);
         ggml_metal_cv_set_bool(cv, has_kvoff, FC_FLASH_ATTN_EXT + 6);
+        ggml_metal_cv_set_bool(cv, t4probe,   FC_FLASH_ATTN_EXT + 7);
 
         ggml_metal_cv_set_bool(cv, bc_mask, FC_FLASH_ATTN_EXT + 10);
 
