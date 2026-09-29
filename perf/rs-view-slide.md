@@ -1,5 +1,10 @@
 # The recurrent-state view slide: reuse the decode graph across rollbacks (2026-09-29)
 
+**MERGED TO PROD `803fb4604` the same afternoon (owner: "Absolutely. Let's merge it.") as a code default. Merged-prod proof: fixed
+depth 3 q4 `86213d038a29` 33.46 t/s (reused 98), ud `ce826d8a3cbd` 30.91 (reused 91); batch1 canonical; controller arms
+q4 `55d89be28ef2` 34.51 / ud `d180ae89f168` 31.66 (statistical arm, replay-gated); multi-slot short+long PASS, vision PASS, both
+lines (README pick block). Worktree removed, branch kept.**
+
 Branch `exp/graph-reuse-cache`, worktree `/Users/troff/play/llama.cpp-graph-reuse`, off prod `c7f560114`. Owner: "see if there is
 better reuse to be had" after the finding in `cpu-round-overhead.md`'s 2026-09-29 addendum: `graphs reused` = 32 of ~98 rounds at
 fixed depth 3, because `llm_graph_input_rs::can_reuse_rs` compares `view_row0` / `view_row0_ss` (the recurrent state's source

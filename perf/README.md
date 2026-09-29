@@ -32,6 +32,18 @@ one level down, and it bit the `GGML_MV_EXT_V2` work on 2026-08-22.
 
 ## The prod pick
 
+**2026-09-29 afternoon (owner: "Absolutely. Let's merge it."): `exp/graph-reuse-cache` MERGED (`803fb4604`) - the recurrent-state VIEW
+SLIDE, a code default (`LLAMA_RS_SLIDE=0` the off-switch, no manifest line: CPU-only, no numerics class).** The decode graph was
+rebuilt on ~2 rounds in 3 because the state's source rows (the previous round's rollback) were graph topology; a miss = 0.37 ms
+build + 2.2 ms sched alloc with the GPU idle. Now `can_reuse_rs` accepts the row change and `set_input` slides the read view and
+its derived views (`rs-view-slide.md`; the byte-range form that also moved the write-back view is recorded there as the trap).
+Fixed depth 3 A/B on the branch: q4 +2.0%, ud +1.7%, byte-identical; replay gate 0 desync on 317 picks. **Merged-prod proof
+(TAGs `rsslide-prod-fixed-0929-{q4,ud}`, `rsslide-prod-0929-{q4,ud}`): fixed depth 3 q4 `86213d038a29` at 33.46 (`graphs
+reused` 98, dec_sub_tg 1.27 ms), ud `ce826d8a3cbd` at 30.91 (91, 1.37); batch1 `d2953fccfb41` / `9c53aaade052`; controller
+arms q4 34.51 (`55d89be28ef2` - the statistical arm moved with the cheaper round, as the replay gate predicts; reused 65), ud
+31.66 (`d180ae89f168`, the known fork; reused 54); multi-slot short + long PASS, vision arm PASS, both lines.** No mint yet: the
+next mint carries this and the tail prune. Tree removed, branch kept.
+
 **2026-09-29 (owner: "take the tail-prune"): `exp/qwen-final-row-prune` MERGED (`c7f560114`) and `LLAMA_QWEN35_PRUNE_EMPTY_TAIL=1`
 promoted to BOTH picks (BI).** A zero-output prefill batch stops after the last layer's attention and cache writes; the o-proj, FFN,
 final norm and empty head of 8295 of 8299 prompt rows had no consumer (`work-elimination-final-row-prune.md`, Astra's 2026-09-28
