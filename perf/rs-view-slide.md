@@ -60,7 +60,9 @@ ud: byte-identical, **+1.7% e2e** (30.29 -> 30.79), submit -1.6 ms/round.
 - **Multi-slot gate short + long: PASS both lines** (3 executors + coordinator; non-uniform rollbacks across seqs give a gather
   form (`view_row0 = -1`) and stay strict).
 - **Vision arm (one slot + multi-slot): PASS both lines.**
-- **Replay gate** (`run-specev-replay-gate.sh`, record with `LLAMA_RS_SLIDE=0`, 2 replays with it on, 1200 tokens): see below.
+- **Replay gate PASS** (`run-specev-replay-gate.sh` TAG `rsslide-replay-0929`, q4, record with `LLAMA_RS_SLIDE=0`, 2 replays with it
+  on, 945 tokens / 317 picks): record `35abc5a8312e` at 31.47 t/s, replays `35abc5a8312e` x2 at 31.93 / 31.96 (0 desync, 0 past
+  trace) - byte-identical under the controller on the same picks, +1.5% on the day.
 
 Adoption = owner. Proposed form: code default (the slide on, `LLAMA_RS_SLIDE=0` the off-switch), no manifest line - a CPU-only
 change with no numerics class; worth +2.0% q4 / +1.7% ud at fixed depth, and more rounds reused under the controller.
