@@ -16,15 +16,19 @@ N=${N:-3}
 export NPRED=${NPRED:-1200} PICK_LINES=${PICK_LINES:-q4} ARMS=${ARMS:-turbo4-n3} LV=5
 TAG=${TAG:-replaygate-$(date +%m%d-%H%M)}
 OUT=/Users/troff/play/kvquant-experiments/results/fuse-quick
-TRACE=$OUT/$TAG.picks
 echo "=== replay gate $TAG: record on $(cd $A && git rev-parse --short HEAD) ($A), replay x$N on $(cd $B && git rev-parse --short HEAD) ($B) ==="
-B=$A TAG=$TAG-rec EXTRA="LLAMA_SPEC_EV_DBG=1 LLAMA_SPEC_EV_TRACE=$TRACE ${EXTRA_A:-}" "$A/perf/run-fuse-quick.sh" 2>&1 | grep -v "^==="
-echo "  recorded $(wc -l < "$TRACE" | tr -d ' ') picks"
+# one trace PER LINE (2026-09-29, kv-layout.md: with PICK_LINES="q4 ud" the ud record overwrote the q4 trace and the q4
+# replays ran the ud line's widths - a "fork" that was a pick difference, not a kernel one)
+for line in $PICK_LINES; do
+TRACE=$OUT/$TAG-$line.picks
+B=$A TAG=$TAG-rec PICK_LINES=$line EXTRA="LLAMA_SPEC_EV_DBG=1 LLAMA_SPEC_EV_TRACE=$TRACE ${EXTRA_A:-}" "$A/perf/run-fuse-quick.sh" 2>&1 | grep -v "^==="
+echo "  recorded $(wc -l < "$TRACE" | tr -d ' ') picks ($line)"
 for i in $(seq 1 "$N"); do
-  B=$B TAG=$TAG-rep$i EXTRA="LLAMA_SPEC_EV_DBG=1 LLAMA_SPEC_EV_REPLAY=$TRACE ${EXTRA_B:-}" "$B/perf/run-fuse-quick.sh" 2>&1 | grep -v "^==="
-  for log in "$OUT"/$TAG-rep$i-*.server.log; do
+  B=$B TAG=$TAG-rep$i PICK_LINES=$line EXTRA="LLAMA_SPEC_EV_DBG=1 LLAMA_SPEC_EV_REPLAY=$TRACE ${EXTRA_B:-}" "$B/perf/run-fuse-quick.sh" 2>&1 | grep -v "^==="
+  for log in "$OUT"/$TAG-rep$i-$line-*.server.log; do
     printf "    %s\n" "$(grep -h 'spec-ev: k hist' "$log" | tail -1 | grep -o 'replay \[.*\]' || echo 'replay [NO REPLAYED PICKS]')"
     grep -h "spec-ev: replay" "$log" | grep -i "desync\|exhausted\|cannot" | head -2 | sed 's/^/    /'
   done
+done
 done
 echo "=== REPLAY-GATE-COMPLETE $(date '+%T') ==="
