@@ -361,6 +361,14 @@ from the failed GT proxy that headless replay is impossible.
 
 ## Gotchas
 
+- **The FA perf cases are head-major; the served cache is cell-major (2026-09-29, `perf/kv-layout.md`).**
+  `test_flash_attn_ext` allocates K/V `[hs, kv, nh]` (each head's stream contiguous) unless the case passes
+  `permute={0,2,1,3}` + `kv_view=false`, which is the cache's own row-per-cell layout. The f16 FA kernels are ~10%
+  slower on the cache's layout at every decode extent (2% at 96K prefill), Turbo4 0-2.5%. Time FA on the cache's
+  layout: the Qwen3.8 shapes exist in both layouts in the perf list, `perf/run-fa-layout-timing.sh` runs them
+  under the pick env per line. And price a layout lever's ceiling with a kernel-side load-stream probe (a function
+  constant that issues the relayout's loads over the stored bytes, timing only) before building a ggml type: the
+  Turbo4 norm-plane relayout came out flat (0.98-1.02x) that way in an hour.
 - **Wait for the replay to settle before parsing.** The file count under
   `/tmp/com.apple.gputools.profiling` oscillates while it works - measured
   0, 72, 92, 112, **40**, 112, 132, 112, 132, 152, **60**, 122 over about 5 s. It deletes
