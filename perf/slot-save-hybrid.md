@@ -100,9 +100,9 @@ byte floor (the 96K census's reading holds), so the decode FA kernel is the whol
 
 | arm | t/s | acc | round | tok/round | sha |
 |---|--:|--:|--:|--:|---|
-| pinned depth 3 (width 4) - the reference | 15.02 / 14.88 | 47.7% | 158.5 / 160.8 | 2.4 | `57e11e9e3763` |
-| pinned depth 2 (width 3) | 13.21 | 56.2% | 158.4 | 2.1 | `b91011a7cf26` |
-| pinned depth 4 (width 5) | 14.51 | 47.7% | 164.6 | 2.4 | `57e11e9e3763` |
+| depth 3 = width 4 (controller capped at 3 = a pin in practice) - the reference | 15.02 / 14.88 | 47.7% | 158.5 / 160.8 | 2.4 | `57e11e9e3763` |
+| controller capped at depth 2 (width <= 3; not a pin, see the next section) | 13.21 | 56.2% | 158.4 | 2.1 | `b91011a7cf26` |
+| controller capped at depth 4 (width <= 5; not a pin) | 14.51 | 47.7% | 164.6 | 2.4 | `57e11e9e3763` |
 | the pick's controller (`LLAMA_SPEC_EV_WIDTHS=3,7` = depths 3/7 = verify widths 4/8) | 14.27 | 46.5% | 169.1 | 2.4 | `57e11e9e3763` |
 | controller depths 3,4,7 (widths 4/5/8) | 13.82 | 44.9% | 175.2 | | `57e11e9e3763` |
 | controller depths 4,7 / 4 (widths 5/8 / 5) | 12.47 / 12.74 | 38.8% / 40.0% | 209 / 200 | | |
@@ -114,6 +114,25 @@ its k histogram is almost all k = 3 (115 of 121 rounds) but it drafts blocks of 
 EMA does react to the length on k, not enough on the block size. An item for the controller, not the kernels; nothing
 adopted from these arms. (`LLAMA_SPEC_EV_WIDTHS` lists draft depths; verify width = k + 1, so the pick switches between
 widths 4 and 8; the depth-4 arms are included only to show the set matters.)
+
+### The two widths that matter, pinned, at 200K (`PICK_SPEC_EV=0`; `slotsave-200k-ud-pin{3,7}`, same restore, back to back)
+
+The harness's first arms today exported no `PICK_SPEC_EV=0`, so "DEPTH=n" was the controller capped at n: at depth 3
+that is width 4 in practice (same sha `57e11e9e3763`, buckets within 3%), at depth 7 it was just the controller. The
+harness now pins whenever DEPTH is set. True pins:
+
+| pinned | t/s | acc | tok/round | wall round | serialized | FA (calls x us) | bulk SoA matmuls | rest |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|
+| depth 3 = width 4 | 14.65 | 47.7% | 2.43 | 162.9 ms | 171.9 | **63.4** (16.2 x 3894) = 37% | 68.7 | 39.8 |
+| depth 7 = width 8 | 9.20 | 26.0% | 2.82 | **301.3 ms** | 323.7 | **151.7** (16.0 x 9350) = 47% | 114.1 | 57.9 |
+
+Width 8 buys +16% tokens per round for +85% round time at this length: the FA call is 2.4x the width-4 call (9.35 vs
+3.89 ms; at 8K the ratio was ~2x, 408-429 vs 217 us) and the wide skinny tiles are 1.66x the width-4 SoA kernels (114 vs
+69 ms; 126 vs 69 on Sep 18 before the plane-fold/header/q6_K levers). On a code-like prompt the width-8 yield would be
+higher (50% at 8K on ud = 4.5 tokens per round vs 3.2 at width 4) and still not 1.85x. The controller's 5-of-121 k = 7
+picks are the right call; the width-8 tiles are not on the 200K board, the width-8 FA even less (a padded 24-row form
+does not exist for 8 x 6 = 48 rows; `[256, 8, 24]` runs the plain batched route). Machine state: the pinned width-4
+anchor reads 162.9 here vs 158.5 an hour earlier on the same restore - ~3% of thermal drift across the afternoon's arms.
 
 **Owner on the prompt (2026-09-30):** the 200K prompt is prose, which the drafter is bad at; that depresses acceptance
 (47-49% vs 73% on the code-like benchprompt) and everything downstream of it (tokens per round, t/s, the controller's

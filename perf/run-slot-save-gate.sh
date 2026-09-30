@@ -17,6 +17,8 @@ PORT=${PORT:-8098}; LV=${LV:-3}; MAXTIME=${MAXTIME:-14400}
 OUT=/Users/troff/play/kvquant-experiments/results; TAG=${TAG:-slotsave-$(date +%m%d-%H%M)}
 EXTRA_ENV=${EXTRA_ENV:-}
 mkdir -p "$OUT" "$SLOTDIR"
+# a DEPTH pins the verify width: no controller (run-w8-decomp.sh does the same; the controller capped at DEPTH is not a pin)
+[ -n "$DEPTH" ] && export PICK_SPEC_EV=0
 source "$B/perf/pick.sh"
 PROMPT_FILE=$(pick_prompt "$PROMPT")
 pick_env "$LINE" "$KV"; pick_args "$LINE" "$KV"
