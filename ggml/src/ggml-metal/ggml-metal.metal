@@ -18853,6 +18853,43 @@ inline void dequantize_kq_soa_mm_pair(
     rf[3] = dlo * float4((uint4(pb.y >> 16) & mlo) | ((uint4((hh >> 28) & 0x0f) & hm) << hs)) - ml;
     regb = (type4x4) rf;
 }
+// GGML_MM_SKINNY_IQ4XS_HDR=1 (perf/skinny-iq4xs-hdr.md): tiles il (even) and il+1 of one iq4_xs superblock in one call.
+// Both tiles sit in the same 32-element sub-block (ib32 = il/2), so the header - dh, scales_h, the 6-bit ls - and d are
+// decoded once instead of twice; the four packs come as two 8-byte loads. Per element the same expression as
+// dequantize_iq4_xs_soa_mm's plain-table loop, in the same order: byte-identical.
+template <typename type4x4>
+inline void dequantize_iq4_xs_soa_mm_pair(
+        device const char * row,
+        int ne00,
+        int block_idx,
+        short il,
+        thread type4x4 & rega,
+        thread type4x4 & regb) {
+    const int nsb = ne00/256;
+    device const uint  * packs = (device const uint  *)(row + 16*nsb) + 32*block_idx + 2*il;
+    device const uchar * hdr   = (device const uchar *)(row + 144*nsb) + 8*block_idx;
+    const half   dh       = *(device const half *) hdr;
+    const ushort scales_h = (ushort) hdr[2] | ((ushort) hdr[3] << 8);
+    const int ib32 = il/2;
+    const int ls = ((hdr[4 + ib32/2] >> 4*(ib32%2)) & 0xf) | (((scales_h >> 2*ib32) & 3) << 4);
+    const float d = (float) dh * (ls - 32);
+    const uint2 pa = ((device const uint2 *) packs)[0];       // tile il: packs 2il, 2il+1
+    const uint2 pb = ((device const uint2 *) packs)[1];       // tile il+1
+    for (int i = 0; i < 4; ++i) {
+        const uint q = (i < 2 ? pa.x : pa.y) >> (16*(i & 1));
+        rega[i][0] = d * kvalues_iq4nl_f[(q >>  0) & 0xf];
+        rega[i][1] = d * kvalues_iq4nl_f[(q >>  4) & 0xf];
+        rega[i][2] = d * kvalues_iq4nl_f[(q >>  8) & 0xf];
+        rega[i][3] = d * kvalues_iq4nl_f[(q >> 12) & 0xf];
+    }
+    for (int i = 0; i < 4; ++i) {
+        const uint q = (i < 2 ? pb.x : pb.y) >> (16*(i & 1));
+        regb[i][0] = d * kvalues_iq4nl_f[(q >>  0) & 0xf];
+        regb[i][1] = d * kvalues_iq4nl_f[(q >>  4) & 0xf];
+        regb[i][2] = d * kvalues_iq4nl_f[(q >>  8) & 0xf];
+        regb[i][3] = d * kvalues_iq4nl_f[(q >> 12) & 0xf];
+    }
+}
 // FC_mul_mm_q6k: the stored q6_K row's tiles il (even) and il+1 in one call - four loads for the pair
 template <typename type4x4>
 inline void dequantize_q6_K_soa_pair(device const char * row, int K, int block_idx, short il, thread type4x4 & rega, thread type4x4 & regb) {
@@ -18889,6 +18926,7 @@ template <typename type4x4> inline void dequantize_soa_mm(device const block_q5_
 // the skinny tile's pair-of-tiles form: q4_K/q5_K decode the header once, every other format runs the single reader twice
 template <typename type4x4> inline void dequantize_soa_mm_pair(device const block_q4_K *, device const char * row, int ne00, int block_idx, short il, thread type4x4 & rega, thread type4x4 & regb) { dequantize_kq_soa_mm_pair<false>(row, ne00, block_idx, il, rega, regb); }
 template <typename type4x4> inline void dequantize_soa_mm_pair(device const block_q5_K *, device const char * row, int ne00, int block_idx, short il, thread type4x4 & rega, thread type4x4 & regb) { dequantize_kq_soa_mm_pair<true>(row, ne00, block_idx, il, rega, regb); }
+template <typename type4x4> inline void dequantize_soa_mm_pair(device const block_iq4_xs *, device const char * row, int ne00, int block_idx, short il, thread type4x4 & rega, thread type4x4 & regb) { dequantize_iq4_xs_soa_mm_pair(row, ne00, block_idx, il, rega, regb); }
 template <typename block_q, typename type4x4> inline void dequantize_soa_mm_pair(device const block_q * tag, device const char * row, int ne00, int block_idx, short il, thread type4x4 & rega, thread type4x4 & regb) { dequantize_soa_mm(tag, row, ne00, block_idx, il, rega); dequantize_soa_mm(tag, row, ne00, block_idx, (short) (il + 1), regb); }
 // the skinny tile's form with a staged table: iq4_xs reads it, the other formats ignore it
 template <typename type4x4> inline void dequantize_soa_mm_lut(device const block_iq4_xs *, device const char * row, int ne00, int block_idx, short il, thread type4x4 & reg, threadgroup const char * lut) { dequantize_iq4_xs_soa_mm_tglut(row, ne00, block_idx, il, reg, lut); }

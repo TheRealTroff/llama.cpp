@@ -10453,6 +10453,12 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         for (int n : {1, 3, 4, 5}) {
             test_cases.emplace_back(new test_mul_mat(t, GGML_TYPE_F32, 5120, n, 17408, {1, 1}, {1, 1}));
         }
+        // the skinny tile's pair readers (GGML_MM_SKINNY_KQ2, GGML_MM_SKINNY_IQ4XS_HDR) on the two FFN orientations at the
+        // verify widths that take the tile (perf/skinny-iq4xs-hdr.md)
+        for (int n : {6, 7, 8}) {
+            test_cases.emplace_back(new test_mul_mat(t, GGML_TYPE_F32, 5120, n, 17408, {1, 1}, {1, 1}));
+            test_cases.emplace_back(new test_mul_mat(t, GGML_TYPE_F32, 17408, n, 5120, {1, 1}, {1, 1}));
+        }
         test_cases.emplace_back(new test_mul_mat(t, GGML_TYPE_F32, 1024, 1, 5120, {1, 1}, {1, 1}));
         test_cases.emplace_back(new test_mul_mat(t, GGML_TYPE_F32, 4096, 512, 5120, {1, 1}, {1, 1}));
         test_cases.emplace_back(new test_mul_mat(t, GGML_TYPE_F32, 256, 1, 4096, {1, 1}, {3, 1}));

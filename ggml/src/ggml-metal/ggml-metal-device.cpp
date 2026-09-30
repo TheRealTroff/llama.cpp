@@ -768,7 +768,12 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm_skinny(gg
     const int q5k = (soa && op->src[0]->type == GGML_TYPE_Q5_K_SOA) ? env_q5k : 0;
     // GGML_MM_SKINNY_KQ2=1: the stored q4_K/q5_K tiles' header decoded once per K-step (FC_MUL_MM + 11, lever 4)
     static const int env_kq2 = getenv("GGML_MM_SKINNY_KQ2") ? atoi(getenv("GGML_MM_SKINNY_KQ2")) : 0;
-    const int kq2 = (soa && (op->src[0]->type == GGML_TYPE_Q5_K_SOA || op->src[0]->type == GGML_TYPE_Q4_K_SOA)) ? env_kq2 : 0;
+    // GGML_MM_SKINNY_IQ4XS_HDR=1: the same header-once pair reader for the stored iq4_xs tile (its 6-bit scale decoded once
+    // for the two tiles of a K-step, the plain-table form; perf/skinny-iq4xs-hdr.md, 2026-09-30) - the same constant, its
+    // own switch so the K-quant pick flag does not move the iq4_xs route
+    static const int env_iq4hdr = getenv("GGML_MM_SKINNY_IQ4XS_HDR") ? atoi(getenv("GGML_MM_SKINNY_IQ4XS_HDR")) : 0;
+    const int kq2 = (soa && (op->src[0]->type == GGML_TYPE_Q5_K_SOA || op->src[0]->type == GGML_TYPE_Q4_K_SOA)) ? env_kq2 :
+                    (soa && op->src[0]->type == GGML_TYPE_IQ4_XS_SOA) ? env_iq4hdr : 0;
     // GGML_MM_SKINNY_Q6K=1: the q6_K tiles (block = the UD lm_head, and stored SoA) read as pairs with wide loads
     // (FC_MUL_MM + 12, perf/w8-decomp-sep18.md the q6_K head item); the constant is set for q6_K pipelines only
     static const int env_q6k = getenv("GGML_MM_SKINNY_Q6K") ? atoi(getenv("GGML_MM_SKINNY_Q6K")) : 0;
