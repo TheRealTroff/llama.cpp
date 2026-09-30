@@ -1,6 +1,10 @@
 # The width-8 decode FA at long context: give it the GQA tile (2026-09-30, owner: "Sounds like a plan. Stub it.")
 
-Status: **OPEN STUB, written 2026-09-30 for a new session. Nothing built, nothing measured.** Branch to create:
+Status: **Form A BUILT + PRICED 2026-09-30 evening on `exp/fa-w8-gqa` (worktree `~/play/llama.cpp-faw8`, off prod
+`e0c158a70` + the slot-save commit `f21d0f8a2` cherry-picked so the 200K restore runs there).** The results are in the
+"Form A measured" section at the end; the stub text below is kept as written. Park = commit + remove the tree.
+
+_(Original stub:)_ Branch to create:
 `exp/fa-w8-gqa` off `prod`, its own worktree (`~/play/llama.cpp-faw8`); park = commit + remove the tree. The timing
 harness is the 200K disk save (below): every arm is a one-second restore, not an hour of prefill.
 
@@ -97,3 +101,88 @@ second pass's measured share. Record a refutation with the same care as a win.
 (the tile, the OR form, the widths plan, the class trap), `perf/w8-decomp-sep18.md` (the 8K width-8 decomposition: "the
 FA route is not it" at 8K - it is at 200K), `perf/longctx-inventory-sep15.md` (the 96K census reading of the decode FA),
 `perf/skinny-direct-mma.md` (the wide matmul tiles: priced, ~-10 ms realistic on the width-8 round, second item).
+
+## Form A measured (2026-09-30 evening, `exp/fa-w8-gqa`, build of `ggml-metal-ops.cpp` + the test cases)
+
+**The change (one gate):** `GGML_FA_GQA_WMAX` (default 6 = today's route). Above width 6 `use_gqa_reuse` engages only where
+the 24-row plan would take the rows - `ggml_metal_flash_attn_ext_q24(op, gqa_ratio) > 0`: Turbo4 K/V in the line's TR class
+(7 or 9), dk = dv = 256, `GGML_FA_Q24_ROWS` set (the pick's 12). Every other cache/form keeps the width <= 6 rule, so the
+drafter's f16 GQA4 route is untouched by construction (`q24` returns 0 for f16) and nothing changes without the flag. The
+dispatcher needed no change: 48 rows plan as `n24 = 2, rem = 0`, 42 rows (width 7) as two 24-row tiles with the second
+padded, the row map `it = ir % ne01, ih = iqh0 + ir / ne01` covers every row. New test cases: widths 7-8 at kv 512 / 8448
+(eval, f16 + Turbo4) and Turbo4 nb 4/7/8 at kv 98304 / 204800 (perf).
+
+**Route proof** (`test-backend-ops perf`, `GGML_FA_DEBUG=1`, the width-8 GQA6 Turbo4 shape `q[256,8,24,1]`, kv 8448):
+flag off = `gqa=0`, pipeline `qtl4w_..._nsg=4_nwg=20_gqah=1_qr=8` (TR 9) / `qtnw_...` (TR 7); flag on = `gqa=1`, pipeline
+`qtl4w24_..._nsg=8_nwg=20_gqah=6` / `qtnw24_...` - the 24-row tile in each line's own class, at the pick's split width.
+
+**Per call** (`perf/run-fa24-timing.sh`, `NB="7|8"`, interleaved x2, us per call, both reps within 0.3%; the pick env +
+`GGML_FA_GQA_WMIN=1`; "pick" = the plain batched route, "w8" = `GGML_FA_GQA_WMAX=8`):
+
+| class | kv | width 7 pick -> w8 | width 8 pick -> w8 |
+|---|--:|--:|--:|
+| TR 9 (ud) | 204800 | 9515 -> 7494 (**-21.2%**) | 9401 -> 7440 (**-20.9%**) |
+| TR 9 | 98304 | 4523 -> 3607 (-20.2%) | 4484 -> 3587 (-20.0%) |
+| TR 9 | 8448 | 416 -> 344 (-17.3%) | 419 -> 346 (-17.4%) |
+| TR 7 (q4) | 204800 | 8713 -> 7357 (**-15.6%**) | 8618 -> 7313 (**-15.1%**) |
+| TR 7 | 98304 | 4142 -> 3544 (-14.4%) | 4110 -> 3525 (-14.2%) |
+| TR 7 | 8448 | 385 -> 343 (-11.0%) | 386 -> 343 (-11.2%) |
+
+The sizing said ~7.8 ms at 200K (2x the tiled width-4 call of 3.89 ms in the graph): measured 7.44 ms = 1.91x, a little
+better than two serial tiles - the two threadgroups per KV head overlap some. The 8K number (-17%) is larger than the
+stub's "nothing at 8K" expectation per call, but the FA is 4% of the 8K width-8 round, so still nothing e2e there. The
+q4 class gains less because `qtnw` starts 8% faster (the same ratio as the width-4 tile's -12.7% vs -18.3%).
+
+**E2e at 200K from the disk save** (`perf/run-slot-save-gate.sh` - the version with the DEPTH pin, `5da57847a`, taken onto
+this branch after a first pair ran the controller capped at 7 and read as width 4; ud line, Turbo4, `-c 212992`, pinned
+depth 7 = width 8, 300 tokens, restores of `ud-200k`, control / flag / control / flag back to back):
+
+| arm | t/s | acc | wall round (dec_syn_tg + draft) | sha |
+|---|--:|--:|--:|---|
+| control (the pick) | 9.240 / 9.231 | 26.0% | **301.4 / 301.7 ms** (285.0 + 16.3) | `3051842f2cc4` |
+| `GGML_FA_GQA_WMAX=8` | **10.245 / 10.237 (+10.9%)** | 26.0% | **271.7 / 271.9 ms (-9.9%)** (255.4 + 16.3) | **`3051842f2cc4`** |
+
+Same sha, same acceptance, same drafter time in all four arms: **byte-identical at 200K, -29.7 ms per width-8 round
+(-9.9%), +10.9% t/s on the pinned width-8 arm** (the sizing said ~-25 ms / -8%). The control reproduces the Sep 30
+morning record (9.20 t/s, 301.3 ms). Profiled pair (`GGML_METAL_PROFILE=1`, serialized GPU ms per round, 105 rounds):
+
+| bucket | control | flag | |
+|---|--:|--:|--:|
+| m1 flash_attn | 151.77 | **121.25** | **-30.5 (-20.1%)** = the per-call -20.9% x 16 calls |
+| bulk SoA matmuls (iq4_xs + q5_K + q4_K) | 113.92 | 113.83 | flat |
+| everything else (lm_head x2, q8_0, drafter, GDN, elementwise, small formats) | 57.75 | 57.74 | flat; m2 (drafter) flash_attn 0.27 -> 0.28 = its route untouched |
+| TOTAL | 323.44 | 292.82 | -30.6 serialized = -29.7 wall: nothing hidden by overlap (`percall-vs-ingraph-profiled`) |
+
+The width-8 round's FA is now 41% of the round (was 47%); the width-8 : width-4 round ratio at 200K goes 1.85x -> 1.67x
+for 2x the columns (the width-4 round: 162.9 ms, the morning's pin).
+
+**The sha gate at 8K, both lines** (`perf/run-w8-decomp.sh LINES="q4 ud" DEPTHS=7 STEPS=anchor`, the pick env,
+`PICK_SPEC_EV=0`, chat benchprompt, 300 tokens; control then flag):
+
+| line (class) | control | `GGML_FA_GQA_WMAX=8` | record (Sep 18, chat lineage) |
+|---|---|---|---|
+| q4 (TR 7, `qtnw24`) | 30.86 t/s, acc 41.7%, round 123.6 ms, `86213d038a29` | 31.12 t/s, 41.7%, 123.0 ms, **`86213d038a29`** | `86213d038a29` |
+| ud (TR 9, `qtl4w24`) | 27.39 t/s, acc 50.1%, round 158.3 ms, `ce826d8a3cbd` | 27.53 t/s, 50.1%, 159.8 ms, **`ce826d8a3cbd`** | `ce826d8a3cbd` |
+
+Canonical on both lines with the flag - the q4 line's tile is its own class (`qtnw24`, the route print above), so the
+2026-09-16 class trap does not recur. The 8K rounds are flat as sized (the width-8 FA is 4% of that round; the ud flag
+arm's harness line read a mid-run spec-prof summary - 36 of 67 rounds - the per-round averages are the same).
+
+**Form B (the 48-row tile): not built.** Form A's call lands at 1.91x the tiled width-4 call (7.44 vs 3.89 ms at 200K),
+i.e. the two 24-row threadgroups per KV head already overlap a little rather than run serially, so a single 48-row pass
+can only take the second pass's per-chunk overhead (softmax/rescale, the staged table, barriers) - the tile note's
+census put the per-chunk work at ~11% of the 24-row kernel's issue, so B's ceiling is a few percent of a call that is now
+41% of the round: ~1-2% of the round at 200K, against a register-risk kernel (NQT x NO = 6 x 4 O tiles at nsg 8; the
+24-row form already spills 48 B). If it is ever wanted: `perf/kernel-census.sh PHASE=decode` on the width-8 flag arm
+first, then the Q = 48 prescreen (`metal-kernel-prescreen`), per the plan above.
+
+**Status: Form A built, gated byte-identical on both lines, priced at 200K; manifest `GGML_FA_GQA_WMAX=8` proposed (BI,
+both lines); adoption = owner.** If picked: the controller's width-8 rounds at long context are the beneficiary (the
+pick's `LLAMA_SPEC_EV_WIDTHS=3,7` switches between widths 4 and 8); nothing changes at the width-4 rounds, on f16
+caches, or at 8K beyond noise. The branch also carries the slot-save server commit (cherry-picked `f21d0f8a2`, plus the
+harness with the DEPTH pin) so its 200K arms restore - a merge to prod takes the ops/tests/perf commit only, or the
+slot-save branch first.
+
+**Test suite** (`test-backend-ops test -o FLASH_ATTN_EXT`, the pick env + `GGML_FA_GQA_WMIN=1 GGML_FA_GQA_WMAX=8`, the new
+width-7/8 eval cases included): **4877/4877 under TR 9 and 4877/4877 under TR 7**, no failures (the 24-row tile's record
+of 4860/4869 had 9 f16 hsk 512/576 cases that have since been fixed).

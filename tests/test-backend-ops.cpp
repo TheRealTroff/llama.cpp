@@ -10143,8 +10143,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     // Turbo KV cache coverage for the Qwen3.8-27B attention geometry.  Keep a
     // short correctness case for both the vector and batched Metal routes;
     // the long-context variants are also useful as focused performance cases.
+    // widths 7 and 8 = the controller's deep verify rounds (the GQA tile above width 6, perf/fa-w8-gqa-tile.md)
     for (ggml_type type_KV : { GGML_TYPE_F16, GGML_TYPE_TURBO4_0 }) {
-        for (int nb : { 1, 3, 4, 5, 6 }) {
+        for (int nb : { 1, 3, 4, 5, 6, 7, 8 }) {
             test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {6, 1}, 512, nb, true, false, 0, 0,
                                                             GGML_PREC_F32, type_KV, type_KV));
             test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {6, 1}, 8448, nb, true, false, 0, 0,
@@ -10848,6 +10849,17 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
         for (int nb : { 1, 2, 3, 4, 5, 6 }) {
             test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {6, 1}, 102400, nb, true, false, 0, 0,
                                                             GGML_PREC_F32, type_KV, type_KV));
+        }
+    }
+    // the controller's deep verify rounds (widths 7-8) at 96K and at the 200K slot save's length: the width-8
+    // decode FA is 47% of the 200K width-8 round (perf/fa-w8-gqa-tile.md); width 4 at 204800 is the tiled reference
+    for (int64_t kv : { 98304, 204800 }) {
+        for (int nb : { 4, 7, 8 }) {
+            if (kv == 98304 && nb == 4) {
+                continue; // already above
+            }
+            test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {6, 1}, kv, nb, true, false, 0, 0,
+                                                            GGML_PREC_F32, GGML_TYPE_TURBO4_0, GGML_TYPE_TURBO4_0));
         }
     }
 

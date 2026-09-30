@@ -5171,8 +5171,15 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
     static const int env_fa_gqa_wmin = getenv("GGML_FA_GQA_WMIN") ? atoi(getenv("GGML_FA_GQA_WMIN")) : 3;
     const int gqa_wmin = env_fa_gqa_wmin < 3 ? env_fa_gqa_wmin :
                          (ne03 > 1 || env_fa_gqa_wmin_all) && ne11 > env_fa_gqa_wmin_kvmin ? env_fa_gqa_wmin_ms : 3;
+    // GGML_FA_GQA_WMAX: the largest verify width that takes the GQA tile (default 6 = the rule the 8-row tile was set
+    // under: width 8 x 6 heads = six 8-row tiles = six KV passes, no better than the plain route). Above 6 the tile
+    // engages only where the 24-row plan would take the rows (ggml_metal_flash_attn_ext_q24 > 0: Turbo4 TR 7/9, dk 256,
+    // GGML_FA_Q24_ROWS): 48 rows = two 24-row tiles = two KV passes per KV head against the plain batched kernel's six,
+    // one per query head (perf/fa-w8-gqa-tile.md, 2026-09-30). Every other cache/form keeps the width <= 6 rule.
+    static const int env_fa_gqa_wmax = getenv("GGML_FA_GQA_WMAX") ? atoi(getenv("GGML_FA_GQA_WMAX")) : 6;
+    const bool gqa_wmax_ok = ne01 <= 6 || (ne01 <= env_fa_gqa_wmax && ggml_metal_flash_attn_ext_q24(op, gqa_ratio) > 0);
     const bool use_gqa_reuse = gqa_ratio_enabled && (is_turbo4_kv || (env_fa_gqa_f16 && is_f16_kv)) && ne00 < 512 &&
-                               ne01 >= gqa_wmin && ne01 <= 6 && (gqa_ratio == 4 || gqa_ratio == 6) &&
+                               ne01 >= gqa_wmin && gqa_wmax_ok && (gqa_ratio == 4 || gqa_ratio == 6) &&
                                !has_sinks && !has_bias &&
                                ne11 % OP_FLASH_ATTN_EXT_NCPSG == 0;
     const bool use_vec = ggml_metal_op_flash_attn_ext_use_vec(op) && !(use_gqa_reuse && ne01 <= 4);
