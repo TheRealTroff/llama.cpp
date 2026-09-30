@@ -3014,6 +3014,69 @@ private:
                         break;
                     }
 
+                    // Hybrid-model slot save (2026-09-30, perf/slot-save-hybrid.md): the target file alone leaves the recurrent
+                    // state at the END of the saved tokens, and the next request re-evaluates at least one token, so without a
+                    // checkpoint to roll back to the whole prompt is re-prefilled. Two sidecars make the file a RAM prompt-cache
+                    // entry on disk: <file>.dft (the drafter's state) and <file>.ckpt (the slot's context checkpoints, target +
+                    // drafter + speculative blobs, read back from their spill files when cold).
+                    size_t nwrite_side = 0;
+                    if (ctx_dft) {
+                        llama_token dummy = 0;
+                        const size_t n = llama_state_seq_save_file(ctx_dft, (filepath + ".dft").c_str(), slot->id, &dummy, 0);
+                        if (n == 0) {
+                            send_error(task, "Unable to save the drafter state", ERROR_TYPE_SERVER);
+                            break;
+                        }
+                        nwrite_side += n;
+                    }
+                    {
+                        // <file>.spec: the drafter's whole per-sequence state (DFlash: the sink+window feature ring)
+                        std::vector<uint8_t> sd;
+                        if (common_speculative_get_state_full(spec.get(), slot->id, sd) && !sd.empty()) {
+                            FILE * f = fopen((filepath + ".spec").c_str(), "wb");
+                            if (!f || fwrite(sd.data(), 1, sd.size(), f) != sd.size()) {
+                                if (f) { fclose(f); }
+                                send_error(task, "Unable to write the drafter state file", ERROR_TYPE_SERVER);
+                                break;
+                            }
+                            fclose(f);
+                            nwrite_side += sd.size();
+                        }
+                    }
+                    {
+                        bool ok = true;
+                        FILE * f = fopen((filepath + ".ckpt").c_str(), "wb");
+                        if (!f) {
+                            send_error(task, "Unable to create the checkpoint file", ERROR_TYPE_SERVER);
+                            break;
+                        }
+                        auto wr = [&](const void * src, size_t n) { if (n && fwrite(src, 1, n, f) != n) { ok = false; } nwrite_side += n; };
+                        const uint32_t magic = 0x54504b43, version = 1, count = (uint32_t) slot->prompt.checkpoints.size();
+                        wr(&magic, 4); wr(&version, 4); wr(&count, 4);
+                        for (const auto & c : slot->prompt.checkpoints) {
+                            std::vector<uint8_t> tgt, dft;
+                            const std::vector<uint8_t> * ptgt = &c.data_tgt;
+                            const std::vector<uint8_t> * pdft = &c.data_dft;
+                            if (c.cold_tgt) { ok = ok && c.cold_tgt->read(tgt); ptgt = &tgt; }
+                            if (c.cold_dft) { ok = ok && c.cold_dft->read(dft); pdft = &dft; }
+                            if (!ok) {
+                                break;
+                            }
+                            const int64_t  n_tokens = c.n_tokens;
+                            const int32_t  pos_min = c.pos_min, pos_max = c.pos_max;
+                            const uint64_t sz[3] = { ptgt->size(), pdft->size(), c.data_spec.size() };
+                            wr(&n_tokens, 8); wr(&pos_min, 4); wr(&pos_max, 4); wr(sz, sizeof(sz));
+                            wr(ptgt->data(), sz[0]); wr(pdft->data(), sz[1]); wr(c.data_spec.data(), sz[2]);
+                        }
+                        fclose(f);
+                        if (!ok) {
+                            send_error(task, "Unable to write the checkpoint file", ERROR_TYPE_SERVER);
+                            break;
+                        }
+                        SLT_INF(*slot, "slot saved: %zu tokens, %.1f MiB target + %.1f MiB sidecars (%u checkpoints, drafter %s)\n",
+                                slot->prompt.tokens.size(), nwrite / (1024.0 * 1024.0), nwrite_side / (1024.0 * 1024.0), count, ctx_dft ? "yes" : "no");
+                    }
+
                     const int64_t t_end = ggml_time_us();
                     const double t_save_ms = (t_end - t_start) / 1000.0;
 
@@ -3023,7 +3086,7 @@ private:
                     res->filename = filename;
                     res->is_save  = true;
                     res->n_tokens = slot->prompt.tokens.size();
-                    res->n_bytes  = nwrite;
+                    res->n_bytes  = nwrite + nwrite_side;
                     res->t_ms     = t_save_ms;
                     queue_results.send(std::move(res));
                 } break;
@@ -3073,6 +3136,68 @@ private:
 
                         slot->prompt.clear();
                         slot->prompt.tokens = std::move(restored);
+
+                        // sidecars written by SLOT_SAVE (see there): the drafter state, then the context checkpoints
+                        if (ctx_dft) {
+                            const std::string p = filepath + ".dft";
+                            if (FILE * probe = fopen(p.c_str(), "rb")) {
+                                fclose(probe);
+                                llama_token tok = 0;
+                                size_t n_tok = 0;
+                                if (llama_state_seq_load_file(ctx_dft, p.c_str(), slot->id, &tok, 1, &n_tok) == 0) {
+                                    throw std::runtime_error("drafter state file present but unreadable");
+                                }
+                            } else {
+                                llama_memory_seq_rm(llama_get_memory(ctx_dft), slot->id, -1, -1);
+                            }
+                        }
+                        {
+                            const std::string p = filepath + ".spec";
+                            std::unique_ptr<FILE, int (*)(FILE *)> f(fopen(p.c_str(), "rb"), fclose);
+                            if (f) {
+                                fseek(f.get(), 0, SEEK_END);
+                                std::vector<uint8_t> sd((size_t) ftell(f.get()));
+                                fseek(f.get(), 0, SEEK_SET);
+                                if (!sd.empty() && fread(sd.data(), 1, sd.size(), f.get()) != sd.size()) {
+                                    throw std::runtime_error("truncated drafter state file");
+                                }
+                                common_speculative_set_state_full(spec.get(), slot->id, sd);
+                            }
+                        }
+                        {
+                            const std::string p = filepath + ".ckpt";
+                            std::unique_ptr<FILE, int (*)(FILE *)> f(fopen(p.c_str(), "rb"), fclose);
+                            if (f) {
+                                auto rd = [&](void * dst, size_t n) {
+                                    if (n && fread(dst, 1, n, f.get()) != n) {
+                                        throw std::runtime_error("truncated checkpoint file");
+                                    }
+                                };
+                                uint32_t magic = 0, version = 0, count = 0;
+                                rd(&magic, 4); rd(&version, 4); rd(&count, 4);
+                                if (magic != 0x54504b43 || version != 1) {
+                                    throw std::runtime_error("bad checkpoint file header");
+                                }
+                                const auto & dir = common_cold_state_dir();
+                                size_t n_bytes = 0;
+                                for (uint32_t i = 0; i < count; i++) {
+                                    auto & c = slot->prompt.checkpoints.emplace_back();
+                                    int64_t  n_tokens = 0;
+                                    int32_t  pos_min = 0, pos_max = 0;
+                                    uint64_t sz[3] = { 0, 0, 0 };
+                                    rd(&n_tokens, 8); rd(&pos_min, 4); rd(&pos_max, 4); rd(sz, sizeof(sz));
+                                    c.n_tokens = n_tokens; c.pos_min = pos_min; c.pos_max = pos_max;
+                                    c.data_tgt.resize(sz[0]); c.data_dft.resize(sz[1]); c.data_spec.resize(sz[2]);
+                                    rd(c.data_tgt.data(), sz[0]); rd(c.data_dft.data(), sz[1]); rd(c.data_spec.data(), sz[2]);
+                                    n_bytes += sz[0] + sz[1] + sz[2];
+                                    if (!dir.empty()) {
+                                        c.spill(dir);
+                                    }
+                                }
+                                SLT_INF(*slot, "slot restored: %zu tokens, %u checkpoints (%.1f MiB), drafter %s\n",
+                                        slot->prompt.tokens.size(), count, n_bytes / (1024.0 * 1024.0), ctx_dft ? "restored" : "none");
+                            }
+                        }
                     } catch (const std::exception & err) {
                         slot->prompt_clear();
                         send_error(task, std::string("Unable to restore slot: ") + err.what(), ERROR_TYPE_INVALID_REQUEST);

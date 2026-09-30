@@ -96,6 +96,11 @@ void common_speculative_accept(common_speculative * spec, llama_seq_id, uint16_t
 bool common_speculative_get_state(common_speculative * spec, llama_seq_id seq_id, std::vector<uint8_t> & data);
 void common_speculative_set_state(common_speculative * spec, llama_seq_id seq_id, const std::vector<uint8_t> & data);
 
+// the whole per-sequence drafter state for a slot save to disk (DFlash: + the sink/window feature ring); the checkpoint
+// stash above is a subset. Falls back to get_state/set_state on drafters without a fuller state.
+bool common_speculative_get_state_full(common_speculative * spec, llama_seq_id seq_id, std::vector<uint8_t> & data);
+void common_speculative_set_state_full(common_speculative * spec, llama_seq_id seq_id, const std::vector<uint8_t> & data);
+
 // print statistics about the speculative decoding
 void common_speculative_print_stats(const common_speculative * spec);
 

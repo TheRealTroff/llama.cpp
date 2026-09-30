@@ -17,6 +17,7 @@
 #include <chrono>
 #include <cinttypes>
 #include <cstring>
+#include <stdexcept>
 #include <deque>
 #include <iomanip>
 #include <map>
@@ -175,6 +176,12 @@ struct common_speculative_impl {
     // (optional) serialize/restore per-seq internal state (e.g. eagle3's deferred boundary).
     virtual bool get_state(llama_seq_id /*seq_id*/, std::vector<uint8_t> & /*data*/) const { return false; }
     virtual void set_state(llama_seq_id /*seq_id*/, const std::vector<uint8_t> & /*data*/) {}
+
+    // the whole per-sequence drafter state (a slot save to disk: perf/slot-save-hybrid.md 2026-09-30); the default is
+    // the checkpoint stash above. DFlash adds its sink+window feature ring, without which a fresh process drafts
+    // from a short view until the window refills (the acceptance dip of a deep checkpoint restore).
+    virtual bool get_state_full(llama_seq_id seq_id, std::vector<uint8_t> & data) const { return get_state(seq_id, data); }
+    virtual void set_state_full(llama_seq_id seq_id, const std::vector<uint8_t> & data) { set_state(seq_id, data); }
 };
 
 struct common_speculative_impl_draft_simple : public common_speculative_impl {
@@ -1140,6 +1147,57 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
             LOG_WRN("%s: ctx_dft pos_max=%d < N-1=%d - process() did not run on every prefill ubatch. "
                     "Drafts may degrade.\n",
                     __func__, (int) pos_max, N - 1);
+        }
+    }
+
+    // full state (a slot save to disk): magic, ring_row_width, n_embd_dec, ring_pos_last, windowed, the sink rows, the
+    // window rows (pos + ring_row_width floats each). Without the ring a fresh process drafts from a short view.
+    bool get_state_full(llama_seq_id seq_id, std::vector<uint8_t> & data) const override {
+        if (seq_id < 0 || seq_id >= (llama_seq_id) n_seq) {
+            return false;
+        }
+        data.clear();
+        auto put = [&](const void * src, size_t n) { const auto * b = (const uint8_t *) src; data.insert(data.end(), b, b + n); };
+        const uint32_t magic = 0x47524644; // 'DFRG'
+        const int32_t  rw = ring_row_width, nd = n_embd_dec;
+        const int32_t  n_s = (int32_t) ring_sink[seq_id].size(), n_w = (int32_t) ring_win[seq_id].size();
+        const llama_pos pl = ring_pos_last[seq_id];
+        const uint8_t  wd = windowed[seq_id] ? 1 : 0;
+        put(&magic, 4); put(&rw, 4); put(&nd, 4); put(&pl, sizeof(pl)); put(&wd, 1); put(&n_s, 4); put(&n_w, 4);
+        for (const auto & fr : ring_sink[seq_id]) { put(&fr.pos, sizeof(fr.pos)); put(fr.row.data(), fr.row.size() * sizeof(float)); }
+        for (const auto & fr : ring_win [seq_id]) { put(&fr.pos, sizeof(fr.pos)); put(fr.row.data(), fr.row.size() * sizeof(float)); }
+        return true;
+    }
+
+    void set_state_full(llama_seq_id seq_id, const std::vector<uint8_t> & data) override {
+        if (seq_id < 0 || seq_id >= (llama_seq_id) n_seq || data.size() < 4) {
+            return;
+        }
+        size_t off = 0;
+        auto get = [&](void * dst, size_t n) { if (off + n > data.size()) { throw std::runtime_error("dflash state truncated"); } std::memcpy(dst, data.data() + off, n); off += n; };
+        try {
+            uint32_t magic = 0; int32_t rw = 0, nd = 0, n_s = 0, n_w = 0; llama_pos pl = -1; uint8_t wd = 0;
+            get(&magic, 4);
+            if (magic != 0x47524644) {
+                return;
+            }
+            get(&rw, 4); get(&nd, 4); get(&pl, sizeof(pl)); get(&wd, 1); get(&n_s, 4); get(&n_w, 4);
+            if (rw != ring_row_width || nd != n_embd_dec) {
+                LOG_WRN("%s: dflash state has row width %d / n_embd_dec %d, this drafter has %d / %d - ignored\n", __func__, rw, nd, ring_row_width, n_embd_dec);
+                return;
+            }
+            std::vector<feat_row> sink((size_t) n_s);
+            std::deque<feat_row>  win;
+            for (auto & fr : sink) { fr.row.resize(rw); get(&fr.pos, sizeof(fr.pos)); get(fr.row.data(), (size_t) rw * sizeof(float)); }
+            for (int32_t i = 0; i < n_w; i++) { feat_row fr; fr.row.resize(rw); get(&fr.pos, sizeof(fr.pos)); get(fr.row.data(), (size_t) rw * sizeof(float)); win.push_back(std::move(fr)); }
+            ring_sink[seq_id]     = std::move(sink);
+            ring_win [seq_id]     = std::move(win);
+            ring_pos_last[seq_id] = pl;
+            windowed[seq_id]      = wd != 0;
+            SPC_DBG("restored dflash state for seq %d: sink=%d window=%d pos_last=%d windowed=%d\n",
+                    (int) seq_id, n_s, n_w, (int) pl, (int) wd);
+        } catch (const std::exception & e) {
+            LOG_WRN("%s: %s - drafter state not restored\n", __func__, e.what());
         }
     }
 
@@ -3086,6 +3144,27 @@ void common_speculative_set_state(common_speculative * spec, llama_seq_id seq_id
 
     for (auto & impl : spec->impls) {
         impl->set_state(seq_id, data);
+    }
+}
+
+bool common_speculative_get_state_full(common_speculative * spec, llama_seq_id seq_id, std::vector<uint8_t> & data) {
+    if (spec == nullptr) {
+        return false;
+    }
+    for (auto & impl : spec->impls) {
+        if (impl->get_state_full(seq_id, data)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void common_speculative_set_state_full(common_speculative * spec, llama_seq_id seq_id, const std::vector<uint8_t> & data) {
+    if (spec == nullptr) {
+        return;
+    }
+    for (auto & impl : spec->impls) {
+        impl->set_state_full(seq_id, data);
     }
 }
 
