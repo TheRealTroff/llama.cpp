@@ -468,6 +468,13 @@ measured lane map. Twenty-four standalone forms prescreened in one compile, all 
   gate script is bash now, `perf/run-skinny-direct-gate.sh`); `-p "m=[0-9]+,n=[678],"` matched five of the built-in
   eval cases because the width-6..8 projection shapes live in the perf list - the 18-case fixture
   `perf/skinny-soa-real-projections.ops` is the coverage.
+- **The isolated per-call pair is not the in-graph per-call number (2026-09-30, later that day).** Profiled inside the
+  round (`GGML_METAL_PROFILE=1`, one encoder per op, nothing overlapped) the direct tile kept -4% on the K=17408 ffn_down
+  shape and LOST the -3.4 / -1.5% on every K=5120 shape (flat to +3% slower); the wall round moved by exactly the
+  serialized delta (-0.5..-0.7 ms), so nothing was hidden under concurrency. `test-backend-ops perf` repeats one op on
+  warm buffers; the round streams each weight once, cold. End a per-call campaign with the in-graph profiled ABAB
+  (`perf/run-skinny-direct-ingraph.sh` pattern, `perf/metalprof-ab.py` to diff, ctl-vs-ctl for the floor) before quoting
+  a per-call number as the lever's value or explaining its round shortfall by overlap.
 
 ## Quantized K/V tiles dequantized straight into the simdgroup matrix (2026-09-06, `perf/ud-model.md` step 16 B)
 
