@@ -1,7 +1,8 @@
 # The width-8 decode FA at long context: give it the GQA tile (2026-09-30, owner: "Sounds like a plan. Stub it.")
 
-Status: **Form A BUILT + PRICED 2026-09-30 evening on `exp/fa-w8-gqa` (worktree `~/play/llama.cpp-faw8`, off prod
-`e0c158a70` + the slot-save commit `f21d0f8a2` cherry-picked so the 200K restore runs there).** The results are in the
+Status: **CLOSED 2026-09-30 evening - Form A MERGED to prod (`41f802198`, `f415a0336`), `GGML_FA_GQA_WMAX=8` PICKED on both lines
+(owner: "I will adopt it"), MINTED `prodpick-sep30-faw8-{q4,ud}` and replay-gated (README pick block); Form B drawn and refuted
+(last section). Built on `exp/fa-w8-gqa` (worktree removed at park, branch kept).** The results are in the
 "Form A measured" section at the end; the stub text below is kept as written. Park = commit + remove the tree.
 
 _(Original stub:)_ Branch to create:
@@ -176,8 +177,8 @@ census put the per-chunk work at ~11% of the 24-row kernel's issue, so B's ceili
 24-row form already spills 48 B). If it is ever wanted: `perf/kernel-census.sh PHASE=decode` on the width-8 flag arm
 first, then the Q = 48 prescreen (`metal-kernel-prescreen`), per the plan above.
 
-**Status: Form A built, gated byte-identical on both lines, priced at 200K; manifest `GGML_FA_GQA_WMAX=8` proposed (BI,
-both lines); adoption = owner.** If picked: the controller's width-8 rounds at long context are the beneficiary (the
+**Status: Form A built, gated byte-identical on both lines, priced at 200K; manifest `GGML_FA_GQA_WMAX=8` PICKED (BI, both
+lines), merged and minted the same evening (README pick block).** If picked: the controller's width-8 rounds at long context are the beneficiary (the
 pick's `LLAMA_SPEC_EV_WIDTHS=3,7` switches between widths 4 and 8); nothing changes at the width-4 rounds, on f16
 caches, or at 8K beyond noise. The branch also carries the slot-save server commit (cherry-picked `f21d0f8a2`, plus the
 harness with the DEPTH pin) so its 200K arms restore - a merge to prod takes the ops/tests/perf commit only, or the
