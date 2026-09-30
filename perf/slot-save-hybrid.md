@@ -96,6 +96,25 @@ byte floor (the 96K census's reading holds), so the decode FA kernel is the whol
 (reaching the roof, -55% per call) the 200K round would be ~125 ms (+27% t/s). The wide-verify tiles are irrelevant here
 (a width-8 round at 200K would carry ~125 ms of FA alone; the controller sits narrow).
 
+### Width and controller arms at 200K, each a restore (owner: "is there anything left on the board at these lengths?")
+
+| arm | t/s | acc | round | tok/round | sha |
+|---|--:|--:|--:|--:|---|
+| pinned depth 3 (width 4) - the reference | 15.02 / 14.88 | 47.7% | 158.5 / 160.8 | 2.4 | `57e11e9e3763` |
+| pinned depth 2 (width 3) | 13.21 | 56.2% | 158.4 | 2.1 | `b91011a7cf26` |
+| pinned depth 4 (width 5) | 14.51 | 47.7% | 164.6 | 2.4 | `57e11e9e3763` |
+| the pick's controller (`LLAMA_SPEC_EV_WIDTHS=3,7`) | 14.27 | 46.5% | 169.1 | 2.4 | `57e11e9e3763` |
+| controller widths 3,4,7 | 13.82 | 44.9% | 175.2 | | `57e11e9e3763` |
+| controller widths 4,7 / 4 | 12.47 / 12.74 | 38.8% / 40.0% | 209 / 200 | | |
+
+Width 3 costs the same round as width 4 here (the 24-row tile pads 18 of 24 rows; the matmuls are width-flat) and
+yields fewer tokens, so width 4 dominates at long context. **The pick's controller is 5% under pinned depth 3 at 200K**:
+its k histogram is almost all k = 3 (115 of 121 rounds) but it drafts blocks of 7 a quarter of the time (block hist
+3:89 / 7:30, the drafter call 13.5 vs 12.3 ms) and pays the occasional k = 7 verify (cost table 204 ms vs 91). The cost
+EMA does react to the length on k, not enough on the block size. An item for the controller, not the kernels; nothing
+adopted from these arms. (The `LLAMA_SPEC_EV_WIDTHS` values are draft depths, k = width - 1; the 4,7 / 4 arms are
+included only to show the set matters.)
+
 ### What the disk save buys
 
 Every further 200K arm on this model/KV type is a 1-second restore plus a 20-second decode instead of a 53-minute
