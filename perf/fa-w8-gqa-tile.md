@@ -186,3 +186,48 @@ slot-save branch first.
 **Test suite** (`test-backend-ops test -o FLASH_ATTN_EXT`, the pick env + `GGML_FA_GQA_WMIN=1 GGML_FA_GQA_WMAX=8`, the new
 width-7/8 eval cases included): **4877/4877 under TR 9 and 4877/4877 under TR 7**, no failures (the 24-row tile's record
 of 4860/4869 had 9 f16 hsk 512/576 cases that have since been fixed).
+
+## Form B, drawn (2026-09-30 evening, owner: "can we at least see what form B would look like?")
+
+**The kernel.** No new code: the 24-row tile's template at Q = 48, one instantiation line per class -
+`kernel_flash_attn_ext<FA_TYPES, block_turbo4_0, 8, dequantize_turbo4_0, ..., 256, 256, 48, OP_FLASH_ATTN_EXT_NCPSG, true, 1, 4, 1, true>`
+(`qtl4w48`; TRM 3 for `qtnw48`). At nsg 8 each simdgroup owns NQ = 6 rows, NQT = 6 query tiles, NO = 4 O column tiles:
+every dequantized K tile feeds 6 MMAs instead of 3, the O accumulator is 24 register tiles per lane instead of 12, the
+score tiles 6 (x2 blocks in the TRN class) instead of 3. The dispatcher would plan 48 rows as one tile (`n48 = 1`), one
+threadgroup per KV head per split: the KV streamed and dequantized ONCE per KV head instead of twice.
+
+**Threadgroup memory: it does not fit.** The OR layout is `Q x (DK + 4C) halves + the K scratch (16 x 32 x nsg halves)`:
+Q = 24 is 24 KB + 8 KB = exactly the 32 KB per-threadgroup limit (`maxThreadgroupMemoryLength`; the tile note's "fills a
+core's 32 KB"). Q = 48 is **48 KB + 8 KB = 56 KB**. Every trim that keeps the structure still misses: C = 32 (scores
+12 KB) -> 44 KB; the K scratch cut to the 2 KB table + the 48 softmax floats -> 50.5 KB at C = 64, 38.5 KB at C = 32.
+The 24 KB Q^T staging is the item, and it cannot shrink: the QK loop reads every Q^T tile per KV chunk, and a fully
+register-resident Q^T is DK8 x NQT = 192 tiles per lane. nsg 16 (NQ = 3 as today) fails `(C/8) % NSG == 0` at C = 64 and
+needs C = 128: 72 KB. The one layout that fits is a different kernel: Q^T pre-converted to a half [DK][Q] device buffer
+by a small pre-pass and loaded per chunk from device memory (L1-resident, 24 KB) with no `sq` at all - 24 KB scores +
+2.5 KB = 26.5 KB - trading every Q^T threadgroup load (one per MMA, 192 per chunk per simdgroup) for a device load.
+
+**Registers (`agx-spill-probe.py`, this build's metallib, mask on, nsg 8, nwg 20, gqah 6; regression check: the 24-row
+tile reads its recorded 48 B):**
+
+| tile (rows) | text | spill qr 0 | qr 4 | qr 8 |
+|---|--:|--:|--:|--:|
+| `qtl4w16o` (16) | 12.7 KB | 0 | 16 | 48 |
+| `qtl4w24` (24, the pick) | 16.8 KB | **48** | 96 | 144 |
+| `qtnw24` (24, the q4 class) | 18.3 KB | 64 | 112 | 160 |
+| `qtl4w32` (32) | 20.9 KB | 144 | 208 | 272 |
+| **`qtl4w48` (48, Form B)** | **29.5 KB** | **336** | 432 | 560 |
+| `qtnw48` (48, Form B, q4 class) | 32.1 KB | 368 | 464 | 576 |
+
+Spill grows ~96 B per 8 rows past 16: Form B spills 7x the pick's tile (the f16 FA's 400 B spill was a 5-10% kernel loss
+at 8 rows; the 16-row prefill tile's 32 B at nsg 4 lost 20-25%). Per the plan, **a spilling form ends here** - and it
+would end at the threadgroup budget before that.
+
+**What B could have bought, for the record.** The two 24-row threadgroups per KV head already overlap: 7.44 ms vs 2 x
+3.90 (the tiled width-4 call at 204800, re-timed: 3904 / 3897 us) = 1.91x. B's prize is the duplicated per-pass work:
+the K/V byte stream and dequant (the tile note's census: dequant ~25-30% of cycles, MMA issue 59%) and the chunk
+loop's barriers; the softmax is per row and does not shrink. Issue-bound arithmetic: two passes = 2M + 2O, one = 2M +
+~O' with the dequant share removed once -> at most ~13% of the width-8 call = ~16 ms of the 121 ms FA bucket = ~5% of
+the 272 ms round, IF it fit in registers and threadgroup memory, which it does not; the device-Q^T layout would give
+back part of that to the L1 loads. **Refuted as a kernel form at this geometry; not worth the layout rewrite.** The
+width-8 board after Form A: FA 121 ms (41%), bulk SoA matmuls 114 ms (39%, the skinny-direct tile's ~-10 ms realistic
+item), the rest 58 ms.

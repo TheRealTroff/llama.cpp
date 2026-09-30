@@ -509,3 +509,23 @@ measured lane map. Twenty-four standalone forms prescreened in one compile, all 
   19.8 KB against a 16.0 KB base) - a shuffle-heavy form ballooning the text is the tell, as with the
   iq4_xs table. Vector loads need their natural alignment in device memory (`ushort4` = 8, `uint4` = 16);
   the `packed_` types are how a 2-byte-aligned stream takes a wide load.
+
+## Sizing a bigger FA decode tile: budget, then registers, then the prize (2026-09-30, `perf/fa-w8-gqa-tile.md` Form B)
+
+The 48-row Turbo4 decode tile (the 24-row OR tile at Q = 48, one KV pass per KV head instead of two) was drawn and refuted
+without a GPU launch, in this order:
+
+- **The threadgroup-memory formula first, with the device limit next to it.** The OR layout `Q x (DK + 4C) + 16 x 32 x nsg`
+  halves is exactly 32 KB at Q = 24 and 56 KB at Q = 48 against a 32 KB `maxThreadgroupMemoryLength`; enumerate the trims
+  (C = 32, the K scratch cut to the table, nsg 16 -> needs C = 128) and name the item that cannot shrink (the Q^T staging,
+  read per chunk). A form that misses the budget is over before the register question; still probe it, the register curve
+  says whether a layout rewrite could ever pay.
+- **The spill curve over the tile size, with the shipped tile as the calibration row**: 16-row 0 B, 24-row 48 B (the record),
+  32-row 144 B, 48-row 336 B at qr 0 (`qtnw` class +32 B per row), ~96 B per 8 rows. One compile, 18 probes, 5 minutes.
+- **Price the prize from the profile before building**: the two 24-row threadgroups per KV head already overlapped to 1.91x
+  one tile (per-call pair at the real KV length), so the one-pass tile's ceiling was the duplicated dequant share (~13% of
+  the call = ~5% of the round) - not worth a layout rewrite plus a 336 B spill.
+- Probe mechanics for the FA family: pass FC 300-307 as `--cvb`, 320-325 as `--cvi`, and OMIT `bc_mask` (FC + 10 = 310):
+  with it every FA kernel fails "cannot locate all required functions". The FA kernels package via the `stage` route;
+  `--keep` works there. And the zsh trap again: a `CV="--cvb ..."` string expanded unquoted in the tool shell is ONE
+  argument (the probe then reports the same "cannot locate" error) - run sweeps under `bash -c`.
