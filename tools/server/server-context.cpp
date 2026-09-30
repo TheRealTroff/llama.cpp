@@ -3138,10 +3138,12 @@ private:
                         slot->prompt.tokens = std::move(restored);
 
                         // sidecars written by SLOT_SAVE (see there): the drafter state, then the context checkpoints
+                        bool dft_restored = false;
                         if (ctx_dft) {
                             const std::string p = filepath + ".dft";
                             if (FILE * probe = fopen(p.c_str(), "rb")) {
                                 fclose(probe);
+                                dft_restored = true;
                                 llama_token tok = 0;
                                 size_t n_tok = 0;
                                 if (llama_state_seq_load_file(ctx_dft, p.c_str(), slot->id, &tok, 1, &n_tok) == 0) {
@@ -3195,7 +3197,7 @@ private:
                                     }
                                 }
                                 SLT_INF(*slot, "slot restored: %zu tokens, %u checkpoints (%.1f MiB), drafter %s\n",
-                                        slot->prompt.tokens.size(), count, n_bytes / (1024.0 * 1024.0), ctx_dft ? "restored" : "none");
+                                        slot->prompt.tokens.size(), count, n_bytes / (1024.0 * 1024.0), !ctx_dft ? "none" : dft_restored ? "restored" : "no file, KV cleared");
                             }
                         }
                     } catch (const std::exception & err) {

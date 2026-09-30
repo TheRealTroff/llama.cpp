@@ -157,3 +157,30 @@ Every further 200K arm on this model/KV type is a 1-second restore plus a 20-sec
 prefill: `PHASES=restore ARMS=anchor EXTRA_ENV=... NAME=ud-200k CTX=212992 DEPTH=3`. The q4 line needs its own save
 (another prefill, its file). Files: `kvquant-experiments/slots/ud-200k{,.ckpt,.dft,.spec}`, 4.0 GB; the tree that
 reads sidecars is the branch build (`~/play/llama.cpp-slotsave`), prod's server restores only the target file.
+
+## Which sidecars a prod save needs (2026-09-30 evening, owner: "if I want to start using slot saves in prod, I'm probably not going to care about the drafter state?")
+
+Three restores of the 8K save on this build, back to back (ud, Turbo4, fixed depth 3, chat benchprompt, 300 tokens):
+
+| restore | acceptance | t/s | sha |
+|---|--:|--:|---|
+| all sidecars (`.ckpt` + `.dft` + `.spec`) | 72.3% | 30.15 / 30.03 | `ce826d8a3cbd` (= the in-process reuse) |
+| no ring (`.ckpt` + `.dft`) | 69.9% | 29.68 | `d180ae89f168` |
+| no drafter state (`.ckpt` only) | 69.9% | 29.59 / 29.55 | `d180ae89f168` |
+
+- **`.ckpt` is the one you cannot drop** on the hybrid model (without it the restore re-prefills everything). The target
+  file + `.ckpt` restores correctly: the target text is exact from the first token (the b1 text is the same on every path).
+- **`.dft` alone is worth nothing**: without the ring the drafter's window is rebuilt from a short view either way, and the
+  two arms are identical to the sha. Keep `.dft` and `.spec` together or drop both (a ring without its KV is untested and
+  the ring's view indexes the drafter's cells - do not ship that combination).
+- **The dip is shallow and short, not abysmal-then-recovering** (per-round `accepted a/3` at `-lv 5`, windows of 10 rounds):
+  the no-drafter-state arm accepts 53% over its first 10 rounds against 70% with the ring, is at 70-77% by rounds 20-50,
+  and the 300-token average is 2.4 points under. The window refills over ~1024 generated tokens, but DFlash drafts from
+  the target's hidden states of the block, so most of the acceptance is back within ~20 rounds (~60 tokens). The texts
+  fork at round 0 (the first draft differs), so the per-window numbers after that are different texts, not a pair.
+- **Cost of keeping them:** 126 MiB per save (20 MiB KV + 106 MiB ring, bounded by the window at any length = 4% of the
+  200K save's bytes), ~0.1 s. Keep them when a restored run has to equal the in-process run (measurement, the owner's
+  determinism rule); for a conversation-resume use in prod they are optional and the price of dropping them is the
+  ~2-point dip over the first hundred tokens plus a possibly different (equally valid) greedy text.
+- Fixed here: the restore log said "drafter restored" whenever a drafter was loaded, file or no file; it now says
+  "no file, KV cleared" for a save without `.dft`.
