@@ -86,7 +86,7 @@ saved work is the per-tile header chain, not the load schedule.
   round line is a mid-run spec-prof summary as before). The q4 line has no iq4_xs tensor; untouched by construction.
 - **200K**: the ABAB above, sha `3051842f2cc4` x4.
 
-**Status: BUILT + PRICED + GATED 2026-09-30 night. Manifest `GGML_MM_SKINNY_IQ4XS_HDR=1` proposed (BI, ud); adoption = owner
+**Status: CLOSED 2026-09-30 night - cherry-picked onto prod (`5ad1809c5`), `GGML_MM_SKINNY_IQ4XS_HDR=1` PICKED on ud (owner: "Go for it"), minted `prodpick-sep30-iq4hdr-ud` and replay-gated (README pick block). Was: BUILT + PRICED + GATED; manifest proposed (BI, ud); adoption = owner
 (-2.6 ms per width-8 round at 200K, -1.0%; -5..-8% per iq4_xs call at widths 6-8 at every length; inert at widths 1-5 and on q4).**
 If picked: the ud mint's Turbo4 600 controller arm is the arm that runs width 8 (8K shas are flat by construction - the FFN
 matmuls are width-8 rounds only).
