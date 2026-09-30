@@ -32,6 +32,22 @@ one level down, and it bit the `GGML_MV_EXT_V2` work on 2026-08-22.
 
 ## The prod pick
 
+**2026-09-30 evening (owner: "I will adopt it"): `exp/fa-w8-gqa` cherry-picked onto prod (`41f802198` + `f415a0336`) - the GQA tile at
+verify widths 7-8, `GGML_FA_GQA_WMAX=8` PICKED on both lines (class BI, `fa-w8-gqa-tile.md`).** The plain batched kernel's six KV
+passes per KV head at width 8 become two 24-row tiles in each line's own class (`qtl4w24` / `qtnw24`); per call at 200K -21% ud /
+-15% q4; ud 200K pinned width-8 round 301.4 -> 271.7 ms (-9.9%, +10.9% t/s) byte-identical x4 from the disk save, FA bucket 151.8 ->
+121.3 ms with every other bucket flat; inert at width 4 and on f16 caches; Form B (a 48-row tile) refuted on the threadgroup budget
+(56 KB vs 32 KB) and a 336 B spill. **Mint `prodpick-sep30-faw8-{q4,ud}` (prod `f415a0336`, evening, hot ambient = a sha mint; t/s
+reference stays `prodpick-sep29-headmajor`):** q4 f16 32.70 / 32.67 at 300 (`d2953fccfb41`), 33.97 / 33.74 at 600 (`441120c66064`);
+Turbo4 33.56 at 300 (`86213d038a29` = the fixed-depth-7 chat text; Sep 29 read `f07b0f8c58e6` - the controller arm), 33.25 / 33.35
+at 600 (`9e49b3d13b31` x2, the known pair's member); b1 14.19, MTP 23.40 (`d2953fccfb41`), turbo4-b1 14.07 (`7c5254d01b12`). ud f16
+30.85 / 30.85 at 300 (`9c53aaade052`), 30.73 / 30.68 at 600 (`86b6e9b02cf0`); Turbo4 31.08 at 300 (`ce826d8a3cbd`, the known
+pair's other member; Sep 29 read `d180ae89f168`), 28.98 / 28.95 at 600 (`abc0c5af7300` x2 = the record); b1 13.03, MTP 19.51
+(`9c53aaade052`), turbo4-b1 12.90 (`d180ae89f168`). Multi-slot split + long PASS, classes PASS, vision PASS (one-slot + multi-slot),
+both lines. Every fixed-depth sha = its record; the two Turbo4 300 controller arms moved to their fixed-depth / known-pair texts
+(a faster width-8 round moves the controller's cost EMA = picks, expected). Replay gate `replaygate-0930-faw8` (record under
+`GGML_FA_GQA_WMAX=6`, three replays under the pick, per line): q4 `10d0f1452d54` x4 (= the Sep 29 record text), 297 picks, 0 desync; ud `b330f0f0ef86` x4, 330 picks, 0 desync. CLOSED: the route is byte-identical under the controller's widths on both lines; the moved 300 shas are the picks.**
+
 **2026-09-29 evening (owner: "I don't see why I wouldn't want this. Adopt away."): `exp/turbo4-plane` MERGED (`ca5519e90`) - the
 HEAD-MAJOR K/V CACHE, `LLAMA_KV_HEAD_MAJOR=1` PICKED on both lines (class BI, `kv-layout.md`).** Per layer and stream the cache is
 `[hs, kv, nh]` (each head's cells contiguous - the layout the FA kernels were always timed on: test-backend-ops' FA cases are
