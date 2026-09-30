@@ -126,13 +126,23 @@ harness now pins whenever DEPTH is set. True pins:
 | depth 3 = width 4 | 14.65 | 47.7% | 2.43 | 162.9 ms | 171.9 | **63.4** (16.2 x 3894) = 37% | 68.7 | 39.8 |
 | depth 7 = width 8 | 9.20 | 26.0% | 2.82 | **301.3 ms** | 323.7 | **151.7** (16.0 x 9350) = 47% | 114.1 | 57.9 |
 
-Width 8 buys +16% tokens per round for +85% round time at this length: the FA call is 2.4x the width-4 call (9.35 vs
-3.89 ms; at 8K the ratio was ~2x, 408-429 vs 217 us) and the wide skinny tiles are 1.66x the width-4 SoA kernels (114 vs
-69 ms; 126 vs 69 on Sep 18 before the plane-fold/header/q6_K levers). On a code-like prompt the width-8 yield would be
-higher (50% at 8K on ud = 4.5 tokens per round vs 3.2 at width 4) and still not 1.85x. The controller's 5-of-121 k = 7
-picks are the right call; the width-8 tiles are not on the 200K board, the width-8 FA even less (a padded 24-row form
-does not exist for 8 x 6 = 48 rows; `[256, 8, 24]` runs the plain batched route). Machine state: the pinned width-4
-anchor reads 162.9 here vs 158.5 an hour earlier on the same restore - ~3% of thermal drift across the afternoon's arms.
+**The width-8 round's mechanics at 200K (owner: acceptance is the prompt's; the round mechanics are the object).**
+Width 8 costs 1.85x the width-4 round for 2x the columns; where the extra 138 ms serialized goes:
+
+| bucket | width 4 | width 8 | x | why |
+|---|--:|--:|--:|---|
+| decode FA | 63.4 | **151.7** | **2.4x** | the GQA-reuse tile is gated to `ne01 <= 6` (`ggml-metal-ops.cpp:5175`); width 8 runs the plain batched kernel, in which each of the 6 query heads streams and dequantizes its KV head's K/V separately - 6 KV passes per KV head against the 24-row tile's 1. Per call 9.35 vs 3.89 ms; at 8K the ratio was ~2x (408-429 vs 217 us), it grows with the KV because the extra passes are the part that scales |
+| bulk SoA matmuls | 68.7 | 114.1 | 1.66x | the wide skinny tiles at 0.83x the width-4 cost per column; 126 on Sep 18, the plane-fold/header/q6_K levers since; the remaining gap to the q4_0 tile's economy is ~25 ms but the direct-MMA result says per-call gains on the K=5120 shapes do not translate |
+| rest (lm_head x2, drafter, GDN, elementwise, small formats) | 39.8 | 57.9 | 1.45x | width-driven small ops; the drafter drafts 7 instead of 3 (6.4 vs 4.3); the q8_0 `[5120,48]` row (9.5) is the serialization artifact |
+
+**The item on the width-8 board is the FA route, and it is the largest single item on either width's board at 200K.**
+A width-8 GQA form - the 24-row tile applied twice per KV head (tokens 0-3 and 4-7, 2 KV passes instead of 6), or a
+48-row tile (1 pass; Q = 48 needs the register-resident O form, the scratch is 96 KB otherwise) - would put the call at
+~2x the width-4 tiled call = ~7.8 ms: -17% per call, ~-25 ms of the 301 ms round (-8%), more if the 48-row form
+amortizes further. Nothing at 8K (FA is 4% of the width-8 round there). Numerics: a new route on the width-8 rounds =
+gate the depth-7 shas on both lines (the 24-row tile at nwg 20 was byte-identical to the previous width-4 route; the
+same may hold here, it must be shown). The wide matmul tiles are the second item at ~-10 ms realistic; the rest is
+width-driven small-op count.
 
 **Owner on the prompt (2026-09-30):** the 200K prompt is prose, which the drafter is bad at; that depresses acceptance
 (47-49% vs 73% on the code-like benchprompt) and everything downstream of it (tokens per round, t/s, the controller's
