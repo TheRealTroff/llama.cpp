@@ -115,6 +115,13 @@ EMA does react to the length on k, not enough on the block size. An item for the
 adopted from these arms. (The `LLAMA_SPEC_EV_WIDTHS` values are draft depths, k = width - 1; the 4,7 / 4 arms are
 included only to show the set matters.)
 
+**Owner on the prompt (2026-09-30):** the 200K prompt is prose, which the drafter is bad at; that depresses acceptance
+(47-49% vs 73% on the code-like benchprompt) and everything downstream of it (tokens per round, t/s, the controller's
+block economics), but it does not change what each operation costs. So: the per-op profile and the bucket shares above
+are valid for any 200K prompt at pinned width 4; the t/s figures and the controller's -5% are this prompt's and should
+be re-checked on a representative (code-like) 200K prompt before a controller change is priced - one more 53-minute
+prefill and a second save.
+
 ### What the disk save buys
 
 Every further 200K arm on this model/KV type is a 1-second restore plus a 20-second decode instead of a 53-minute
