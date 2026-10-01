@@ -15,7 +15,7 @@ PROMPTS=${PROMPTS:-$(dirname "$0")/prompts.tsv}
 ROWS=${ROWS:-.}
 case "$LINE" in
   q4) M=/Users/troff/play/Qwen3.8-27B-uniform-Q4_0-SOA-V1.gguf ;;
-  ud) M=/Users/troff/play/Qwen3.8-27B-UD-Q4_K_M-SOA-V2.gguf ;;
+  ud) M=/Users/troff/play/Qwen3.8-27B-UD-Q4_K_M-SOA-V3.gguf ;;
   *) echo "unknown LINE $LINE"; exit 1 ;;
 esac
 D=$OUT/$TAG-$LINE; mkdir -p "$D"

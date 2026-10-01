@@ -122,7 +122,10 @@ PICK_MANIFEST=(
 # for both lines by default; the UD spend is the context it buys.
 
 PICK_MODEL_Q4=/Users/troff/play/Qwen3.8-27B-uniform-Q4_0-SOA-V1.gguf
-PICK_MODEL_UD=/Users/troff/play/Qwen3.8-27B-UD-Q4_K_M-SOA-V2.gguf
+# -SOA-V3 since 2026-10-01 (owner: "I think I'll take it"): V2 + the Q6_K vocab head stored as Q6_K_SOA
+# (`llama-gguf-repack --head`, ud-soa-head.md): pairwise decode KLD vs the native head < 5e-7 mean at widths 1/2/4/5/8,
+# corpus +0.8% under the controller, texts unchanged. V2 = `--reverse` V3 + a plain repack.
+PICK_MODEL_UD=/Users/troff/play/Qwen3.8-27B-UD-Q4_K_M-SOA-V3.gguf
 PICK_DRAFTER=/Users/troff/play/Qwen3.8-27B-DFlash2-pureQ4_0-SOA-V1.gguf
 PICK_DEPTH=${PICK_DEPTH:-3}  # DFlash depth of a fixed-depth line (verify width 4, Turbo4's best width)
 PICK_DEPTH_EV=${PICK_DEPTH_EV:-7}  # the block cap of a line that picks the LLAMA_SPEC_EV controller (verify widths up to 8)
