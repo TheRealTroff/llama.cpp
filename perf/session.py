@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 # perf/session.py - the session corpus: record an agent session once, replay it teacher-forced (perf/session-corpus.md).
-#   record: the model drives real read-only tools over a pinned tree, user turns from a user script -> a frozen transcript
+#   record: the model drives real tools (list/read/grep/write/edit/compile) over a scratch copy of a pinned tree, user turns from a user script -> a frozen transcript
 #   replay: every assistant turn is generated from the SCRIPTED history (the generation is measured, then discarded),
 #           so every arm sees identical prompts at every turn whatever its own text did
 #   report: per-turn rows -> totals by segment class (think / prose / code / tool) and by context bucket
 # Segment attribution is per stream chunk from the server's cumulative per-token timings: a round's cost lands on the
 # first token of its burst, so a round that straddles a segment boundary is booked to the earlier segment.
-import argparse, hashlib, json, os, re, subprocess, sys, time, urllib.request
+import argparse, ast, hashlib, json, os, re, shutil, subprocess, sys, tempfile, time, urllib.request
 
 TOOLS = [
     {"type": "function", "function": {"name": "list_dir", "description": "List the entries of a directory in the repository.",
@@ -20,9 +20,59 @@ TOOLS = [
         "parameters": {"type": "object", "properties": {
             "pattern": {"type": "string", "description": "Extended regular expression."},
             "path": {"type": "string", "description": "File or directory to search, relative to the repository root. Default the whole repository."}}, "required": ["pattern"]}}},
+    {"type": "function", "function": {"name": "write_file", "description": "Create a file in the repository or replace its whole content.",
+        "parameters": {"type": "object", "properties": {
+            "path": {"type": "string", "description": "File path relative to the repository root."},
+            "content": {"type": "string", "description": "The full new content of the file."}}, "required": ["path", "content"]}}},
+    {"type": "function", "function": {"name": "edit_file", "description": "Replace one occurrence of old_string in a file with new_string. old_string must match the file exactly and occur once.",
+        "parameters": {"type": "object", "properties": {
+            "path": {"type": "string", "description": "File path relative to the repository root."},
+            "old_string": {"type": "string", "description": "The exact text to replace."},
+            "new_string": {"type": "string", "description": "The replacement text."}}, "required": ["path", "old_string", "new_string"]}}},
+    {"type": "function", "function": {"name": "compile", "description": "Check one source file with its compiler and return the diagnostics. Nothing is linked or run. C and C++ files (.c .cpp .cc .h .hpp): clang, C++17, -Wall -Wextra. Rust files (.rs): rustc type and borrow check of the crate whose root is this file (main.rs is a binary crate, anything else a library; files named in mod declarations are included; no external crates, no cargo). Python files (.py): syntax check only.",
+        "parameters": {"type": "object", "properties": {"path": {"type": "string", "description": "Source file path relative to the repository root."}}, "required": ["path"]}}},
 ]
 MAX_RESULT = 8000
+# compile is the one tool that starts a process on model-written input. The leash: fixed command lines (the model gives
+# a path, never a flag); check-only modes (clang -fsyntax-only, rustc --emit=metadata, no object, no link, nothing is ever
+# run); rustc directly and never cargo (no build scripts, no proc-macro crates); Python is parsed in this process (ast),
+# never imported; the path inside the scratch tree; a sandbox profile with no network and no file writes outside one
+# throwaway output directory; a timeout.
+COMPILE_INC = ["include", "ggml/include", "common", "src", "vendor", "tools/server", "tools/mtmd"]
+C_EXT = (".c", ".cpp", ".cc", ".h", ".hpp")
+RUSTC = os.path.expanduser("~/.rustup/toolchains/stable-aarch64-apple-darwin/bin/rustc")
 
+
+def _sandboxed(cmd, root, outdir=None):
+    prof = "(version 1)(allow default)(deny network*)(deny file-write*)(allow file-write* (literal \"/dev/null\")"
+    prof += f" (subpath \"{outdir}\"))" if outdir else ")"
+    r = subprocess.run(["/usr/bin/sandbox-exec", "-p", prof, *cmd], cwd=root, capture_output=True, text=True, errors="replace",
+                       timeout=120, stdin=subprocess.DEVNULL)
+    return ((r.stderr + r.stdout).strip() or "no diagnostics") + f"\n[exit {r.returncode}]"
+
+
+def compile_tool(root, p):
+    rel = os.path.relpath(p, root)
+    if not os.path.isfile(p):
+        raise ValueError("no such file")
+    if p.endswith(C_EXT):
+        lang = ["-x", "c"] if p.endswith(".c") else ["-x", "c++", "-std=c++17"]
+        return _sandboxed(["/usr/bin/c++", *lang, "-fsyntax-only", "-fno-color-diagnostics", "-ferror-limit=20", "-Wall", "-Wextra",
+                           "-Wno-pragma-once-outside-header", *[f"-I{d}" for d in COMPILE_INC], "--", rel], root)
+    if p.endswith(".rs"):
+        out = os.path.realpath(tempfile.mkdtemp(prefix="session-rustc-"))
+        try:
+            kind = "bin" if os.path.basename(p) == "main.rs" else "lib"
+            return _sandboxed([RUSTC, "--edition", "2021", "--crate-type", kind, "--emit=metadata", "--color", "never", "--out-dir", out, "--", rel], root, out)
+        finally:
+            shutil.rmtree(out, ignore_errors=True)
+    if p.endswith(".py"):
+        try:
+            ast.parse(open(p, errors="replace").read(), rel)
+            return "no diagnostics\n[exit 0]"
+        except SyntaxError as e:
+            return f"{rel}:{e.lineno}:{e.offset}: SyntaxError: {e.msg}\n    {(e.text or '').rstrip()}\n[exit 1]"
+    raise ValueError("not a C, C++, Rust or Python source file")
 
 def _resolve(root, path):
     p = os.path.realpath(os.path.join(root, path or "."))
@@ -55,6 +105,22 @@ def run_tool(root, name, args):
             out = "\n".join(h[:300] for h in hits[:60]) or "no matches"
             if len(hits) > 60:
                 out += f"\n... {len(hits) - 60} more matches"
+        elif name == "write_file":
+            p = _resolve(root, args["path"])
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            open(p, "w").write(str(args["content"]))
+            out = f"wrote {args['path']} ({len(str(args['content']).splitlines())} lines)"
+        elif name == "edit_file":
+            p = _resolve(root, args["path"])
+            text = open(p, errors="replace").read()
+            n = text.count(str(args["old_string"]))
+            if n != 1:
+                out = f"error: old_string occurs {n} times in {args['path']}, it must occur once"
+            else:
+                open(p, "w").write(text.replace(str(args["old_string"]), str(args["new_string"])))
+                out = f"edited {args['path']}"
+        elif name == "compile":
+            out = compile_tool(root, _resolve(root, args["path"]))
         else:
             out = f"error: unknown tool {name}"
     except Exception as e:
@@ -170,7 +236,8 @@ def cmd_record(a):
             msg, t, seg, finish = generate(a.port, TOOLS, messages, a.max_tokens, a.effort)
             rows.append(turn_row(len(messages), ui, t, seg, finish, msg)); show(rows[-1])
             messages.append(msg)
-            if not msg.get("tool_calls"):
+            full = t.get("cache_n", 0) + t.get("prompt_n", 0) + t.get("predicted_n", 0) > a.ctx_limit
+            if not msg.get("tool_calls") or full:
                 break
             for c in msg["tool_calls"]:
                 messages.append({"role": "tool", "tool_call_id": c["id"], "content": run_tool(root, c["function"]["name"], c["function"]["arguments"])})
@@ -179,6 +246,9 @@ def cmd_record(a):
         json.dump({"meta": {"user_script": os.path.basename(a.user), "root": a.root, "note": a.note, "effort": a.effort, "max_tokens": a.max_tokens,
                             "recorded": time.strftime("%Y-%m-%d %H:%M")}, "tools": TOOLS, "messages": messages, "record_rows": rows},
                   open(a.out, "w"), indent=1)
+        if full:
+            print(f"  context limit {a.ctx_limit} reached after user turn {ui}: stop", flush=True)
+            break
     print(f"recorded {len(messages)} messages, {sum(1 for m in messages if m['role'] == 'assistant')} assistant turns -> {a.out}")
 
 
@@ -245,6 +315,7 @@ if __name__ == "__main__":
     p.add_argument("--user", required=True); p.add_argument("--root", required=True); p.add_argument("--out", required=True)
     p.add_argument("--port", type=int, default=8098); p.add_argument("--max-tokens", type=int, default=4096)
     p.add_argument("--max-steps", type=int, default=10); p.add_argument("--effort", default=None); p.add_argument("--note", default="")
+    p.add_argument("--ctx-limit", type=int, default=92000)
     p.set_defaults(fn=cmd_record)
     p = sub.add_parser("replay")
     p.add_argument("--script", required=True); p.add_argument("--out", required=True); p.add_argument("--label", default="arm")

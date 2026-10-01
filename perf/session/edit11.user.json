@@ -1,0 +1,16 @@
+{
+ "system": "You are a coding assistant working in a checkout of the llama.cpp repository. Use the tools to look at the code and the docs before you answer questions about them, and to make the changes you are asked for; do not guess at file contents. Keep answers focused.",
+ "turns": [
+  "I want a small utility header for token-list helpers. First look at how server_tokens::get_common_prefix is written in tools/server/server-common.cpp so we match the style.",
+  "Create tools/server/token-utils.h with two inline functions over std::vector<llama_token>: common_prefix_len(a, b) and common_suffix_len(a, b). Include guards, the right includes, short comments.",
+  "Now add tools/server/tests/unit/test-token-utils.cpp with assert-based tests for both functions: empty inputs, identical lists, a partial match, and lists of different lengths.",
+  "Compile the test file with the compile tool and fix whatever the compiler reports until it is clean.",
+  "Add a third function to the header, lcp_similarity(a, b), returning the common prefix length as a float fraction of b's size (0 when b is empty), and extend the test file to cover it.",
+  "Compile the tests again. Then compile tools/server/server-common.cpp too and tell me whether it produces any warnings.",
+  "In tools/server/server-context.cpp, find the place where the slot similarity f_sim_cur is computed and show me those lines. Do not change them yet. Would our lcp_similarity be a drop-in there? Explain what differs.",
+  "Write a short markdown doc at docs/development/token-utils.md that documents the three functions with a usage example each.",
+  "I changed my mind about the name: rename common_suffix_len to shared_suffix_len everywhere we used it - the header, the tests and the doc.",
+  "Compile the test file once more to make sure the rename did not break anything.",
+  "Give me a summary of every file we created or changed, as a JSON array of objects with path, action and a one-line description."
+ ]
+}

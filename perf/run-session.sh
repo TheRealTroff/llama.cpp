@@ -48,10 +48,12 @@ start_server() {  # start_server <arm> <label>
 }
 if [ "$MODE" = record ]; then
   arm=${ARMS%% *}
+  WORK=${WORK:-/Users/troff/play/kvquant-experiments/data/session-work}   # the tools write here: a fresh clone of the pinned tree per recording
+  rm -rf "$WORK" && cp -cR "$ROOT" "$WORK" || exit 1
   start_server "$arm" record
   echo "--- record under arm $arm (${#PICK_ENV[@]} pick flags)"
-  python3 "$B/perf/session.py" record --user "${USER_SCRIPT:?USER_SCRIPT=<user script json>}" --root "$ROOT" --out "$SCRIPT" --port "$PORT" \
-      --note "line=$LINE kv=$KV arm=$arm commit=$(git -C "$B" rev-parse --short HEAD)" ${EFFORT:+--effort "$EFFORT"}
+  python3 "$B/perf/session.py" record --user "${USER_SCRIPT:?USER_SCRIPT=<user script json>}" --root "$WORK" --out "$SCRIPT" --port "$PORT" \
+      --note "line=$LINE kv=$KV arm=$arm commit=$(git -C "$B" rev-parse --short HEAD)" ${EFFORT:+--effort "$EFFORT"} ${CTX_LIMIT:+--ctx-limit "$CTX_LIMIT"} ${MAX_STEPS:+--max-steps "$MAX_STEPS"}
   stop_server
   exit 0
 fi
