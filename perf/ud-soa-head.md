@@ -1,6 +1,6 @@
 # The stored SoA vocab head on ud (`-SOA-V3head`)
 
-Status: **PRICED 2026-10-01 (+0.3..0.8% on the ud pick, texts unchanged; depth 4 in the controller set REFUTED), adoption = owner** (owner: "Yeah, take a peek"). Branch `exp/ud-soa-head`, worktree
+Status: **ADOPTED 2026-10-01 evening (owner: "I think I'll take it"): the ud manifest file is `-SOA-V3` (prod `43c06ab80`), mint `prodpick-oct01-soav3-ud` - every sha = its V2 record, all gates PASS, replay gate `c837e6f5b159` x4 / 0 desync (README, "The prod pick"). Depth 4 in the controller set REFUTED.** The file is called `V3head` below (renamed at adoption). Branch `exp/ud-soa-head`, worktree
 `llama.cpp-soahead`; the only code change is `llama-gguf-repack --head`. All runs on the prod binary (`bb904db04`,
 09-30 21:34) - the runtime already routes a `Q6_K_SOA` head at every width.
 

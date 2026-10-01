@@ -32,6 +32,20 @@ one level down, and it bit the `GGML_MV_EXT_V2` work on 2026-08-22.
 
 ## The prod pick
 
+**2026-10-01 evening (owner: "I think I'll take it"): the ud line's file is `-SOA-V3` - V2 with the Q6_K vocab head stored as
+`Q6_K_SOA` (`llama-gguf-repack --head`, `6d739adbf`; manifest `43c06ab80`; `ud-soa-head.md`; no q4 change, no code change in
+the runtime).** Priced the same day on `exp/ud-soa-head`: pairwise decode-path KLD vs the native head < 5e-7 mean at widths
+1/2/4/5/8 (max at the file floor; 1-5 top-token flips of 8192 at widths 2/4/5, none at 1 and 8); head per call -14% at 4
+columns, -51% at 5 (the native `r1_5` cliff, gone in both the target and the drafter), -7% at 8, +5-6% at 1-2; e2e fixed
+width 4 / 8 +0.3 / +0.4% interleaved, width 5 +6.5%, corpus under the controller +0.8% with the texts unchanged; depth 4 in
+the controller set REFUTED on both files. **Mint `prodpick-oct01-soav3-ud` (prod `43c06ab80`, binary 09-30 21:34):** f16
+30.97 / 31.48 at 300 (`9c53aaade052`), 31.25 / 31.49 at 600 (`86b6e9b02cf0`); Turbo4 32.07 at 300 (`d180ae89f168`, the known
+pair's member), 29.84 / 29.81 at 600 (`abc0c5af7300` x2 = the record); b1 13.26, MTP 19.67 (`9c53aaade052`), turbo4-b1 12.98
+(`d180ae89f168`), partial 14.68. **Every sha = its V2 record.** Multi-slot split + long PASS, classes PASS, vision PASS
+(one-slot + multi-slot). Replay gate `replaygate-1001-soav3` (record on the V2 file, three replays on V3, 1200 requested /
+968 generated): `c837e6f5b159` x4, 323 picks, 0 desync. V2 deleted after the gates (= `--reverse` V3 + a plain repack); the
+Oct 1 logs before the rename call the file `V3head`.
+
 **2026-10-01 (owner: "I haven't seen a width sweep in a while"): the fixed-depth verify-width sweep on the pick, both lines -
 a measurement, no pick change.** `run-width-sweep.sh` (new: `run-prod-pick.sh` per cell, `PICK_SPEC_EV=0 PICK_DEPTH=d` for the
 fixed arms, the manifest's controller for the last row), prod `bb904db04`, binary 09-30 21:34, Turbo4 cache at the 100K
