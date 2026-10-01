@@ -114,6 +114,7 @@ struct params {
     bool plan = false;
     bool verify = false;
     bool strict = false;
+    bool head = false; // also convert a Q6_K output.weight
     int64_t min_elements = MIN_SOA_ELEMENTS;
     std::vector<std::regex> excludes;
     std::vector<ggml_type> types; // plain source types to convert (empty = all)
@@ -139,6 +140,7 @@ void print_usage(const char * exe) {
     printf("  --verify         reverse every converted row and require byte identity\n");
     printf("  --reverse        convert stored SoA tensors back to their plain types\n");
     printf("  --strict         fail if a 2-D source tensor has an incompatible row shape\n");
+    printf("  --head           also convert a Q6_K output.weight (the vocab head; default: left as stored)\n");
     printf("  --min-elements N only convert matrices with at least N elements (default: 16777216)\n");
     printf("  --exclude REGEX  leave matching tensors unchanged (may be repeated)\n");
     printf("  --type T         only convert this plain type (q4_0, iq4_xs, q4_K, q5_K; may be repeated)\n");
@@ -175,6 +177,8 @@ params parse_params(int argc, const char ** argv) {
             p.reverse = true;
         } else if (arg == "--strict") {
             p.strict = true;
+        } else if (arg == "--head") {
+            p.head = true;
         } else if (arg == "--min-elements") {
             if (++argi >= argc) {
                 throw std::invalid_argument("--min-elements requires a value");
@@ -225,7 +229,7 @@ bool is_row_lookup_tensor(const std::string & name) {
 }
 
 std::string forward_skip_reason(const params & p, const std::string & name, const ggml_tensor * t) {
-    if (t->type == GGML_TYPE_Q6_K && name == "output.weight") {
+    if (!p.head && t->type == GGML_TYPE_Q6_K && name == "output.weight") {
         return "Q6_K output head excluded (remaining-UD experiment covers projections)";
     }
     if (is_row_lookup_tensor(name)) {
