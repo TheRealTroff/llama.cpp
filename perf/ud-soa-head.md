@@ -1,6 +1,6 @@
 # The stored SoA vocab head on ud (`-SOA-V3head`)
 
-Status: **PRICED 2026-10-01, adoption = owner** (owner: "Yeah, take a peek"). Branch `exp/ud-soa-head`, worktree
+Status: **PRICED 2026-10-01 (+0.3..0.8% on the ud pick, texts unchanged; depth 4 in the controller set REFUTED), adoption = owner** (owner: "Yeah, take a peek"). Branch `exp/ud-soa-head`, worktree
 `llama.cpp-soahead`; the only code change is `llama-gguf-repack --head`. All runs on the prod binary (`bb904db04`,
 09-30 21:34) - the runtime already routes a `Q6_K_SOA` head at every width.
 
@@ -72,9 +72,41 @@ The drafter keeps its head gain (-0.5 ms per call at both widths); the verify ro
 ## What it is worth
 
 - The pick as it runs (depth 3, controller {3,7}): +0.3..0.4%, shas unchanged on benchprompt.
-- ud width 5: +6.5%, the cliff gone in both graphs - it makes width 5 a candidate for the controller's width set
-  again (not tested: a {3,4,7} or {4,7} re-pricing on the corpus).
+- ud width 5: +6.5%, the cliff gone in both graphs - ~~it makes width 5 a candidate for the controller's width set
+  again~~ re-priced below: depth 4 in the set returns nothing.
 - Costs: a new 18.7 GB file and a file swap (prove routes, re-mint, the Sep 7 stored-file trap); a possible sha fork
   at widths 2/4/5 on other texts; widths 1-2 +0.2 ms per head call.
 
-Not done: the multi-slot / vision / replay gates on the file, the corpus, widths 3, 6, 7 KLD rows, f16-cache arms.
+## The controller with depth 4 in its set (owner: "Yes, reprice") - REFUTED
+
+`LLAMA_SPEC_EV_WIDTHS` is in verify DEPTHS (k = 3 -> 4 columns, 7 -> 8 columns); "width 5 back in the set" = depth 4 =
+`3,4,7`. Corpus of the Sep 25 table (8 prompts, 300 tokens, ud Turbo4, LV 3, cap 7, hybrid block rule), four arms
+interleaved per prompt, two passes, TAGs `specev-w5-oct01-{v2,v3}-{37,347}-p{1,2}`, 0 aborts. t/s p1 / p2:
+
+| prompt | V2 {3,7} (the pick) | V3head {3,7} | V2 {3,4,7} | V3head {3,4,7} |
+|---|--:|--:|--:|--:|
+| benchprompt | 31.70 / 31.76 | 31.91 / 31.97 | 31.65 / 31.88 | 32.14 / 32.20 |
+| 01-code-explain | 31.57 / 32.33 | 31.82 / 32.61 | 32.00 / 32.06 | 32.09 / 32.64 |
+| 02-prose-creative | 23.08 / 23.37 | 23.62 / 22.64 | 22.76 / 22.79 | 23.13 / 24.43 |
+| 03-chat-support (43 tokens) | 25.77 / 25.81 | 26.04 / 26.13 | 25.75 / 25.74 | 26.08 / 26.01 |
+| 04-math-derivation | 39.93 / 40.00 | 40.13 / 40.24 | 38.55 / 38.77 | 39.71 / 39.73 |
+| 05-json-boilerplate | 49.90 / 49.78 | 50.11 / 50.12 | 49.34 / 49.42 | 49.69 / 48.94 |
+| 06-algorithms | 33.45 / 33.57 | 33.94 / 34.32 | 33.26 / 34.33 | 33.96 / 34.65 |
+| 08-story | 21.21 / 21.70 | 21.63 / 22.01 | 21.02 / 21.45 | 21.44 / 21.79 |
+| **mean** | **32.18** | **32.45 (+0.8%)** | **31.92 (-0.8%)** | **32.41 (+0.7%)** |
+
+- **Depth 4 does not earn its place on either file.** On V2 it costs 0.8% (math -3.3%, JSON -1.0%: the controller
+  takes k=4 for 9-13 rounds that {3,7} sends to 7); on V3head the cliff's removal brings {3,4,7} back level with
+  {3,7} (-0.1%), not above it. The controller did use it (benchprompt k hist 3:55 4:14 7:11, learned cost[4] 115 ms on
+  V3head vs 119 on V2, cost[3] 105-107).
+- **The file under the pick's own set: +0.8% on the corpus** (seven of eight prompts up in both passes; prose p2 is
+  the one down cell), in line with the +0.3 / +0.4% interleaved fixed-depth pairs. Run-to-run spread on single cells
+  is 1-2%.
+- **Shas:** V3head {3,7} = V2 {3,7} on every prompt in both passes, bar 06-algorithms p1 where the V2 arm itself read
+  its other text (`7703b1`, the controller's timing fork). {3,4,7} forks prose and story on both files and, on
+  V3head, benchprompt (`ce826d8a3cbd`, its known pair member) and code-explain p1.
+
+So the SoA head is a ~+0.3..0.8% item for the ud pick with unchanged texts under {3,7}, and no reason to change the
+width set.
+
+Not done: the multi-slot / vision / replay gates on the file, widths 3, 6, 7 KLD rows, f16-cache arms.
