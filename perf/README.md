@@ -32,6 +32,83 @@ one level down, and it bit the `GGML_MV_EXT_V2` work on 2026-08-22.
 
 ## The prod pick
 
+**2026-10-01 (owner: "I haven't seen a width sweep in a while"): the fixed-depth verify-width sweep on the pick, both lines -
+a measurement, no pick change.** `run-width-sweep.sh` (new: `run-prod-pick.sh` per cell, `PICK_SPEC_EV=0 PICK_DEPTH=d` for the
+fixed arms, the manifest's controller for the last row), prod `bb904db04`, binary 09-30 21:34, Turbo4 cache at the 100K
+allocation, chat-templated benchprompt, a fresh reboot with one discarded warmup per line, two passes (p1 / p2), TAGs
+`wsweep-oct01-{q4,ud}-{w1,d1..d7,ev}-p{1,2}`, log `wsweep-oct01.log`; 0 aborts. t/s, acceptance at 300 / 600:
+
+| q4, verify width | 300 | 600 | acc 300 / 600 | sha 300 | sha 600 |
+|---|--:|--:|--:|---|---|
+| 1 (no spec) | 14.74 / 14.82 | - | - | `7c5254d01b12` | - |
+| 2 | 23.01 / 23.13 | 22.16 / 23.15 | 85.7 / 85.7 | `55d89be28ef2` | `2f3cd31b7ffc` |
+| 3 | 30.51 / 30.61 | 30.25 / 30.35 | 79.2 / 77.8 | `86213d038a29` | `9e49b3d13b31` |
+| **4** | 33.69 / 34.09 | **34.32 / 34.29** | 66.8 / 66.9 | `86213d038a29` | `9e49b3d13b31` |
+| 5 | 32.69 / 32.66 | 33.36 / 33.31 | 54.7 / 56.0 | `f07b0f8c58e6` | `e8572334d851` |
+| 6 | 30.09 / 30.19 | 28.55 / 28.70 | 51.9 / 47.8 | `86213d038a29` | `8f9227a252c8` |
+| 7 | 32.25 / 32.27 | 30.14 / 30.07 | 48.1 / 43.2 | `86213d038a29` | `8f9227a252c8` |
+| 8 | 32.42 / 32.25 | 31.20 / 31.17 | 41.7 / 39.3 | `86213d038a29` | `8f9227a252c8` |
+| controller {3,7} | **35.27 / 35.23** | 34.49 / 34.60 | 67.8 / 62.9 | `f07b0f8c58e6` | `d92d9ebd9107` |
+
+| ud, verify width | 300 | 600 | acc 300 / 600 | sha 300 | sha 600 |
+|---|--:|--:|--:|---|---|
+| 1 (no spec) | 13.46 / 13.43 | - | - | `d180ae89f168` | - |
+| 2 | 20.09 / 20.06 | 19.46 / 19.50 | 92.9 / 86.6 | `ce826d8a3cbd` | `64fbb927b28d` |
+| 3 | 26.89 / 26.89 | 25.95 / 25.93 | 81.5 / 76.3 | `ce826d8a3cbd` | `7eaeffa2a01e` |
+| **4** | 31.33 / 31.36 | **30.43 / 30.39** | 73.5 / 69.5 | `ce826d8a3cbd` | `7eaeffa2a01e` |
+| 5 | 28.40 / 28.35 | 27.54 / 27.41 | 62.5 / 59.5 | `ce826d8a3cbd` | `fff0c4979d71` |
+| 6 | 25.24 / 25.24 | 25.15 / 25.14 | 57.0 / 56.2 | `ce826d8a3cbd` | `3741a7caadd8` |
+| 7 | 26.33 / 26.33 | 26.09 / 26.05 | 51.1 / 49.9 | `ce826d8a3cbd` | `3741a7caadd8` |
+| 8 | 28.85 / 28.74 | 27.55 / 27.50 | 50.1 / 46.5 | `ce826d8a3cbd` | `3741a7caadd8` |
+| controller {3,7} | **32.30 / 32.38** | 30.14 / 30.10 | 72.4 / 65.5 | `d180ae89f168` | `abc0c5af7300` |
+
+Round cost per width (pass 1, 600 tokens, `-lv 3` spec-prof; pass 2 within ~0.6 ms where checked), verify = `dec_syn_tg`,
+draft = `draft_call`, ms:
+
+| width | q4 verify | q4 draft | ud verify | ud draft |
+|---|--:|--:|--:|--:|
+| 2 | 73.0 | 9.3 | 83.6 | 10.4 |
+| 3 | 72.9 | 9.7 | 83.7 | 11.6 |
+| 4 | 75.3 | 10.2 | 87.1 | 12.2 |
+| 5 | 83.8 | 11.4 | 102.4 | **17.9** |
+| 6 | 103.5 | 13.1 | 133.6 | 15.3 |
+| 7 | 103.8 | 13.2 | 135.1 | 15.5 |
+| 8 | 104.4 | 13.5 | 135.8 | 15.8 |
+
+- **Width 4 is the best fixed width on both lines; the controller is +4% (q4) / +3% (ud) over it at 300 and level at 600**
+  (q4 +1%, ud -1%). q4 width 5 is 3% under width 4 at 600; ud width 5 is 10% under and width 6 17% under.
+- **Widths 6-8 cost one round** (the same skinny / tile kernels: +24% q4, +30% ud over width 5, then +1..2 ms for two more
+  columns), so width 6 is the low point and 8 the best of the three - by construction (owner: "that's how we built it"),
+  the Sep 7 shape (`spec-verify-narrow.md` section 2) at ~10% less per round on q4. The controller's {3,7} never runs width 6.
+- **Shas:** every 300 sha is on record (ud controller `d180ae89f168` = the known pair's other member, both passes). At 600,
+  widths 3-4, ud width 2 (`64fbb927b28d`, the text the ud controller arm's fork also reads) and the ud controller are on
+  record; **not found in the notes: q4 width 2 `2f3cd31b7ffc`, widths 5-8 on both
+  lines (no earlier 600-token record at those depths; both passes agree, widths 6-8 share one text per line), and the q4
+  controller's `d92d9ebd9107` x2** (the statistical arm, `mint-controller-arm-is-statistical`; not checked against its
+  known texts).
+- **The ud drafter at depth 4 costs 17.9 ms per call** (12.2 at depth 3, 15.3 at depth 5; 17.9-19.0 in all four ud
+  depth-4 runs, q4 11.4) **= the q6_K head's 5-column cliff, paid twice per round (owner: "check the drafter").** Per-op
+  profile (`run-w8-decomp.sh`, `env LINES=ud DEPTHS="3 4 5" STEPS=metalprof`, TAG `drafter-d4-oct01`, serialized encoders),
+  `MUL_MAT q6_K [5120,248320]` us per call by columns:
+
+  | columns | drafter (m2) | target (m1) |
+  |---|--:|--:|
+  | 4 (depth 3) | 4971 | 4978 |
+  | 5 (depth 4) | **9747** | **10060** |
+  | 6 (depth 5) | 5963 | 6004 |
+
+  The Sep 18 per-call table (`w8-decomp-sep18.md`, native `mul_mv_ext_q6_K_f16_r1_5` 9413 us) in the graph: the head runs
+  at depth+1 columns in both contexts, so ud width 5 pays ~+4.8 ms in the drafter and ~+5.1 ms in the verify round over
+  width 4 (~8-9 ms of a ~120 ms round against a smooth 4 -> 6 curve, ~7%). No other drafter row moves (`TOP_K` 80 / 87 /
+  103 us). Not a pick item today - fixed depth 3 and the controller's {3,7} never run 5 columns; it prices ud width 5 and
+  any controller width set that includes it. **The stored SoA head PRICED the same afternoon on `exp/ud-soa-head`
+  (`0f69d4c4b`, note `ud-soa-head.md` on that branch, file `-SOA-V3head`; owner: "Yeah, take a peek"):** pairwise
+  decode-path KLD vs the native head < 5e-7 mean at widths 1, 2, 4, 5, 8 (max at the file floor; 1-5 top-token flips of
+  8192 at widths 2/4/5, none at 1 and 8), every benchprompt sha unchanged, ud width 5 +6.5% e2e (draft 17.9 -> 13.3 ms,
+  verify 102.4 -> 99.6), widths 4 and 8 +0.3 / +0.4% interleaved. Controller set with depth 4 added (`3,4,7`, corpus, two passes, owner:
+  "Yes, reprice"): REFUTED - V2 -0.8%, V3head level with {3,7}; the V3head file under {3,7} +0.8% on the corpus, texts
+  unchanged. Adoption = owner (a file swap + re-mint for ~+0.3..0.8%; multi-slot / vision / replay gates not run). Not built: the tile for the 5-column head.
+
 **2026-09-30 night (owner: "Go for it"): `exp/skinny-iq4xs-hdr` cherry-picked onto prod (`5ad1809c5`), `GGML_MM_SKINNY_IQ4XS_HDR=1` PICKED
 on ud (class BI, `skinny-iq4xs-hdr.md`): the K-quant header-once pair reader ported to the stored iq4_xs skinny tile (widths 6-8);
 -6..-8% per iq4_xs call, byte-identical (12/12 dumps on real Metal output), ud 200K pinned width-8 round 271.7 -> 269.4 ms (-1.0%)
@@ -1096,6 +1173,8 @@ must be a separate checkout. Two arms that agree to the microsecond are a routin
   means the configs were not different - real races do not reproduce bit-exactly.
 
 ## File map
+
+- **`run-width-sweep.sh` - 2026-10-01, the fixed-depth verify-width sweep on the current pick:** widths 1-8 + the controller arm, both lines, Turbo4, 300 and 600 tokens, through `run-prod-pick.sh` (so the manifest env); `STAMP`, `PASSES`, `SWEEP_LINES` (not `LINES`: the zsh trap), `DEPTHS`. ~1 h 40 for two passes on both lines. The Oct 1 table is the first block of "The prod pick".
 
 - **`ctx-class-cache.md` - 2026-09-25 evening, branch `exp/ctx-class-cache-gate` (VERIFIED, owner asked "does prompt caching still work with varying context sizes, 4 streams of k, 2k, 4k, 8k"): the prompt cache under `--ctx-seq-sizes 4096,8192,16384,32768` - attention-KV prefix reuse, the recurrent (GDN) checkpoints and the host-RAM prompt cache (`--cache-ram`) all work with the size classes; 16/16 requests in their class, 10/10 continuations reuse >= 99%, cached text = uncached text (15/16, one 48th-token tie; every logprob delta is on the first generated token = tail-prefill shape numerics), the RAM round trip byte-identical. Tool `run-ctx-class-cache-gate.sh` + `ctx-class-cache-driver.py` (~25 min at K=4096, `--phase verdict` re-prints the table). FOLLOW-UP the same evening (owner: 'Let's see where it brings us'): the idle-slot RAM copy is a duplicate that is never loaded in split mode (a similarity pick keeping >50% never saves, so never loads); two opt-in server rules on the branch - `LLAMA_CACHE_SAVE_TAIL=N` (save the slot when >= N decoded tokens will be overwritten) + `LLAMA_CACHE_LOAD_CKPT=1` (score a cached prompt by its resumable tokens on a recurrent/SWA context) - with `--no-cache-idle-slots`: cache peak 7.9 GB -> 3.0 GB, the consumed entry (A5) restored 2608/2639, the overwritten branch (B6) restored 5086/5114 from the cache, the concurrent round 22 -> 3 s, every T1-T4 sha unchanged (arms `ctxcache-arm{A,B,C,C2}`). Then the CHECKPOINT ANATOMY (owner: 'Can you dump a checkpoint to disk?'): `LLAMA_CKPT_DUMP=<dir>` + `ckpt-dump-decode.py` - a checkpoint = 149.6 MiB of GDN state (48 layers x 3 MiB S + 0.12 MiB R, f32, fixed) + 20-40 MiB of the DFlash drafter's ENTIRE KV cache (a plain KV cache ignores PARTIAL_ONLY; bounded by its 2048 cells) + 0 spec; `LLAMA_CKPT_NO_DFT=1` drops the drafter part on a truncatable drafter: every checkpoint 149.6 MiB, byte-identical (arm `ctxcache-armD` = arm C2's shas), cache peak 3.0 -> 2.7 GB. Then the LOSSY-CHECKPOINT EXPERIMENT (owner: 'Hypothesize away'): the state's mantissas are incompressible (zstd 92.7%), but per-head SVD shows effective rank 1-7; `LLAMA_CKPT_LOAD_DIR` + `ckpt-lowrank.py` + `ckpt-lowrank-driver.py` restore rank-k / f16 states in place of the exact blob: rank 4-16 = exact text at 2.2K (mean top-20 KL ~1e-4), 5-50x worse at 8.5K (rank 32 = 5.6e-4, rank 4 = 6e-3 = the Turbo4 cache's price for 16x less), f16 = noise level in 2 of 3 cases; the price COMPOUNDS over a long re-prefill (4 tokens: 1e-7..1e-5) - one prompt per size, a first look. Nothing adopted. LONG LENGTHS (12K/24K/48K/96K classes, 57K-token top stream, arms `ctxcache-long-arm{A,P}`, both PASS, all shas equal between arms): the defaults fill the 8 GB cache and evict (7 entries, 7984 MiB) and the consumed-entry stall is 59 s at the concurrent round; the proposed set: 4 entries 2875 MiB, no eviction, round 4-5 s, checkpoints 149.6 MiB at 57K, a 1.1 GB save still ~100 ms. 2026-09-26 OWNER: '2, while accepting loss of acceptance' = the four behaviours are CODE DEFAULTS (save-on-overwrite 64, checkpoint-aware cache scoring, no drafter blob in checkpoints, no idle-slot saves in split mode; off-switches LLAMA_CACHE_SAVE_TAIL=0 / LLAMA_CACHE_LOAD_CKPT=0 / LLAMA_CKPT_NO_DFT=0 / LLAMA_CACHE_IDLE_SPLIT=1); `--no-cache-idle-slots` no longer needed on split-mode servers. Gates on the default binary recorded in the note's 'Defaults' section. 2026-09-26 COLD STATE ON DISK (owner: 'move everything except the kv cache to disk', branch `exp/cold-state-spill`): checkpoints and prompt-cache entries spill to unlinked temp files right after capture (`common_cold_blob`, default on, `LLAMA_COLD_STATE=0` = RAM, `LLAMA_COLD_STATE_DIR=<dir>`), the live KV stays; smoke byte-identical RAM vs disk, 150 MiB checkpoint spill 15 ms / restore 11 ms, 196 MiB entry spill 19 ms / read 10 ms; gate arms `coldspill-q4-{disk,ram}` BOTH PASS, all shas identical between arms, server RSS peak 20.30 vs 24.34 GiB (-4.0 GiB, the cache + in-slot checkpoints); MERGED TO PROD 2026-09-26 (owner 'Yes do it'); ~~OPEN: prod binary not rebuilt at the merge + multi-slot gate both lines pending~~ CLOSED 2026-09-27: prod rebuilt, multi-slot gate `coldspill-rebuild-0927` short + long PASS on both lines, all reference shas held.**
 - **`per-slot-ctx.md` "the packed layout" - 2026-09-25, branch `exp/kv-size-classes` (MERGED TO PROD dc02ff4d6, owner: "Bring it onto prod"; post-merge gates on the prod binary: split PASS 3/3 + 8/8, classes PASS 3/3 + 8/8; worktree removed, branch kept; Turbo4/Turbo4: 6336 -> 1980 MiB):** per-slot context sizes built - `--ctx-seq-sizes 98304,8192,8192,8192` packs the streams back to back (one long coordinator beside short executors); 96K + 3 x 8K = 3030 MiB KV vs 9696 for 4 x 96K (-69%), output byte-identical to the split arm (multislot gate split PASS 3/3 + 8/8, new `ARM=classes` PASS 3/3 + 8/8, FA ops 4869/4869); new FA input `kv_off` (src[6]) + Metal `_kvo=1` kernel variants for mixed-size batches, the uniform layout builds the old graph; server picks the smallest idle slot that holds the prompt.
