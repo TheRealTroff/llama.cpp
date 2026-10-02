@@ -1,6 +1,6 @@
 # Prefix slot saves: an agent's base prompt restored from disk instead of prefilled (2026-10-02, owner: "I would like to have some slot saves for common prefixes, e.g. the base prompts of the agent software that I run (right now pi and opencode)")
 
-Status: **BUILT + GATED on `exp/prefix-slot-saves` (ud line, Turbo4, one slot, pinned depth 3). Not merged; merge = owner. Open: the q4 line, several slots / size classes, the container's real prompts, who makes and refreshes the saves, checkpoint trimming.**
+Status: **BUILT + GATED on `exp/prefix-slot-saves`, both lines, Turbo4, pinned depth 3: one slot, four slots (sequential and concurrent), per-slot context sizes (`perf/run-prefix-gate.sh`). Two restore bugs found and fixed on the way (below). Not merged; merge = owner. Open: the controller arm, the container's real prompts, who makes and refreshes the saves, checkpoint trimming.**
 
 ## What the clients send (captures, no GPU)
 
@@ -43,6 +43,32 @@ The effort line is token 1 (a thinking-level change invalidates a save). opencod
 - Cost: head 280 MiB + 314 MiB `.ckpt` (2 checkpoints) + 153 MiB drafter pair; project 339 + 628 (4 checkpoints) + 132 MiB. Restore 100-210 ms.
 - A foreign `.meta` was skipped with a warning.
 
+## Both lines, several slots (2026-10-02 afternoon, `perf/run-prefix-gate.sh`, `prefix-oct02-{q4,q4b,ud,ud-r1,ud-r2}`)
+
+The gate makes the references and the four saves (head + project A, both clients) on a one-slot server, then restarts and sends the captures with no slot id: one slot; `-np 4`; `--ctx-seq-sizes 32768,16384,8192,8192`; each multi-slot layout sequentially and with the four requests at once. A save made in slot 0 of a one-slot server restores into any slot of any layout.
+
+| prefill s | fresh | head (other project) | project (same project) |
+|---|--:|--:|--:|
+| q4 opencode (10.7K) | 79.2 | 26.8 | 0.5 |
+| q4 pi (3.6K) | 26.2 | 11.7 | 0.4 |
+| ud opencode | 84.9 | 28.9 | 0.5 |
+| ud pi | 28.1 | 12.6 | 0.5 |
+
+Every arm restored the intended save (`prompt_n` 16 for a project save, 3439 / 1560 for a head) on both lines in all five layouts.
+
+Text against the one-slot references:
+- **Project saves: the in-process text in every arm**, logprobs equal sequentially, within 0.06 in the concurrent arms (batch composition).
+- **Head saves: the fresh text except at near-ties.** A head restore prefills the tail in another batch shape than a fresh prefill; logprobs move by up to 0.004 (ud) / 0.08 (q4). Forks seen, each priced with a no-drafter replay (`NOSPEC=1`, every token then carries logprobs; a draft-accepted token has none):
+  - q4 pi project A through the head: token 4, ` to` -0.936 / ` me` -1.040 fresh, -0.985 / -0.975 through the head.
+  - q4 opencode other project, sequential arms: token 22, ` working` -0.756 / ` directory` -0.803 fresh, -0.786 / -0.789 through the head. The concurrent arms landed on the fresh text.
+  - ud pi other project, concurrent arms only (4 of 4 runs): token 9, ` here` -0.720 / ` in` -0.726.
+  So a head save is not byte-identical to a fresh prefill: it is the cached-vs-uncached delta of `ctx-class-cache.md` (first-token shape numerics), and a project save is exact.
+
+### Two restore bugs this found (both fixed on the branch)
+
+1. **A slot save was tied to the server's slot count.** `llama_kv_cache::state_read` refused a file whose stream count differs ("n_stream mismatch"): a save from `-np 1` did not restore under `-np 4`, the lookup logged it and the prompt was prefilled in full. A single-sequence state has cells in one stream and is read into the target sequence's stream, so the check now applies to whole-context states only.
+2. **Out-of-bounds read after a single-sequence restore of the recurrent state.** `llama_memory_recurrent::state_read` left `head` at the restored sequence's cell; the server sets a sampler when it launches a task, the next decode re-reserves the graph, and the reserve reads `n_seqs` cells from `head` (`s_copy_view_row0`): past the end when the restored slot is not the first. ud concurrent arms segfaulted 2 of 2 (crash reports `llama-server-2026-10-02-1439/1440`), q4 read garbage and survived. `head = 0` after the restore: 0 of 4 concurrent runs crash. This is reachable from a plain `SLOT_RESTORE` or a RAM prompt-cache load into a slot other than 0 on a multi-slot server, with or without prefix saves.
+
 ## Usage
 
 ```
@@ -51,12 +77,15 @@ perf/prefix-save.py tok a.json b.json            # token counts, common prefixes
 perf/prefix-save.py head a.json b.json oc-head   # prefill to the common prefix of two projects, save
 perf/prefix-save.py chat a.json label            # send a capture; prompt_n / cache_n / sha of the generated tokens
 perf/prefix-save.py save oc-projA
+B=<tree> LINE=q4 TAG=prefix-<date>-q4 perf/run-prefix-gate.sh      # PHASES="make one np4 classes", SKIP=seq, REFTAG=<run with the references>
 ```
+`NP=4` / `SIZES=...` / `NOSPEC=1` on `run-prefix-server.sh`; `--slot -1` and `multi` on the driver.
 `--slot-save-path` and `LLAMA_PREFIX_DIR` are the same directory here. zsh: call the driver through a function, not `$VAR args`.
 
 ## Open
 
-- q4 line (its own saves), more than one slot, `--ctx-seq-sizes` classes, the controller arm.
+- The controller arm (the gate pins depth 3). A second pass of the crash fix to the owner's bar (x8).
+- Slot choice: a new project of a client goes to the slot holding that client's other conversation (similarity pick) even when an empty slot is idle; the displaced conversation goes to the RAM cache.
 - Who makes the saves: today the driver, from captures. Candidates: the server saves a project prefix itself at the first user message of an unseen prompt; a head is found as the common prefix of two saved prompts.
 - Refresh: a changed prompt just stops matching; stale files are not removed. opencode's date makes a project save one day long, its head is not affected.
 - Checkpoints are 150 MiB each and a save carries 2-4; a head needs none when the prompt contains all of it.

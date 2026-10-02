@@ -2380,11 +2380,13 @@ void llama_kv_cache::state_read(llama_io_read_i & io, llama_seq_id seq_id, llama
 
     uint32_t n_stream_cur;
     io.read(&n_stream_cur, sizeof(n_stream_cur));
-    if (n_stream_cur != n_stream) {
+    // a single-sequence state has cells in one stream only and is read into the target sequence's stream, so it may
+    // come from a context with another stream count (a slot save restored under a different -np; perf/prefix-slot-saves.md)
+    if (n_stream_cur != n_stream && seq_id == -1) {
         throw std::runtime_error("n_stream mismatch");
     }
 
-    for (uint32_t s = 0; s < n_stream; ++s) {
+    for (uint32_t s = 0; s < n_stream_cur; ++s) {
         uint32_t cell_count;
         io.read(&cell_count, sizeof(cell_count));
 

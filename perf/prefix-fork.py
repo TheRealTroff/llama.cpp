@@ -9,4 +9,6 @@ while n < min(len(a), len(b)) and a[n]["token"] == b[n]["token"]: n += 1
 if n == len(a) == len(b): print(f"  identical: {n} tokens; max |dlogprob| = {max(abs(x['logprob']-y['logprob']) for x, y in zip(a, b)):.4f}"); sys.exit(0)
 print(f"  fork at token {n} of {len(a)} / {len(b)}; max |dlogprob| before it = {max([abs(x['logprob']-y['logprob']) for x, y in zip(a[:n], b[:n])] or [0]):.4f}")
 for name, t in (("a", a), ("b", b)):
-    if n < len(t): print(f"   {name}: " + ", ".join(f"{c['token']!r} {c['logprob']:.3f}" for c in t[n]["top_logprobs"][:3]))
+    if n < len(t):
+        top = t[n].get("top_logprobs") or []
+        print(f"   {name}: {t[n]['token']!r} " + (", ".join(f"{c['token']!r} {c['logprob']:.3f}" for c in top[:3]) if top else "(a draft-accepted token: no logprobs; replay with NOSPEC=1 for the margin)"))

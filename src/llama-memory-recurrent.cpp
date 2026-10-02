@@ -963,6 +963,10 @@ void llama_memory_recurrent::state_read(llama_io_read_i & io, llama_seq_id seq_i
         throw std::runtime_error("failed to restore kv cache");
     }
 
+    // a single-sequence restore leaves head at the sequence's cell; a graph reserve before the next find_slot (the
+    // server sets a sampler when it launches a task) reads n_seqs cells from head and would run past the last cell
+    head = 0;
+
     if (n_rs_seq != 0) {
         if (seq_id == -1) {
             std::fill(rs_idx.begin(), rs_idx.end(), 0);
