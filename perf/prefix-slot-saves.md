@@ -62,7 +62,15 @@ Text against the one-slot references:
   - q4 pi project A through the head: token 4, ` to` -0.936 / ` me` -1.040 fresh, -0.985 / -0.975 through the head.
   - q4 opencode other project, sequential arms: token 22, ` working` -0.756 / ` directory` -0.803 fresh, -0.786 / -0.789 through the head. The concurrent arms landed on the fresh text.
   - ud pi other project, concurrent arms only (4 of 4 runs): token 9, ` here` -0.720 / ` in` -0.726.
-  So a head save is not byte-identical to a fresh prefill: it is the cached-vs-uncached delta of `ctx-class-cache.md` (first-token shape numerics), and a project save is exact.
+  So an unaligned head save is not byte-identical to a fresh prefill (the aligned one below is): it is the cached-vs-uncached delta of `ctx-class-cache.md` (first-token shape numerics), and a project save is exact.
+
+### An aligned head is byte-identical (owner: "The tail is prefilled in a different batch shape - why? Does it have to be that way?")
+
+It does not. A prefill is decoded in micro-batches of 512 tokens (`n_ubatch`), and the Metal kernels are not bit-stable across how tokens are grouped. A fresh opencode prefill groups `[0,512) ... [7168,7680) ...` up to its own end-of-prompt breaks. The first head save moved three boundaries: it was cut at 7288 (not a multiple of 512), and the server broke its last batches at `n-4-512` and `n-4` (6772, 7284) to place the near-end checkpoints, so tokens 6144-7288 and everything after 7288 were grouped differently from the fresh run.
+
+Head saves cut at the last multiple of 512 inside the shared prefix (`--backoff`: opencode 7168 of 7288, pi 2048 of 2084) and made on a server with `--ctx-checkpoints 0` (no near-end breaks; a head needs no checkpoint, the prompt contains all of it): **all 8 comparisons (both lines, both clients, project A and B) give the fresh run's tokens with max |dlogprob| 0.0000**, the three near-tie forks included (`prefix-oct02-{q4,ud}-*-al`). Cost: 120 / 36 tokens more to prefill (27.8 vs 26.8 s on q4 opencode), and the save loses its 314 MiB `.ckpt` (opencode head 412 MiB in all, pi 329 MiB).
+
+Rule: cut a head on an `n_ubatch` boundary and prefill it without checkpoint breaks. Not yet in the tooling as a default (the driver takes `--backoff`, the server flag is manual).
 
 ### Two restore bugs this found (both fixed on the branch)
 
