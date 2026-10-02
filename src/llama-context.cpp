@@ -7,6 +7,8 @@
 #include "llama-batch.h"
 #include "llama-io.h"
 #include "llama-memory.h"
+#include "llama-memory-hybrid.h"
+#include "llama-kv-cache.h"
 #include "llama-mmap.h"
 #include "llama-model.h"
 #include "llama-ext.h"
@@ -4815,4 +4817,17 @@ llama_memory_breakdown llama_get_memory_breakdown(const struct llama_context * c
 
 llama_context * llama_get_ctx_other(struct llama_context * ctx) {
     return ctx->get_cparams().ctx_other;
+}
+
+void llama_state_seq_set_tail(llama_context * ctx, llama_pos p0) {
+    llama_memory_t mem = ctx->get_memory();
+    llama_kv_cache * kv = nullptr;
+    if (auto * hyb = dynamic_cast<llama_memory_hybrid *>(mem)) {
+        kv = hyb->get_mem_attn();
+    } else {
+        kv = dynamic_cast<llama_kv_cache *>(mem);
+    }
+    if (kv) {
+        kv->state_tail_p0 = p0;
+    }
 }

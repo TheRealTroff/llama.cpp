@@ -1,6 +1,6 @@
 # Prefix slot saves: an agent's base prompt restored from disk instead of prefilled (2026-10-02, owner: "I would like to have some slot saves for common prefixes, e.g. the base prompts of the agent software that I run (right now pi and opencode)")
 
-Status: **BUILT + GATED on `exp/prefix-slot-saves`, both lines, Turbo4, pinned depth 3: one slot, four slots (sequential and concurrent), per-slot context sizes (`perf/run-prefix-gate.sh`). Two restore bugs found and fixed on the way (below). Not merged; merge = owner. Open: the controller arm, the container's real prompts, who makes and refreshes the saves, checkpoint trimming.**
+Status: **BUILT + GATED on `exp/prefix-slot-saves`, both lines; since the evening the server makes the saves itself, in layers, byte-identical to a fresh prefill (`LLAMA_PREFIX_AUTO=1`, section "Saves made by the server"). Earlier state: Turbo4, pinned depth 3: one slot, four slots (sequential and concurrent), per-slot context sizes (`perf/run-prefix-gate.sh`). Two restore bugs found and fixed on the way (below). Not merged; merge = owner. Open: the controller arm, the container's real prompts, who makes and refreshes the saves, checkpoint trimming.**
 
 ## What the clients send (captures, no GPU)
 
@@ -77,6 +77,33 @@ Rule: cut a head on an `n_ubatch` boundary and prefill it without checkpoint bre
 1. **A slot save was tied to the server's slot count.** `llama_kv_cache::state_read` refused a file whose stream count differs ("n_stream mismatch"): a save from `-np 1` did not restore under `-np 4`, the lookup logged it and the prompt was prefilled in full. A single-sequence state has cells in one stream and is read into the target sequence's stream, so the check now applies to whole-context states only.
 2. **Out-of-bounds read after a single-sequence restore of the recurrent state.** `llama_memory_recurrent::state_read` left `head` at the restored sequence's cell; the server sets a sampler when it launches a task, the next decode re-reserves the graph, and the reserve reads `n_seqs` cells from `head` (`s_copy_view_row0`): past the end when the restored slot is not the first. ud concurrent arms segfaulted 2 of 2 (crash reports `llama-server-2026-10-02-1439/1440`), q4 read garbage and survived. `head = 0` after the restore: 0 of 4 concurrent runs crash. This is reachable from a plain `SLOT_RESTORE` or a RAM prompt-cache load into a slot other than 0 on a multi-slot server, with or without prefix saves.
 
+## Saves made by the server, in layers (2026-10-02 evening, owner: "Do both"; `LLAMA_PREFIX_AUTO=1`, gate `perf/run-prefix-auto-gate.sh`)
+
+With `LLAMA_PREFIX_DIR=<dir> LLAMA_PREFIX_AUTO=1` nothing is captured or prefilled by hand: the server writes saves while it prefills ordinary requests, at no extra prefill (a batch break at the cut and a 50-70 ms write).
+
+- **Project cut**: the last 512-token (`n_ubatch`) boundary that every prompt with this system block passes before its end-of-prompt batch breaks: `floor((U + 4 - 512) / 512) * 512`, U = the first user message (opencode 9728 of 10709, pi 3072 of 3627). `LLAMA_PREFIX_CUT=user` cuts at U instead (a shorter tail, not the fresh grouping; not gated).
+- **Head cut**: when the prompt shares a prefix with a save of another prompt (another project, or the same project on another date), the last 512 boundary inside that shared prefix (opencode 7168, pi 2048). The head is written on the way and the project save becomes a **layer** on it.
+- **Layer**: the attention cells from the parent's end on, plus the recurrent state (fixed size, always whole) and the drafter pair. `llama_state_seq_set_tail(ctx, p0)` (llama-ext.h) makes the KV writer emit only cells at positions >= p0 and the reader append; restore = parent chain, oldest first. `.meta` line 2: `auto parent=<name|-> start=<n>`; a layer whose parent is missing or does not match is skipped.
+- No checkpoints in these saves: a server-made save resumes only a prompt that contains all of it (scored that way).
+- A save is written only from a prefill grouped like a fresh one: it starts at 0 or at the end of a restored server-made save, and the slot is alone in each of its batches (else "cancelled" / "none made" in the log).
+- Names `auto-<tokens>-<fnv64 of the tokens>`. `LLAMA_PREFIX_MIN_TOKENS` (1024: opencode's 593-token title request makes nothing), `LLAMA_PREFIX_MAX_MIB` (16384: over it the least recently used server-made saves that nothing builds on are deleted; a restore touches `.meta`), `LLAMA_PREFIX_NO_DFT=1` drops the drafter pair (-153 MiB per save; not gated).
+
+What the server did with an empty directory (ud, one slot; q4 the same sequence):
+
+| request | server action | prefilled | prefill s |
+|---|---|--:|--:|
+| opencode project A | writes A whole at 9728 | 10725 | 84.9 |
+| opencode project B | writes head at 7168 + B as a layer | 10727 | 85.1 |
+| project A, next day's date | restores the head, writes A' as a layer | 3557 | 29.9 |
+| pi project A / B | whole at 3072; head at 2048 + layer | 3642 / 3644 | 28.2 |
+| after a restart: any of them | restores head + layer (58-86 ms) | 997-999 (opencode), 571-572 (pi) | 9.2-9.3 / 5.1 |
+
+Sizes: head 412 MiB (opencode) / 329 (pi); project layer 337 / 313 MiB (of which the recurrent state ~150 and the drafter pair 153; the cells themselves 41 / 16 MiB); a whole project save 453 / 346 MiB. Seven saves 2.5 GB.
+
+**Text: every arm equals a fresh prefill of the same request on a server with no prefix saves and no RAM cache** (`*-ref`): the make phase, the restart, per-slot context sizes (layers restored into the 16K and 8K slots) with max |dlogprob| 0.0000, and four requests at once on `-np 4` with the same tokens and |dlogprob| <= 0.002 (batch composition). ud 20/20 comparisons. q4 (`prefix-auto-oct02-q4`): the 16 sequential comparisons at 0.0000 (restart prefill 8.4 s opencode / 4.6 s pi); the concurrent arm 3 of 4 on the fresh text (|dlogprob| <= 0.008) and opencode project B forks at token 22, the ` working` / ` directory` tie priced above at 0.05 logits fresh - four streams in one batch move a logprob more than that, with or without saves.
+
+Against the hand-made project save (checkpoint at the user message, 0.5 s) the aligned cut pays ~1000 tokens per new session (9.2 s opencode, 5.1 s pi on ud) for byte-identity with a fresh prefill and a third of the disk.
+
 ## Usage
 
 ```
@@ -94,7 +121,8 @@ B=<tree> LINE=q4 TAG=prefix-<date>-q4 perf/run-prefix-gate.sh      # PHASES="mak
 
 - The controller arm (the gate pins depth 3). A second pass of the crash fix to the owner's bar (x8).
 - Slot choice: a new project of a client goes to the slot holding that client's other conversation (similarity pick) even when an empty slot is idle; the displaced conversation goes to the RAM cache.
-- Who makes the saves: today the driver, from captures. Candidates: the server saves a project prefix itself at the first user message of an unseen prompt; a head is found as the common prefix of two saved prompts.
+- The first project of a client is saved whole (no head is known yet) and stays whole; it is not re-layered when a head appears.
+- `LLAMA_PREFIX_CUT=user` and `LLAMA_PREFIX_NO_DFT=1` are built, not gated.
 - Refresh: a changed prompt just stops matching; stale files are not removed. opencode's date makes a project save one day long, its head is not affected.
 - Checkpoints are 150 MiB each and a save carries 2-4; a head needs none when the prompt contains all of it.
 - A save without `.spec` leaves the previous conversation's drafter ring in place (acceptance only).

@@ -150,6 +150,10 @@ public:
 
     // state write/load
 
+    // tail state (llama_state_seq_set_tail, perf/prefix-slot-saves.md): >= 0 makes a single-sequence state_write emit only
+    // the cells at positions >= state_tail_p0, and a single-sequence state_read append to the cells below it
+    llama_pos state_tail_p0 = -1;
+
     void state_write(llama_io_write_i & io, llama_seq_id seq_id = -1, llama_state_seq_flags flags = 0) const override;
     void state_read (llama_io_read_i  & io, llama_seq_id seq_id = -1, llama_state_seq_flags flags = 0) override;
 
