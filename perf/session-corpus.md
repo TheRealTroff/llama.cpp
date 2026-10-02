@@ -1,6 +1,6 @@
 # The session corpus: a recorded agent session, replayed teacher-forced (2026-10-01, owner: "time we created a more realistic corpus ... a series of back and forths with some discussion, some code explains, some tool calls, some doc reads"; "absolutely with thinking on")
 
-Status: **BUILT + MEASURED on `exp/session-corpus` (both lines): the read-only pilot (`pilot10`) and the edit session (`edit11`, write/edit/compile tools). Scripts only, no server change; runs on prod's binary. In progress: the long three-language recording (`long29`). Open: slot saves at chosen turns, the k histogram per segment. Merge = owner.**
+Status: **BUILT + MEASURED on `exp/session-corpus` (both lines): the read-only pilot (`pilot10`), the edit session (`edit11`, write/edit/compile tools), Scripts only, no server change; runs on prod's binary. the long three-language session (`long29`, context to 140K). Open: slot saves at chosen turns, the k histogram per segment. Merge = owner.**
 
 ## Why
 
@@ -66,6 +66,38 @@ Decode t/s, pinned depth 3 -> controller (TAGs `session-edit11-{ud,q4}-a`, two i
 
 `long29` (`perf/session/long29.user.json`): 29 user turns across orientation, C++ (templates, a breaking signature change), Rust (a crate from scratch: generics, a slot pool with `&mut` returns, an error type, an iterator API, a rename) and Python (a gguf-py script, a refactor, unittest), with discussion, a derivation and JSON turns between. The recorder stops at `--ctx-limit` (default 92K, under the pick's 102400).
 
+## The long session (`long29`, 2026-10-02; recorded on ud at pinned depth 3, `CTX=163840`, stop at 140K)
+
+The first recording attempt was void: at the template's default effort (xhigh) the model drafts whole files in its thinking, six turns hit the 4096-token cap as pure thinking and never acted, and one cut `write_file` ran with partial content. Fixes: per-turn cap 16384, a cut turn ends the recording (the user turn is dropped, a cut tool call never runs). Owner: xhigh is the model's default, the curbed templates are a separate experiment - let it finish its thinking.
+
+17 of the 29 user turns fit under 140K: 76 assistant turns, 167 messages, 102K generated: **78% thinking**, 11% prose, 1% code blocks, 10% tool calls; the longest turn 10,983 tokens; no cut turn. Reached: orientation, C++, the derivation, Rust part 1, two Python turns. 16 compiles: Rust 2 with errors / 9 clean, C++ 1 with warnings / 4 clean.
+
+Decode t/s, ONE pass per arm (TAGs `session-long29-{ud,q4}-a`, ~90-100K tokens per arm):
+
+| segment | ud d3 | ud controller | | q4 d3 | q4 controller | |
+|---|--:|--:|--:|--:|--:|--:|
+| thinking | 24.7 | 25.2 | +2% | 27.6 | 29.2 | +6% |
+| prose | 24.4 | 24.8 | +2% | 28.0 | 29.0 | +4% |
+| code blocks | 26.4 | 29.9 | +13% | 30.1 | 34.4 | +14% |
+| tool calls | 31.2 | 34.5 | +11% | 34.5 | 41.8 | +21% |
+| **all** | **25.25** | **25.89** | **+2.5%** | **28.35** | **30.19** | **+6.5%** |
+
+By context, d3 -> controller: ud 0-16K 30.6 -> 31.1, 16-32K 28.3 -> 28.6, 32-64K 27.8 -> 28.8, 64-100K 24.4 -> 24.8, 100-140K 22.7 -> 23.1 (+1.2..3.3% in every bucket); q4 34.3 -> 35.9, 31.9 -> 33.7, 30.6 -> 33.0, 27.6 -> 28.8, 25.4 -> 26.0 (+2.5..7.8%). Length costs both arms alike (-26% from <16K to >100K); the controller does not turn negative to 140K (the 200K prose prompt's -5% is not contradicted: this stops at 140K and is not prose). k hist ud 3:22723 7:4850, q4 3:18570 7:5595.
+
+**What the thinking is about matters** (owner: "how much does it matter what it's thinking about?"). Thinking segments only, grouped by the user turn's subject; acceptance = the pinned depth-3 arm:
+
+| thinking about | ud tokens | ud acc | ud controller | q4 acc | q4 controller |
+|---|--:|--:|--:|--:|--:|
+| orientation / docs | 2,800 | 56.5% | -2% | 56.1% | +3% |
+| C++ | 12,600 | 74.7% | +3% | 66.9% | +9% |
+| the derivation | 3,100 | 82.5% | +7% | 80.4% | +9% |
+| Rust | 57,500 | 67.9% | +1% | 67.8% | +5% |
+| Python | 3,100 | 64.8% | (n differs 3.6x) | 73.4% | +4% |
+
+Per turn (>= 300 thinking tokens, ud) acceptance runs 49%..92%. The subjects came in order, so t/s across rows is confounded with context; acceptance is not. Rust is 73% of the ud thinking, which is most of the long session's headline. Grouping by what the thinking leads to (a write, a read, an answer) is not usable: the arms' turns change group once the text forks.
+
+**Across the three scripts** (controller over pinned depth 3): read-only pilot ud +3.5% / q4 +3.4..4.0%; edit session +5.8% / +11.5..13%; long session +2.5% / +6.5%. The share of thinking and what it is about set the number; tool calls are +11..25% everywhere.
+
 ## Traps
 
 - **Wall and prefill seconds are not comparable between arms.** A turn whose text left the script makes the next request prefill the scripted turn (ud controller: 395 s prefill vs 262 s for the arm that reproduces the script; it forked on 22 / 18 of 37 turns). On q4 every turn of both arms differs from the ud-recorded script, so both pay the same 380 s. Compare decode t/s.
@@ -75,6 +107,6 @@ Decode t/s, pinned depth 3 -> controller (TAGs `session-edit11-{ud,q4}-a`, two i
 
 ## Open
 
-1. The long recording `long29`: record, then replay on both lines.
+1. A second pass of `long29` (one pass per arm so far) and the 12 user turns that did not fit (Rust part 2, the breaking C++ change, the wrap-up): a larger context or a resumed recording.
 2. Slot saves at chosen turns (`slot-save-hybrid.md`) so an arm can start at turn N without the prefix prefill.
 3. The controller's k / block histogram per segment (join the `.picks` trace to the stream).
