@@ -134,3 +134,8 @@ LLAMA_API uint32_t        llama_model_target_layer_ids_n(const struct llama_mode
 // if out is nullptr, returns the number of tokens without writing to out
 // caller must allocate enough memory for out before calling
 LLAMA_API uint32_t llama_model_get_tok_embd(const struct llama_model * model, float * out);
+
+// Tail states (perf/prefix-slot-saves.md): with p0 >= 0 the next llama_state_seq_* writes of a single sequence carry only
+// the attention cells at positions >= p0 (plus the whole recurrent state), and reads append them to the cells the
+// sequence already holds below p0. p0 = -1 restores whole-sequence states. No effect on a memory without a KV cache.
+LLAMA_API void llama_state_seq_set_tail(struct llama_context * ctx, llama_pos p0);

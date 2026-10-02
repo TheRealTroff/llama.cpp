@@ -2325,6 +2325,9 @@ void llama_kv_cache::state_write(llama_io_write_i & io, llama_seq_id seq_id, lla
             add_cell = add_cell && !cells.is_empty(i);
             add_cell = add_cell && (seq_id == -1 || cells.seq_has(i, seq_id));
 
+            // tail state (llama_state_seq_set_tail): only the sequence's cells from position state_tail_p0 on
+            add_cell = add_cell && (seq_id == -1 || state_tail_p0 < 0 || cells.pos_get(i) >= state_tail_p0);
+
             // check the cell is not SWA-masked
             if (add_cell && seq_id != -1) {
                 const bool is_masked = llama_hparams::is_masked_swa(n_swa, swa_type, cells.pos_get(i), cells.seq_pos_max(seq_id));
@@ -2380,11 +2383,13 @@ void llama_kv_cache::state_read(llama_io_read_i & io, llama_seq_id seq_id, llama
 
     uint32_t n_stream_cur;
     io.read(&n_stream_cur, sizeof(n_stream_cur));
-    if (n_stream_cur != n_stream) {
+    // a single-sequence state has cells in one stream only and is read into the target sequence's stream, so it may
+    // come from a context with another stream count (a slot save restored under a different -np; perf/prefix-slot-saves.md)
+    if (n_stream_cur != n_stream && seq_id == -1) {
         throw std::runtime_error("n_stream mismatch");
     }
 
-    for (uint32_t s = 0; s < n_stream; ++s) {
+    for (uint32_t s = 0; s < n_stream_cur; ++s) {
         uint32_t cell_count;
         io.read(&cell_count, sizeof(cell_count));
 
@@ -2587,8 +2592,12 @@ bool llama_kv_cache::state_read_meta(llama_io_read_i & io, uint32_t strm, uint32
     auto & head  = v_heads[strm];
 
     if (dest_seq_id != -1) {
-        // single sequence
-        seq_rm(dest_seq_id, -1, -1);
+        // single sequence; a tail state (llama_state_seq_set_tail) is appended to the cells the sequence holds below p0
+        if (state_tail_p0 < 0) {
+            seq_rm(dest_seq_id, -1, -1);
+        } else {
+            seq_rm(dest_seq_id, state_tail_p0, -1);
+        }
 
         llama_batch_allocr balloc(hparams.n_pos_per_embd());
 

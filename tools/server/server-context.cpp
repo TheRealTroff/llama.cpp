@@ -24,6 +24,8 @@
 #include <exception>
 #include <memory>
 #include <filesystem>
+
+#include "../../src/llama-ext.h" // llama_state_seq_set_tail (prefix save layers)
 #include <utility>
 #include <fstream>
 
@@ -196,6 +198,14 @@ struct server_batch {
 
 struct server_slot {
     int id;
+
+    // prefix saves made by the server (LLAMA_PREFIX_AUTO, perf/prefix-slot-saves.md)
+    struct prefix_cut { int32_t n; std::string parent; int32_t start; };
+    std::vector<prefix_cut> prefix_cuts;     // saves to write when this prefill reaches n tokens (ascending)
+    std::string prefix_at_name;              // the prefix save the slot was just restored from ...
+    int32_t prefix_at_n       = -1;          // ... and its token count; consumed when the task starts
+    int32_t prefix_n_prev_last = 0;          // the slot's last prompt batch: tokens other slots had in it before ours,
+    int32_t prefix_n_cur_last  = -1;         // and ours (-1 = none yet)
 
     llama_context * ctx_tgt = nullptr;
     llama_context * ctx_dft = nullptr;
@@ -1739,6 +1749,14 @@ private:
         }
         SRV_TRC("%s", "for more info see https://github.com/ggml-org/llama.cpp/pull/16391\n");
 
+        // prefix saves (2026-10-02, perf/prefix-slot-saves.md)
+        if (const char * dir = getenv("LLAMA_PREFIX_DIR"); dir && *dir) {
+            prefix_dir  = dir;
+            prefix_auto = getenv("LLAMA_PREFIX_AUTO") && atoi(getenv("LLAMA_PREFIX_AUTO")) != 0;
+            prefix_scan();
+            SRV_INF("prefix saves: %zu usable in %s (LLAMA_PREFIX_DIR; LLAMA_PREFIX_MIN_GAIN tokens over the slot, default 256); the server makes saves = %d (LLAMA_PREFIX_AUTO)\n", prefix_saves.size(), prefix_dir.c_str(), (int) prefix_auto);
+        }
+
         // cold state on disk (2026-09-26): prompt checkpoints and prompt-cache entries spill to unlinked temp files
         if (const auto & dir = common_cold_state_dir(); !dir.empty()) {
             SRV_INF("cold state: checkpoints + prompt-cache entries spill to %s (LLAMA_COLD_STATE=0 keeps them in RAM, LLAMA_COLD_STATE_DIR=<dir> moves them)\n", dir.c_str());
@@ -1917,6 +1935,503 @@ private:
         return nullptr;
     }
 
+    // restore a slot from a slot save file and its sidecars (SLOT_RESTORE and the prefix-save lookup); throws on a bad file
+    // tail_p0 >= 0: the file is a layer - its attention cells start at token tail_p0 and are appended to what the slot holds
+    size_t slot_restore_file(server_slot & slot, const std::string & filepath, int32_t tail_p0 = -1) {
+        size_t n_packed = 0;
+        llama_tokens packed;
+        size_t nread = llama_state_seq_load_file(ctx_tgt, filepath.c_str(), slot.id, nullptr, 0, &n_packed);
+        if (nread != 0) {
+            packed.resize(std::max<size_t>(1, n_packed));
+            llama_state_seq_set_tail(ctx_tgt, tail_p0);
+            nread = llama_state_seq_load_file(ctx_tgt, filepath.c_str(), slot.id, packed.data(), packed.size(), &n_packed);
+            llama_state_seq_set_tail(ctx_tgt, -1);
+        }
+        if (nread == 0) {
+            throw std::runtime_error("No available space in KV cache or invalid slot save file");
+        }
+        packed.resize(n_packed);
+
+        server_tokens restored = server_tokens::deserialize(packed, mctx != nullptr);
+
+        if (restored.size() > (size_t) slot.n_ctx) {
+            throw std::runtime_error("Restored prompt does not fit in the slot context");
+        }
+
+        if (!restored.validate(ctx_tgt)) {
+            throw std::runtime_error("Invalid tokens in slot save file");
+        }
+
+        slot.prompt.clear();
+        slot.prompt.tokens = std::move(restored);
+
+        // sidecars written by SLOT_SAVE (see there): the drafter state, then the context checkpoints
+        bool dft_restored = false;
+        if (ctx_dft) {
+            const std::string p = filepath + ".dft";
+            if (FILE * probe = fopen(p.c_str(), "rb")) {
+                fclose(probe);
+                dft_restored = true;
+                llama_token tok = 0;
+                size_t n_tok = 0;
+                if (llama_state_seq_load_file(ctx_dft, p.c_str(), slot.id, &tok, 1, &n_tok) == 0) {
+                    throw std::runtime_error("drafter state file present but unreadable");
+                }
+            } else {
+                llama_memory_seq_rm(llama_get_memory(ctx_dft), slot.id, -1, -1);
+            }
+        }
+        {
+            const std::string p = filepath + ".spec";
+            std::unique_ptr<FILE, int (*)(FILE *)> f(fopen(p.c_str(), "rb"), fclose);
+            if (f) {
+                fseek(f.get(), 0, SEEK_END);
+                std::vector<uint8_t> sd((size_t) ftell(f.get()));
+                fseek(f.get(), 0, SEEK_SET);
+                if (!sd.empty() && fread(sd.data(), 1, sd.size(), f.get()) != sd.size()) {
+                    throw std::runtime_error("truncated drafter state file");
+                }
+                common_speculative_set_state_full(spec.get(), slot.id, sd);
+            }
+        }
+        {
+            const std::string p = filepath + ".ckpt";
+            std::unique_ptr<FILE, int (*)(FILE *)> f(fopen(p.c_str(), "rb"), fclose);
+            if (f) {
+                auto rd = [&](void * dst, size_t n) {
+                    if (n && fread(dst, 1, n, f.get()) != n) {
+                        throw std::runtime_error("truncated checkpoint file");
+                    }
+                };
+                uint32_t magic = 0, version = 0, count = 0;
+                rd(&magic, 4); rd(&version, 4); rd(&count, 4);
+                if (magic != 0x54504b43 || version != 1) {
+                    throw std::runtime_error("bad checkpoint file header");
+                }
+                const auto & dir = common_cold_state_dir();
+                size_t n_bytes = 0;
+                for (uint32_t i = 0; i < count; i++) {
+                    auto & c = slot.prompt.checkpoints.emplace_back();
+                    int64_t  n_tokens = 0;
+                    int32_t  pos_min = 0, pos_max = 0;
+                    uint64_t sz[3] = { 0, 0, 0 };
+                    rd(&n_tokens, 8); rd(&pos_min, 4); rd(&pos_max, 4); rd(sz, sizeof(sz));
+                    c.n_tokens = n_tokens; c.pos_min = pos_min; c.pos_max = pos_max;
+                    c.data_tgt.resize(sz[0]); c.data_dft.resize(sz[1]); c.data_spec.resize(sz[2]);
+                    rd(c.data_tgt.data(), sz[0]); rd(c.data_dft.data(), sz[1]); rd(c.data_spec.data(), sz[2]);
+                    n_bytes += sz[0] + sz[1] + sz[2];
+                    if (!dir.empty()) {
+                        c.spill(dir);
+                    }
+                }
+                SLT_INF(slot, "slot restored: %zu tokens, %u checkpoints (%.1f MiB), drafter %s\n",
+                        slot.prompt.tokens.size(), count, n_bytes / (1024.0 * 1024.0), !ctx_dft ? "none" : dft_restored ? "restored" : "no file, KV cleared");
+            }
+        }
+        return nread;
+    }
+
+    // Prefix saves (2026-10-02, perf/prefix-slot-saves.md): slot saves of common prompt prefixes (an agent's tools + base
+    // prompt) in LLAMA_PREFIX_DIR, consulted when a task arrives. A save is restored into the picked slot when it resumes
+    // at least LLAMA_PREFIX_MIN_GAIN (256) more tokens than the slot itself would. A save is listed only with a <file>.meta
+    // that names this model file, KV types and layout (written by SLOT_SAVE): a stale or foreign save is never loaded.
+    struct server_prefix_save {
+        std::string name;
+        std::string path;
+        server_tokens tokens;
+        std::vector<int64_t> ckpt_n_tokens;
+        bool        made_by_server = false; // every token decoded, no checkpoints: resumes only a prompt that contains all of it
+        std::string parent;                 // a layer: the attention cells from token `start` on; the cells below are the parent's
+        int32_t     start = 0;
+        uint64_t    n_bytes = 0;
+    };
+    bool    prefix_auto = false;
+    int32_t prefix_batch_total = 0;         // size of the last batch sent to decode
+    std::string prefix_dir;
+    std::vector<server_prefix_save> prefix_saves;
+    int64_t prefix_dir_mtime = -1;
+
+    std::string slot_save_identity() const {
+        std::error_code ec;
+        const auto sz = std::filesystem::file_size(params_base.model.path, ec);
+        const char * hm = getenv("LLAMA_KV_HEAD_MAJOR");
+        return "model=" + std::filesystem::path(params_base.model.path).filename().string() + " size=" + std::to_string(ec ? 0 : (uint64_t) sz) +
+               " ctk=" + ggml_type_name(params_base.cache_type_k) + " ctv=" + ggml_type_name(params_base.cache_type_v) +
+               " kv_head_major=" + (hm ? hm : "default");
+    }
+
+    // tokens a prompt can resume when only its first lcp tokens are wanted: all of them when the prefix reaches the end,
+    // else the newest checkpoint at or before lcp (same rule as server_prompt_cache::effective_reuse)
+    static int prefix_reuse(size_t n_tokens, const std::vector<int64_t> & ckpts, int lcp, bool ckpt_needed, bool all_decoded = false) {
+        if (all_decoded && ckpt_needed) {
+            return lcp >= (int) n_tokens ? lcp : 0;
+        }
+        if (!ckpt_needed || lcp <= 0 || lcp >= (int) n_tokens - 1) {
+            return lcp;
+        }
+        int res = 0;
+        for (const auto n : ckpts) {
+            if (n <= lcp) {
+                res = std::max<int>(res, (int) n);
+            }
+        }
+        return res;
+    }
+
+    void prefix_scan() {
+        std::error_code ec;
+        const auto mt = std::filesystem::last_write_time(prefix_dir, ec);
+        if (ec) {
+            return;
+        }
+        const int64_t mtime = (int64_t) mt.time_since_epoch().count();
+        if (mtime == prefix_dir_mtime) {
+            return;
+        }
+        prefix_dir_mtime = mtime;
+        prefix_saves.clear();
+        const std::string identity = slot_save_identity();
+        for (const auto & ent : std::filesystem::directory_iterator(prefix_dir, ec)) {
+            const std::string path = ent.path().string();
+            if (!ent.is_regular_file() || ent.path().extension() != ".meta") {
+                continue;
+            }
+            const std::string base = path.substr(0, path.size() - 5);
+            const std::string name = std::filesystem::path(base).filename().string();
+            std::string meta, meta2;
+            {
+                std::ifstream f(path);
+                std::getline(f, meta);
+                std::getline(f, meta2);
+            }
+            if (meta != identity) {
+                SRV_WRN("prefix save %s skipped: made for another model or KV configuration (%s)\n", name.c_str(), meta.c_str());
+                continue;
+            }
+            server_prefix_save cur;
+            cur.name = name;
+            cur.path = base;
+            {
+                // second line (saves made by the server): "auto parent=<name|-> start=<n>"
+                char par[256] = { 0 };
+                int  start = 0;
+                if (sscanf(meta2.c_str(), "auto parent=%255s start=%d", par, &start) == 2) {
+                    cur.made_by_server = true;
+                    if (strcmp(par, "-") != 0) {
+                        cur.parent = par;
+                        cur.start  = start;
+                    }
+                }
+                std::error_code ec2;
+                for (const char * sfx : { "", ".meta", ".ckpt", ".dft", ".spec" }) {
+                    const auto sz = std::filesystem::file_size(base + sfx, ec2);
+                    if (!ec2) {
+                        cur.n_bytes += sz;
+                    }
+                }
+            }
+            {
+                std::unique_ptr<FILE, int (*)(FILE *)> f(fopen(base.c_str(), "rb"), fclose);
+                uint32_t hdr[3] = { 0, 0, 0 };
+                if (!f || fread(hdr, 4, 3, f.get()) != 3 || hdr[0] != LLAMA_STATE_SEQ_MAGIC || hdr[1] != LLAMA_STATE_SEQ_VERSION) {
+                    SRV_WRN("prefix save %s skipped: not a slot save file\n", name.c_str());
+                    continue;
+                }
+                llama_tokens packed(hdr[2]);
+                if (hdr[2] == 0 || fread(packed.data(), sizeof(llama_token), packed.size(), f.get()) != packed.size()) {
+                    SRV_WRN("prefix save %s skipped: truncated\n", name.c_str());
+                    continue;
+                }
+                try {
+                    cur.tokens = server_tokens::deserialize(packed, mctx != nullptr);
+                } catch (const std::exception & err) {
+                    SRV_WRN("prefix save %s skipped: %s\n", name.c_str(), err.what());
+                    continue;
+                }
+            }
+            {
+                std::unique_ptr<FILE, int (*)(FILE *)> f(fopen((base + ".ckpt").c_str(), "rb"), fclose);
+                uint32_t hdr[3] = { 0, 0, 0 };
+                if (f && fread(hdr, 4, 3, f.get()) == 3 && hdr[0] == 0x54504b43 && hdr[1] == 1) {
+                    for (uint32_t i = 0; i < hdr[2]; i++) {
+                        int64_t n_tokens = 0;
+                        int32_t pos[2];
+                        uint64_t sz[3];
+                        if (fread(&n_tokens, 8, 1, f.get()) != 1 || fread(pos, 4, 2, f.get()) != 2 || fread(sz, 8, 3, f.get()) != 3 ||
+                            fseeko(f.get(), (off_t) (sz[0] + sz[1] + sz[2]), SEEK_CUR) != 0) {
+                            break;
+                        }
+                        cur.ckpt_n_tokens.push_back(n_tokens);
+                    }
+                }
+            }
+            SRV_INF("prefix save %s: %zu tokens, %zu checkpoints%s%s\n", name.c_str(), cur.tokens.size(), cur.ckpt_n_tokens.size(),
+                    cur.parent.empty() ? "" : ", layer on ", cur.parent.c_str());
+            prefix_saves.push_back(std::move(cur));
+        }
+        // a layer is usable only with its parent: same tokens up to the layer's start
+        for (bool again = true; again; ) {
+            again = false;
+            for (auto it = prefix_saves.begin(); it != prefix_saves.end(); ++it) {
+                if (it->parent.empty()) {
+                    continue;
+                }
+                const server_prefix_save * par = prefix_find(it->parent);
+                if (par == nullptr || (int32_t) par->tokens.size() != it->start || (int32_t) par->tokens.get_common_prefix(it->tokens) != it->start) {
+                    SRV_WRN("prefix save %s skipped: its parent %s is missing or does not match\n", it->name.c_str(), it->parent.c_str());
+                    prefix_saves.erase(it);
+                    again = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    const server_prefix_save * prefix_find(const std::string & name) const {
+        for (const auto & cur : prefix_saves) {
+            if (cur.name == name) {
+                return &cur;
+            }
+        }
+        return nullptr;
+    }
+
+    // restore a save and the layers under it, oldest first
+    void prefix_restore_chain(server_slot & slot, const server_prefix_save & save) {
+        std::vector<const server_prefix_save *> chain;
+        for (const server_prefix_save * cur = &save; cur != nullptr; cur = cur->parent.empty() ? nullptr : prefix_find(cur->parent)) {
+            chain.push_back(cur);
+        }
+        for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
+            slot_restore_file(slot, (*it)->path, (*it)->parent.empty() ? -1 : (*it)->start);
+            std::error_code ec;
+            std::filesystem::last_write_time((*it)->path + ".meta", std::filesystem::file_time_type::clock::now(), ec); // recently used
+        }
+    }
+
+    static std::string prefix_name(const server_tokens & tokens, int32_t n) {
+        uint64_t h = 1469598103934665603ull;
+        for (int32_t i = 0; i < n; i++) {
+            const uint32_t t = (uint32_t) tokens[i];
+            for (int b = 0; b < 4; b++) {
+                h = (h ^ ((t >> (8 * b)) & 0xff)) * 1099511628211ull;
+            }
+        }
+        char buf[64];
+        snprintf(buf, sizeof(buf), "auto-%d-%016llx", n, (unsigned long long) h);
+        return buf;
+    }
+
+    // LLAMA_PREFIX_AUTO=1: decide which saves this prefill writes on its way. Called when a task starts, n_past final.
+    //  - project cut: the last ubatch boundary that every prompt with this system block passes through before its
+    //    end-of-prompt batch breaks (LLAMA_PREFIX_CUT=user: the first user message itself - shorter tail, not the fresh grouping)
+    //  - head cut: the last ubatch boundary inside the longest prefix this prompt shares with a save of another prompt
+    // Only a prefill that starts at 0 or at the end of a restored server-made save is grouped like a fresh one.
+    void prefix_plan(server_slot & slot, int n_past) {
+        slot.prefix_cuts.clear();
+        slot.prefix_n_cur_last = -1;
+        const std::string at_name = slot.prefix_at_name;
+        const int32_t     at_n    = slot.prefix_at_n;
+        slot.prefix_at_name.clear();
+        slot.prefix_at_n = -1;
+        if (!prefix_auto || slot.task->type != SERVER_TASK_TYPE_COMPLETION || mctx != nullptr) {
+            return;
+        }
+        static const int  min_tokens = getenv("LLAMA_PREFIX_MIN_TOKENS") ? atoi(getenv("LLAMA_PREFIX_MIN_TOKENS")) : 1024;
+        static const bool cut_user   = getenv("LLAMA_PREFIX_CUT") && strcmp(getenv("LLAMA_PREFIX_CUT"), "user") == 0;
+        const int32_t n_ub = llama_n_ubatch(ctx_tgt);
+        const int32_t n_b  = llama_n_batch(ctx_tgt);
+        const int32_t n    = slot.task->n_tokens();
+        int32_t u = -1;
+        for (const auto & sp : slot.task->params.message_spans.spans) {
+            if (sp.role == COMMON_CHAT_ROLE_USER) {
+                u = (int32_t) sp.pos;
+                break;
+            }
+        }
+        if (u < min_tokens || n_ub <= 0 || n_b % n_ub != 0) {
+            return;
+        }
+        if (!(n_past == 0 || (n_past == at_n && n_past % n_ub == 0))) {
+            SLT_INF(slot, "prefix saves: none made, the prefill resumes at %d (not 0, not the end of a restored prefix save)\n", n_past);
+            return;
+        }
+        // the shortest request with this system block has ~8 tokens after the user start; its batches break at n - 4 - n_ubatch
+        int32_t c_proj = cut_user ? u : ((u + 4 - n_ub) / n_ub) * n_ub;
+        if (!cut_user && c_proj > n - 4 - n_ub) {
+            c_proj = ((n - 4 - n_ub) / n_ub) * n_ub;
+        }
+        int32_t c_head = 0;
+        bool have_proj = false;
+        for (const auto & cur : prefix_saves) {
+            const int32_t lcp = (int32_t) cur.tokens.get_common_prefix(slot.task->tokens);
+            if (lcp >= (int32_t) cur.tokens.size()) {
+                have_proj = have_proj || (int32_t) cur.tokens.size() == c_proj;
+                continue; // contained in the prompt: a parent, not evidence of a shared head
+            }
+            c_head = std::max(c_head, (std::min(lcp, c_proj) / n_ub) * n_ub);
+        }
+        std::string parent = n_past > 0 ? at_name : "";
+        int32_t     start  = n_past;
+        if (c_head >= min_tokens && c_head > n_past && c_head < c_proj) {
+            bool have_head = false;
+            for (const auto & cur : prefix_saves) {
+                have_head = have_head || ((int32_t) cur.tokens.size() == c_head && (int32_t) cur.tokens.get_common_prefix(slot.task->tokens) == c_head);
+            }
+            if (!have_head) {
+                slot.prefix_cuts.push_back({ c_head, parent, start });
+            }
+            parent = prefix_name(slot.task->tokens, c_head);
+            start  = c_head;
+        }
+        if (!have_proj && c_proj >= min_tokens && c_proj > start) {
+            slot.prefix_cuts.push_back({ c_proj, parent, start });
+        }
+        for (const auto & c : slot.prefix_cuts) {
+            SLT_INF(slot, "prefix saves: will write %s at %d tokens (%s%s)\n", prefix_name(slot.task->tokens, c.n).c_str(), c.n,
+                    c.parent.empty() ? "whole state" : "layer on ", c.parent.c_str());
+        }
+    }
+
+    // write the save planned at the slot's current token count; the slot has just decoded up to it
+    void prefix_write(server_slot & slot) {
+        const auto cut = slot.prefix_cuts.front();
+        slot.prefix_cuts.erase(slot.prefix_cuts.begin());
+        static const bool no_dft = getenv("LLAMA_PREFIX_NO_DFT") && atoi(getenv("LLAMA_PREFIX_NO_DFT")) != 0;
+        const int64_t t_start = ggml_time_us();
+        const std::string name = prefix_name(slot.prompt.tokens, cut.n);
+        const std::string path = (std::filesystem::path(prefix_dir) / name).string();
+        size_t n_bytes = 0;
+        try {
+            const std::vector<char> packed = slot.prompt.tokens.serialize();
+            llama_state_seq_set_tail(ctx_tgt, cut.parent.empty() ? -1 : cut.start);
+            const size_t nw = llama_state_seq_save_file(ctx_tgt, path.c_str(), slot.id,
+                    reinterpret_cast<const llama_token *>(packed.data()), packed.size() / sizeof(llama_token));
+            llama_state_seq_set_tail(ctx_tgt, -1);
+            if (nw == 0) {
+                throw std::runtime_error("unable to write the state file");
+            }
+            n_bytes += nw;
+            if (ctx_dft && !no_dft) {
+                llama_token dummy = 0;
+                n_bytes += llama_state_seq_save_file(ctx_dft, (path + ".dft").c_str(), slot.id, &dummy, 0);
+                std::vector<uint8_t> sd;
+                if (common_speculative_get_state_full(spec.get(), slot.id, sd) && !sd.empty()) {
+                    std::ofstream f(path + ".spec", std::ios::binary);
+                    f.write((const char *) sd.data(), (std::streamsize) sd.size());
+                    n_bytes += sd.size();
+                }
+            }
+            {
+                // the meta file last: the lookup lists a save by it
+                std::ofstream fm(path + ".meta");
+                fm << slot_save_identity() << "\n" << "auto parent=" << (cut.parent.empty() ? "-" : cut.parent) << " start=" << cut.start << "\n";
+            }
+            SLT_INF(slot, "prefix save %s written: %d tokens%s%s, %.1f MiB, %.1f ms\n", name.c_str(), cut.n,
+                    cut.parent.empty() ? "" : ", layer on ", cut.parent.c_str(), n_bytes / (1024.0 * 1024.0), (ggml_time_us() - t_start) / 1000.0);
+        } catch (const std::exception & err) {
+            llama_state_seq_set_tail(ctx_tgt, -1);
+            SLT_WRN(slot, "prefix save %s not written: %s\n", name.c_str(), err.what());
+            slot.prefix_cuts.clear();
+            return;
+        }
+        prefix_evict(name);
+    }
+
+    // LLAMA_PREFIX_MAX_MIB (16384): over it, the least recently used saves that no other save builds on are deleted
+    void prefix_evict(const std::string & keep) {
+        static const uint64_t max_bytes = (uint64_t) (getenv("LLAMA_PREFIX_MAX_MIB") ? atoll(getenv("LLAMA_PREFIX_MAX_MIB")) : 16384) * 1024 * 1024;
+        prefix_dir_mtime = -1;
+        prefix_scan();
+        while (true) {
+            uint64_t total = 0;
+            for (const auto & cur : prefix_saves) {
+                total += cur.n_bytes;
+            }
+            if (total <= max_bytes) {
+                return;
+            }
+            const server_prefix_save * victim = nullptr;
+            std::filesystem::file_time_type t_victim;
+            for (const auto & cur : prefix_saves) {
+                bool is_parent = false;
+                for (const auto & other : prefix_saves) {
+                    is_parent = is_parent || other.parent == cur.name;
+                }
+                if (is_parent || cur.name == keep || !cur.made_by_server) {
+                    continue;
+                }
+                std::error_code ec;
+                const auto t = std::filesystem::last_write_time(cur.path + ".meta", ec);
+                if (!ec && (victim == nullptr || t < t_victim)) {
+                    victim   = &cur;
+                    t_victim = t;
+                }
+            }
+            if (victim == nullptr) {
+                return;
+            }
+            SRV_INF("prefix save %s deleted: %.1f MiB over the %.0f MiB budget (LLAMA_PREFIX_MAX_MIB)\n", victim->name.c_str(),
+                    (total - max_bytes) / (1024.0 * 1024.0), max_bytes / (1024.0 * 1024.0));
+            std::error_code ec;
+            for (const char * sfx : { ".meta", "", ".ckpt", ".dft", ".spec" }) {
+                std::filesystem::remove(victim->path + sfx, ec);
+            }
+            prefix_dir_mtime = -1;
+            prefix_scan();
+        }
+    }
+
+    void prefix_try_restore(server_slot & slot, const server_task & task) {
+        static const int min_gain = getenv("LLAMA_PREFIX_MIN_GAIN") ? atoi(getenv("LLAMA_PREFIX_MIN_GAIN")) : 256;
+        prefix_scan();
+        if (prefix_saves.empty()) {
+            return;
+        }
+        const bool ckpt_needed = ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL ||
+                                 ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_RS   || n_swa > 0;
+        int n_slot = 0;
+        if (!slot.prompt.tokens.empty()) {
+            std::vector<int64_t> ckpts;
+            for (const auto & c : slot.prompt.checkpoints) {
+                ckpts.push_back(c.n_tokens);
+            }
+            n_slot = prefix_reuse(slot.prompt.tokens.size(), ckpts, (int) slot.prompt.tokens.get_common_prefix(task.tokens), ckpt_needed);
+        }
+        const server_prefix_save * best = nullptr;
+        int n_best = 0;
+        for (const auto & cur : prefix_saves) {
+            if (cur.tokens.size() > (size_t) slot.n_ctx) {
+                continue;
+            }
+            const int n = prefix_reuse(cur.tokens.size(), cur.ckpt_n_tokens, (int) cur.tokens.get_common_prefix(task.tokens), ckpt_needed, cur.made_by_server);
+            if (n > n_best) {
+                n_best = n;
+                best = &cur;
+            }
+        }
+        if (best == nullptr || n_best < n_slot + min_gain) {
+            return;
+        }
+        const int64_t t_start = ggml_time_us();
+        if (prompt_cache && !slot.prompt.tokens.empty()) {
+            slot.prompt_save(*prompt_cache);
+            prompt_cache->update();
+        }
+        try {
+            prefix_restore_chain(slot, *best);
+            if (best->made_by_server) {
+                slot.prefix_at_name = best->name;
+                slot.prefix_at_n    = (int32_t) best->tokens.size();
+            }
+            SLT_INF(slot, "prefix save %s restored: resumes %d of %d prompt tokens (the slot alone: %d), %.1f ms\n",
+                    best->name.c_str(), n_best, (int) task.tokens.size(), n_slot, (ggml_time_us() - t_start) / 1000.0);
+        } catch (const std::exception & err) {
+            SLT_WRN(slot, "prefix save %s could not be restored: %s\n", best->name.c_str(), err.what());
+            slot.prompt_clear();
+        }
+    }
+
     server_slot * get_available_slot(const server_task & task) {
         server_slot * ret = nullptr;
 
@@ -2083,6 +2598,10 @@ private:
                 prompt_cache->update();
 
                 SRV_TRC("prompt cache update took %.2f ms\n", (ggml_time_us() - t_start) / 1000.0);
+            }
+
+            if (!prefix_dir.empty() && task.type == SERVER_TASK_TYPE_COMPLETION) {
+                prefix_try_restore(*ret, task);
             }
         }
 
@@ -3073,6 +3592,11 @@ private:
                             send_error(task, "Unable to write the checkpoint file", ERROR_TYPE_SERVER);
                             break;
                         }
+                        {
+                            // <file>.meta: what the save was made with; the prefix-save lookup lists only matching saves
+                            std::ofstream fm(filepath + ".meta");
+                            fm << slot_save_identity() << "\n";
+                        }
                         SLT_INF(*slot, "slot saved: %zu tokens, %.1f MiB target + %.1f MiB sidecars (%u checkpoints, drafter %s)\n",
                                 slot->prompt.tokens.size(), nwrite / (1024.0 * 1024.0), nwrite_side / (1024.0 * 1024.0), count, ctx_dft ? "yes" : "no");
                     }
@@ -3112,94 +3636,7 @@ private:
 
                     size_t nread = 0;
                     try {
-                        size_t n_packed = 0;
-                        llama_tokens packed;
-                        nread = llama_state_seq_load_file(ctx_tgt, filepath.c_str(), slot->id, nullptr, 0, &n_packed);
-                        if (nread != 0) {
-                            packed.resize(std::max<size_t>(1, n_packed));
-                            nread = llama_state_seq_load_file(ctx_tgt, filepath.c_str(), slot->id, packed.data(), packed.size(), &n_packed);
-                        }
-                        if (nread == 0) {
-                            throw std::runtime_error("No available space in KV cache or invalid slot save file");
-                        }
-                        packed.resize(n_packed);
-
-                        server_tokens restored = server_tokens::deserialize(packed, mctx != nullptr);
-
-                        if (restored.size() > (size_t) slot->n_ctx) {
-                            throw std::runtime_error("Restored prompt does not fit in the slot context");
-                        }
-
-                        if (!restored.validate(ctx_tgt)) {
-                            throw std::runtime_error("Invalid tokens in slot save file");
-                        }
-
-                        slot->prompt.clear();
-                        slot->prompt.tokens = std::move(restored);
-
-                        // sidecars written by SLOT_SAVE (see there): the drafter state, then the context checkpoints
-                        bool dft_restored = false;
-                        if (ctx_dft) {
-                            const std::string p = filepath + ".dft";
-                            if (FILE * probe = fopen(p.c_str(), "rb")) {
-                                fclose(probe);
-                                dft_restored = true;
-                                llama_token tok = 0;
-                                size_t n_tok = 0;
-                                if (llama_state_seq_load_file(ctx_dft, p.c_str(), slot->id, &tok, 1, &n_tok) == 0) {
-                                    throw std::runtime_error("drafter state file present but unreadable");
-                                }
-                            } else {
-                                llama_memory_seq_rm(llama_get_memory(ctx_dft), slot->id, -1, -1);
-                            }
-                        }
-                        {
-                            const std::string p = filepath + ".spec";
-                            std::unique_ptr<FILE, int (*)(FILE *)> f(fopen(p.c_str(), "rb"), fclose);
-                            if (f) {
-                                fseek(f.get(), 0, SEEK_END);
-                                std::vector<uint8_t> sd((size_t) ftell(f.get()));
-                                fseek(f.get(), 0, SEEK_SET);
-                                if (!sd.empty() && fread(sd.data(), 1, sd.size(), f.get()) != sd.size()) {
-                                    throw std::runtime_error("truncated drafter state file");
-                                }
-                                common_speculative_set_state_full(spec.get(), slot->id, sd);
-                            }
-                        }
-                        {
-                            const std::string p = filepath + ".ckpt";
-                            std::unique_ptr<FILE, int (*)(FILE *)> f(fopen(p.c_str(), "rb"), fclose);
-                            if (f) {
-                                auto rd = [&](void * dst, size_t n) {
-                                    if (n && fread(dst, 1, n, f.get()) != n) {
-                                        throw std::runtime_error("truncated checkpoint file");
-                                    }
-                                };
-                                uint32_t magic = 0, version = 0, count = 0;
-                                rd(&magic, 4); rd(&version, 4); rd(&count, 4);
-                                if (magic != 0x54504b43 || version != 1) {
-                                    throw std::runtime_error("bad checkpoint file header");
-                                }
-                                const auto & dir = common_cold_state_dir();
-                                size_t n_bytes = 0;
-                                for (uint32_t i = 0; i < count; i++) {
-                                    auto & c = slot->prompt.checkpoints.emplace_back();
-                                    int64_t  n_tokens = 0;
-                                    int32_t  pos_min = 0, pos_max = 0;
-                                    uint64_t sz[3] = { 0, 0, 0 };
-                                    rd(&n_tokens, 8); rd(&pos_min, 4); rd(&pos_max, 4); rd(sz, sizeof(sz));
-                                    c.n_tokens = n_tokens; c.pos_min = pos_min; c.pos_max = pos_max;
-                                    c.data_tgt.resize(sz[0]); c.data_dft.resize(sz[1]); c.data_spec.resize(sz[2]);
-                                    rd(c.data_tgt.data(), sz[0]); rd(c.data_dft.data(), sz[1]); rd(c.data_spec.data(), sz[2]);
-                                    n_bytes += sz[0] + sz[1] + sz[2];
-                                    if (!dir.empty()) {
-                                        c.spill(dir);
-                                    }
-                                }
-                                SLT_INF(*slot, "slot restored: %zu tokens, %u checkpoints (%.1f MiB), drafter %s\n",
-                                        slot->prompt.tokens.size(), count, n_bytes / (1024.0 * 1024.0), !ctx_dft ? "none" : dft_restored ? "restored" : "no file, KV cleared");
-                            }
-                        }
+                        nread = slot_restore_file(*slot, filepath);
                     } catch (const std::exception & err) {
                         slot->prompt_clear();
                         send_error(task, std::string("Unable to restore slot: ") + err.what(), ERROR_TYPE_INVALID_REQUEST);
@@ -3479,6 +3916,8 @@ private:
         llama_batch batch_view;
         int32_t off_next = 0;
         int32_t n_batch = llama_n_batch(ctx_tgt);
+        prefix_batch_total = batch.size();
+
         for (int32_t off = 0; off < batch.size(); off = off_next) {
             const int32_t n_tokens = std::min(n_batch, batch.size() - off);
             try {
@@ -4103,6 +4542,8 @@ private:
                             SLT_WRN(slot, "n_past was set to %d\n", n_past);
                         }
 
+                        prefix_plan(slot, n_past);
+
                         slot.stats.n_prompt_cached    = n_past;
                         slot.stats.n_prompt_processed = 0;
 
@@ -4121,6 +4562,17 @@ private:
                             }
                         }
                     } // end of SLOT_STATE_STARTED
+
+                    if (!slot.prefix_cuts.empty()) {
+                        // a save is only made from a prefill grouped like a fresh one: the slot alone in each of its batches
+                        if (slot.prefix_n_cur_last >= 0 && (slot.prefix_n_prev_last != 0 || slot.prefix_n_cur_last != prefix_batch_total)) {
+                            SLT_INF(slot, "prefix saves: cancelled, the slot shared a batch with another (%d + %d of %d tokens)\n",
+                                    slot.prefix_n_prev_last, slot.prefix_n_cur_last, prefix_batch_total);
+                            slot.prefix_cuts.clear();
+                        } else if (slot.prompt.n_tokens() == slot.prefix_cuts.front().n) {
+                            prefix_write(slot);
+                        }
+                    }
 
                     if (!slot.can_split()) {
                         // cannot fit the prompt in the current batch - will try next iter
@@ -4243,6 +4695,11 @@ private:
                             /* is_prompt = */ true);
                         slot.prompt.tokens.push_back(cur_tok);
 
+                        // break where a prefix save is to be written (a ubatch boundary: the grouping is unchanged)
+                        if (!slot.prefix_cuts.empty() && slot.prompt.n_tokens() == slot.prefix_cuts.front().n) {
+                            break;
+                        }
+
                         // break at the last user message, or at user messages at least min step past the last checkpoint
                         if (do_checkpoint && spans.is_user_start(slot.prompt.n_tokens())) {
                             const auto pos = slot.prompt.n_tokens();
@@ -4277,6 +4734,9 @@ private:
 
                     // the number of tokens added to the batch for the current slot
                     const auto n_tokens_cur = batch.size() - n_tokens_prev;
+
+                    slot.prefix_n_prev_last = n_tokens_prev;
+                    slot.prefix_n_cur_last  = n_tokens_cur;
 
                     const auto n_tokens_start = slot.prompt.n_tokens() - n_tokens_cur;
 
