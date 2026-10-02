@@ -1739,6 +1739,13 @@ private:
         }
         SRV_TRC("%s", "for more info see https://github.com/ggml-org/llama.cpp/pull/16391\n");
 
+        // prefix saves (2026-10-02, perf/prefix-slot-saves.md)
+        if (const char * dir = getenv("LLAMA_PREFIX_DIR"); dir && *dir) {
+            prefix_dir = dir;
+            prefix_scan();
+            SRV_INF("prefix saves: %zu usable in %s (LLAMA_PREFIX_DIR; LLAMA_PREFIX_MIN_GAIN tokens over the slot, default 256)\n", prefix_saves.size(), prefix_dir.c_str());
+        }
+
         // cold state on disk (2026-09-26): prompt checkpoints and prompt-cache entries spill to unlinked temp files
         if (const auto & dir = common_cold_state_dir(); !dir.empty()) {
             SRV_INF("cold state: checkpoints + prompt-cache entries spill to %s (LLAMA_COLD_STATE=0 keeps them in RAM, LLAMA_COLD_STATE_DIR=<dir> moves them)\n", dir.c_str());
@@ -1917,6 +1924,255 @@ private:
         return nullptr;
     }
 
+    // restore a slot from a slot save file and its sidecars (SLOT_RESTORE and the prefix-save lookup); throws on a bad file
+    size_t slot_restore_file(server_slot & slot, const std::string & filepath) {
+        size_t n_packed = 0;
+        llama_tokens packed;
+        size_t nread = llama_state_seq_load_file(ctx_tgt, filepath.c_str(), slot.id, nullptr, 0, &n_packed);
+        if (nread != 0) {
+            packed.resize(std::max<size_t>(1, n_packed));
+            nread = llama_state_seq_load_file(ctx_tgt, filepath.c_str(), slot.id, packed.data(), packed.size(), &n_packed);
+        }
+        if (nread == 0) {
+            throw std::runtime_error("No available space in KV cache or invalid slot save file");
+        }
+        packed.resize(n_packed);
+
+        server_tokens restored = server_tokens::deserialize(packed, mctx != nullptr);
+
+        if (restored.size() > (size_t) slot.n_ctx) {
+            throw std::runtime_error("Restored prompt does not fit in the slot context");
+        }
+
+        if (!restored.validate(ctx_tgt)) {
+            throw std::runtime_error("Invalid tokens in slot save file");
+        }
+
+        slot.prompt.clear();
+        slot.prompt.tokens = std::move(restored);
+
+        // sidecars written by SLOT_SAVE (see there): the drafter state, then the context checkpoints
+        bool dft_restored = false;
+        if (ctx_dft) {
+            const std::string p = filepath + ".dft";
+            if (FILE * probe = fopen(p.c_str(), "rb")) {
+                fclose(probe);
+                dft_restored = true;
+                llama_token tok = 0;
+                size_t n_tok = 0;
+                if (llama_state_seq_load_file(ctx_dft, p.c_str(), slot.id, &tok, 1, &n_tok) == 0) {
+                    throw std::runtime_error("drafter state file present but unreadable");
+                }
+            } else {
+                llama_memory_seq_rm(llama_get_memory(ctx_dft), slot.id, -1, -1);
+            }
+        }
+        {
+            const std::string p = filepath + ".spec";
+            std::unique_ptr<FILE, int (*)(FILE *)> f(fopen(p.c_str(), "rb"), fclose);
+            if (f) {
+                fseek(f.get(), 0, SEEK_END);
+                std::vector<uint8_t> sd((size_t) ftell(f.get()));
+                fseek(f.get(), 0, SEEK_SET);
+                if (!sd.empty() && fread(sd.data(), 1, sd.size(), f.get()) != sd.size()) {
+                    throw std::runtime_error("truncated drafter state file");
+                }
+                common_speculative_set_state_full(spec.get(), slot.id, sd);
+            }
+        }
+        {
+            const std::string p = filepath + ".ckpt";
+            std::unique_ptr<FILE, int (*)(FILE *)> f(fopen(p.c_str(), "rb"), fclose);
+            if (f) {
+                auto rd = [&](void * dst, size_t n) {
+                    if (n && fread(dst, 1, n, f.get()) != n) {
+                        throw std::runtime_error("truncated checkpoint file");
+                    }
+                };
+                uint32_t magic = 0, version = 0, count = 0;
+                rd(&magic, 4); rd(&version, 4); rd(&count, 4);
+                if (magic != 0x54504b43 || version != 1) {
+                    throw std::runtime_error("bad checkpoint file header");
+                }
+                const auto & dir = common_cold_state_dir();
+                size_t n_bytes = 0;
+                for (uint32_t i = 0; i < count; i++) {
+                    auto & c = slot.prompt.checkpoints.emplace_back();
+                    int64_t  n_tokens = 0;
+                    int32_t  pos_min = 0, pos_max = 0;
+                    uint64_t sz[3] = { 0, 0, 0 };
+                    rd(&n_tokens, 8); rd(&pos_min, 4); rd(&pos_max, 4); rd(sz, sizeof(sz));
+                    c.n_tokens = n_tokens; c.pos_min = pos_min; c.pos_max = pos_max;
+                    c.data_tgt.resize(sz[0]); c.data_dft.resize(sz[1]); c.data_spec.resize(sz[2]);
+                    rd(c.data_tgt.data(), sz[0]); rd(c.data_dft.data(), sz[1]); rd(c.data_spec.data(), sz[2]);
+                    n_bytes += sz[0] + sz[1] + sz[2];
+                    if (!dir.empty()) {
+                        c.spill(dir);
+                    }
+                }
+                SLT_INF(slot, "slot restored: %zu tokens, %u checkpoints (%.1f MiB), drafter %s\n",
+                        slot.prompt.tokens.size(), count, n_bytes / (1024.0 * 1024.0), !ctx_dft ? "none" : dft_restored ? "restored" : "no file, KV cleared");
+            }
+        }
+        return nread;
+    }
+
+    // Prefix saves (2026-10-02, perf/prefix-slot-saves.md): slot saves of common prompt prefixes (an agent's tools + base
+    // prompt) in LLAMA_PREFIX_DIR, consulted when a task arrives. A save is restored into the picked slot when it resumes
+    // at least LLAMA_PREFIX_MIN_GAIN (256) more tokens than the slot itself would. A save is listed only with a <file>.meta
+    // that names this model file, KV types and layout (written by SLOT_SAVE): a stale or foreign save is never loaded.
+    struct server_prefix_save {
+        std::string name;
+        std::string path;
+        server_tokens tokens;
+        std::vector<int64_t> ckpt_n_tokens;
+    };
+    std::string prefix_dir;
+    std::vector<server_prefix_save> prefix_saves;
+    int64_t prefix_dir_mtime = -1;
+
+    std::string slot_save_identity() const {
+        std::error_code ec;
+        const auto sz = std::filesystem::file_size(params_base.model.path, ec);
+        const char * hm = getenv("LLAMA_KV_HEAD_MAJOR");
+        return "model=" + std::filesystem::path(params_base.model.path).filename().string() + " size=" + std::to_string(ec ? 0 : (uint64_t) sz) +
+               " ctk=" + ggml_type_name(params_base.cache_type_k) + " ctv=" + ggml_type_name(params_base.cache_type_v) +
+               " kv_head_major=" + (hm ? hm : "default");
+    }
+
+    // tokens a prompt can resume when only its first lcp tokens are wanted: all of them when the prefix reaches the end,
+    // else the newest checkpoint at or before lcp (same rule as server_prompt_cache::effective_reuse)
+    static int prefix_reuse(size_t n_tokens, const std::vector<int64_t> & ckpts, int lcp, bool ckpt_needed) {
+        if (!ckpt_needed || lcp <= 0 || lcp >= (int) n_tokens - 1) {
+            return lcp;
+        }
+        int res = 0;
+        for (const auto n : ckpts) {
+            if (n <= lcp) {
+                res = std::max<int>(res, (int) n);
+            }
+        }
+        return res;
+    }
+
+    void prefix_scan() {
+        std::error_code ec;
+        const auto mt = std::filesystem::last_write_time(prefix_dir, ec);
+        if (ec) {
+            return;
+        }
+        const int64_t mtime = (int64_t) mt.time_since_epoch().count();
+        if (mtime == prefix_dir_mtime) {
+            return;
+        }
+        prefix_dir_mtime = mtime;
+        prefix_saves.clear();
+        const std::string identity = slot_save_identity();
+        for (const auto & ent : std::filesystem::directory_iterator(prefix_dir, ec)) {
+            const std::string path = ent.path().string();
+            if (!ent.is_regular_file() || ent.path().extension() != ".meta") {
+                continue;
+            }
+            const std::string base = path.substr(0, path.size() - 5);
+            const std::string name = std::filesystem::path(base).filename().string();
+            std::string meta;
+            {
+                std::ifstream f(path);
+                std::getline(f, meta);
+            }
+            if (meta != identity) {
+                SRV_WRN("prefix save %s skipped: made for another model or KV configuration (%s)\n", name.c_str(), meta.c_str());
+                continue;
+            }
+            server_prefix_save cur;
+            cur.name = name;
+            cur.path = base;
+            {
+                std::unique_ptr<FILE, int (*)(FILE *)> f(fopen(base.c_str(), "rb"), fclose);
+                uint32_t hdr[3] = { 0, 0, 0 };
+                if (!f || fread(hdr, 4, 3, f.get()) != 3 || hdr[0] != LLAMA_STATE_SEQ_MAGIC || hdr[1] != LLAMA_STATE_SEQ_VERSION) {
+                    SRV_WRN("prefix save %s skipped: not a slot save file\n", name.c_str());
+                    continue;
+                }
+                llama_tokens packed(hdr[2]);
+                if (hdr[2] == 0 || fread(packed.data(), sizeof(llama_token), packed.size(), f.get()) != packed.size()) {
+                    SRV_WRN("prefix save %s skipped: truncated\n", name.c_str());
+                    continue;
+                }
+                try {
+                    cur.tokens = server_tokens::deserialize(packed, mctx != nullptr);
+                } catch (const std::exception & err) {
+                    SRV_WRN("prefix save %s skipped: %s\n", name.c_str(), err.what());
+                    continue;
+                }
+            }
+            {
+                std::unique_ptr<FILE, int (*)(FILE *)> f(fopen((base + ".ckpt").c_str(), "rb"), fclose);
+                uint32_t hdr[3] = { 0, 0, 0 };
+                if (f && fread(hdr, 4, 3, f.get()) == 3 && hdr[0] == 0x54504b43 && hdr[1] == 1) {
+                    for (uint32_t i = 0; i < hdr[2]; i++) {
+                        int64_t n_tokens = 0;
+                        int32_t pos[2];
+                        uint64_t sz[3];
+                        if (fread(&n_tokens, 8, 1, f.get()) != 1 || fread(pos, 4, 2, f.get()) != 2 || fread(sz, 8, 3, f.get()) != 3 ||
+                            fseeko(f.get(), (off_t) (sz[0] + sz[1] + sz[2]), SEEK_CUR) != 0) {
+                            break;
+                        }
+                        cur.ckpt_n_tokens.push_back(n_tokens);
+                    }
+                }
+            }
+            SRV_INF("prefix save %s: %zu tokens, %zu checkpoints\n", name.c_str(), cur.tokens.size(), cur.ckpt_n_tokens.size());
+            prefix_saves.push_back(std::move(cur));
+        }
+    }
+
+    void prefix_try_restore(server_slot & slot, const server_task & task) {
+        static const int min_gain = getenv("LLAMA_PREFIX_MIN_GAIN") ? atoi(getenv("LLAMA_PREFIX_MIN_GAIN")) : 256;
+        prefix_scan();
+        if (prefix_saves.empty()) {
+            return;
+        }
+        const bool ckpt_needed = ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL ||
+                                 ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_RS   || n_swa > 0;
+        int n_slot = 0;
+        if (!slot.prompt.tokens.empty()) {
+            std::vector<int64_t> ckpts;
+            for (const auto & c : slot.prompt.checkpoints) {
+                ckpts.push_back(c.n_tokens);
+            }
+            n_slot = prefix_reuse(slot.prompt.tokens.size(), ckpts, (int) slot.prompt.tokens.get_common_prefix(task.tokens), ckpt_needed);
+        }
+        const server_prefix_save * best = nullptr;
+        int n_best = 0;
+        for (const auto & cur : prefix_saves) {
+            if (cur.tokens.size() > (size_t) slot.n_ctx) {
+                continue;
+            }
+            const int n = prefix_reuse(cur.tokens.size(), cur.ckpt_n_tokens, (int) cur.tokens.get_common_prefix(task.tokens), ckpt_needed);
+            if (n > n_best) {
+                n_best = n;
+                best = &cur;
+            }
+        }
+        if (best == nullptr || n_best < n_slot + min_gain) {
+            return;
+        }
+        const int64_t t_start = ggml_time_us();
+        if (prompt_cache && !slot.prompt.tokens.empty()) {
+            slot.prompt_save(*prompt_cache);
+            prompt_cache->update();
+        }
+        try {
+            slot_restore_file(slot, best->path);
+            SLT_INF(slot, "prefix save %s restored: resumes %d of %d prompt tokens (the slot alone: %d), %.1f ms\n",
+                    best->name.c_str(), n_best, (int) task.tokens.size(), n_slot, (ggml_time_us() - t_start) / 1000.0);
+        } catch (const std::exception & err) {
+            SLT_WRN(slot, "prefix save %s could not be restored: %s\n", best->name.c_str(), err.what());
+            slot.prompt_clear();
+        }
+    }
+
     server_slot * get_available_slot(const server_task & task) {
         server_slot * ret = nullptr;
 
@@ -2083,6 +2339,10 @@ private:
                 prompt_cache->update();
 
                 SRV_TRC("prompt cache update took %.2f ms\n", (ggml_time_us() - t_start) / 1000.0);
+            }
+
+            if (!prefix_dir.empty() && task.type == SERVER_TASK_TYPE_COMPLETION) {
+                prefix_try_restore(*ret, task);
             }
         }
 
@@ -3073,6 +3333,11 @@ private:
                             send_error(task, "Unable to write the checkpoint file", ERROR_TYPE_SERVER);
                             break;
                         }
+                        {
+                            // <file>.meta: what the save was made with; the prefix-save lookup lists only matching saves
+                            std::ofstream fm(filepath + ".meta");
+                            fm << slot_save_identity() << "\n";
+                        }
                         SLT_INF(*slot, "slot saved: %zu tokens, %.1f MiB target + %.1f MiB sidecars (%u checkpoints, drafter %s)\n",
                                 slot->prompt.tokens.size(), nwrite / (1024.0 * 1024.0), nwrite_side / (1024.0 * 1024.0), count, ctx_dft ? "yes" : "no");
                     }
@@ -3112,94 +3377,7 @@ private:
 
                     size_t nread = 0;
                     try {
-                        size_t n_packed = 0;
-                        llama_tokens packed;
-                        nread = llama_state_seq_load_file(ctx_tgt, filepath.c_str(), slot->id, nullptr, 0, &n_packed);
-                        if (nread != 0) {
-                            packed.resize(std::max<size_t>(1, n_packed));
-                            nread = llama_state_seq_load_file(ctx_tgt, filepath.c_str(), slot->id, packed.data(), packed.size(), &n_packed);
-                        }
-                        if (nread == 0) {
-                            throw std::runtime_error("No available space in KV cache or invalid slot save file");
-                        }
-                        packed.resize(n_packed);
-
-                        server_tokens restored = server_tokens::deserialize(packed, mctx != nullptr);
-
-                        if (restored.size() > (size_t) slot->n_ctx) {
-                            throw std::runtime_error("Restored prompt does not fit in the slot context");
-                        }
-
-                        if (!restored.validate(ctx_tgt)) {
-                            throw std::runtime_error("Invalid tokens in slot save file");
-                        }
-
-                        slot->prompt.clear();
-                        slot->prompt.tokens = std::move(restored);
-
-                        // sidecars written by SLOT_SAVE (see there): the drafter state, then the context checkpoints
-                        bool dft_restored = false;
-                        if (ctx_dft) {
-                            const std::string p = filepath + ".dft";
-                            if (FILE * probe = fopen(p.c_str(), "rb")) {
-                                fclose(probe);
-                                dft_restored = true;
-                                llama_token tok = 0;
-                                size_t n_tok = 0;
-                                if (llama_state_seq_load_file(ctx_dft, p.c_str(), slot->id, &tok, 1, &n_tok) == 0) {
-                                    throw std::runtime_error("drafter state file present but unreadable");
-                                }
-                            } else {
-                                llama_memory_seq_rm(llama_get_memory(ctx_dft), slot->id, -1, -1);
-                            }
-                        }
-                        {
-                            const std::string p = filepath + ".spec";
-                            std::unique_ptr<FILE, int (*)(FILE *)> f(fopen(p.c_str(), "rb"), fclose);
-                            if (f) {
-                                fseek(f.get(), 0, SEEK_END);
-                                std::vector<uint8_t> sd((size_t) ftell(f.get()));
-                                fseek(f.get(), 0, SEEK_SET);
-                                if (!sd.empty() && fread(sd.data(), 1, sd.size(), f.get()) != sd.size()) {
-                                    throw std::runtime_error("truncated drafter state file");
-                                }
-                                common_speculative_set_state_full(spec.get(), slot->id, sd);
-                            }
-                        }
-                        {
-                            const std::string p = filepath + ".ckpt";
-                            std::unique_ptr<FILE, int (*)(FILE *)> f(fopen(p.c_str(), "rb"), fclose);
-                            if (f) {
-                                auto rd = [&](void * dst, size_t n) {
-                                    if (n && fread(dst, 1, n, f.get()) != n) {
-                                        throw std::runtime_error("truncated checkpoint file");
-                                    }
-                                };
-                                uint32_t magic = 0, version = 0, count = 0;
-                                rd(&magic, 4); rd(&version, 4); rd(&count, 4);
-                                if (magic != 0x54504b43 || version != 1) {
-                                    throw std::runtime_error("bad checkpoint file header");
-                                }
-                                const auto & dir = common_cold_state_dir();
-                                size_t n_bytes = 0;
-                                for (uint32_t i = 0; i < count; i++) {
-                                    auto & c = slot->prompt.checkpoints.emplace_back();
-                                    int64_t  n_tokens = 0;
-                                    int32_t  pos_min = 0, pos_max = 0;
-                                    uint64_t sz[3] = { 0, 0, 0 };
-                                    rd(&n_tokens, 8); rd(&pos_min, 4); rd(&pos_max, 4); rd(sz, sizeof(sz));
-                                    c.n_tokens = n_tokens; c.pos_min = pos_min; c.pos_max = pos_max;
-                                    c.data_tgt.resize(sz[0]); c.data_dft.resize(sz[1]); c.data_spec.resize(sz[2]);
-                                    rd(c.data_tgt.data(), sz[0]); rd(c.data_dft.data(), sz[1]); rd(c.data_spec.data(), sz[2]);
-                                    n_bytes += sz[0] + sz[1] + sz[2];
-                                    if (!dir.empty()) {
-                                        c.spill(dir);
-                                    }
-                                }
-                                SLT_INF(*slot, "slot restored: %zu tokens, %u checkpoints (%.1f MiB), drafter %s\n",
-                                        slot->prompt.tokens.size(), count, n_bytes / (1024.0 * 1024.0), !ctx_dft ? "none" : dft_restored ? "restored" : "no file, KV cleared");
-                            }
-                        }
+                        nread = slot_restore_file(*slot, filepath);
                     } catch (const std::exception & err) {
                         slot->prompt_clear();
                         send_error(task, std::string("Unable to restore slot: ") + err.what(), ERROR_TYPE_INVALID_REQUEST);
