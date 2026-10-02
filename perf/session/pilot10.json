@@ -1,0 +1,2505 @@
+{
+ "meta": {
+  "user_script": "pilot10.user.json",
+  "root": "/Users/troff/play/kvquant-experiments/data/session-repo",
+  "note": "line=ud kv=turbo4 arm=d3 commit=7ac100447",
+  "effort": null,
+  "max_tokens": 4096,
+  "recorded": "2026-10-01 19:36"
+ },
+ "tools": [
+  {
+   "type": "function",
+   "function": {
+    "name": "list_dir",
+    "description": "List the entries of a directory in the repository.",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "path": {
+       "type": "string",
+       "description": "Directory path relative to the repository root."
+      }
+     },
+     "required": [
+      "path"
+     ]
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "read_file",
+    "description": "Read lines of a text file in the repository. Returns numbered lines.",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "path": {
+       "type": "string",
+       "description": "File path relative to the repository root."
+      },
+      "offset": {
+       "type": "integer",
+       "description": "First line to read, 1-based. Default 1."
+      },
+      "limit": {
+       "type": "integer",
+       "description": "Number of lines to read. Default 150, maximum 300."
+      }
+     },
+     "required": [
+      "path"
+     ]
+    }
+   }
+  },
+  {
+   "type": "function",
+   "function": {
+    "name": "grep",
+    "description": "Search the repository with an extended regular expression. Returns matching lines as path:line:text.",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "pattern": {
+       "type": "string",
+       "description": "Extended regular expression."
+      },
+      "path": {
+       "type": "string",
+       "description": "File or directory to search, relative to the repository root. Default the whole repository."
+      }
+     },
+     "required": [
+      "pattern"
+     ]
+    }
+   }
+  }
+ ],
+ "messages": [
+  {
+   "role": "system",
+   "content": "You are a coding assistant working in a checkout of the llama.cpp repository. Use the tools to look at the code and the docs before you answer questions about them; do not guess at file contents. Keep answers focused."
+  },
+  {
+   "role": "user",
+   "content": "I'm new to this codebase. What is in the top-level directory, and where does the HTTP server live?"
+  },
+  {
+   "role": "assistant",
+   "content": "",
+   "reasoning_content": "The user wants to know what's in the top-level directory and where the HTTP server is located. Let's list the top-level directory and search for the HTTP server code.\n",
+   "tool_calls": [
+    {
+     "id": "7EbUeKOsAHdOT0suI2BVSjggVufcae73",
+     "type": "function",
+     "function": {
+      "name": "list_dir",
+      "arguments": {
+       "path": "."
+      }
+     }
+    },
+    {
+     "id": "3fx1zkIW2tsrtE6vgaQKbHUBg04IC2Vs",
+     "type": "function",
+     "function": {
+      "name": "grep",
+      "arguments": {
+       "pattern": "llama_server",
+       "path": "examples"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "role": "tool",
+   "tool_call_id": "7EbUeKOsAHdOT0suI2BVSjggVufcae73",
+   "content": ".clang-format\n.clang-tidy\n.devops/\n.dockerignore\n.ecrc\n.editorconfig\n.flake8\n.gemini/\n.github/\n.gitignore\n.gitmodules\n.pi/\n.pre-commit-config.yaml\nAGENTS.md\nAUTHORS\nCLAUDE.md\nCMakeLists.txt\nCMakePresets.json\nCODEOWNERS\nCONTRIBUTING.md\nLICENSE\nMakefile\nREADME.md\nSECURITY.md\napp/\nbenches/\nbuild-xcframework.sh\nci/\ncmake/\ncommon/\nconversion/\nconvert_hf_to_gguf.py\nconvert_hf_to_gguf_update.py\nconvert_llama_ggml_to_gguf.py\nconvert_lora_to_gguf.py\ndocs/\nexamples/\nflake.nix\nggml/\ngguf-py/\ngrammars/\ninclude/\nlicenses/\nmedia/\nmodels/\nmypy.ini\nperf/\npocs/\npyproject.toml\npyrightconfig.json\nrequirements/\nrequirements.txt\nscripts/\nskills/\nsrc/\ntests/\ntools/\nty.toml\nvendor/"
+  },
+  {
+   "role": "tool",
+   "tool_call_id": "3fx1zkIW2tsrtE6vgaQKbHUBg04IC2Vs",
+   "content": "no matches"
+  },
+  {
+   "role": "assistant",
+   "content": "",
+   "reasoning_content": "The grep for llama_server in examples didn't find anything. Let me check the tools directory. That's where the server is usually located in llama.cpp.\n",
+   "tool_calls": [
+    {
+     "id": "uh9gVxH3tQp5TZvqTZ49tNtnemRKaHjM",
+     "type": "function",
+     "function": {
+      "name": "list_dir",
+      "arguments": {
+       "path": "tools"
+      }
+     }
+    },
+    {
+     "id": "jcu1hRA8mxnyfosUxSBRbeZ77OaEUhSF",
+     "type": "function",
+     "function": {
+      "name": "list_dir",
+      "arguments": {
+       "path": "src"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "role": "tool",
+   "tool_call_id": "uh9gVxH3tQp5TZvqTZ49tNtnemRKaHjM",
+   "content": "CMakeLists.txt\nbatched-bench/\ncli/\ncompletion/\ncvector-generator/\nexport-lora/\nfit-params/\ngguf-repack/\ngguf-split/\nimatrix/\nllama-bench/\nmtmd/\nparser/\nperplexity/\nquantize/\nresults/\nrpc/\nserver/\ntokenize/\ntts/\nui/"
+  },
+  {
+   "role": "tool",
+   "tool_call_id": "jcu1hRA8mxnyfosUxSBRbeZ77OaEUhSF",
+   "content": "CMakeLists.txt\nllama-adapter.cpp\nllama-adapter.h\nllama-arch.cpp\nllama-arch.h\nllama-batch.cpp\nllama-batch.h\nllama-chat.cpp\nllama-chat.h\nllama-context.cpp\nllama-context.h\nllama-cparams.cpp\nllama-cparams.h\nllama-ext.h\nllama-grammar.cpp\nllama-grammar.h\nllama-graph.cpp\nllama-graph.h\nllama-hparams.cpp\nllama-hparams.h\nllama-impl.cpp\nllama-impl.h\nllama-io.cpp\nllama-io.h\nllama-kv-cache-dsa.cpp\nllama-kv-cache-dsa.h\nllama-kv-cache-dsv4.cpp\nllama-kv-cache-dsv4.h\nllama-kv-cache-iswa.cpp\nllama-kv-cache-iswa.h\nllama-kv-cache-msa.cpp\nllama-kv-cache-msa.h\nllama-kv-cache.cpp\nllama-kv-cache.h\nllama-kv-cells.h\nllama-memory-hybrid-iswa.cpp\nllama-memory-hybrid-iswa.h\nllama-memory-hybrid.cpp\nllama-memory-hybrid.h\nllama-memory-recurrent.cpp\nllama-memory-recurrent.h\nllama-memory.cpp\nllama-memory.h\nllama-mmap.cpp\nllama-mmap.h\nllama-model-loader.cpp\nllama-model-loader.h\nllama-model-saver.cpp\nllama-model-saver.h\nllama-model.cpp\nllama-model.h\nllama-quant.cpp\nllama-quant.h\nllama-sampler.cpp\nllama-sampler.h\nllama-vocab.cpp\nllama-vocab.h\nllama.cpp\nmodels/\nunicode-data.cpp\nunicode-data.h\nunicode.cpp\nunicode.h"
+  },
+  {
+   "role": "assistant",
+   "content": "",
+   "reasoning_content": "The HTTP server is in tools/server. Let's take a quick look at its contents.\n",
+   "tool_calls": [
+    {
+     "id": "wxkCSjJON0hbZlReOOY6Em2vitYN6Dqf",
+     "type": "function",
+     "function": {
+      "name": "list_dir",
+      "arguments": {
+       "path": "tools/server"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "role": "tool",
+   "tool_call_id": "wxkCSjJON0hbZlReOOY6Em2vitYN6Dqf",
+   "content": "CMakeLists.txt\nREADME-dev.md\nREADME.md\nbench/\nmain.cpp\nserver-chat.cpp\nserver-chat.h\nserver-common.cpp\nserver-common.h\nserver-context.cpp\nserver-context.h\nserver-cors-proxy.h\nserver-http.cpp\nserver-http.h\nserver-mcp.cpp\nserver-mcp.h\nserver-models.cpp\nserver-models.h\nserver-queue.cpp\nserver-queue.h\nserver-schema.cpp\nserver-schema.h\nserver-stream.cpp\nserver-stream.h\nserver-task.cpp\nserver-task.h\nserver-tools.cpp\nserver-tools.h\nserver.cpp\ntests/"
+  },
+  {
+   "role": "assistant",
+   "content": "Here's the lay of the land:\n\n## Top-level directory\n\n**Core library**\n- `src/` \u2014 the main inference engine (`llama.cpp`, model loading, KV cache, samplers, vocab, etc.)\n- `ggml/` \u2014 the tensor/compute library the engine builds on\n- `include/` \u2014 public C/C++ API headers\n- `common/` \u2014 shared utilities used by the tools (arg parsing, sampling, chat templates, etc.)\n\n**Applications**\n- `tools/` \u2014 the CLI apps: `server/` (HTTP server), `cli/`, `quantize/`, `imatrix/`, `llama-bench/`, `rpc/`, `tts/`, etc.\n- `examples/` \u2014 sample programs\n- `app/` \u2014 app-level code\n\n**Build & CI**\n- `CMakeLists.txt`, `Makefile`, `CMakePresets.json`, `cmake/`, `ci/`, `scripts/`\n\n**Python & model tooling**\n- `convert_hf_to_gguf.py` (and friends) \u2014 Hugging Face \u2192 GGUF conversion\n- `gguf-py/` \u2014 Python GGUF library\n- `models/`, `grammars/`, `media/`\n\n**Docs & tests**\n- `docs/`, `tests/`, `benches/`, `perf/`\n\n**Misc**\n- `vendor/`, `conversion/`, `pocs/`, `skills/`, plus config files (`.clang-format`, `.editorconfig`, `pyproject.toml`, etc.)\n\n## The HTTP server\n\nIt lives in **`tools/server/`**. Key files:\n\n- `main.cpp` \u2014 entry point\n- `server.cpp` / `server.h` \u2014 core server logic\n- `server-http.cpp` / `server-http.h` \u2014 HTTP request handling\n- `server-chat.cpp` \u2014 chat/completion request handling\n- `server-context.cpp` \u2014 per-request context management\n- `server-queue.cpp` \u2014 request queueing\n- `server-models.cpp` \u2014 model management endpoints\n- `server-schema.cpp` \u2014 request/response schemas\n- `server-tools.cpp`, `server-mcp.cpp` \u2014 tool-calling / MCP support\n- `README.md` and `README-dev.md` \u2014 usage and developer docs\n\nSo if you want to understand the server, start with `tools/server/README.md`, then `main.cpp` \u2192 `server.cpp` \u2192 `server-http.cpp`.",
+   "reasoning_content": "Now I have a good grasp of the overall picture. Let me write a concise answer:\n\nTop-level directory:\n- Core library: src/ (llama.cpp inference engine), ggml/ (tensor library), include/ (public headers), common/ (shared utilities)\n- tools/ \u2014 CLI apps including server/ (HTTP server), cli/, quantize/, etc.\n- examples/ \u2014 sample programs\n- docs/, tests/, benches/, ci/, cmake/, scripts/, grammars/, models/, media/, vendor/\n- Build files: CMakeLists.txt, Makefile, CMakePresets.json\n- Python conversion scripts: convert_hf_to_gguf.py, etc.\n- gguf-py/ \u2014 Python GGUF library\n- Config files: .clang-format, .editorconfig, etc.\n\nHTTP server: tools/server/ \u2014 main.cpp is the entry point, server.cpp is the core, server-http.cpp is the HTTP handling, server-chat.cpp is the chat logic, etc.\n"
+  },
+  {
+   "role": "user",
+   "content": "Read the start of tools/server/README.md and summarise what the server offers. A short list is fine."
+  },
+  {
+   "role": "assistant",
+   "content": "",
+   "reasoning_content": "The user wants me to read the beginning of tools/server/README.md and summarize what the server provides. Let me read the file.\n",
+   "tool_calls": [
+    {
+     "id": "jLlsA6jPNpgwDmbYKsAAjKIHXjca8UAe",
+     "type": "function",
+     "function": {
+      "name": "read_file",
+      "arguments": {
+       "path": "tools/server/README.md",
+       "limit": 120
+      }
+     }
+    }
+   ]
+  },
+  {
+   "role": "tool",
+   "tool_call_id": "jLlsA6jPNpgwDmbYKsAAjKIHXjca8UAe",
+   "content": "     1\t# LLaMA.cpp HTTP Server\n     2\t\n     3\tFast, lightweight, pure C/C++ HTTP server based on [httplib](https://github.com/yhirose/cpp-httplib), [nlohmann::json](https://github.com/nlohmann/json) and **llama.cpp**.\n     4\t\n     5\tSet of LLM REST APIs and a web UI to interact with llama.cpp.\n     6\t\n     7\t**Features:**\n     8\t * LLM inference of F16 and quantized models on GPU and CPU\n     9\t * [OpenAI API](https://github.com/openai/openai-openapi) compatible chat completions, responses, and embeddings routes\n    10\t * [Anthropic Messages API](https://docs.anthropic.com/en/api/messages) compatible chat completions\n    11\t * Reranking endpoint (https://github.com/ggml-org/llama.cpp/pull/9510)\n    12\t * Parallel decoding with multi-user support\n    13\t * Continuous batching\n    14\t * Multimodal ([documentation](../../docs/multimodal.md)) / with OpenAI-compatible API support\n    15\t * Monitoring endpoints\n    16\t * Schema-constrained JSON response format\n    17\t * Prefilling of assistant messages similar to the Claude API\n    18\t * [Function calling](../../docs/function-calling.md) / tool use for ~any model\n    19\t * Speculative decoding\n    20\t * Easy-to-use web UI\n    21\t\n    22\tFor the full list of features, please refer to [server's changelog](https://github.com/ggml-org/llama.cpp/issues/9291)\n    23\t\n    24\t## Usage\n    25\t\n    26\t<!-- HELP_START -->\n    27\t\n    28\t<!-- IMPORTANT: The list below is auto-generated by llama-gen-docs; do NOT modify it manually -->\n    29\t\n    30\t### Common params\n    31\t\n    32\t| Argument | Explanation |\n    33\t| -------- | ----------- |\n    34\t| `-h, --help, --usage` | print usage and exit |\n    35\t| `--version` | show version and build info |\n    36\t| `-cl, --cache-list` | show list of models in cache |\n    37\t| `--completion-bash` | print source-able bash completion script for llama.cpp |\n    38\t| `-t, --threads N` | number of CPU threads to use during generation (default: -1)<br/>(env: LLAMA_ARG_THREADS) |\n    39\t| `-tb, --threads-batch N` | number of threads to use during batch and prompt processing (default: same as --threads) |\n    40\t| `-C, --cpu-mask M` | CPU affinity mask: arbitrarily long hex. Complements cpu-range (default: \"\") |\n    41\t| `-Cr, --cpu-range lo-hi` | range of CPUs for affinity. Complements --cpu-mask |\n    42\t| `--cpu-strict <0\\|1>` | use strict CPU placement (default: 0) |\n    43\t| `--prio N` | set process/thread priority : low(-1), normal(0), medium(1), high(2), realtime(3) (default: 0) |\n    44\t| `--poll <0...100>` | use polling level to wait for work (0 - no polling, default: 50) |\n    45\t| `-Cb, --cpu-mask-batch M` | CPU affinity mask: arbitrarily long hex. Complements cpu-range-batch (default: same as --cpu-mask) |\n    46\t| `-Crb, --cpu-range-batch lo-hi` | ranges of CPUs for affinity. Complements --cpu-mask-batch |\n    47\t| `--cpu-strict-batch <0\\|1>` | use strict CPU placement (default: same as --cpu-strict) |\n    48\t| `--prio-batch N` | set process/thread priority : 0-normal, 1-medium, 2-high, 3-realtime (default: 0) |\n    49\t| `--poll-batch <0\\|1>` | use polling to wait for work (default: same as --poll) |\n    50\t| `-c, --ctx-size N` | size of the prompt context (default: 0, 0 = loaded from model)<br/>(env: LLAMA_ARG_CTX_SIZE) |\n    51\t| `-n, --predict, --n-predict N` | number of tokens to predict (default: -1, -1 = infinity)<br/>(env: LLAMA_ARG_N_PREDICT) |\n    52\t| `-b, --batch-size N` | logical maximum batch size (default: 2048)<br/>(env: LLAMA_ARG_BATCH) |\n    53\t| `-ub, --ubatch-size N` | physical maximum batch size (default: 512)<br/>(env: LLAMA_ARG_UBATCH) |\n    54\t| `--keep N` | number of tokens to keep from the initial prompt (default: 0, -1 = all) |\n    55\t| `--swa-full` | use full-size SWA cache (default: false)<br/>[(more info)](https://github.com/ggml-org/llama.cpp/pull/13194#issuecomment-2868343055)<br/>(env: LLAMA_ARG_SWA_FULL) |\n    56\t| `-fa, --flash-attn [on\\|off\\|auto]` | set Flash Attention use ('on', 'off', or 'auto', default: 'auto')<br/>(env: LLAMA_ARG_FLASH_ATTN) |\n    57\t| `--perf, --no-perf` | whether to enable internal libllama performance timings (default: false)<br/>(env: LLAMA_ARG_PERF) |\n    58\t| `-e, --escape, --no-escape` | whether to process escapes sequences (\\n, \\r, \\t, \\', \\\", \\\\) (default: true) |\n    59\t| `--rope-scaling {none,linear,yarn}` | RoPE frequency scaling method, defaults to linear unless specified by the model<br/>(env: LLAMA_ARG_ROPE_SCALING_TYPE) |\n    60\t| `--rope-scale N` | RoPE context scaling factor, expands context by a factor of N<br/>(env: LLAMA_ARG_ROPE_SCALE) |\n    61\t| `--rope-freq-base N` | RoPE base frequency, used by NTK-aware scaling (default: loaded from model)<br/>(env: LLAMA_ARG_ROPE_FREQ_BASE) |\n    62\t| `--rope-freq-scale N` | RoPE frequency scaling factor, expands context by a factor of 1/N<br/>(env: LLAMA_ARG_ROPE_FREQ_SCALE) |\n    63\t| `--yarn-orig-ctx N` | YaRN: original context size of model (default: 0 = model training context size)<br/>(env: LLAMA_ARG_YARN_ORIG_CTX) |\n    64\t| `--yarn-ext-factor N` | YaRN: extrapolation mix factor (default: -1.00, 0.0 = full interpolation)<br/>(env: LLAMA_ARG_YARN_EXT_FACTOR) |\n    65\t| `--yarn-attn-factor N` | YaRN: scale sqrt(t) or attention magnitude (default: -1.00)<br/>(env: LLAMA_ARG_YARN_ATTN_FACTOR) |\n    66\t| `--yarn-beta-slow N` | YaRN: high correction dim or alpha (default: -1.00)<br/>(env: LLAMA_ARG_YARN_BETA_SLOW) |\n    67\t| `--yarn-beta-fast N` | YaRN: low correction dim or beta (default: -1.00)<br/>(env: LLAMA_ARG_YARN_BETA_FAST) |\n    68\t| `-kvo, --kv-offload, -nkvo, --no-kv-offload` | whether to enable KV cache offloading (default: enabled)<br/>(env: LLAMA_ARG_KV_OFFLOAD) |\n    69\t| `--repack, -nr, --no-repack` | whether to enable weight repacking (default: enabled)<br/>(env: LLAMA_ARG_REPACK) |\n    70\t| `--no-host` | bypass host buffer allowing extra buffers to be used<br/>(env: LLAMA_ARG_NO_HOST) |\n    71\t| `-ctk, --cache-type-k TYPE` | KV cache data type for K<br/>allowed values: f32, f16, bf16, q8_0, q4_0, q4_1, iq4_nl, q5_0, q5_1<br/>(default: f16)<br/>(env: LLAMA_ARG_CACHE_TYPE_K) |\n    72\t| `-ctv, --cache-type-v TYPE` | KV cache data type for V<br/>allowed values: f32, f16, bf16, q8_0, q4_0, q4_1, iq4_nl, q5_0, q5_1<br/>(default: f16)<br/>(env: LLAMA_ARG_CACHE_TYPE_V) |\n    73\t| `-dt, --defrag-thold N` | KV cache defragmentation threshold (DEPRECATED)<br/>(env: LLAMA_ARG_DEFRAG_THOLD) |\n    74\t| `--rpc SERVERS` | comma-separated list of RPC servers (host:port)<br/>(env: LLAMA_ARG_RPC) |\n    75\t| `--mlock` | DEPRECATED in favor of `--load-mode`: force system to keep model in RAM rather than swapping or compressing<br/>(env: LLAMA_ARG_MLOCK) |\n    76\t| `--mmap, --no-mmap` | DEPRECATED in favor of `--load-mode`: whether to memory-map model. (if mmap disabled, slower load but may reduce pageouts if not using mlock)<br/>(env: LLAMA_ARG_MMAP) |\n    77\t| `-dio, --direct-io, -ndio, --no-direct-io` | DEPRECATED in favor of `--load-mode`: use DirectIO if available<br/>(env: LLAMA_ARG_DIO) |\n    78\t| `-lm, --load-mode MODE` | model loading mode (default: auto)<br/>- auto: mmap, unless a device does not support it<br/>- none: no special loading mode<br/>- mmap: memory-map model (if mmap disabled, slower load but may reduce pageouts if not using mlock)<br/>- mlock: force system to keep model in RAM rather than swapping or compressing<br/>- mmap+mlock: mmap + force system to keep model in RAM r\n    79\t| `--numa TYPE` | attempt optimizations that help on some NUMA systems<br/>- distribute: spread execution evenly over all nodes<br/>- isolate: only spawn threads on CPUs on the node that execution started on<br/>- numactl: use the CPU map provided by numactl<br/>if run without this previously, it is recommended to drop the system page cache before using this<br/>see https://github.com/ggml-org/lla\n    80\t| `-dev, --device <dev1,dev2,..>` | comma-separated list of devices to use for offloading (none = don't offload)<br/>use --list-devices to see a list of avail\n... [truncated]"
+  },
+  {
+   "role": "assistant",
+   "content": "Per the README, the server is a fast, lightweight, pure C/C++ HTTP server (built on cpp-httplib, nlohmann::json, and llama.cpp) exposing LLM REST APIs plus a web UI. Its features:\n\n- **Inference** of F16 and quantized models on GPU and CPU\n- **OpenAI-compatible** chat completions, responses, and embeddings routes\n- **Anthropic Messages API**-compatible chat completions\n- **Reranking** endpoint\n- **Parallel decoding** with multi-user support and **continuous batching**\n- **Multimodal** support (with OpenAI-compatible API)\n- **Monitoring** endpoints\n- **Schema-constrained JSON** response format\n- **Prefilling** of assistant messages (Claude-API style)\n- **Function calling / tool use** for ~any model\n- **Speculative decoding**\n- An easy-to-use **web UI**\n\nThe rest of the README is the auto-generated CLI reference (common params, server params, etc.).",
+   "reasoning_content": "The user is asking for a short list summarizing what the server provides. The feature list is on lines 7-20. Let me summarize it concisely.\n"
+  },
+  {
+   "role": "user",
+   "content": "Find where the server chooses which slot handles an incoming request and explain the selection logic."
+  },
+  {
+   "role": "assistant",
+   "content": "",
+   "reasoning_content": "The user wants to find where the server selects which slot handles an incoming request, and have the selection logic explained. Let me search for slot selection logic in tools/server.\n\nLet me search for \"slot\" related code.\n",
+   "tool_calls": [
+    {
+     "id": "HvsS0OEEjYMNwDZmAFuAj3tVqfoFXeEZ",
+     "type": "function",
+     "function": {
+      "name": "grep",
+      "arguments": {
+       "pattern": "slot",
+       "path": "tools/server"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "role": "tool",
+   "tool_call_id": "HvsS0OEEjYMNwDZmAFuAj3tVqfoFXeEZ",
+   "content": "tools/server/server-common.h:24:#define SLT_DBG(slot, fmt, ...) LOG_DBG(\"slot %12.*s: id %2d | task %d | \" fmt, 12, __func__, (slot).id, ((slot).task ? (slot).task->id : -1), __VA_ARGS__)\ntools/server/server-common.h:25:#define SLT_TRC(slot, fmt, ...) LOG_TRC(\"slot %12.*s: id %2d | task %d | \" fmt, 12, __func__, (slot).id, ((slot).task ? (slot).task->id : -1), __VA_ARGS__)\ntools/server/server-common.h:26:#define SLT_INF(slot, fmt, ...) LOG_INF(\"slot %12.*s: id %2d | task %d | \" fmt, 12, __func__, (slot).id, ((slot).task ? (slot).task->id : -1), __VA_ARGS__)\ntools/server/server-common.h:27:#define SLT_WRN(slot, fmt, ...) LOG_WRN(\"slot %12.*s: id %2d | task %d | \" fmt, 12, __func__, (slot).id, ((slot).task ? (slot).task->id : -1), __VA_ARGS__)\ntools/server/server-common.h:28:#define SLT_ERR(slot, fmt, ...) LOG_ERR(\"slot %12.*s: id %2d | task %d | \" fmt, 12, __func__, (slot).id, ((slot).task ? (slot).task->id : -1), __VA_ARGS__)\ntools/server/server-common.h:29:#define SLT_CNT(slot, fmt, ...) LOG_CNT(\"\"                                 fmt,                                                                __VA_ARGS__)\ntools/server/server-common.h:345:// shared between server_slot and server_task_result_*\ntools/server/server-common.h:346:struct server_slot_stats {\ntools/server/server-common.h:352:    // note: the per-position breakdown lives in server_slot, it is not needed in a task result\ntools/server/server-common.h:424:    // false if the slot never started, i.e. the task result carries no stats\ntools/server/server-common.h:433:// unlike server_slot_stats, server_metrics is server-global and cumulative, not tied to a slot\ntools/server/server-common.h:469:    uint64_t n_busy_slots = 0;\ntools/server/bench/bench.py:46:    parser.add_argument(\"--parallel\", type=int, help=\"Set the number of slots for process requests\", required=True)\ntools/server/bench/script.js:25:// Max slot context\ntools/server/bench/script.js:26:const n_ctx_slot = __ENV.SERVER_BENCH_MAX_CONTEXT ? parseInt(__ENV.SERVER_BENCH_MAX_CONTEXT) : 2048\ntools/server/bench/script.js:49:        .filter(conv => conv.n_prompt_tokens <= n_prompt_tokens && conv.n_prompt_tokens + conv.n_completion_tokens <= n_ctx_slot)\ntools/server/bench/speed-bench/README.md:15:The client does not launch the server, so start `llama-server` yourself first. If you care about throughput numbers, set the client `--concurrency` to the server's slot count (`--np`):\ntools/server/server-context.h:26:    int slot_n_ctx;\ntools/server/server-context.h:132:    server_http_context::handler_t get_slots;\ntools/server/server-context.h:133:    server_http_context::handler_t post_slots;\ntools/server/server-context.h:167:    std::unique_ptr<server_res_generator> handle_slots_save(const server_http_req & req, int id_slot);\ntools/server/server-context.h:168:    std::unique_ptr<server_res_generator> handle_slots_restore(const server_http_req & req, int id_slot);\ntools/server/server-context.h:169:    std::unique_ptr<server_res_generator> handle_slots_erase(const server_http_req &, int id_slot);\ntools/server/server-queue.h:46:    std::function<void(void)>                 callback_update_slots;\ntools/server/server-queue.h:58:    // Add a new task, but defer until one slot is available\ntools/server/server-queue.h:64:    // Call when the state of one slot is changed, it will move one task from deferred to main queue\ntools/server/server-queue.h:65:    // prioritize tasks that use the specified slot (otherwise, pop the first deferred task)\ntools/server/server-queue.h:66:    void pop_deferred_task(int id_slot);\ntools/server/server-queue.h:83:     * - Process the task (i.e. maybe copy data into slot)\ntools/server/server-queue.h:85:     * - Update all slots\ntools/server/server-queue.h:98:    // must be called from start_loop() thread (ideally inside callback_update_slots)\ntools/server/server-queue.h:124:    // Register the function to be called when all slots data is ready to be processed\ntools/server/server-queue.h:125:    void on_update_slots(std::function<void(void)> callback) {\ntools/server/server-queue.h:126:        callback_update_slots = std::move(callback);\ntools/server/server-task.cpp:347:        {\"id_slot\",             id_slot},\ntools/server/server-task.cpp:1058:        {\"id_slot\",          id_slot},\ntools/server/server-task.cpp:1516:    return slots_data;\ntools/server/server-task.cpp:1577:            (double) n_processing_slots\ntools/server/server-task.cpp:1583:            \"n_busy_slots_per_decode\",\ntools/server/server-task.cpp:1584:            \"Average number of busy slots per llama_decode() call\",\ntools/server/server-task.cpp:1585:            (double) metrics.n_busy_slots / std::max((double) metrics.n_decode, 1.0)\ntools/server/server-task.cpp:1617:// server_task_result_slot_save_load\ntools/server/server-task.cpp:1619:json server_task_result_slot_save_load::to_json() {\ntools/server/server-task.cpp:1622:            { \"id_slot\",   id_slot },\ntools/server/server-task.cpp:1633:        { \"id_slot\",    id_slot },\ntools/server/server-task.cpp:1644:// server_task_result_slot_erase\ntools/server/server-task.cpp:1646:json server_task_result_slot_erase::to_json() {\ntools/server/server-task.cpp:1648:        { \"id_slot\",  id_slot },\ntools/server/server-task.cpp:1808:bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tokens_new, llama_context * ctx_tgt, llama_context * ctx_dft, int32_t id_slot) {\ntools/server/server-task.cpp:1811:    float f_keep_best = prompt.tokens.size() > 0 ? float(lcp_best) / prompt.tokens.size() : -1.0f; // empty slot: any cache entry wins\ntools/server/server-task.cpp:1857:            const size_t n = llama_state_seq_set_data_ext(ctx_tgt, data.data(), size, id_slot, 0);\ntools/server/server-task.cpp:1882:                const size_t n = llama_state_seq_set_data_ext(ctx_dft, data.data(), size, id_slot, 0);\ntools/server/server-models.h:200:    // queue of requests waiting for a models_max slot\ntools/server/server-models.h:279:    // if models_max is reached, the request waits in a queue until a slot frees up\ntools/server/tests/unit/test_basic.py:27:    assert res.body[\"total_slots\"] == server.n_slots\ntools/server/tests/unit/test_basic.py:29:    assert server.n_ctx is not None and server.n_slots is not None\ntools/server/tests/unit/test_basic.py:30:    assert default_val[\"n_ctx\"] == server.n_ctx / server.n_slots\ntools/server/tests/unit/test_basic.py:43:def test_server_slots():\ntools/server/tests/unit/test_basic.py:46:    # without slots endpoint enabled, this should return error\ntools/server/tests/unit/test_basic.py:47:    server.server_slots = False\n... 1282 more matches"
+  },
+  {
+   "role": "assistant",
+   "content": "",
+   "reasoning_content": "There are a lot of matches. Let's look for the actual slot selection logic. It's probably in server.cpp, in a function like `slot_get_min` or `slot_get`. Let me search for it.\n",
+   "tool_calls": [
+    {
+     "id": "d3sJwS6uO9RAcZhCiLDc71sSUZ1AWwNs",
+     "type": "function",
+     "function": {
+      "name": "grep",
+      "arguments": {
+       "pattern": "slot_get|get_slot|select_slot|slot_select",
+       "path": "tools/server"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "role": "tool",
+   "tool_call_id": "d3sJwS6uO9RAcZhCiLDc71sSUZ1AWwNs",
+   "content": "tools/server/server-context.h:132:    server_http_context::handler_t get_slots;\ntools/server/server-context.cpp:1893:    server_slot * get_slot_by_id(int id_slot) {\ntools/server/server-context.cpp:1906:    server_slot * get_slot_by_cmpl_id(const std::string & cmpl_id) {\ntools/server/server-context.cpp:1927:            ret = get_slot_by_id(task.id_slot);\ntools/server/server-context.cpp:2915:                    server_slot * slot = get_slot_by_cmpl_id(task.params.control_cmpl_id);\ntools/server/server-context.cpp:2983:                    server_slot * slot = get_slot_by_id(id_slot);\ntools/server/server-context.cpp:3096:                    server_slot * slot = get_slot_by_id(id_slot);\ntools/server/server-context.cpp:3225:                    server_slot * slot = get_slot_by_id(id_slot);\ntools/server/server-context.cpp:4759:    int get_slot_n_ctx() {\ntools/server/server-context.cpp:4931:        /* slot_n_ctx             */ impl->get_slot_n_ctx(),\ntools/server/server-context.cpp:5329:    this->get_slots = [this](const server_http_req & req) {\ntools/server/server.cpp:219:        routes.get_slots                   = models_routes->proxy_get;\ntools/server/server.cpp:272:    ctx_http.get (\"/slots\",                    ex_wrapper(routes.get_slots));"
+  },
+  {
+   "role": "assistant",
+   "content": "",
+   "reasoning_content": "Let's look at the slot selection logic. It's probably in server.cpp, in a function that finds an available slot. Let me search for \"slot\" in server.cpp.\n",
+   "tool_calls": [
+    {
+     "id": "lwnJ783vcMoiEYMDwGCKverZSZeD9jlv",
+     "type": "function",
+     "function": {
+      "name": "grep",
+      "arguments": {
+       "pattern": "slot",
+       "path": "tools/server/server.cpp"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "role": "tool",
+   "tool_call_id": "lwnJ783vcMoiEYMDwGCKverZSZeD9jlv",
+   "content": "tools/server/server.cpp:219:        routes.get_slots                   = models_routes->proxy_get;\ntools/server/server.cpp:220:        routes.post_slots                  = models_routes->proxy_post;\ntools/server/server.cpp:271:    // Save & load slots\ntools/server/server.cpp:272:    ctx_http.get (\"/slots\",                    ex_wrapper(routes.get_slots));\ntools/server/server.cpp:273:    ctx_http.post(\"/slots/:id_slot\",           ex_wrapper(routes.post_slots));"
+  },
+  {
+   "role": "assistant",
+   "content": "",
+   "reasoning_content": "The slot selection logic is probably in server-context.cpp. Let's look for where a new task gets assigned to a slot. I'll search for \"slot\" in server-context.cpp.\n",
+   "tool_calls": [
+    {
+     "id": "gSY8RjfLlQxtPifNvRDp7tnhVEAHlEZQ",
+     "type": "function",
+     "function": {
+      "name": "grep",
+      "arguments": {
+       "pattern": "slot",
+       "path": "tools/server/server-context.cpp"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "role": "tool",
+   "tool_call_id": "gSY8RjfLlQxtPifNvRDp7tnhVEAHlEZQ",
+   "content": "tools/server/server-context.cpp:58:enum slot_state {\ntools/server/server-context.cpp:60:    SLOT_STATE_WAIT_OTHER, // after assigning a task, but waiting for parent slot to process prompt\ntools/server/server-context.cpp:67:struct server_slot; // forward declaration\ntools/server/server-context.cpp:74:        int32_t id_slot;\ntools/server/server-context.cpp:84:    // track if given slot can be batched with slots already in the batch\ntools/server/server-context.cpp:85:    server_slot * slot_batched = nullptr;\ntools/server/server-context.cpp:114:    bool add(int32_t id_slot, llama_token token, llama_pos pos, bool output, bool is_prompt) {\ntools/server/server-context.cpp:120:        tokens.push_back({ id_slot, token, pos, output, is_prompt });\ntools/server/server-context.cpp:124:    bool add(int32_t id_slot, const std::vector<float> & embd_in, llama_pos pos, bool output, bool is_prompt) {\ntools/server/server-context.cpp:129:        tokens.push_back({ id_slot, LLAMA_TOKEN_NULL, pos, output, is_prompt });\ntools/server/server-context.cpp:139:        slot_batched      = nullptr;\ntools/server/server-context.cpp:165:            common_batch_add(batch, t.token, t.pos, { t.id_slot }, t.output);\ntools/server/server-context.cpp:197:struct server_slot {\ntools/server/server-context.cpp:351:        //   LLAMA_SPEC_EV_TRACE=<path>   record one line per round: \"<request> <slot> <drafted b> <verified k>\"\ntools/server/server-context.cpp:357:        int slot_id  = 0;\ntools/server/server-context.cpp:358:        int req_idx  = 0;                // per-slot request counter (begin_request increments; init is lazy, on the first draft)\ntools/server/server-context.cpp:364:            int    one_slot = -1;        // the trace's only slot id when it has exactly one (then the lookup ignores the slot:\ntools/server/server-context.cpp:365:                                         // a single-stream gate must not depend on which slot the server hands the request)\ntools/server/server-context.cpp:366:            std::map<std::pair<int, int>, std::vector<std::pair<int, int>>> picks; // (slot, request) -> [(b, k)]\ntools/server/server-context.cpp:391:                            if (st.one_slot == -1) st.one_slot = kv.first.first;\ntools/server/server-context.cpp:392:                            else if (st.one_slot != kv.first.first) { st.one_slot = -2; break; }\ntools/server/server-context.cpp:403:            auto it = st.picks.find({st.one_slot >= 0 ? st.one_slot : slot_id, req_idx});\ntools/server/server-context.cpp:533:                fprintf(st.out, \"%d %d %d %d\\n\", req_idx, slot_id, b, k);\ntools/server/server-context.cpp:581:    // used to determine the slot that has been used the longest\ntools/server/server-context.cpp:585:    int32_t n_ctx   = 0;  // context size per slot\ntools/server/server-context.cpp:610:    slot_state state = SLOT_STATE_IDLE;\ntools/server/server-context.cpp:638:        // (its checkpoints were spilled when they were made and share their files with the slot's list)\ntools/server/server-context.cpp:679:    server_slot_stats stats;\ntools/server/server-context.cpp:682:    // not in server_slot_stats to avoid copying to every task result\ntools/server/server-context.cpp:685:    std::function<void(int /* id_slot */)>   callback_on_release;\ntools/server/server-context.cpp:686:    std::function<void(const server_slot &)> callback_on_reset; // called before reset()\ntools/server/server-context.cpp:688:    // this is for printing timings with slot progress, not part of metrics\ntools/server/server-context.cpp:780:    bool can_batch_with(server_slot & other_slot) const {\ntools/server/server-context.cpp:783:        return task->type == other_slot.task->type\ntools/server/server-context.cpp:784:            && inp_embd.size() == other_slot.inp_embd.size()\ntools/server/server-context.cpp:785:            && are_lora_equal(lora, other_slot.lora);\ntools/server/server-context.cpp:807:            SLT_WRN(*this, \"%s\", \"slot is not processing\\n\");\ntools/server/server-context.cpp:821:        // determine the max draft that fits the current slot state\ntools/server/server-context.cpp:822:        // note: slot.prompt is not yet expanded with the `id` token sampled above\ntools/server/server-context.cpp:835:    // add sampled token of this slot to the batch, optionally add the speculative draft tokens if any\ntools/server/server-context.cpp:848:            SLT_DBG(*this, \"slot decode token, id=%d, n_ctx = %d, n_tokens = %d, truncated = %d\\n\",\ntools/server/server-context.cpp:885:            // do not keep context of the child slots - the parent's context is enough\ntools/server/server-context.cpp:1056:    void copy_state_to(server_slot & other) const {\ntools/server/server-context.cpp:1073:// note: this is not a member of server_slot because we want to run it inside yield_to_queue\ntools/server/server-context.cpp:1074://       slot is passed as const to avoid accidental modification of the slot state\ntools/server/server-context.cpp:1076:static int process_mtmd_chunk(server_slot & slot, mtmd::batch_ptr & mbatch, size_t idx, size_t & n_tokens_out) {  // non-const: may set slot.spec_off_request\ntools/server/server-context.cpp:1077:    GGML_ASSERT(slot.mctx);\ntools/server/server-context.cpp:1078:    const auto & mctx = slot.mctx;\ntools/server/server-context.cpp:1079:    const auto & input_tokens = slot.task->tokens;\ntools/server/server-context.cpp:1091:                cb_state cbs = { slot.spec, false };\ntools/server/server-context.cpp:1104:                    slot.ctx_tgt,\ntools/server/server-context.cpp:1107:                    slot.prompt.tokens.pos_next(),\ntools/server/server-context.cpp:1108:                    slot.id,\ntools/server/server-context.cpp:1109:                    llama_n_batch(slot.ctx_tgt),\ntools/server/server-context.cpp:1115:                    SLT_ERR(slot, \"failed to decode mtmd chunk, idx = %zu, res = %d\\n\", idx, res);\ntools/server/server-context.cpp:1118:                if (cbs.failed && !slot.spec_off_request) {\ntools/server/server-context.cpp:1119:                    SLT_WRN(slot, \"%s\", \"the drafter could not ingest an image chunk: this request generates without speculation\\n\");\ntools/server/server-context.cpp:1120:                    slot.spec_off_request = true;\ntools/server/server-context.cpp:1156:        SLT_DBG(slot, \"try adding media chunk idx = %zu to batch, res = %d\\n\", next_idx, res);\ntools/server/server-context.cpp:1161:    SLT_TRC(slot, \"encoding mtmd batch from idx = %zu, n_chunks = %d\\n\", idx, n_added);\n... 914 more matches"
+  },
+  {
+   "role": "assistant",
+   "content": "",
+   "reasoning_content": "There are a lot of matches. Let's look for the specific function that selects a slot for a new task. I'll search for \"slot_get_min\" or similar functions. Let me search for functions that return a slot pointer for a new task.\n",
+   "tool_calls": [
+    {
+     "id": "uxseIXaMImGlaBaK2c50pBk1Dr3ktQjK",
+     "type": "function",
+     "function": {
+      "name": "grep",
+      "arguments": {
+       "pattern": "slot_get_min|slot_get\\b|get_min|slot.*=.*slot|find.*slot|slot.*free|free.*slot",
+       "path": "tools/server/server-context.cpp"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "role": "tool",
+   "tool_call_id": "uxseIXaMImGlaBaK2c50pBk1Dr3ktQjK",
+   "content": "tools/server/server-context.cpp:364:            int    one_slot = -1;        // the trace's only slot id when it has exactly one (then the lookup ignores the slot:\ntools/server/server-context.cpp:391:                            if (st.one_slot == -1) st.one_slot = kv.first.first;\ntools/server/server-context.cpp:392:                            else if (st.one_slot != kv.first.first) { st.one_slot = -2; break; }\ntools/server/server-context.cpp:403:            auto it = st.picks.find({st.one_slot >= 0 ? st.one_slot : slot_id, req_idx});\ntools/server/server-context.cpp:1601:        slot_prompt_similarity = params_base.slot_prompt_similarity;\ntools/server/server-context.cpp:1623:        SRV_INF(\"initializing, n_slots = %d, n_ctx_slot = %d, kv_unified = '%s'\\n\",\ntools/server/server-context.cpp:1633:            SRV_INF(\"per-slot context sizes = %s (a task goes to the smallest idle slot it fits)\\n\", str.c_str());\ntools/server/server-context.cpp:1663:            server_slot & slot = slots[i];\ntools/server/server-context.cpp:1670:            slot.n_ctx   = ctx_per_slot ? std::min((int) llama_n_ctx_seq_id(ctx_tgt, i), n_ctx_train) : n_ctx_slot;\ntools/server/server-context.cpp:1675:            SLT_TRC(slot, \"new slot, n_ctx = %d\\n\", slot.n_ctx);\ntools/server/server-context.cpp:1677:            slot.callback_on_release = [this](int id_slot) {\ntools/server/server-context.cpp:1681:            slot.callback_on_reset = [this](const server_slot & slot) {\ntools/server/server-context.cpp:1733:            SRV_INF(\"prompt cache: checkpoint-aware load = %d (LLAMA_CACHE_LOAD_CKPT, partial state fixed = %d), idle-slot saves = %s (--cache-idle-slots %d, kv_unified %d)\\n\",\ntools/server/server-context.cpp:1812:                    // without a unified KV cache, clearing a slot frees no reusable room, so we only\ntools/server/server-context.cpp:1895:        id_slot = id_slot % slots.size();\ntools/server/server-context.cpp:1898:            if (slot.id == id_slot) {\ntools/server/server-context.cpp:1955:        auto slot_fits = [&](const server_slot & slot) {\ntools/server/server-context.cpp:1958:        auto slot_in_class = [&](const server_slot & slot) {\ntools/server/server-context.cpp:1962:        // find the slot that has at least n% prompt similarity\ntools/server/server-context.cpp:1967:                if (task.id_slot != -1 && slot.id != task.id_slot) {\ntools/server/server-context.cpp:1973:                    SLT_TRC(slot, \" - skipping, is_processing = %d\\n\", slot.is_processing());\ntools/server/server-context.cpp:1978:                if (task.id_slot == -1 && !slot_fits(slot)) {\ntools/server/server-context.cpp:1979:                    SLT_TRC(slot, \" - skipping, n_ctx = %d < %zu\\n\", slot.n_ctx, n_need);\ntools/server/server-context.cpp:1995:                SLT_TRC(slot, \" - checking sim = %.3f (%zu/%zu) > %.3f\\n\", f_sim_cur, lcp_len, task.tokens.size(), slot_prompt_similarity);\ntools/server/server-context.cpp:2020:        // find the slot that has been least recently used\ntools/server/server-context.cpp:2245:        slot.state = slot.task->is_child()\ntools/server/server-context.cpp:2252:        SLT_INF(slot, \"processing task, is_child = %d\\n\", slot.task->is_child());\ntools/server/server-context.cpp:2309:        if (!params_base.ctx_shift && slot.prompt.n_tokens() + 1 >= slot.n_ctx) {\ntools/server/server-context.cpp:2323:            SLT_DBG(slot, \"stopped by limit, n_gen = %d, n_predict = %d\\n\", (int) slot.stats.n_gen, slot.task->params.n_predict);\ntools/server/server-context.cpp:2335:                    while (pos < slot.generated_text.size() && (slot.generated_text[pos] == ' ' || slot.generated_text[pos] == '\\t')) {\ntools/server/server-context.cpp:2347:                        SLT_DBG(slot, \"stopped by indentation limit, n_gen = %d, n_indent = %d\\n\", (int) slot.stats.n_gen, n_indent);\ntools/server/server-context.cpp:2353:                    const size_t pos = slot.generated_text.find('\\n', slot.last_nl_pos);\ntools/server/server-context.cpp:2371:                SLT_DBG(slot, \"stopped by time limit, n_gen = %d, t_max_predict_ms = %d ms\\n\", (int) slot.stats.n_gen, (int) slot.task->params.t_max_predict_ms);\ntools/server/server-context.cpp:2382:        SLT_DBG(slot, \"n_gen = %d, n_remaining = %d, next token: %5d '%s'\\n\", (int) slot.stats.n_gen, slot.n_remaining(), result.tok, token_str.c_str());\ntools/server/server-context.cpp:2505:        if (slot.stop != STOP_TYPE_NONE || slot.task->params.timings_per_token) {\ntools/server/server-context.cpp:2516:        res->id_slot = slot.id;\ntools/server/server-context.cpp:2522:            slot.debug_generated_text = slot.generated_text;\ntools/server/server-context.cpp:2673:    std::vector<server_slot *> get_free_slots(size_t n_slots_needed, int exclude_id_slot) {\ntools/server/server-context.cpp:2674:        std::vector<server_slot *> free_slots;\ntools/server/server-context.cpp:2676:            if (!slot.is_processing() && slot.id != exclude_id_slot) {\ntools/server/server-context.cpp:2677:                free_slots.push_back(&slot);\ntools/server/server-context.cpp:2679:            if (free_slots.size() >= n_slots_needed) {\ntools/server/server-context.cpp:2683:        return free_slots;\ntools/server/server-context.cpp:2738:        for (auto it = slot.prompt.checkpoints.begin(); it != slot.prompt.checkpoints.end(); ) {\ntools/server/server-context.cpp:2838:                    server_slot * slot = get_available_slot(task);\ntools/server/server-context.cpp:2859:                        // try getting free slots for all child tasks\ntools/server/server-context.cpp:2861:                        std::vector<server_slot *> child_slots = get_free_slots(n_child_tasks, slot->id);\ntools/server/server-context.cpp:2863:                            SRV_DBG(\"not enough free slots for child tasks, n_free = %zu, n_children = %zu, defer task, id_task = %d\\n\", child_slots.size(), n_child_tasks, id_task);\ntools/server/server-context.cpp:2915:                    server_slot * slot = get_slot_by_cmpl_id(task.params.control_cmpl_id);\ntools/server/server-context.cpp:2955:                        json slot_data = slot.to_json(slots_debug == 0);\ntools/server/server-context.cpp:2965:                    SRV_DBG(\"n_idle_slots = %d, n_processing_slots = %d\\n\", n_idle_slots, n_processing_slots);\ntools/server/server-context.cpp:2969:                    res->slots_data          = std::move(slots_data);\ntools/server/server-context.cpp:2970:                    res->n_idle_slots        = n_idle_slots;\ntools/server/server-context.cpp:2971:                    res->n_processing_slots  = n_processing_slots;\ntools/server/server-context.cpp:2982:                    const int id_slot = task.slot_action.id_slot;\ntools/server/server-context.cpp:2983:                    server_slot * slot = get_slot_by_id(id_slot);\ntools/server/server-context.cpp:3085:                    res->id_slot  = id_slot;\ntools/server/server-context.cpp:3095:                    const int id_slot = task.slot_action.id_slot;\ntools/server/server-context.cpp:3096:                    server_slot * slot = get_slot_by_id(id_slot);\ntools/server/server-context.cpp:3214:                    res->id_slot  = id_slot;\n... 40 more matches"
+  },
+  {
+   "role": "assistant",
+   "content": "",
+   "reasoning_content": "Found it. The key function is `get_available_slot(task)` around line 2838, and the selection logic is around lines 1955\u20132020. Let me read that section.\n",
+   "tool_calls": [
+    {
+     "id": "P0qLFfp7JTrCPNOAJZyxAjdHwHAPLTHj",
+     "type": "function",
+     "function": {
+      "name": "read_file",
+      "arguments": {
+       "path": "tools/server/server-context.cpp",
+       "offset": 1940,
+       "limit": 110
+      }
+     }
+    }
+   ]
+  },
+  {
+   "role": "tool",
+   "tool_call_id": "P0qLFfp7JTrCPNOAJZyxAjdHwHAPLTHj",
+   "content": "  1940\t            bool any_fits = false;\n  1941\t            for (const server_slot & slot : slots) {\n  1942\t                if ((size_t) slot.n_ctx >= n_need) {\n  1943\t                    any_fits = true;\n  1944\t                    if (!slot.is_processing() && (n_ctx_fit < 0 || slot.n_ctx < n_ctx_fit)) {\n  1945\t                        n_ctx_fit = slot.n_ctx;\n  1946\t                    }\n  1947\t                }\n  1948\t            }\n  1949\t            if (task.id_slot == -1 && any_fits && n_ctx_fit < 0) {\n  1950\t                // every slot that could hold it is busy: defer (same as all-busy in the uniform case)\n  1951\t                SRV_DBG(\"no idle slot holds %zu tokens, deferring\\n\", n_need);\n  1952\t                return nullptr;\n  1953\t            }\n  1954\t        }\n  1955\t        auto slot_fits = [&](const server_slot & slot) {\n  1956\t            return n_ctx_fit < 0 || (size_t) slot.n_ctx >= n_need;\n  1957\t        };\n  1958\t        auto slot_in_class = [&](const server_slot & slot) {\n  1959\t            return n_ctx_fit < 0 || slot.n_ctx == n_ctx_fit;\n  1960\t        };\n  1961\t\n  1962\t        // find the slot that has at least n% prompt similarity\n  1963\t        if (slot_prompt_similarity != 0.0f) {\n  1964\t            float f_sim_best = 0;\n  1965\t\n  1966\t            for (server_slot & slot : slots) {\n  1967\t                if (task.id_slot != -1 && slot.id != task.id_slot) {\n  1968\t                    continue;\n  1969\t                }\n  1970\t\n  1971\t                // skip the slot if it is not available\n  1972\t                if (slot.is_processing()) {\n  1973\t                    SLT_TRC(slot, \" - skipping, is_processing = %d\\n\", slot.is_processing());\n  1974\t                    continue;\n  1975\t                }\n  1976\t\n  1977\t                // per-slot context sizes: a cached prefix in a slot that cannot hold the prompt is no use\n  1978\t                if (task.id_slot == -1 && !slot_fits(slot)) {\n  1979\t                    SLT_TRC(slot, \" - skipping, n_ctx = %d < %zu\\n\", slot.n_ctx, n_need);\n  1980\t                    continue;\n  1981\t                }\n  1982\t\n  1983\t                const auto & tokens = slot.prompt.tokens;\n  1984\t\n  1985\t                // skip the slot if it does not contains cached tokens\n  1986\t                if (tokens.empty()) {\n  1987\t                    SLT_TRC(slot, \"%s\", \" - skipping, slot is empty\\n\");\n  1988\t                    continue;\n  1989\t                }\n  1990\t\n  1991\t                // fraction of the Longest Common Prefix length with respect to the input prompt length\n  1992\t                const size_t lcp_len = tokens.get_common_prefix(task.tokens);\n  1993\t                const float f_sim_cur = float(lcp_len) / task.tokens.size();\n  1994\t\n  1995\t                SLT_TRC(slot, \" - checking sim = %.3f (%zu/%zu) > %.3f\\n\", f_sim_cur, lcp_len, task.tokens.size(), slot_prompt_similarity);\n  1996\t\n  1997\t                // select the current slot if the criteria match\n  1998\t                if (f_sim_cur > f_sim_best && f_sim_cur > slot_prompt_similarity) {\n  1999\t                    f_sim_best = f_sim_cur;\n  2000\t\n  2001\t                    ret = &slot;\n  2002\t                }\n  2003\t            }\n  2004\t\n  2005\t            if (ret != nullptr) {\n  2006\t                const float f_keep = (f_sim_best*task.tokens.size()) / ret->prompt.tokens.size();\n  2007\t\n  2008\t                if (task.id_slot == -1) {\n  2009\t                    SLT_INF(*ret, \"selected slot by LCP similarity, f_sim_best = %.3f (> %.3f thold), f_keep = %.3f\\n\",\n  2010\t                            f_sim_best, slot_prompt_similarity, f_keep);\n  2011\t                }\n  2012\t\n  2013\t                // if we are about to lose a large portion of the existing context - save it in the prompt cache\n  2014\t                if (f_keep < 0.5f) {\n  2015\t                    update_cache = true;\n  2016\t                }\n  2017\t            }\n  2018\t        }\n  2019\t\n  2020\t        // find the slot that has been least recently used\n  2021\t        if (ret == nullptr) {\n  2022\t            int64_t t_last = -1;\n  2023\t\n  2024\t            for (server_slot & slot : slots) {\n  2025\t                // skip the slot if it is not available\n  2026\t                if (slot.is_processing()) {\n  2027\t                    continue;\n  2028\t                }\n  2029\t\n  2030\t                // per-slot context sizes: stay in the smallest size class that holds the prompt\n  2031\t                if (!slot_in_class(slot)) {\n  2032\t                    continue;\n  2033\t                }\n  2034\t\n  2035\t                // select the current slot if the criteria match\n  2036\t                if (!ret || slot.t_last_used <= t_last) {\n  2037\t                    t_last = slot.t_last_used;\n  2038\t                    ret = &slot;\n  2039\t                }\n  2040\t            }\n  2041\t\n  2042\t            if (ret != nullptr) {\n  2043\t                SLT_INF(*ret, \"selected slot by LRU, t_last = %\" PRId64 \"\\n\", t_last);\n  2044\t\n  2045\t                update_cache = true;\n  2046\t            }\n  2047\t        }\n  2048\t\n  2049\t        if (ret) {\n[lines 1940-2049 of 6228]"
+  },
+  {
+   "role": "assistant",
+   "content": "",
+   "reasoning_content": "Let's read the beginning of this function to understand the overall context. I'll read from around line 1900.\n",
+   "tool_calls": [
+    {
+     "id": "RLJZEQpStMxtHJYBhdZIo0oMsLUskrCy",
+     "type": "function",
+     "function": {
+      "name": "read_file",
+      "arguments": {
+       "path": "tools/server/server-context.cpp",
+       "offset": 1890,
+       "limit": 55
+      }
+     }
+    }
+   ]
+  },
+  {
+   "role": "tool",
+   "tool_call_id": "RLJZEQpStMxtHJYBhdZIo0oMsLUskrCy",
+   "content": "  1890\t        return true;\n  1891\t    }\n  1892\t\n  1893\t    server_slot * get_slot_by_id(int id_slot) {\n  1894\t        // note: allow id_slot to be out of bounds (wrap around)\n  1895\t        id_slot = id_slot % slots.size();\n  1896\t\n  1897\t        for (server_slot & slot : slots) {\n  1898\t            if (slot.id == id_slot) {\n  1899\t                return &slot;\n  1900\t            }\n  1901\t        }\n  1902\t\n  1903\t        return nullptr;\n  1904\t    }\n  1905\t\n  1906\t    server_slot * get_slot_by_cmpl_id(const std::string & cmpl_id) {\n  1907\t        if (cmpl_id.empty()) {\n  1908\t            return nullptr;\n  1909\t        }\n  1910\t\n  1911\t        for (server_slot & slot : slots) {\n  1912\t            if (slot.is_processing() && slot.task && slot.task->params.oaicompat_cmpl_id == cmpl_id) {\n  1913\t                return &slot;\n  1914\t            }\n  1915\t        }\n  1916\t\n  1917\t        return nullptr;\n  1918\t    }\n  1919\t\n  1920\t    server_slot * get_available_slot(const server_task & task) {\n  1921\t        server_slot * ret = nullptr;\n  1922\t\n  1923\t        bool update_cache = false;\n  1924\t\n  1925\t        // if a specific slot is requested, use it (still goes through cache update logic below)\n  1926\t        if (task.id_slot != -1) {\n  1927\t            ret = get_slot_by_id(task.id_slot);\n  1928\t            if (ret) {\n  1929\t                SLT_INF(*ret, \"selected slot by id (%d)\\n\", task.id_slot);\n  1930\t            }\n  1931\t        }\n  1932\t\n  1933\t        // per-slot context sizes: a task may only go to a slot whose context holds its prompt, and among the idle\n  1934\t        // slots that do, the LRU rule stays inside the smallest such size class (a short task never takes the\n  1935\t        // coordinator's slot). With uniform slots every slot is one class and this is the old rule. A prompt that\n  1936\t        // fits no slot at all falls through to the old path, which reports the context error.\n  1937\t        const size_t n_need = task.tokens.size() + 1;\n  1938\t        int n_ctx_fit = -1;\n  1939\t        {\n  1940\t            bool any_fits = false;\n  1941\t            for (const server_slot & slot : slots) {\n  1942\t                if ((size_t) slot.n_ctx >= n_need) {\n  1943\t                    any_fits = true;\n  1944\t                    if (!slot.is_processing() && (n_ctx_fit < 0 || slot.n_ctx < n_ctx_fit)) {\n[lines 1890-1944 of 6228]"
+  },
+  {
+   "role": "assistant",
+   "content": "",
+   "reasoning_content": "Now I've got the full picture of `get_available_slot`. Let me also check where it's called from (line 2838) and what happens after the selection (line 2049 onwards). I'll read lines 2049\u20132070 and lines 2830\u20132870.\n",
+   "tool_calls": [
+    {
+     "id": "yvcCYupO0j9KGPPzHKKpi1sLrbVIYs8C",
+     "type": "function",
+     "function": {
+      "name": "read_file",
+      "arguments": {
+       "path": "tools/server/server-context.cpp",
+       "offset": 2049,
+       "limit": 25
+      }
+     }
+    },
+    {
+     "id": "7fYTIPFuYq27fRDHdOeQy0JHUDYQq3WC",
+     "type": "function",
+     "function": {
+      "name": "read_file",
+      "arguments": {
+       "path": "tools/server/server-context.cpp",
+       "offset": 2825,
+       "limit": 50
+      }
+     }
+    }
+   ]
+  },
+  {
+   "role": "tool",
+   "tool_call_id": "yvcCYupO0j9KGPPzHKKpi1sLrbVIYs8C",
+   "content": "  2049\t        if (ret) {\n  2050\t            // LLAMA_CACHE_SAVE_TAIL=N (2026-09-25, perf/ctx-class-cache.md): save the slot's state to the prompt cache\n  2051\t            // whenever the task will overwrite at least N decoded tokens of it, whichever way the slot was picked\n  2052\t            // (similarity keeping over half of it, or a requested id_slot - the paths that lose the tail unsaved).\n  2053\t            // With it, --no-cache-idle-slots loses nothing: in split mode the idle-slot save is a duplicate of a\n  2054\t            // state that stays live in its slot, and it fills the cache with copies nobody restores.\n  2055\t            // DEFAULT 64 since 2026-09-26 (owner: \"2, while accepting loss of acceptance\" = the rules are code defaults);\n  2056\t            // LLAMA_CACHE_SAVE_TAIL=0 restores upstream's rule (save only when under half of the slot would be kept)\n  2057\t            static const int save_tail = getenv(\"LLAMA_CACHE_SAVE_TAIL\") ? atoi(getenv(\"LLAMA_CACHE_SAVE_TAIL\")) : 64;\n  2058\t            if (save_tail > 0 && !update_cache && !ret->prompt.tokens.empty()) {\n  2059\t                const int lcp  = ret->prompt.tokens.get_common_prefix(task.tokens);\n  2060\t                const int lost = (int) ret->prompt.tokens.size() - 1 - lcp;   // decoded tokens beyond the prefix (the last sampled token never is)\n  2061\t                if (lost >= save_tail) {\n  2062\t                    SLT_INF(*ret, \"saving to the prompt cache: the task overwrites %d decoded tokens (LLAMA_CACHE_SAVE_TAIL = %d)\\n\", lost, save_tail);\n  2063\t                    update_cache = true;\n  2064\t                }\n  2065\t            }\n  2066\t\n  2067\t            update_cache = update_cache && prompt_cache;\n  2068\t\n  2069\t            // cache prompts only for completion tasks\n  2070\t            update_cache = update_cache && task.type == SERVER_TASK_TYPE_COMPLETION;\n  2071\t\n  2072\t            if (update_cache) {\n  2073\t                SRV_TRC(\"%s\", \"updating prompt cache\\n\");\n[lines 2049-2073 of 6228]"
+  },
+  {
+   "role": "tool",
+   "tool_call_id": "7fYTIPFuYq27fRDHdOeQy0JHUDYQq3WC",
+   "content": "  2825\t            case SERVER_TASK_TYPE_EMBEDDING:\n  2826\t            case SERVER_TASK_TYPE_RERANK:\n  2827\t                {\n  2828\t                    // special case: if input is provided via CLI, tokenize it first\n  2829\t                    // otherwise, no need to tokenize as it's already done inside the HTTP thread\n  2830\t                    if (task.cli) {\n  2831\t                        if (!tokenize_cli_input(task)) {\n  2832\t                            break;\n  2833\t                        }\n  2834\t                    }\n  2835\t\n  2836\t                    const int id_task = task.id;\n  2837\t\n  2838\t                    server_slot * slot = get_available_slot(task);\n  2839\t\n  2840\t                    //\n  2841\t                    // slot scheduling logic\n  2842\t                    //\n  2843\t\n  2844\t                    if (slot == nullptr) {\n  2845\t                        // if no slot is available, we defer this task for processing later\n  2846\t                        SRV_DBG(\"no slot is available, defer task, id_task = %d\\n\", id_task);\n  2847\t                        queue_tasks.defer(std::move(task));\n  2848\t                        break;\n  2849\t                    }\n  2850\t\n  2851\t                    if (slot->is_processing()) {\n  2852\t                        // if requested slot is unavailable, we defer this task for processing later\n  2853\t                        SRV_DBG(\"requested slot is unavailable, defer task, id_task = %d\\n\", id_task);\n  2854\t                        queue_tasks.defer(std::move(task));\n  2855\t                        break;\n  2856\t                    }\n  2857\t\n  2858\t                    if (task.is_parent()) {\n  2859\t                        // try getting free slots for all child tasks\n  2860\t                        size_t n_child_tasks = task.child_tasks.size();\n  2861\t                        std::vector<server_slot *> child_slots = get_free_slots(n_child_tasks, slot->id);\n  2862\t                        if (child_slots.size() < n_child_tasks) {\n  2863\t                            SRV_DBG(\"not enough free slots for child tasks, n_free = %zu, n_children = %zu, defer task, id_task = %d\\n\", child_slots.size(), n_child_tasks, id_task);\n  2864\t                            queue_tasks.defer(std::move(task));\n  2865\t                            break;\n  2866\t                        }\n  2867\t                        if (!launch_slots_with_parent_task(*slot, child_slots, std::move(task))) {\n  2868\t                            SRV_ERR(\"failed to launch slot with parent task, id_task = %d\\n\", id_task);\n  2869\t                            break; // drop the task\n  2870\t                        }\n  2871\t                    } else if (!launch_slot_with_task(*slot, std::move(task))) {\n  2872\t                        SRV_ERR(\"failed to launch slot with task, id_task = %d\\n\", id_task);\n  2873\t                        break; // drop the task\n  2874\t                    }\n[lines 2825-2874 of 6228]"
+  },
+  {
+   "role": "assistant",
+   "content": "",
+   "reasoning_content": "Now I have a grasp of the overall picture. Let me summarize:\n\n**Location**: `tools/server/server-context.cpp` \u2014 `server_context_impl::get_available_slot(const server_task & task)` (line 1920). It's called from the queue processing loop (around line 2838) for COMPLETION/EMBEDDING/RERANK tasks.\n\n**Selection logic** (in priority order):\n\n1. **Explicit slot ID**: If `task.id_slot != -1` (the client requested a specific slot), use `get_slot_by_id(task.id_slot)` \u2014 the ID wraps around modulo the number of slots.\n\n2. **Size class (per-slot context size)**: Compute `n_need = task.tokens.size() + 1`. Among the idle slots that can hold the prompt, find the smallest `n_ctx` (the \"size class\"). If all slots that can hold the prompt are busy, return nullptr (defer). The LRU pass stays within that smallest class, so short tasks don't steal the coordinator's large slot.\n\n3. **Prompt similarity (LCP)**: If `slot_prompt_similarity != 0.0f` (the `--slot-sim` parameter), scan idle slots (respecting the requested ID and size class), skip empty slots, compute the longest common prefix (LCP) between the slot's cached prompt tokens and the task's tokens, and take the fraction relative to the task's token count. Pick the slot with the highest similarity that exceeds the threshold. If the selected slot would lose more than half of its cached context (f_keep < 0.5), mark `update_cache` to save the old prompt to the prompt cache.\n\n4. **LRU fallback**: If no slot met the similarity criterion, pick the idle slot with the oldest `t_last_used` (least recently used) within the size class. This also sets `update_cache = true`.\n\n5. **Cache save tail rule**: After selection, if the task overwrites at least `LLAMA_CACHE_SAVE_TAIL` (default 64) decoded tokens of the selected slot, save the slot's state to the prompt cache (completion tasks only).\n\n**After selection** (around line 2838):\n- If no slot is available \u2192 defer the task to the queue (`queue_tasks.defer`), and it will be retried when a slot is released (`pop_deferred_task`).\n- If the requested slot is busy \u2192 defer.\n- Parent tasks (parallel sampling) need one free slot per child task (`get_free_slots`); if there aren't enough, defer.\n- Otherwise, launch the slot with the task (`launch_slot_with_task` / `launch_slots_with_parent_task`).\n\nAlso, `t_last_used` is updated when the slot is used \u2014 let me quickly check where t_last_used is set. Line 581: \"used to determine the slot that has been used the longest\". Let me quickly check where it's updated. Actually, I have enough information. I could quickly grep for t_last_used to confirm it's set at task start.\n",
+   "tool_calls": [
+    {
+     "id": "TwUAxBfI6l0JXMOL2sj0z4312U8bsfE7",
+     "type": "function",
+     "function": {
+      "name": "grep",
+      "arguments": {
+       "pattern": "t_last_used",
+       "path": "tools/server/server-context.cpp"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "role": "tool",
+   "tool_call_id": "TwUAxBfI6l0JXMOL2sj0z4312U8bsfE7",
+   "content": "tools/server/server-context.cpp:582:    int64_t t_last_used = -1;\ntools/server/server-context.cpp:881:            t_last_used = ggml_time_us();\ntools/server/server-context.cpp:2036:                if (!ret || slot.t_last_used <= t_last) {\ntools/server/server-context.cpp:2037:                    t_last = slot.t_last_used;"
+  },
+  {
+   "role": "assistant",
+   "content": "",
+   "reasoning_content": "`t_last_used` is set at line 881 \u2014 let me check the context. It's probably inside `launch_slot_with_task` or `process`. Line 881 is inside the server_slot method (around lines 870\u2013890, near \"do not keep context of the child slots\"). Let me quickly check.\n",
+   "tool_calls": [
+    {
+     "id": "qW0L4Sqh3AaRiOwHdh31JtIIXJxvbtRd",
+     "type": "function",
+     "function": {
+      "name": "read_file",
+      "arguments": {
+       "path": "tools/server/server-context.cpp",
+       "offset": 860,
+       "limit": 30
+      }
+     }
+    }
+   ]
+  },
+  {
+   "role": "tool",
+   "tool_call_id": "qW0L4Sqh3AaRiOwHdh31JtIIXJxvbtRd",
+   "content": "   860\t\n   861\t            auto pos0 = prompt.tokens.pos_next();\n   862\t\n   863\t            add_ok &= batch.add(id, sampled, pos0++, true, false);\n   864\t            for (auto token : spec_draft) {\n   865\t                add_ok &= batch.add(this->id, token, pos0++, true, false);\n   866\t            }\n   867\t        }\n   868\t\n   869\t        GGML_ASSERT(add_ok && \"batch must be large enough to hold the sampled and draft tokens\");\n   870\t\n   871\t        prompt.tokens.push_back(sampled);\n   872\t        prompt.tokens.insert(spec_draft);\n   873\t    }\n   874\t\n   875\t    void release() {\n   876\t        if (is_processing()) {\n   877\t            GGML_ASSERT(task);\n   878\t\n   879\t            SLT_INF(*this, \"stop processing: n_tokens = %d, truncated = %d\\n\", prompt.n_tokens(), truncated);\n   880\t\n   881\t            t_last_used = ggml_time_us();\n   882\t\n   883\t            state = SLOT_STATE_IDLE;\n   884\t\n   885\t            // do not keep context of the child slots - the parent's context is enough\n   886\t            if (task->is_child()) {\n   887\t                prompt_clear();\n   888\t            }\n   889\t\n[lines 860-889 of 6228]"
+  },
+  {
+   "role": "user",
+   "content": "Why would you prefer the slot with the longest common prefix over simply taking the least recently used one? What are the trade-offs?"
+  },
+  {
+   "role": "assistant",
+   "content": "",
+   "reasoning_content": "The user is asking a conceptual question about the slot selection logic: why prioritize LCP (longest common prefix) similarity over pure LRU, and what the tradeoffs are.\n\nI've already read the code. Let me think about what I know:\n\n1. **Why LCP similarity helps**:\n   - Each slot holds a KV cache of the prompt tokens it has processed. If a new task's prompt shares a long prefix with the tokens cached in an idle slot, the shared prefix doesn't need to be reprocessed (prompt processing / prefill is expensive \u2014 it's a large batch of tokens through the model).\n   - This is especially valuable for multi-turn conversations: a client continuing a conversation sends the entire conversation history again each time. If the same slot still holds that history in its KV cache, the server only needs to process the new delta (the last user message), not the entire history. This dramatically reduces TTFT (time to first token) for follow-up requests.\n   - The `slot_prompt_similarity` threshold (the `--slot-sim` parameter) controls this: only pick a similar slot if the similarity exceeds the threshold.\n   - Also, the prompt cache: if the selected slot would lose more than half of its cached context (f_keep < 0.5), the old prompt is saved to the prompt cache so it can be restored later.\n\n2. **Tradeoffs**:\n   - **Fairness / load balancing**: LRU spreads load evenly across slots. LCP-based selection can concentrate work on a small number of \"hot\" slots (e.g., one client with a long conversation keeps hitting the same slot), leaving other slots idle. This is fine for throughput, but it means the cache of other slots gets evicted/overwritten.\n   - **Cache pollution / eviction**: Picking a similar slot overwrites that slot's cached context with the new prompt. If the original conversation comes back later, its KV cache is gone (mitigated by saving to the prompt cache when f_keep < 0.5, but that's a disk/memory cost and a restore cost).\n   - **Size class constraint**: With per-slot context sizes, a similar slot that can't hold the prompt is useless \u2014 the code skips slots that don't fit. So similarity only helps within the size class.\n   - **Cost of the similarity check itself**: Computing the LCP across all slots for each incoming task is O(slots \u00d7 tokens) \u2014 a token-by-token comparison. Cheap compared to inference, but not free.\n   - **Stale context**: A slot's cached tokens may be from a different conversation that merely shares a prefix (e.g., a common system prompt). In that case, the LCP match is still beneficial (the system prompt prefix is shared), but the \"similarity\" may be misleading \u2014 a high LCP fraction on a short prompt could be dominated by the system prompt.\n   - **Threshold tuning**: `slot_prompt_similarity` balances: 0 disables it (pure LRU); a low threshold picks slots with even a small shared prefix (good for common system prompts); a high threshold requires a strong match.\n   - **LRU as fallback**: When no slot meets the similarity threshold, LRU is used \u2014 this is a reasonable default that spreads load and doesn't waste time on cache reuse.\n   - **Interaction with the prompt cache**: The LCP path sets update_cache when f_keep < 0.5, saving the evicted context to the prompt cache. This adds I/O but preserves the ability to restore.\n\nLet me also check the `--slot-sim` parameter to confirm the name. I'll do a quick grep.\n\nActually, I should verify the parameter name. Let me grep for slot_prompt_similarity in the parameter definitions.\n",
+   "tool_calls": [
+    {
+     "id": "g8ojbn3iqZielr2Z0r1ejTDuQLlzc95F",
+     "type": "function",
+     "function": {
+      "name": "grep",
+      "arguments": {
+       "pattern": "slot_prompt_similarity|slot-sim",
+       "path": "tools/server"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "role": "tool",
+   "tool_call_id": "g8ojbn3iqZielr2Z0r1ejTDuQLlzc95F",
+   "content": "tools/server/server-context.cpp:1259:    float slot_prompt_similarity = 0.0f;\ntools/server/server-context.cpp:1601:        slot_prompt_similarity = params_base.slot_prompt_similarity;\ntools/server/server-context.cpp:1963:        if (slot_prompt_similarity != 0.0f) {\ntools/server/server-context.cpp:1995:                SLT_TRC(slot, \" - checking sim = %.3f (%zu/%zu) > %.3f\\n\", f_sim_cur, lcp_len, task.tokens.size(), slot_prompt_similarity);\ntools/server/server-context.cpp:1998:                if (f_sim_cur > f_sim_best && f_sim_cur > slot_prompt_similarity) {\ntools/server/server-context.cpp:2010:                            f_sim_best, slot_prompt_similarity, f_keep);"
+  },
+  {
+   "role": "assistant",
+   "content": "",
+   "reasoning_content": "Let's check where slot_prompt_similarity is defined in the parameters (probably in common/server or params). I'll try grepping more broadly.\n",
+   "tool_calls": [
+    {
+     "id": "jJT2XS8Puf9v5Pv8gCklTy0JvdcpceuX",
+     "type": "function",
+     "function": {
+      "name": "grep",
+      "arguments": {
+       "pattern": "slot_prompt_similarity",
+       "path": "common"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "role": "tool",
+   "tool_call_id": "jJT2XS8Puf9v5Pv8gCklTy0JvdcpceuX",
+   "content": "common/arg.cpp:3775:        string_format(\"how much the prompt of a request must match the prompt of a slot in order to use that slot (default: %.2f, 0.0 = disabled)\\n\", params.slot_prompt_similarity),\ncommon/arg.cpp:3777:            params.slot_prompt_similarity = std::stof(value);\ncommon/common.h:679:    float slot_prompt_similarity = 0.1f;"
+  },
+  {
+   "role": "assistant",
+   "content": "",
+   "reasoning_content": "So the CLI parameter is `--slot-sim` (let me confirm the flag name). Line 3775 of arg.cpp. Let me read a bit around there to get the flag name.\n",
+   "tool_calls": [
+    {
+     "id": "Po3fdVdsliTgZGcFM8lWTOo0FiirRCz2",
+     "type": "function",
+     "function": {
+      "name": "read_file",
+      "arguments": {
+       "path": "common/arg.cpp",
+       "offset": 3770,
+       "limit": 12
+      }
+     }
+    }
+   ]
+  },
+  {
+   "role": "tool",
+   "tool_call_id": "Po3fdVdsliTgZGcFM8lWTOo0FiirRCz2",
+   "content": "  3770\t            params.prefill_assistant = value;\n  3771\t        }\n  3772\t    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env(\"LLAMA_ARG_PREFILL_ASSISTANT\"));\n  3773\t    add_opt(common_arg(\n  3774\t        {\"-sps\", \"--slot-prompt-similarity\"}, \"SIMILARITY\",\n  3775\t        string_format(\"how much the prompt of a request must match the prompt of a slot in order to use that slot (default: %.2f, 0.0 = disabled)\\n\", params.slot_prompt_similarity),\n  3776\t        [](common_params & params, const std::string & value) {\n  3777\t            params.slot_prompt_similarity = std::stof(value);\n  3778\t        }\n  3779\t    ).set_examples({LLAMA_EXAMPLE_SERVER}));\n  3780\t    add_opt(common_arg(\n  3781\t        {\"--lora-init-without-apply\"},\n[lines 3770-3781 of 4704]"
+  },
+  {
+   "role": "assistant",
+   "content": "Short answer: because a slot's KV cache is a precomputed asset, and reusing it skips the most expensive part of a request.\n\n## Why LCP beats LRU here\n\nPrompt processing (prefill) is the batch-heavy, latency-dominating part of a request. Each slot's KV cache already contains the processed state of whatever prompt last ran in it. If an idle slot's cached tokens match the new request's prompt as a prefix, the server can resume from the end of that prefix and only process the delta.\n\nThis matters most for multi-turn chat: OpenAI-compatible clients resend the *entire* conversation history on every turn. Under pure LRU, a follow-up message might land in a different slot than the one that processed turns 1\u2013N, forcing a full re-prefill of the whole history. Under LCP routing (the `slot_prompt_similarity` path in `get_available_slot`, `server-context.cpp:1962-2018`), the follow-up lands back in the same slot and only the new user message is prefilled \u2014 a direct TTFT and compute win.\n\nThe mechanics, as implemented:\n\n- Only active when `-sps/--slot-prompt-similarity` is non-zero (default 0.1, `common/common.h:679`).\n- Skips busy slots, empty slots, and \u2014 with per-slot context sizes \u2014 slots whose `n_ctx` can't hold the prompt (a cached prefix in a too-small slot is useless).\n- Scores each candidate as `LCP length / task token count` and picks the best slot above the threshold.\n- If the chosen slot would lose more than half its cached context (`f_keep < 0.5`), the old prompt is saved to the prompt cache before being overwritten.\n\n## Trade-offs\n\n1. **Load concentration vs. even spread.** LRU spreads requests uniformly; LCP routing pins a client's conversation to one slot. That's great for that client's latency, but other slots sit idle while one does all the work, and their cached contexts go stale. Continuous batching softens the throughput impact, but the imbalance is real.\n\n2. **Eviction cost.** Reusing a similar slot overwrites its cached context. If the original conversation returns, its KV state is gone. The code mitigates this by saving the evicted prompt to the prompt cache (both the `f_keep < 0.5` path and the LRU path set `update_cache`), but that's extra memory/disk and a restore cost later.\n\n3. **Similarity can mislead.** A high LCP fraction on a short prompt is often just a shared system prompt, not a genuine conversation match. The threshold is a blunt instrument: too low and you route on trivial prefixes; too high and you rarely get the benefit. The check itself is O(slots \u00d7 prompt tokens) per request \u2014 cheap next to inference, but not free.\n\n4. **Size-class constraint.** With per-slot context sizes, similarity only applies within the smallest size class that fits the prompt. A conversation that outgrows its slot's `n_ctx` gets no cache benefit at all.\n\n5. **It's an optimization on top of LRU, not a replacement.** When no slot clears the threshold, the code falls back to LRU (`server-context.cpp:2020-2047`). So LRU remains the baseline for fairness and cold traffic; the LCP path only kicks in when reuse is actually worthwhile.\n\nIn short: LRU optimizes for fairness, LCP optimizes for latency by trading even load distribution against KV-cache reuse \u2014 and the prompt-cache save logic is the safety net for the evicted contexts that trade creates.",
+   "reasoning_content": "Now I have all the information I need. Let me write the answer.\n\n**Why LCP similarity beats pure LRU:**\n\nThe core reason is that each slot's KV cache is a precomputed artifact. Prompt processing (prefill) is the expensive, batch-heavy part of a request \u2014 it runs the entire prompt through the model in one go. If an idle slot already holds tokens that match the new request's prompt as a prefix, those tokens don't need to be reprocessed: the slot can resume from where the prefix ends and only process the delta.\n\nThis matters most for multi-turn chat: OpenAI-compatible clients resend the full conversation history on every turn. With LRU, a follow-up message might land in a different slot than the one that processed turns 1\u2013N, forcing a full re-prefill of the entire history. With LCP matching, the follow-up lands in the same slot, and only the new user message gets prefilled. This directly reduces TTFT (time to first token) and compute cost.\n\nThe code (server-context.cpp:1962-2018):\n- Only enabled when `slot_prompt_similarity != 0` (CLI: `-sps/--slot-prompt-similarity`, default 0.1)\n- Skips busy slots, empty slots, and (with per-slot context sizes) slots too small to hold the prompt\n- Computes LCP length between the slot's cached tokens and the task's tokens, takes the ratio against the task's token count\n- Picks the best slot that exceeds the threshold\n- If the selected slot would lose more than half of its cached context (f_keep < 0.5), it saves the old prompt to the prompt cache before overwriting\n\n**Tradeoffs:**\n\n1. **Load concentration vs. even spreading**: LRU spreads requests evenly across slots. LCP routing pins a client's conversation to one slot \u2014 good for that client's latency, but other slots sit idle while one slot does all the work. With continuous batching this is less of a throughput problem, but it does mean the KV caches of the other slots get stale/evicted.\n\n2. **Cache eviction cost**: Choosing a similar slot overwrites its cached context with the new prompt. If the original conversation comes back, its KV cache is gone. Mitigation: the code saves the evicted prompt to the prompt cache when f_keep < 0.5 (and there's also the LLAMA_CACHE_SAVE_TAIL rule), but that's extra memory/disk and a restore cost later.\n\n3. **Similarity can be misleading**: A high LCP ratio on a short prompt is often just a shared system prompt, not a real conversation match. The threshold (default 0.1) is a blunt instrument: too low and you route on trivial prefixes; too high and you rarely benefit. Also, the LCP check is O(slots \u00d7 prompt tokens) per request \u2014 cheap compared to inference, but not free.\n\n4. **Size class constraint**: With per-slot context sizes, a similar slot that can't hold the prompt is useless, so similarity only applies within the smallest size class that fits. A long conversation that outgrows its slot's n_ctx gets no cache benefit at all.\n\n5. **Fallback behavior**: When no slot clears the threshold, the code falls back to LRU anyway \u2014 so the similarity path is strictly an optimization layered on top of LRU, not a replacement. LRU remains the baseline for fairness and for cold traffic.\n\nAlso worth noting: the LRU path also sets update_cache = true (saves the evicted slot's prompt to the prompt cache), so both paths try to preserve evicted context.\n\nLet me write a focused answer. The user is asking \"why prefer LCP over LRU, and what are the tradeoffs\" \u2014 a conceptual question grounded in the code. I should reference the code locations I've verified.\n"
+  },
+  {
+   "role": "user",
+   "content": "Show me the function that computes the common prefix between two token lists and walk me through it."
+  },
+  {
+   "role": "assistant",
+   "content": "",
+   "reasoning_content": "The user is asking for the function that computes the common prefix between two token lists. In the slot selection code, I confirmed `tokens.get_common_prefix(task.tokens)`. Let's find that function. It's probably in server-common.h or server-task.cpp, and is likely a method of `server_tokens`.\n",
+   "tool_calls": [
+    {
+     "id": "4xUt1M2Ox8lqzUJiXdF2jrVfD8Sr61iW",
+     "type": "function",
+     "function": {
+      "name": "grep",
+      "arguments": {
+       "pattern": "get_common_prefix",
+       "path": "tools/server"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "role": "tool",
+   "tool_call_id": "4xUt1M2Ox8lqzUJiXdF2jrVfD8Sr61iW",
+   "content": "tools/server/server-common.h:232:    size_t get_common_prefix(const server_tokens & b) const;\ntools/server/server-task.cpp:1711:        const int cur_lcp_len = it->prompt.tokens.get_common_prefix(prompt.tokens);\ntools/server/server-task.cpp:1736:        const int len = it->prompt.tokens.get_common_prefix(prompt.tokens);\ntools/server/server-task.cpp:1809:    const int lcp_best = effective_reuse(prompt, prompt.tokens.get_common_prefix(tokens_new));\ntools/server/server-task.cpp:1820:        const int lcp_cur = effective_reuse(it->prompt, it->prompt.tokens.get_common_prefix(tokens_new));\ntools/server/server-common.cpp:680:size_t server_tokens::get_common_prefix(const server_tokens & b) const {\ntools/server/server-context.cpp:1992:                const size_t lcp_len = tokens.get_common_prefix(task.tokens);\ntools/server/server-context.cpp:2059:                const int lcp  = ret->prompt.tokens.get_common_prefix(task.tokens);\ntools/server/server-context.cpp:3894:                                n_past = slot.prompt.tokens.get_common_prefix(input_tokens);"
+  },
+  {
+   "role": "assistant",
+   "content": "",
+   "reasoning_content": "The function is `server_tokens::get_common_prefix` at `tools/server/server-common.cpp:680`. Let's read it, and also check the declaration and the `server_tokens` struct in server-common.h.\n",
+   "tool_calls": [
+    {
+     "id": "uQ4zWRoejB91P2lEQu6eiySz6XriscsR",
+     "type": "function",
+     "function": {
+      "name": "read_file",
+      "arguments": {
+       "path": "tools/server/server-common.cpp",
+       "offset": 660,
+       "limit": 45
+      }
+     }
+    },
+    {
+     "id": "gLeZ46ooue9zqWiAdXx4iLcTJkxlV0Xr",
+     "type": "function",
+     "function": {
+      "name": "read_file",
+      "arguments": {
+       "path": "tools/server/server-common.h",
+       "offset": 200,
+       "limit": 45
+      }
+     }
+    }
+   ]
+  },
+  {
+   "role": "tool",
+   "tool_call_id": "uQ4zWRoejB91P2lEQu6eiySz6XriscsR",
+   "content": "   660\t                it = map_idx_to_media.erase(it);\n   661\t            } else {\n   662\t                ++it;\n   663\t            }\n   664\t        }\n   665\t    }\n   666\t    tokens.resize(n);\n   667\t}\n   668\t\n   669\tstd::string server_tokens::detokenize(const llama_context * ctx, bool special) const {\n   670\t    llama_tokens text_tokens;\n   671\t    text_tokens.reserve(tokens.size());\n   672\t    for (const auto & t : tokens) {\n   673\t        if (t != LLAMA_TOKEN_NULL) {\n   674\t            text_tokens.push_back(t);\n   675\t        }\n   676\t    }\n   677\t    return common_detokenize(ctx, text_tokens, special);\n   678\t}\n   679\t\n   680\tsize_t server_tokens::get_common_prefix(const server_tokens & b) const {\n   681\t    const size_t max_idx = std::min(tokens.size(), b.tokens.size());\n   682\t\n   683\t    if (!has_mtmd) {\n   684\t        for (size_t i = 0; i < max_idx; ++i) {\n   685\t            if (tokens[i] == b.tokens[i]) {\n   686\t                continue;\n   687\t            }\n   688\t\n   689\t            return i;\n   690\t        }\n   691\t\n   692\t        return max_idx;\n   693\t    }\n   694\t\n   695\t    for (size_t i = 0; i < max_idx; ++i) {\n   696\t        const llama_token ai =   tokens[i];\n   697\t        const llama_token bi = b.tokens[i];\n   698\t\n   699\t        if (ai == LLAMA_TOKEN_NULL && bi == LLAMA_TOKEN_NULL) {\n   700\t            const auto & a_chunk =   find_chunk(i);\n   701\t            const auto & b_chunk = b.find_chunk(i);\n   702\t\n   703\t            GGML_ASSERT(a_chunk && b_chunk);\n   704\t\n[lines 660-704 of 1822]"
+  },
+  {
+   "role": "tool",
+   "tool_call_id": "gLeZ46ooue9zqWiAdXx4iLcTJkxlV0Xr",
+   "content": "   200\t    void push_back_placeholder(const mtmd_input_chunk * chunk);\n   201\t\n   202\t    // appends server tokens, updates the media map. copies media chunks.\n   203\t    void push_back(server_tokens & tokens);\n   204\t\n   205\t    // for compatibility with context shift and prompt truncation\n   206\t    void insert(const llama_tokens & inp_tokens);\n   207\t\n   208\t    // for compatibility with speculative decoding, ctx shift\n   209\t    const llama_tokens & get_tokens() const;\n   210\t\n   211\t    llama_tokens get_text_tokens() const;\n   212\t\n   213\t    std::vector<char> serialize() const;\n   214\t    static server_tokens deserialize(const llama_tokens & packed, bool has_mtmd);\n   215\t\n   216\t    // for compatibility with speculative decoding\n   217\t    void set_token(llama_pos pos, llama_token id);\n   218\t\n   219\t    size_t size() const { return tokens.size(); }\n   220\t\n   221\t    bool empty() const { return tokens.empty(); }\n   222\t\n   223\t    void clear() {\n   224\t        map_idx_to_media.clear();\n   225\t        tokens.clear();\n   226\t    }\n   227\t\n   228\t    void keep_first(size_t n);\n   229\t\n   230\t    std::string detokenize(const llama_context * ctx, bool special) const;\n   231\t\n   232\t    size_t get_common_prefix(const server_tokens & b) const;\n   233\t\n   234\t    // split the tokens into message spans, skipping over media chunks\n   235\t    common_chat_msg_spans find_message_spans(const common_chat_msg_delimiters & delims) const;\n   236\t\n   237\t    // check text token IDs and the mapping between media chunks and token ranges\n   238\t    bool validate(const struct llama_context * ctx) const;\n   239\t\n   240\t    server_tokens clone() const;\n   241\t};\n   242\t\n   243\t\n   244\t//\n[lines 200-244 of 607]"
+  },
+  {
+   "role": "assistant",
+   "content": "",
+   "reasoning_content": "Let's read the rest of the function (from line 704 onward) and check the multimodal branch.\n",
+   "tool_calls": [
+    {
+     "id": "hgaIJau4WWdHGwEc65gBB5uQ6LoCSyHn",
+     "type": "function",
+     "function": {
+      "name": "read_file",
+      "arguments": {
+       "path": "tools/server/server-common.cpp",
+       "offset": 704,
+       "limit": 40
+      }
+     }
+    }
+   ]
+  },
+  {
+   "role": "tool",
+   "tool_call_id": "hgaIJau4WWdHGwEc65gBB5uQ6LoCSyHn",
+   "content": "   704\t\n   705\t            const std::string id_ai = mtmd_input_chunk_get_id(a_chunk.get());\n   706\t            const std::string id_bi = mtmd_input_chunk_get_id(b_chunk.get());\n   707\t\n   708\t            const size_t n_tok_a = mtmd_input_chunk_get_n_tokens(a_chunk.get());\n   709\t            const size_t n_tok_b = mtmd_input_chunk_get_n_tokens(b_chunk.get());\n   710\t\n   711\t            if (id_ai == id_bi && n_tok_a == n_tok_b) {\n   712\t                GGML_ASSERT(n_tok_a > 0 && \"Invalid media chunk\"); // should never happen\n   713\t                i += n_tok_a - 1; // will be +1 by the for loop\n   714\t                continue;\n   715\t            }\n   716\t\n   717\t            return i;\n   718\t        }\n   719\t\n   720\t        if (ai == bi) {\n   721\t            continue;\n   722\t        }\n   723\t\n   724\t        return i;\n   725\t    }\n   726\t\n   727\t    return max_idx; // all tokens are equal\n   728\t}\n   729\t\n   730\tcommon_chat_msg_spans server_tokens::find_message_spans(const common_chat_msg_delimiters & delims) const {\n   731\t    std::map<size_t, size_t> skips;\n   732\t    for (const auto & it : map_idx_to_media) {\n   733\t        skips[it.first] = mtmd_input_chunk_get_n_tokens(it.second.get());\n   734\t    }\n   735\t    return delims.split(tokens, skips);\n   736\t}\n   737\t\n   738\tbool server_tokens::validate(const struct llama_context * ctx) const {\n   739\t    const llama_model * model = llama_get_model(ctx);\n   740\t    const llama_vocab * vocab = llama_model_get_vocab(model);\n   741\t    const int32_t n_vocab = llama_vocab_n_tokens(vocab);\n   742\t    size_t n_media = 0;\n   743\t\n[lines 704-743 of 1822]"
+  },
+  {
+   "role": "assistant",
+   "content": "",
+   "reasoning_content": "Now I've got the whole function. Let me also check the `server_tokens` struct to explain `has_mtmd`, `map_idx_to_media`, and `find_chunk`. I'll take a look at the struct definition in server-common.h.\n",
+   "tool_calls": [
+    {
+     "id": "HfsJQzkFmXqHbG6XZFANBjZl6o6lL1cr",
+     "type": "function",
+     "function": {
+      "name": "read_file",
+      "arguments": {
+       "path": "tools/server/server-common.h",
+       "offset": 160,
+       "limit": 42
+      }
+     }
+    }
+   ]
+  },
+  {
+   "role": "tool",
+   "tool_call_id": "HfsJQzkFmXqHbG6XZFANBjZl6o6lL1cr",
+   "content": "   160\t    ~server_tokens() = default;\n   161\t\n   162\t    // Prevent copying\n   163\t    // TODO: server_tokens should be copyable - remove this:\n   164\t    server_tokens(const server_tokens&) = delete;\n   165\t    server_tokens& operator=(const server_tokens&) = delete;\n   166\t\n   167\t    // Allow moving (usually implicitly generated if members are movable)\n   168\t    server_tokens(server_tokens&&) = default;\n   169\t    server_tokens& operator=(server_tokens&&) = default;\n   170\t\n   171\t    // Allow accessing elements using [] operator\n   172\t    llama_token operator[](size_t index) { return tokens[index]; }\n   173\t    const llama_token& operator[](size_t index) const { return tokens[index]; }\n   174\t\n   175\t    server_tokens(mtmd::input_chunks & mtmd_chunks, bool has_mtmd);\n   176\t    server_tokens(const llama_tokens & tokens, bool has_mtmd);\n   177\t\n   178\t    // for debugging\n   179\t    std::string str() const;\n   180\t\n   181\t    // the next position after n_tokens. if n_tokens < 0, return the next position after all tokens.\n   182\t    llama_pos pos_next(int64_t n_tokens = -1) const;\n   183\t\n   184\t    // number of tokens with position < max_pos\n   185\t    size_t size_up_to_pos(llama_pos max_pos) const;\n   186\t\n   187\t    const mtmd::input_chunk_ptr & find_chunk(size_t idx) const;\n   188\t\n   189\t    // find next media chunk after idx\n   190\t    // returns a pair of pointer to the chunk (nullptr if not found) and its start index in tokens\n   191\t    std::pair<const mtmd::input_chunk_ptr *, size_t> find_next_media_chunk(size_t idx) const;\n   192\t\n   193\t    void push_back(llama_token tok);\n   194\t\n   195\t    // will create a copy of the chunk if it contains non-text data\n   196\t    void push_back(const mtmd_input_chunk * chunk);\n   197\t\n   198\t    // same as push_back, but media chunks are stored as placeholders (no image/audio data)\n   199\t    // only use this if the chunk will never be encoded again (e.g. it is already in the KV cache)\n   200\t    void push_back_placeholder(const mtmd_input_chunk * chunk);\n   201\t\n[lines 160-201 of 607]"
+  },
+  {
+   "role": "assistant",
+   "content": "",
+   "reasoning_content": "Let's also check the beginning of the struct to see the members (tokens, map_idx_to_media, has_mtmd).\n",
+   "tool_calls": [
+    {
+     "id": "JKbM3Xp2x4yp1jbiGIJ6vuAhQerR9zgH",
+     "type": "function",
+     "function": {
+      "name": "read_file",
+      "arguments": {
+       "path": "tools/server/server-common.h",
+       "offset": 140,
+       "limit": 22
+      }
+     }
+    }
+   ]
+  },
+  {
+   "role": "tool",
+   "tool_call_id": "JKbM3Xp2x4yp1jbiGIJ6vuAhQerR9zgH",
+   "content": "   140\t\n   141\t    // map a **start** index in tokens to the image chunk\n   142\t    // note: the order need to be in-sync with tokens\n   143\t    std::map<size_t, mtmd::input_chunk_ptr> map_idx_to_media;\n   144\t\n   145\t    // list of tokens\n   146\t    //   if the token is LLAMA_TOKEN_NULL, it indicates that this position is occupied by media chunk\n   147\t    //   otherwise, it is a normal text token\n   148\t    // note: a non-text chunk can occupy multiple tokens (aka memory cells) in the token list\n   149\t    // note(2): for M-RoPE, an image can occupy different number of pos; do not assume 1-to-1 mapping tokens <-> pos\n   150\t    llama_tokens tokens;\n   151\t\n   152\t    // for ex. with input of 5 text tokens and 2 images (each image occupies 3 tokens and 2 pos):\n   153\t    //      [0] [1] [2] [3] [4] [img0] [img0] [img0] [img1] [img1] [img1]\n   154\t    // idx  0   1   2   3   4   5      6      7      8      9      10\n   155\t    // pos  0   1   2   3   4   5      5      5      7      7      7\n   156\t    // map_idx_to_media will contain: {5, img0}, {8, img1}\n   157\t\n   158\tpublic:\n   159\t    server_tokens() = default;\n   160\t    ~server_tokens() = default;\n   161\t\n[lines 140-161 of 607]"
+  },
+  {
+   "role": "assistant",
+   "content": "It's `server_tokens::get_common_prefix` in `tools/server/server-common.cpp:680-728`. Here it is:\n\n```cpp\nsize_t server_tokens::get_common_prefix(const server_tokens & b) const {\n    const size_t max_idx = std::min(tokens.size(), b.tokens.size());\n\n    if (!has_mtmd) {\n        for (size_t i = 0; i < max_idx; ++i) {\n            if (tokens[i] == b.tokens[i]) {\n                continue;\n            }\n            return i;\n        }\n        return max_idx;\n    }\n\n    for (size_t i = 0; i < max_idx; ++i) {\n        const llama_token ai =   tokens[i];\n        const llama_token bi = b.tokens[i];\n\n        if (ai == LLAMA_TOKEN_NULL && bi == LLAMA_TOKEN_NULL) {\n            const auto & a_chunk =   find_chunk(i);\n            const auto & b_chunk = b.find_chunk(i);\n\n            GGML_ASSERT(a_chunk && b_chunk);\n\n            const std::string id_ai = mtmd_input_chunk_get_id(a_chunk.get());\n            const std::string id_bi = mtmd_input_chunk_get_id(b_chunk.get());\n\n            const size_t n_tok_a = mtmd_input_chunk_get_n_tokens(a_chunk.get());\n            const size_t n_tok_b = mtmd_input_chunk_get_n_tokens(b_chunk.get());\n\n            if (id_ai == id_bi && n_tok_a == n_tok_b) {\n                GGML_ASSERT(n_tok_a > 0 && \"Invalid media chunk\");\n                i += n_tok_a - 1; // will be +1 by the for loop\n                continue;\n            }\n\n            return i;\n        }\n\n        if (ai == bi) {\n            continue;\n        }\n\n        return i;\n    }\n\n    return max_idx; // all tokens are equal\n}\n```\n\n## Walkthrough\n\n**Setup.** `max_idx` is the length of the shorter list \u2014 a common prefix can never be longer than that. The return value is the number of leading positions that match (equivalently, the index of the first mismatch, or `max_idx` if one list is a prefix of the other).\n\n**Context: what a `server_tokens` is.** It's not just a flat token vector (`server-common.h:140-156`): for multimodal prompts, media (images/audio) occupy *placeholder* positions in the token list \u2014 `LLAMA_TOKEN_NULL` \u2014 and `map_idx_to_media` maps each chunk's *start* index to the chunk object. One image can span several positions (memory cells), and with M-RoPE the token-to-position mapping isn't 1:1.\n\n**Branch 1 \u2014 text-only (`!has_mtmd`).** A plain linear scan: compare position by position, return at the first mismatch, or `max_idx` if everything matched. O(min(n, m)).\n\n**Branch 2 \u2014 multimodal.** Same scan, but each position can be one of three cases:\n\n1. **Both are media placeholders** (`ai == bi == LLAMA_TOKEN_NULL`): look up the chunk at that index in both lists via `find_chunk(i)` and compare the chunk's **id** and its **token count**. The id identifies the media content, `n_tokens` how many cells it occupies \u2014 if both agree, the KV state for that media region is reusable, so the whole chunk is skipped in one jump: `i += n_tok_a - 1` (the loop's `++i` lands on the chunk's last position). If either differs, the prefix ends here.\n2. **Both are real tokens**: ordinary equality check.\n3. **One is a placeholder, one is a real token**: `ai == bi` is false (`LLAMA_TOKEN_NULL` never equals a real token id), so it falls through to `return i` \u2014 a media position and a text position can never match, which is the correct outcome.\n\nIf the loop finishes, the shorter list was a full prefix of the longer one: return `max_idx`.\n\n## Why it's written this way\n\n- **Media compared by id, not bytes**: the chunk id is a content identifier, so two prompts referencing the same image match without re-hashing or comparing pixel data; the `n_tokens` check guards against the same media being encoded at a different resolution/patch count (which would produce a different KV footprint).\n- **The `i += n - 1` jump** keeps the scan O(positions) rather than re-checking every cell of a large image chunk.\n- **Callers** all rely on the \"length of reusable prefix\" semantics: slot selection scores similarity with it (`server-context.cpp:1992`), the cache-save-tail rule counts how many decoded tokens would be lost (`server-context.cpp:2059`), the prompt cache uses it to decide which cached prompt to restore (`server-task.cpp:1809,1820`), and `n_past` computation for KV reuse (`server-context.cpp:3894`).",
+   "reasoning_content": "Now I have everything I need to explain the function. Let me write the walkthrough.\n\nThe function is `server_tokens::get_common_prefix(const server_tokens & b) const` at `tools/server/server-common.cpp:680-728`.\n\nStructure:\n1. `max_idx = min(tokens.size(), b.tokens.size())` \u2014 the prefix can't exceed the shorter list.\n2. Two branches:\n   - **Text-only** (`!has_mtmd`): a simple linear scan comparing `tokens[i] == b.tokens[i]`, returning the first index where they differ, or `max_idx` if all are equal.\n   - **Multimodal** (`has_mtmd`): the token list contains `LLAMA_TOKEN_NULL` placeholders at positions occupied by media chunks (images/audio). `map_idx_to_media` maps the *starting* index of a media chunk to the chunk. For each position:\n     - If both are NULL (both are media positions): look up the chunk at that index in both lists via `find_chunk(i)`, and compare the chunk's **id** and **token count** (`n_tokens`). If they match, skip the entire chunk (`i += n_tok_a - 1`, plus the loop's +1). Otherwise, return i.\n     - If both are regular tokens: compare for equality.\n     - If one is NULL and the other isn't: `ai == bi` is false (NULL != a real token), so return i.\n   - If the loop completes, return `max_idx`.\n\nKey points to explain:\n- Return value semantics: the length of the common prefix (number of leading tokens that match), not the index of the first difference \u2014 well, actually it's the same thing: the first differing index == the length of the common prefix.\n- Why media chunks are compared by id + n_tokens rather than by content: the chunk's id identifies the media (e.g., a hash of the image data), and n_tokens is the number of memory cells it occupies. If both match, the KV cache for that media region is reusable.\n- The `i += n_tok_a - 1` trick: the for loop adds 1, so this jumps to the last position of the chunk.\n- Note the asymmetry: if `ai` is NULL and `bi` is a real token (or vice versa), it falls into `if (ai == bi) continue; return i;` and returns i \u2014 correct, because a media position and a text position can never match.\n- Edge case: if one list is a prefix of the other, it returns the length of the shorter one.\n- Callers: slot selection (server-context.cpp:1992), the cache-save-tail logic (2059), prompt cache load (server-task.cpp:1809, 1820), checkpoint logic (1711, 1736), and n_past computation (3894).\n\nLet me write a concise walkthrough with the code.\n"
+  },
+  {
+   "role": "user",
+   "content": "Write a small standalone C++ function that returns the common-prefix similarity of two std::vector<int> as a fraction of the second one's length, with a few assert-based tests in main()."
+  },
+  {
+   "role": "assistant",
+   "content": "Here's a standalone version that mirrors the server's scoring (`lcp_len / task.tokens.size()` at `server-context.cpp:1992-1993`), where the fraction is taken over the *second* list:\n\n```cpp\n#include <algorithm>\n#include <cassert>\n#include <vector>\n\n// Length of the longest common prefix of a and b.\nstatic size_t common_prefix_len(const std::vector<int> & a, const std::vector<int> & b) {\n    const size_t max_idx = std::min(a.size(), b.size());\n    for (size_t i = 0; i < max_idx; ++i) {\n        if (a[i] != b[i]) {\n            return i;\n        }\n    }\n    return max_idx;\n}\n\n// Common-prefix similarity of a and b, as a fraction of b's length.\n// Convention: 0.0 when b is empty (nothing to match against).\nstatic float common_prefix_sim(const std::vector<int> & a, const std::vector<int> & b) {\n    if (b.empty()) {\n        return 0.0f;\n    }\n    return float(common_prefix_len(a, b)) / float(b.size());\n}\n\nint main() {\n    // identical lists -> full match\n    assert(common_prefix_sim({1, 2, 3}, {1, 2, 3}) == 1.0f);\n\n    // no common prefix at all\n    assert(common_prefix_sim({1, 2, 3}, {4, 5, 6}) == 0.0f);\n\n    // partial prefix: 2 of 4 positions match\n    assert(common_prefix_sim({1, 2, 9, 9}, {1, 2, 3, 4}) == 0.5f);\n\n    // a is a prefix of b: lcp = a.size(), fraction of b\n    assert(common_prefix_sim({1, 2}, {1, 2, 3, 4}) == 0.5f);\n    assert(common_prefix_sim({1},    {1, 2, 3, 4}) == 0.25f);\n\n    // b is a prefix of a: the whole of b matches\n    assert(common_prefix_sim({1, 2, 3, 4, 5}, {1, 2, 3}) == 1.0f);\n\n    // empty-list conventions\n    assert(common_prefix_sim({1, 2, 3}, {}) == 0.0f); // empty b\n    assert(common_prefix_sim({}, {1, 2, 3}) == 0.0f); // empty a\n    assert(common_prefix_sim({}, {}) == 0.0f);         // both empty\n\n    return 0;\n}\n```\n\nNotes:\n\n- **Denominator is `b`'s size**, matching the server, where `b` is the incoming task's tokens and `a` is the slot's cached prompt. So a slot whose cached prompt is a *longer* continuation still scores by how much of the *new* prompt it covers.\n- **Empty-`b` convention**: the server never hits this \u2014 it skips slots with empty prompts before scoring (`server-context.cpp:1986-1989`) \u2014 so `0.0` is just a safe, documented choice for the standalone function.\n- **Test values** (1.0, 0.5, 0.25, 0.0) are all exactly representable in binary, so the `==` comparisons can't trip on rounding. If you add cases like 3/5, compare against `0.6f` (both sides round to the same float) or use an epsilon.\n\nCompile and run with: `g++ -std=c++17 -Wall -Wextra -o lcp_sim lcp_sim.cpp && ./lcp_sim` \u2014 silence means all asserts passed.",
+   "reasoning_content": "The user is asking for a small standalone C++ function that returns the common prefix similarity of two `std::vector<int>` as a fraction of the second one's length, along with a few assert-based tests in `main()`.\n\nThis reflects the slot selection logic in `server-context.cpp:1992-1993`:\n```cpp\nconst size_t lcp_len = tokens.get_common_prefix(task.tokens);\nconst float f_sim_cur = float(lcp_len) / task.tokens.size();\n```\n\nSo the similarity is `lcp(a, b) / b.size()` \u2014 the fraction of the second list's length.\n\nEdge cases to consider:\n- If `b` is empty: division by zero. What should we return? In the server code, empty slots are skipped before the similarity computation (`if (tokens.empty()) continue;`), and task.tokens is never empty. In a standalone function, we should define the behavior: return 0.0 if b is empty (no prefix to match). This is a reasonable convention, and we should document it.\n- If `a` is empty: lcp = 0, similarity = 0 (as long as b is non-empty).\n- If one is a prefix of the other: lcp = min length.\n\nLet me try writing it:\n\n```cpp\n#include <cassert>\n#include <algorithm>\n#include <vector>\n\n// Length of the longest common prefix of a and b.\nstatic size_t common_prefix_len(const std::vector<int> & a, const std::vector<int> & b) {\n    const size_t max_idx = std::min(a.size(), b.size());\n    for (size_t i = 0; i < max_idx; ++i) {\n        if (a[i] != b[i]) {\n            return i;\n        }\n    }\n    return max_idx;\n}\n\n// Common prefix similarity of a and b, as a fraction of b's length.\n// Returns 0.0 if b is empty (nothing to match against).\nstatic float common_prefix_sim(const std::vector<int> & a, const std::vector<int> & b) {\n    if (b.empty()) {\n        return 0.0f;\n    }\n    return float(common_prefix_len(a, b)) / float(b.size());\n}\n\nint main() {\n    // Identical lists -> 1.0\n    assert(common_prefix_sim({1, 2, 3}, {1, 2, 3}) == 1.0f);\n\n    // No common prefix -> 0.0\n    assert(common_prefix_sim({1, 2, 3}, {4, 5, 6}) == 0.0f);\n\n    // Partial prefix: 2 of 4 match -> 0.5\n    assert(common_prefix_sim({1, 2, 9, 9}, {1, 2, 3, 4}) == 0.5f);\n\n    // a is a prefix of b: lcp = a.size(), fraction of b -> 3/5\n    assert(common_prefix_sim({1, 2, 3}, {1, 2, 3, 4, 5}) == 0.6f);\n\n    // b is a prefix of a: lcp = b.size() -> 1.0\n    assert(common_prefix_sim({1, 2, 3, 4, 5}, {1, 2, 3}) == 1.0f);\n\n    // Empty b -> 0.0 by convention\n    assert(common_prefix_sim({1, 2, 3}, {}) == 0.0f);\n\n    // Empty a, non-empty b -> 0.0\n    assert(common_prefix_sim({}, {1, 2, 3}) == 0.0f);\n\n    // Both empty -> 0.0\n    assert(common_prefix_sim({}, {}) == 0.0f);\n\n    return 0;\n}\n```\n\nWait \u2014 floating point: 0.5f is exact, 0.6f is not exactly representable, but `float(3)/float(5)` computed in float is\u2026 let me think. `float(3) / float(5)` = 0.6f rounded to the nearest float. The literal `0.6f` is also the double 0.6 rounded to the nearest float. Both are the same float value (the correctly-rounded representation of 0.6). So the comparison `== 0.6f` holds: the division 3.0f/5.0f is correctly rounded (IEEE division is correctly rounded), and the literal 0.6f is the correctly-rounded float of 0.6. 3/5 = 0.6 exactly in decimal, so both are the float nearest to 0.6. Equal. Good.\n\n0.5f is exact in binary. 1.0f and 0.0f are exact. So all the asserts are safe.\n\nActually, to be even safer against floating-point pedantry, I could use values that are exactly representable: 0.5, 0.25, 0.75, 1.0, 0.0. Let me adjust the tests to use exact values where possible, but 0.6f is fine as analyzed. Hmm, but to keep it simple and robust, I could also make the partial-prefix test 2 of 4 = 0.5 (exact), and the prefix test 3 of 6 = 0.5 or 1 of 4 = 0.25. Let me use exact values to avoid any doubt:\n\n- Identical: 1.0\n- No match: 0.0\n- Partial: {1,2,9,9} vs {1,2,3,4} \u2192 0.5\n- a is a prefix of b: {1,2,3} vs {1,2,3,4,5,6} \u2192 3/6 = 0.5. Hmm, same as the other. Use {1,2} vs {1,2,3,4} \u2192 0.5. Or 1/4: {1} vs {1,2,3,4} \u2192 0.25.\n- b is a prefix of a: {1,2,3,4,5} vs {1,2,3} \u2192 1.0.\n\nLet me structure it with a mix: 1.0, 0.0, 0.5, 0.25, 1.0, and the empty cases. All exactly representable.\n\nShould I write this to a file in the repo? The user said \"write a small standalone C++ function\" \u2014 this is a request for code, not necessarily a request to modify the repo. The instructions say to use tools before answering questions about the code, but this is a writing task. I think it's appropriate to just present the code in the answer. I could also offer to save it somewhere. The repo has pocs/ and tests/, but the user didn't ask to add a file. I'll just present the code inline.\n\nI should mention the connection to the server code: this mirrors `f_sim_cur = lcp_len / task.tokens.size()` at server-context.cpp:1992-1993, where \"the second one\" is the task's tokens. And the convention for empty b: the server skips empty slots before computing similarity (line 1986), so 0.0 is a reasonable standalone convention.\n\nKeep the answer focused: code + a brief note on edge-case conventions.\n"
+  },
+  {
+   "role": "user",
+   "content": "What does docs/speculative.md say about the available speculative decoding types? Summarise the differences."
+  },
+  {
+   "role": "assistant",
+   "content": "",
+   "reasoning_content": "The user is asking about docs/speculative.md and the types of speculative decoding. Let's read that file.\n",
+   "tool_calls": [
+    {
+     "id": "psImk6714DNYDbXGHKkbb00SJB6y7atc",
+     "type": "function",
+     "function": {
+      "name": "read_file",
+      "arguments": {
+       "path": "docs/speculative.md"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "role": "tool",
+   "tool_call_id": "psImk6714DNYDbXGHKkbb00SJB6y7atc",
+   "content": "     1\t# Speculative Decoding\n     2\t\n     3\tllama.cpp supports speculative decoding, a technique that can significantly accelerate token generation by predicting multiple tokens ahead of the main model.\n     4\t\n     5\t[Speculative decoding](https://en.wikipedia.org/wiki/Transformer_(deep_learning)#Speculative_decoding) leverages the fact that computing n tokens in a batch (as in prompt processing) is more efficient than computing n sequentially (as in response generation). By generating draft tokens quickly and then verifying them with the target model in a single batch, this approach can achieve substantial sp\n     6\t\n     7\t## Implementations\n     8\t\n     9\tThe `llama-server` application supports several implementations of speculative decoding. An implementation with draft model can be mixed with an implementation without draft model.\n    10\t\n    11\t### Draft Model (`draft`)\n    12\t\n    13\tA much smaller model (called the _draft model_) generates drafts.\n    14\tA draft model is the most used approach in speculative decoding.\n    15\t\n    16\t### EAGLE-3 (`draft-eagle3`)\n    17\t\n    18\tEAGLE-3 uses a small draft model that reads the target model's hidden states to predict the next tokens, so it\n    19\treaches higher acceptance than a standalone draft model of the same size. The draft is a one-layer transformer\n    20\ttrained for a specific target model; it shares the target model's tokenizer and, optionally, uses a reduced draft\n    21\tvocabulary with its own `lm_head`, which is mapped back using a `d2t` table.\n    22\t\n    23\tConvert the EAGLE-3 checkpoint with `--target-model-dir` so it inherits the target's tokenizer and the layer\n    24\tindices to read. Both the SpecForge `LlamaForCausalLMEagle3` and the vLLM/AngelSlim `Eagle3LlamaForCausalLM`\n    25\tcheckpoint formats are supported (for example [`AngelSlim/Qwen3-4B_eagle3`](https://huggingface.co/AngelSlim/Qwen3-4B_eagle3)\n    26\tfor `Qwen/Qwen3-4B`):\n    27\t\n    28\t```bash\n    29\tpython convert_hf_to_gguf.py AngelSlim/Qwen3-4B_eagle3 \\\n    30\t    --target-model-dir Qwen/Qwen3-4B --outtype bf16 --outfile Qwen3-4B-eagle3.gguf\n    31\t\n    32\tllama-server -m Qwen3-4B.gguf -md Qwen3-4B-eagle3.gguf --spec-type draft-eagle3\n    33\t```\n    34\t\n    35\tSupported EAGLE-3 draft models include:\n    36\t\n    37\t- [yuhuili/EAGLE3-LLaMA3.1-Instruct-8B](https://huggingface.co/yuhuili/EAGLE3-LLaMA3.1-Instruct-8B)\n    38\t- [yuhuili/EAGLE3-LLaMA3.3-Instruct-70B](https://huggingface.co/yuhuili/EAGLE3-LLaMA3.3-Instruct-70B)\n    39\t- [RedHatAI/gemma-4-31B-it-speculator.eagle3](https://huggingface.co/RedHatAI/gemma-4-31B-it-speculator.eagle3)\n    40\t- [RedHatAI/gemma-4-26B-A4B-it-speculator.eagle3](https://huggingface.co/RedHatAI/gemma-4-26B-A4B-it-speculator.eagle3)\n    41\t- [Tengyunw/qwen3_8b_eagle3](https://huggingface.co/Tengyunw/qwen3_8b_eagle3)\n    42\t- [Tengyunw/qwen3_30b_moe_eagle3](https://huggingface.co/Tengyunw/qwen3_30b_moe_eagle3)\n    43\t- [AngelSlim/Qwen3-1.7B_eagle3](https://huggingface.co/AngelSlim/Qwen3-1.7B_eagle3)\n    44\t- [AngelSlim/Qwen3-4B_eagle3](https://huggingface.co/AngelSlim/Qwen3-4B_eagle3)\n    45\t- [AngelSlim/Qwen3-8B_eagle3](https://huggingface.co/AngelSlim/Qwen3-8B_eagle3)\n    46\t- [AngelSlim/Qwen3-14B_eagle3](https://huggingface.co/AngelSlim/Qwen3-14B_eagle3)\n    47\t- [AngelSlim/Qwen3-32B_eagle3](https://huggingface.co/AngelSlim/Qwen3-32B_eagle3)\n    48\t- [AngelSlim/Qwen3-a3B_eagle3](https://huggingface.co/AngelSlim/Qwen3-a3B_eagle3)\n    49\t- [RedHatAI/gpt-oss-20b-speculator.eagle3](https://huggingface.co/RedHatAI/gpt-oss-20b-speculator.eagle3)\n    50\t- [lmsys/EAGLE3-gpt-oss-120b-bf16](https://huggingface.co/lmsys/EAGLE3-gpt-oss-120b-bf16)\n    51\t- [nvidia/gpt-oss-120b-Eagle3-long-context](https://huggingface.co/nvidia/gpt-oss-120b-Eagle3-long-context)\n    52\t\n    53\tFor the full and up-to-date list of supported models, see #18039.\n    54\t\n    55\t### DFlash (`draft-dflash`)\n    56\t\n    57\tDFlash produces an entire block of draft tokens in a single forward pass (block diffusion) and\n    58\tinjects the target model's hidden states into the draft model's attention, instead of drafting one\n    59\ttoken at a time. This keeps the draft model small while making drafting GPU-friendly. Unlike EAGLE-3\n    60\t(a single-layer autoregressive draft), the DFlash draft uses several transformer layers but emits a\n    61\twhole block per draft step.\n    62\t\n    63\tThe draft is a small block-diffusion model trained for a specific target (for example\n    64\t`z-lab/Qwen3-4B-DFlash` for `Qwen/Qwen3-4B`). Convert it with `--target-model-dir` so it inherits the\n    65\ttarget's tokenizer and token embeddings:\n    66\t\n    67\t```bash\n    68\tpython convert_hf_to_gguf.py z-lab/Qwen3-4B-DFlash \\\n    69\t    --target-model-dir Qwen/Qwen3-4B --outtype bf16 --outfile Qwen3-4B-DFlash.gguf\n    70\t\n    71\tllama-server -m Qwen3-4B.gguf -md Qwen3-4B-DFlash.gguf \\\n    72\t    --spec-type draft-dflash --spec-draft-n-max 15 -fa on --jinja\n    73\t```\n    74\t\n    75\t`--spec-draft-n-max` is clamped to the draft model's trained block size.\n    76\t\n    77\tSee:\n    78\t\n    79\t- #22105\n    80\t\n    81\t### DSpark (`draft-dspark`)\n    82\t\n    83\tDSpark extends DFlash with a semi-autoregressive _Markov head_: the draft still emits a whole\n    84\tblock per forward pass, but each block position's logits are biased by a low-rank term keyed on\n    85\tthe previous token, chained in-graph across the block. This keeps drafting at one decode per\n    86\tblock while recovering some of the left-to-right signal that pure block diffusion loses.\n    87\t\n    88\tThe draft is a small DeepSpec checkpoint trained for a specific target (for example\n    89\t[`deepseek-ai/dspark_qwen3_4b_block7`](https://huggingface.co/deepseek-ai/dspark_qwen3_4b_block7)\n    90\tfor `Qwen/Qwen3-4B`). Convert it with `--target-model-dir` so it inherits the target's tokenizer\n    91\tand token embeddings:\n    92\t\n    93\t```bash\n    94\tpython convert_hf_to_gguf.py deepseek-ai/dspark_qwen3_4b_block7 \\\n    95\t    --target-model-dir Qwen/Qwen3-4B --outtype bf16 --outfile Qwen3-4B-DSpark.gguf\n    96\t\n    97\tllama-server -m Qwen3-4B.gguf -md Qwen3-4B-DSpark.gguf \\\n    98\t    --spec-type draft-dspark --spec-draft-n-max 7 -fa on --jinja\n    99\t```\n   100\t\n   101\t`--spec-draft-n-max` is clamped to the draft model's trained block size.\n   102\t\n   103\t`--spec-draft-conf-min P` truncates each drafted block at the first position whose predicted\n   104\tacceptance (from the draft's confidence head, if present) falls below `P` (default 0 = disabled).\n   105\t\n   106\tCurrently only drafts with a Qwen3 backbone are supported; support for other backbones\n   107\t(e.g. Gemma4) is planned.\n   108\t\n   109\tDSpark drafts exported in the [speculators](https://github.com/vllm-project/speculators) format\n   110\t(for example [`RedHatAI/gemma-4-31B-it-speculator.dspark`](https://huggingface.co/RedHatAI/gemma-4-31B-it-speculator.dspark))\n   111\tconvert the same way.\n   112\t\n   113\tSee:\n   114\t\n   115\t- #25173\n   116\t\n   117\t### n-gram Cache (`ngram-cache`)\n   118\t\n   119\tAn n-gram is a sequence of n tokens. The n-gram cache implementation maintains statistics about short n-gram sequences.\n   120\tA draft is computed using probabilities derived from these statistics. External statistics can also be loaded from files for improved accuracy.\n   121\t\n   122\tSee:\n   123\t\n   124\t- #5479, #6828, #6848\n   125\t\n   126\t### n-gram Map (`ngram-simple`, `ngram-map-*`)\n   127\t\n   128\tThese implementations search the token history for patterns and use matching sequences as draft candidates.\n   129\tThey require no additional model but rely on patterns that have already appeared in the generated text.\n   130\tAn example to use this approach can be the rewriting of source code by a LLM.\n   131\t\n   132\t#### n-gram Map (`ngram-simple`)\n   133\t\n   134\tThis implementation looks for the last n-gram in history that matches the current n-gram and creates a draft using the m tokens following the matched n-gram. It is the simplest self-speculat\n... [truncated]"
+  },
+  {
+   "role": "assistant",
+   "content": "",
+   "reasoning_content": "The file was truncated at line 133. Let's read the rest.\n",
+   "tool_calls": [
+    {
+     "id": "5xacCl0I4Vx7JME5Ol0bJlWzj2Bosllv",
+     "type": "function",
+     "function": {
+      "name": "read_file",
+      "arguments": {
+       "path": "docs/speculative.md",
+       "offset": 133,
+       "limit": 120
+      }
+     }
+    }
+   ]
+  },
+  {
+   "role": "tool",
+   "tool_call_id": "5xacCl0I4Vx7JME5Ol0bJlWzj2Bosllv",
+   "content": "   133\t\n   134\tThis implementation looks for the last n-gram in history that matches the current n-gram and creates a draft using the m tokens following the matched n-gram. It is the simplest self-speculative approach with minimal overhead.\n   135\t\n   136\t```\n   137\tllama-server [...] --spec-type ngram-simple --spec-draft-n-max 64\n   138\t```\n   139\t\n   140\t#### n-gram Map Key (`ngram-map-k`)\n   141\t\n   142\tThis implementation looks for the current n-gram of size n (called the _key_) in the token history. If the key n-gram is followed by the same m tokens (called the _mgram_) multiple times, it creates a draft using these m tokens. This approach requires a minimum number of occurrences (argument `--spec-ngram-map-k-min-hits`, default is 1) before generating drafts.\n   143\t\n   144\tThe number of accepted tokens is stored for each used n-gram.\n   145\t\n   146\t**Example:**\n   147\t```\n   148\tllama-server [...] --spec-type ngram-map-k --spec-draft-n-max 64\n   149\t```\n   150\t\n   151\t#### n-gram Map Key-4-Values (`ngram-map-k4v`)\n   152\t\n   153\tThis experimental implementation looks for the current n-gram of size n (called the _key_) in the token history. For each key, up to four _values_ (n-grams of size m, called _mgrams_) are tracked. An internal statistic counts the occurrences of each mgram after the key n-gram. If one mgram is significantly more frequent than the others, it is used as the draft.\n   154\t\n   155\tThe number of accepted tokens is stored for each used n-gram.\n   156\t\n   157\t**Example:** Server options to be used if there are a lot of longer repetitions.\n   158\t```\n   159\tllama-server [...] --spec-type ngram-map-k4v --spec-ngram-map-k4v-size-n 8 --spec-ngram-map-k4v-size-m 8 --spec-ngram-map-k4v-min-hits 2 --spec-draft-n-max 64\n   160\t```\n   161\t\n   162\t### n-gram Mod (`ngram-mod`)\n   163\t\n   164\tAdd basic ngram hasher for speculative decoding:\n   165\t\n   166\t- For each ngram, compute a hash using LCG\n   167\t- For each computed hash, store the next token\n   168\t- During speculation, iteratively compute the rolling hash of the last n tokens and pick the next token from the storage\n   169\t\n   170\tSome characteristics:\n   171\t\n   172\t- Lightweight (~16 MB)\n   173\t- Constant memory and complexity\n   174\t- Can generate variable draft lengths (i.e. m is not fixed)\n   175\t\n   176\tCurrently, a single hash pool is shared across all server slots, so different requests can benefit from each other.\n   177\t\n   178\t**Sample usage:**\n   179\t\n   180\t```\n   181\t# notes:\n   182\t# - small `n` are not recommended\n   183\t# - MoEs require long drafts\n   184\t# - dense models: can reduce `--spec-ngram-mod-n-min` and `--spec-ngram-mod-n-max`\n   185\t\n   186\tllama-server ... --spec-type ngram-mod --spec-ngram-mod-n-match 24 --spec-ngram-mod-n-min 48 --spec-ngram-mod-n-max 64\n   187\t```\n   188\t\n   189\tApplications:\n   190\t\n   191\t- Iterating over a block of text/code (e.g. in llama.vim)\n   192\t- Reasoning models (when they have to repeat their thinking in the final answer)\n   193\t- Summarization\n   194\t\n   195\tExample Video:\n   196\t\n   197\t- See #19164\n   198\t\n   199\t### Differences between ngram-simple, ngram-map and ngram-mod\n   200\t\n   201\t- ngram-simple looks for a previous matching n-gram and inserts the following m-gram.\n   202\t- ngram-map-k looks for a previous matching n-gram and inserts the following m-gram but uses an internal hash-map of n-grams in the current context window.\n   203\t- ngram-mod uses a hash pool which is shared across all server slots. The hash pool is a map from n-gram hash to the next token (not the next m-gram as in ngram-map).\n   204\t\n   205\t## Command-Line Options\n   206\t\n   207\tIf a draft model is combined with a draftless decoding the draftless decoding has higher precedence.\n   208\t\n   209\t### Backend Sampling\n   210\t\n   211\tUse `--backend-sampling` to run supported target-model samplers on the model backend. Draft-model sampling uses the backend by default and can be controlled with `--spec-draft-backend-sampling` and `--no-spec-draft-backend-sampling`.\n   212\t\n   213\tUnsupported samplers and device layouts fall back to CPU sampling. Tensor split mode does not support backend sampling. A fixed seed produces repeatable random draws, but stochastic CPU and backend sampling can still select different tokens because floating-point operations can differ between implementations and devices. Use greedy sampling when exact output matching is required.\n   214\t\n   215\t### General Speculative Parameters\n   216\t\n   217\t```\n   218\t--spec-type [none|draft-simple|draft-eagle3|draft-dflash|draft-dspark|draft-mtp|ngram-cache|ngram-simple|ngram-map-k|ngram-map-k4v|ngram-mod]\n   219\t                                        comma-separated list of types of speculative decoding to use\n   220\t                                        (default: none)\n   221\t                                        (env: LLAMA_ARG_SPEC_TYPE)\n   222\t--spec-default                          use default speculative decoding config\n   223\t                                        (enables ngram-mod)\n   224\t```\n   225\t\n   226\t### Draft Model Parameters\n   227\t\n   228\t```\n   229\t--spec-draft-model, -md, --model-draft  FNAME\n   230\t                                        draft model for speculative decoding (default: unused)\n   231\t                                        (env: LLAMA_ARG_SPEC_DRAFT_MODEL)\n   232\t--spec-draft-hf, -hfd, -hfrd, --hf-repo-draft  <user>/<model>[:quant]\n   233\t                                        HuggingFace repository for the draft model\n   234\t                                        (env: LLAMA_ARG_SPEC_DRAFT_HF_REPO)\n   235\t--spec-draft-n-max                      N\n   236\t                                        number of tokens to draft for speculative decoding (default: 3)\n   237\t                                        (env: LLAMA_ARG_SPEC_DRAFT_N_MAX)\n   238\t--spec-draft-n-min                      N\n   239\t                                        minimum number of draft tokens to use for speculative decoding (default: 0)\n   240\t                                        (env: LLAMA_ARG_SPEC_DRAFT_N_MIN)\n   241\t--spec-draft-p-split, --draft-p-split   P\n   242\t                                        speculative decoding split probability (default: 0.10)\n   243\t                                        (env: LLAMA_ARG_SPEC_DRAFT_P_SPLIT)\n   244\t--spec-draft-p-min, --draft-p-min       P\n   245\t                                        minimum speculative decoding probability (greedy) (default: 0.00)\n   246\t                                        (env: LLAMA_ARG_SPEC_DRAFT_P_MIN)\n   247\t--spec-draft-ngl, -ngld, --gpu-layers-draft, --n-gpu-layers-draft  N\n   248\t                                        max. number of draft model layers to store in VRAM, either an exact number, 'auto', or 'all' (default: auto)\n   249\t                                        (env: LLAMA_ARG_N_GPU_LAYERS_DRAFT)\n   250\t--spec-draft-device, -devd, --device-draft  <dev1,dev2,..>\n   251\t                                        comma-separated list of devices to use for offloading the draft model\n   252\t                                        (use --list-devices to see available devices)\n[lines 133-252 of 441]"
+  },
+  {
+   "role": "assistant",
+   "content": "",
+   "reasoning_content": "I've got a good enough grasp of the types now. The `--spec-type` list also includes `draft-simple` and `draft-mtp`, but these don't have dedicated sections in the documentation (draft-simple is probably the basic \"Draft Model\" section, and draft-mtp is mentioned in the CLI list). Let me check whether draft-mtp is mentioned elsewhere in the documentation. I'll try grepping for \"mtp\" in the documentation.\n",
+   "tool_calls": [
+    {
+     "id": "uHgGhsiFeGJnFFoC5Qho9ZCGLvMcyuQw",
+     "type": "function",
+     "function": {
+      "name": "grep",
+      "arguments": {
+       "pattern": "mtp|MTP",
+       "path": "docs/speculative.md"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "role": "tool",
+   "tool_call_id": "uHgGhsiFeGJnFFoC5Qho9ZCGLvMcyuQw",
+   "content": "docs/speculative.md:218:--spec-type [none|draft-simple|draft-eagle3|draft-dflash|draft-dspark|draft-mtp|ngram-cache|ngram-simple|ngram-map-k|ngram-map-k4v|ngram-mod]\ndocs/speculative.md:360:| `draft-mtp` | Use Multi Token Prediction (MTP) heads from the main model |"
+  },
+  {
+   "role": "assistant",
+   "content": "",
+   "reasoning_content": "There's a table around line 360. Let me read that section to get the complete summary table.\n",
+   "tool_calls": [
+    {
+     "id": "vCcKY4I1R6TkcnsAJvbhPJYZpYrMLtIr",
+     "type": "function",
+     "function": {
+      "name": "read_file",
+      "arguments": {
+       "path": "docs/speculative.md",
+       "offset": 330,
+       "limit": 60
+      }
+     }
+    }
+   ]
+  },
+  {
+   "role": "tool",
+   "tool_call_id": "vCcKY4I1R6TkcnsAJvbhPJYZpYrMLtIr",
+   "content": "   330\t--spec-ngram-map-k-size-n               N\n   331\t                                        ngram size N for ngram-map-k speculative decoding, length of lookup n-gram (default: 12)\n   332\t--spec-ngram-map-k-size-m               N\n   333\t                                        ngram size M for ngram-map-k speculative decoding, length of draft m-gram (default: 48)\n   334\t--spec-ngram-map-k-min-hits             N\n   335\t                                        minimum hits for ngram-map-k speculative decoding (default: 1)\n   336\t```\n   337\t\n   338\t### n-gram Map Key-4-Values Parameters\n   339\t\n   340\t```\n   341\t--spec-ngram-map-k4v-size-n             N\n   342\t                                        ngram size N for ngram-map-k4v speculative decoding, length of lookup n-gram (default: 12)\n   343\t--spec-ngram-map-k4v-size-m             N\n   344\t                                        ngram size M for ngram-map-k4v speculative decoding, length of draft m-gram (default: 48)\n   345\t--spec-ngram-map-k4v-min-hits           N\n   346\t                                        minimum hits for ngram-map-k4v speculative decoding (default: 1)\n   347\t```\n   348\t\n   349\t### `--spec-type TYPE`\n   350\t\n   351\tSpecifies a comma-separated list of speculative decoding types to use.\n   352\t\n   353\t| Type | Description |\n   354\t|------|-------------|\n   355\t| `none` | No speculative decoding (default) |\n   356\t| `draft-simple` | Use a simple draft model for speculation |\n   357\t| `draft-eagle3` | Use an EAGLE-3 draft model that reads the target's hidden states |\n   358\t| `draft-dflash` | Use a DFlash block-diffusion draft model that emits a block per step |\n   359\t| `draft-dspark` | Use a DSpark draft model (DFlash backbone + semi-autoregressive Markov head) |\n   360\t| `draft-mtp` | Use Multi Token Prediction (MTP) heads from the main model |\n   361\t| `ngram-cache` | Use n-gram cache lookup |\n   362\t| `ngram-simple` | Use simple n-gram pattern matching |\n   363\t| `ngram-map-k` | Use n-gram pattern matching with n-gram-keys |\n   364\t| `ngram-map-k4v` | Use n-gram pattern matching with n-gram-keys and up to four m-gram values (experimental) |\n   365\t| `ngram-mod` | Use basic ngram hasher for speculative decoding with shared pool |\n   366\t\n   367\t**Example:** Server-instance used to refactor source code.\n   368\t```bash\n   369\t./llama-server [...] --spec-type ngram-simple\n   370\t```\n   371\t\n   372\t**Example:** Multiple speculative implementations.\n   373\t```bash\n   374\t./llama-server [...] --spec-type ngram-mod,ngram-map-k4v\n   375\t```\n   376\t\n   377\t### `--spec-ngram-*-size-n N`\n   378\t\n   379\tSets the size N of the lookup n-gram for n-gram map based speculative decoding.\n   380\tThe n-gram size N determines how many tokens in a row to look back when searching for matching patterns.\n   381\t\n   382\tEach n-gram implementation has its own parameter:\n   383\t\n   384\t- `--spec-ngram-simple-size-n` for `ngram-simple`\n   385\t- `--spec-ngram-map-k-size-n` for `ngram-map-k`\n   386\t- `--spec-ngram-map-k4v-size-n` for `ngram-map-k4v`\n   387\t- `--spec-ngram-mod-n-match` for `ngram-mod`\n   388\t\n   389\t### `--spec-ngram-*-size-m M`\n[lines 330-389 of 441]"
+  },
+  {
+   "role": "assistant",
+   "content": "`docs/speculative.md` describes two families of speculative decoding for `llama-server`, selectable via `--spec-type` (comma-separated, so they can be combined; a draftless type takes precedence over a draft-model one when both are given).\n\n## Draft-model types (need a small draft model via `-md`)\n\n| Type | How it drafts |\n|------|---------------|\n| `draft-simple` | A much smaller model generates drafts token-by-token. The classic, most-used approach. |\n| `draft-eagle3` | A **one-layer** transformer draft that reads the *target model's hidden states*, so it gets higher acceptance than a standalone draft of the same size. Shares the target's tokenizer; optionally a reduced draft vocab with its own `lm_head` mapped back via a `d2t` table. Checkpoint must be converted with `--target-model-dir`. |\n| `draft-dflash` | **Block diffusion**: emits an *entire block* of draft tokens in a single forward pass, injecting the target's hidden states into the draft's attention. Uses several layers but one block per step \u2014 GPU-friendly. `--spec-draft-n-max` is clamped to the trained block size. |\n| `draft-dspark` | DFlash plus a semi-autoregressive **Markov head**: still one block per pass, but each position's logits are biased by a low-rank term keyed on the previous token, recovering some left-to-right signal that pure block diffusion loses. Can truncate blocks via a confidence head (`--spec-draft-conf-min`). Currently Qwen3 backbone only. |\n| `draft-mtp` | Uses **Multi-Token Prediction heads from the main model itself** \u2014 no separate draft file. |\n\n## Draftless / n-gram types (no extra model; exploit repetition in the text)\n\n| Type | How it drafts |\n|------|---------------|\n| `ngram-cache` | Maintains statistics over short n-gram sequences and drafts from those probabilities; can load external statistics from files. |\n| `ngram-simple` | Finds the *last* n-gram in history matching the current one and drafts the m tokens that followed it. Simplest self-speculation, minimal overhead. |\n| `ngram-map-k` | Same key\u2192m-gram idea, but backed by an internal hash map over the current context window; requires a minimum occurrence count (`--spec-ngram-map-k-min-hits`, default 1) before drafting, and tracks accepted-token counts per n-gram. |\n| `ngram-map-k4v` (experimental) | Tracks up to **four** candidate m-grams per key n-gram with occurrence counts; drafts only when one value is significantly more frequent. Aimed at workloads with long repetitions. |\n| `ngram-mod` | Rolling LCG hash of the last n tokens into a hash pool mapping hash \u2192 *next single token*. Lightweight (~16 MB), constant memory/complexity, **variable draft lengths**, and the pool is **shared across all server slots** so requests benefit from each other. Good for code iteration, reasoning models that repeat their thinking, and summarization. This is what `--spec-default` enables. |\n\n## The key contrasts\n\n- **Draft-model vs. draftless**: draft models cost extra memory/compute but work on arbitrary text; n-gram methods are essentially free but only pay off when the output is repetitive (code rewriting, repeated reasoning, summarization).\n- **Within draft models**: the axis is drafting structure \u2014 autoregressive one-at-a-time (`draft-simple`), hidden-state-conditioned single layer (`draft-eagle3`), whole-block diffusion (`draft-dflash`), block + Markov bias (`draft-dspark`), or the target's own MTP heads (`draft-mtp`). EAGLE-3/DFlash/DSpark drafts are all target-specific and need `--target-model-dir` at conversion.\n- **Within n-grams**: increasing sophistication of the lookup \u2014 last match (`ngram-simple`) \u2192 hash map with hit threshold (`ngram-map-k`) \u2192 multi-candidate frequency tracking (`ngram-map-k4v`) \u2192 shared rolling-hash pool with variable-length drafts (`ngram-mod`); `ngram-cache` is the statistics-based outlier that can ingest external data.",
+   "reasoning_content": "Now I have a grasp of the overall picture. Let me summarize the types of speculative decoding in docs/speculative.md and their differences.\n\nTypes (from the `--spec-type` table, lines 353\u2013365):\n\n**Draft model family** (requires a separate small draft model, `-md`):\n1. `draft-simple` \u2014 a small draft model generates drafts one token at a time (autoregressive). The most common approach.\n2. `draft-eagle3` \u2014 a one-layer transformer draft that reads the target model's hidden states \u2192 higher acceptance rate than a standalone draft of the same size. Shares the target's tokenizer, and optionally uses a reduced draft vocabulary with its own lm_head mapped via a d2t table. Checkpoint conversion requires `--target-model-dir`.\n3. `draft-dflash` \u2014 block diffusion: generates an entire block of draft tokens in a single forward pass, and injects the target's hidden states into the draft's attention. Multiple transformer layers, but one block per step. GPU-friendly. `--spec-draft-n-max` is clamped to the trained block size.\n4. `draft-dspark` \u2014 DFlash + a semi-autoregressive Markov head: still one block per forward pass, but the logits at each position within the block are biased by a low-rank term keyed on the previous token (chained within the graph), recovering left-to-right signal. Has a confidence head, and `--spec-draft-conf-min` truncates the block. Currently only the Qwen3 backbone.\n5. `draft-mtp` \u2014 uses the main model's own Multi-Token Prediction heads (no separate draft model file needed).\n\n**Draft-free / n-gram family** (no additional model; exploits repetition in the generated text):\n6. `ngram-cache` \u2014 maintains statistics on short n-gram sequences; drafts from those probabilities; can load external statistics from a file.\n7. `ngram-simple` \u2014 finds the last n-gram in the history that matches the current n-gram, and drafts the m tokens that followed it. The simplest self-speculation, minimal overhead.\n8. `ngram-map-k` \u2014 same idea, but uses an internal hash map of n-gram keys within the current context window; requires a minimum number of occurrences (`--spec-ngram-map-k-min-hits`, default 1) before drafting; tracks the number of accepted tokens per n-gram.\n9. `ngram-map-k4v` (experimental) \u2014 tracks up to 4 candidate m-gram values per key n-gram along with occurrence counts; drafts only when one value is significantly more frequent.\n10. `ngram-mod` \u2014 LCG rolling hash of the last n tokens \u2192 a hash pool mapping hash \u2192 next token; lightweight (about 16 MB), constant memory/complexity, variable draft length; the pool is shared across all server slots (requests benefit from each other). Good for code iteration, reasoning models that repeat their thinking, and summarization.\n\nKey differences to emphasize:\n- Draft model vs. draft-free: draft models add model memory/compute cost but work on arbitrary text; n-gram methods are free but only effective when the output contains repetition (code rewriting, reasoning repetition, summarization).\n- Within the draft family: autoregressive one-token-at-a-time (draft-simple) vs. hidden-state-conditioned one-layer (eagle3) vs. block diffusion (dflash) vs. block + Markov head (dspark) vs. the main model's own MTP heads (draft-mtp).\n- Within the n-gram family: simple last-match (ngram-simple) vs. hash map with hit count (ngram-map-k) vs. 4-value frequency tracking (ngram-map-k4v) vs. shared rolling hash pool with variable length (ngram-mod); ngram-cache is statistics-based and can use external statistics.\n- Multiple types can be combined (comma-separated list); when a draft model is combined with draft-free, the draft-free one takes priority.\n- `--spec-default` enables ngram-mod.\n\nLet me write a concise summary.\n"
+  },
+  {
+   "role": "user",
+   "content": "Give me a JSON array describing five sampling-related request parameters of the /completion endpoint: name, type, default and a one-line description for each. Take them from the server README."
+  },
+  {
+   "role": "assistant",
+   "content": "",
+   "reasoning_content": "The user is asking for a JSON array describing 5 sampling-related request parameters of the /completion endpoint. The fields are: name, type, default, and a one-line description. They should be taken from the server's README (tools/server/README.md).\n\nI need to find the section in the README that describes the request body parameters for /completion. Let me search for \"temperature\", \"top_k\", etc. in the README.\n",
+   "tool_calls": [
+    {
+     "id": "rSwCwJSpaXlcSsUqkI9ZunSEQ2F1FolB",
+     "type": "function",
+     "function": {
+      "name": "grep",
+      "arguments": {
+       "pattern": "temperature|top_k|top_p|top_n|min_p",
+       "path": "tools/server/README.md"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "role": "tool",
+   "tool_call_id": "rSwCwJSpaXlcSsUqkI9ZunSEQ2F1FolB",
+   "content": "tools/server/README.md:122:| `--samplers SAMPLERS` | samplers that will be used for generation in the order, separated by ';'<br/>(default: penalties;dry;top_n_sigma;top_k;typ_p;top_p;min_p;xtc;temperature) |\ntools/server/README.md:126:| `--temp, --temperature N` | temperature (default: 0.80) |\ntools/server/README.md:145:| `--dynatemp-range N` | dynamic temperature range (default: 0.00, 0.0 = disabled) |\ntools/server/README.md:146:| `--dynatemp-exp N` | dynamic temperature exponent (default: 1.00) |\ntools/server/README.md:504:`temperature`: Adjust the randomness of the generated text. Default: `0.8`\ntools/server/README.md:506:`dynatemp_range`: Dynamic temperature range. The final temperature will be in the range of `[temperature - dynatemp_range; temperature + dynatemp_range]` Default: `0.0`, which is disabled.\ntools/server/README.md:508:`dynatemp_exponent`: Dynamic temperature exponent. Default: `1.0`\ntools/server/README.md:510:`top_k`: Limit the next token selection to the K most probable tokens.  Default: `40`\ntools/server/README.md:512:`top_p`: Limit the next token selection to a subset of tokens with a cumulative probability above a threshold P. Default: `0.95`\ntools/server/README.md:514:`min_p`: The minimum probability for a token to be considered, relative to the probability of the most likely token. Default: `0.05`\ntools/server/README.md:572:`n_probs`: If greater than 0, the response also contains the probabilities of top N tokens for each generated token given the sampling settings. Note that for temperature < 0 the tokens are sampled greedily but token probabilities are still being calculated via a simple so\ntools/server/README.md:584:`samplers`: The order the samplers should be applied in. An array of strings representing sampler type names. If a sampler is not set, it will not be used. If a sampler is specified more than once, it will be applied multiple times. Default: `[\"dry\", \"top_k\", \"typ_p\", \"top\ntools/server/README.md:645:    - `top_logprobs` will be replaced with `top_probs`. Each element contains:\ntools/server/README.md:650:    - Number of elements in `top_probs` may be less than `n_probs`\ntools/server/README.md:780:            \"top_n\": 3,\ntools/server/README.md:840:      \"temperature\": 0.800000011920929,\ntools/server/README.md:843:      \"top_k\": 40,\ntools/server/README.md:844:      \"top_p\": 0.949999988079071,\ntools/server/README.md:845:      \"min_p\": 0.05000000074505806,\ntools/server/README.md:877:        \"top_k\",\ntools/server/README.md:879:        \"top_p\",\ntools/server/README.md:880:        \"min_p\",\ntools/server/README.md:882:        \"temperature\"\ntools/server/README.md:989:      \"temperature\": 0.800000011920929,\ntools/server/README.md:992:      \"top_k\": 40,\ntools/server/README.md:993:      \"top_p\": 0.949999988079071,\ntools/server/README.md:994:      \"min_p\": 0.05000000074505806,\ntools/server/README.md:995:      \"top_n_sigma\": -1.0,\ntools/server/README.md:1024:        \"top_k\",\ntools/server/README.md:1026:        \"top_p\",\ntools/server/README.md:1027:        \"min_p\",\ntools/server/README.md:1029:        \"temperature\"\ntools/server/README.md:1054:      \"temperature\": 0.800000011920929,\ntools/server/README.md:1057:      \"top_k\": 40,\ntools/server/README.md:1058:      \"top_p\": 0.949999988079071,\ntools/server/README.md:1059:      \"min_p\": 0.05000000074505806,\ntools/server/README.md:1060:      \"top_n_sigma\": -1.0,\ntools/server/README.md:1089:        \"top_k\",\ntools/server/README.md:1091:        \"top_p\",\ntools/server/README.md:1092:        \"min_p\",\ntools/server/README.md:1094:        \"temperature\"\ntools/server/README.md:1579:`temperature`: Sampling temperature 0-1 (default: 1.0)\ntools/server/README.md:1581:`top_p`: Nucleus sampling (default: 1.0)\ntools/server/README.md:1583:`top_k`: Top-k sampling"
+  },
+  {
+   "role": "assistant",
+   "content": "",
+   "reasoning_content": "The request body parameters for /completion are documented around lines 500-520. Let me read that section to get the exact descriptions and default values.\n",
+   "tool_calls": [
+    {
+     "id": "TtSM5DEpTOMVM4Pahgh4tiTExCKDEQ8e",
+     "type": "function",
+     "function": {
+      "name": "read_file",
+      "arguments": {
+       "path": "tools/server/README.md",
+       "offset": 495,
+       "limit": 30
+      }
+     }
+    }
+   ]
+  },
+  {
+   "role": "tool",
+   "tool_call_id": "TtSM5DEpTOMVM4Pahgh4tiTExCKDEQ8e",
+   "content": "   495\t\n   496\tMultiple prompts are also supported. In this case, the completion result will be an array.\n   497\t\n   498\t  - Only strings: `[\"string1\", \"string2\"]`\n   499\t  - Strings, JSON objects, and sequences of tokens: `[\"string1\", [12, 34, 56], { \"prompt_string\": \"string\", \"multimodal_data\": [\"base64\"]}]`\n   500\t  - Mixed types: `[[12, 34, \"string\", 56, 78], [12, 34, 56], \"string\", { \"prompt_string\": \"string\" }]`\n   501\t\n   502\tNote for `multimodal_data` in JSON object prompts. This should be an array of strings, containing base64 encoded multimodal data such as images and audio. There must be an identical number of MTMD media markers in the string prompt element which act as placeholders for the data provided to this parameter. The multimodal data files will be substituted in order. The marker string (e.g. `<__media__>`\n   503\t\n   504\t`temperature`: Adjust the randomness of the generated text. Default: `0.8`\n   505\t\n   506\t`dynatemp_range`: Dynamic temperature range. The final temperature will be in the range of `[temperature - dynatemp_range; temperature + dynatemp_range]` Default: `0.0`, which is disabled.\n   507\t\n   508\t`dynatemp_exponent`: Dynamic temperature exponent. Default: `1.0`\n   509\t\n   510\t`top_k`: Limit the next token selection to the K most probable tokens.  Default: `40`\n   511\t\n   512\t`top_p`: Limit the next token selection to a subset of tokens with a cumulative probability above a threshold P. Default: `0.95`\n   513\t\n   514\t`min_p`: The minimum probability for a token to be considered, relative to the probability of the most likely token. Default: `0.05`\n   515\t\n   516\t`n_predict`: Set the maximum number of tokens to predict when generating text. **Note:** May exceed the set limit slightly if the last token is a partial multibyte character. When 0, no tokens will be generated but the prompt is evaluated into the cache. Default: `-1`, where `-1` is infinity.\n   517\t\n   518\t`n_indent`: Specify the minimum line indentation for the generated text in number of whitespace characters. Useful for code completion tasks. Default: `0`\n   519\t\n   520\t`n_keep`: Specify the number of tokens from the prompt to retain when the context size is exceeded and tokens need to be discarded. The number excludes the BOS token.\n   521\tBy default, this value is set to `0`, meaning no tokens are kept. Use `-1` to retain all tokens from the prompt.\n   522\t\n   523\t`n_cmpl`: Number of completions to generate from the current prompt. If input has multiple prompts, the output will have N prompts times `n_cmpl` entries.\n   524\t\n[lines 495-524 of 2130]"
+  },
+  {
+   "role": "assistant",
+   "content": "From the `/completion` request-body section of `tools/server/README.md` (lines 504\u2013514):\n\n```json\n[\n  {\n    \"name\": \"temperature\",\n    \"type\": \"number\",\n    \"default\": 0.8,\n    \"description\": \"Adjust the randomness of the generated text.\"\n  },\n  {\n    \"name\": \"dynatemp_range\",\n    \"type\": \"number\",\n    \"default\": 0.0,\n    \"description\": \"Dynamic temperature range; the final temperature is in [temperature - range, temperature + range] (0.0 = disabled).\"\n  },\n  {\n    \"name\": \"top_k\",\n    \"type\": \"integer\",\n    \"default\": 40,\n    \"description\": \"Limit the next token selection to the K most probable tokens.\"\n  },\n  {\n    \"name\": \"top_p\",\n    \"type\": \"number\",\n    \"default\": 0.95,\n    \"description\": \"Limit the next token selection to a subset of tokens with a cumulative probability above threshold P.\"\n  },\n  {\n    \"name\": \"min_p\",\n    \"type\": \"number\",\n    \"default\": 0.05,\n    \"description\": \"Minimum probability for a token to be considered, relative to the probability of the most likely token.\"\n  }\n]\n```\n\nNotes: the README states the defaults but not explicit JSON types \u2014 `number`/`integer` above are inferred from the request examples in the same README (e.g. `\"temperature\": 0.8`, `\"top_k\": 40`). If you'd rather include `dynatemp_exponent` (default `1.0`) instead of one of these, it's documented two lines above `top_k`.",
+   "reasoning_content": "I have the exact descriptions and default values from the /completion request body section of the README (lines 504\u2013514). I'll pick 5 sampling-related parameters: temperature, top_k, top_p, min_p, dynatemp_range (or dynatemp_exponent). All are sampling-related.\n\nTypes: these are numeric (float/int). The README doesn't explicitly state the JSON types, but from the examples (lines 840\u2013845: \"temperature\": 0.8, \"top_k\": 40, \"top_p\": 0.95, \"min_p\": 0.05), temperature/top_p/min_p/dynatemp_range are numbers (float), and top_k is an integer. I'll describe the types as number/integer based on the examples.\n\nI'll create a JSON array with name, type, default, and description.\n"
+  },
+  {
+   "role": "user",
+   "content": "Suppose a draft of n tokens is verified and each token is accepted independently with probability p, stopping at the first rejection. Derive the expected number of accepted tokens, and evaluate it for p = 0.7 with n = 3 and n = 7."
+  },
+  {
+   "role": "assistant",
+   "content": "## Setup\n\nLet $X$ = number of accepted tokens. We stop at the first rejection, so:\n\n$$P(X = k) = \\begin{cases} p^k(1-p), & k = 0, \\dots, n-1 \\\\ p^n, & k = n \\end{cases}$$\n\n(the first $k$ tokens accepted, the next one rejected \u2014 or all $n$ accepted).\n\n## Derivation\n\nThe direct sum $\\sum k\\,P(X=k)$ is messy; the tail-sum formula is cleaner. $X \\ge k$ (for $k \\le n$) means the first $k$ draft tokens were all accepted, which has probability $p^k$:\n\n$$E[X] = \\sum_{k=1}^{n} P(X \\ge k) = \\sum_{k=1}^{n} p^k = p\\,\\frac{1 - p^n}{1 - p}$$\n\n(a finite geometric series). Sanity check: $n=1$ gives $E[X] = p$ \u2713. As $n \\to \\infty$ this approaches the unbounded geometric mean $p/(1-p)$.\n\n## Evaluation for p = 0.7\n\n**n = 3:**\n\n$$E[X] = 0.7 \\cdot \\frac{1 - 0.7^3}{0.3} = 0.7 \\cdot \\frac{1 - 0.343}{0.3} = 0.7 \\cdot 2.19 = \\mathbf{1.533}$$\n\n**n = 7:**\n\n$$E[X] = 0.7 \\cdot \\frac{1 - 0.7^7}{0.3} = 0.7 \\cdot \\frac{1 - 0.0823543}{0.3} \\approx 0.7 \\cdot 3.05882 \\approx \\mathbf{2.1412}$$\n\nFor reference, the ceiling is $p/(1-p) = 7/3 \\approx 2.3333$ \u2014 so going from $n=3$ to $n=7$ buys only $\\approx 0.61$ extra accepted tokens, while the draft cost (and the verification batch size) more than doubles. That diminishing return is exactly why the server clamps `--spec-draft-n-max` to the draft model's trained block size for block-diffusion types, and why the default is a modest 3.\n\nOne caveat: this is the idealized model you specified. In real speculative decoding the acceptances aren't independent with a fixed $p$ \u2014 the target verifies the whole draft in one batch, a token is only accepted if all predecessors were, and the per-position acceptance probability drifts as the draft distribution diverges from the target's \u2014 so actual acceptance curves fall off faster than this geometric model predicts.",
+   "reasoning_content": "This is a math problem about speculative decoding. Let me derive the expected number of accepted tokens.\n\nSetup: A draft of n tokens is verified. Each token is accepted independently with probability p, and we stop at the first rejection. Let X = number of accepted tokens. X takes values 0..n.\n\nP(X = k) for k < n: the first k are accepted and the (k+1)-th is rejected: p^k (1-p).\nP(X = n): all n are accepted: p^n.\n\nE[X] = sum_{k=0}^{n-1} k p^k (1-p) + n p^n.\n\nStandard result: for an unbounded geometric distribution, E = p/(1-p). With a cap at n:\n\nE[X] = sum_{k=0}^{n-1} k p^k (1-p) + n p^n\n\nLet me derive it cleanly. Let S = sum_{k=0}^{n} P(X >= k) = sum_{k=1}^{n} p^k (since X >= k means the first k tokens are all accepted, which requires k <= n).\n\nE[X] = sum_{k=1}^{n} P(X >= k) = sum_{k=1}^{n} p^k = p (1 - p^n)/(1 - p).\n\nThis is the clean derivation: E[X] = p(1-p^n)/(1-p).\n\nVerification for small n: n=1: E = p. Formula: p(1-p)/(1-p) = p. \u2713\n\nFor p = 0.7:\n- n = 3: E = 0.7 (1 - 0.343)/0.3 = 0.7 * 0.657/0.3 = 0.7 * 2.19 = 1.533.\n  0.7^3 = 0.343. 1 - 0.343 = 0.657. 0.657/0.3 = 2.19. 0.7 * 2.19 = 1.533.\n- n = 7: 0.7^7 = 0.0823543. 1 - 0.0823543 = 0.9176457. /0.3 = 3.058819. * 0.7 = 2.141173...\n  Let me compute: 0.7^2=0.49, 0.7^3=0.343, 0.7^4=0.2401, 0.7^5=0.16807, 0.7^6=0.117649, 0.7^7=0.0823543.\n  Sum of p^k for k=1..7: 0.7 + 0.49 + 0.343 + 0.2401 + 0.16807 + 0.117649 + 0.0823543 = \n  0.7+0.49 = 1.19\n  +0.343 = 1.533\n  +0.2401 = 1.7731\n  +0.16807 = 1.94117\n  +0.117649 = 2.058819\n  +0.0823543 = 2.1411733\n  So E = 2.1411733 \u2248 2.1412.\n\nAs n \u2192 \u221e: E \u2192 p/(1-p) = 0.7/0.3 = 7/3 \u2248 2.3333.\n\nSo for n=3: 1.533; for n=7: \u2248 2.1412; the upper bound is \u2248 2.3333.\n\nNote: this is the idealized model \u2014 in actual speculative decoding, acceptance is not independent (the target model verifies the entire draft in one batch, and acceptance is sequential: a token is accepted only if all preceding tokens are accepted, and the acceptance probability is not a fixed p but depends on the divergence between the draft and target distributions). But the problem explicitly states \"each token is accepted independently with probability p, stopping at the first rejection,\" so I'll derive under that model. I can add a one-line note that this is an idealization.\n\nAlso worth noting: the expected number of *verified* tokens per round is n (all drafts are checked in one batch), plus typically one bonus token from the target. But the question only asks for the expected number of accepted tokens.\n\nLet me present the derivation:\n\n1. Distribution: P(X=k) = p^k(1-p) (k=0..n-1), P(X=n) = p^n.\n2. Tail-sum formula: E[X] = \u03a3_{k=1}^{n} P(X\u2265k) = \u03a3_{k=1}^{n} p^k = p(1-p^n)/(1-p).\n3. Evaluation.\n\nI'll keep it concise and complete.\n"
+  },
+  {
+   "role": "user",
+   "content": "Summarise what we covered as a short checklist for a new contributor to the server code."
+  },
+  {
+   "role": "assistant",
+   "content": "## New-contributor checklist: llama.cpp server\n\n**Orientation**\n- [ ] Know the layout: `src/` (engine), `ggml/` (tensors), `common/` (shared utils), `tools/server/` (the HTTP server), `docs/` (prose docs)\n- [ ] Read `tools/server/README.md` \u2014 features, then the auto-generated CLI reference (don't edit the `HELP_START` block by hand)\n\n**Request flow**\n- [ ] `main.cpp` \u2192 `server.cpp` (routes) \u2192 `server-http.cpp` (HTTP) \u2192 `server-context.cpp` (task processing)\n- [ ] Tasks are queued (`server-queue.cpp`); if no slot is free, the task is **deferred** and retried when a slot releases\n\n**Slot selection** (`get_available_slot`, `server-context.cpp:~1920`)\n- [ ] Order of precedence: explicit `id_slot` \u2192 smallest size class that fits the prompt \u2192 LCP prompt-similarity match (if `-sps` > 0) \u2192 LRU fallback\n- [ ] Understand the trade-off: LCP reuse skips re-prefill (lower TTFT) but concentrates load and evicts cached context; evicted prompts are saved to the prompt cache (`f_keep < 0.5`, `LLAMA_CACHE_SAVE_TAIL`)\n\n**Token utilities**\n- [ ] `server_tokens` (`server-common.h/.cpp`): flat token list where `LLAMA_TOKEN_NULL` marks media-chunk positions, mapped via `map_idx_to_media`\n- [ ] `get_common_prefix` (`server-common.cpp:680`): plain scan for text; for multimodal, media positions compare chunk **id + token count** and skip the whole chunk\n\n**Speculative decoding** (`docs/speculative.md`)\n- [ ] Two families: draft-model (`draft-simple`, `draft-eagle3`, `draft-dflash`, `draft-dspark`, `draft-mtp`) vs. draftless n-gram (`ngram-cache`, `ngram-simple`, `ngram-map-k`, `ngram-map-k4v`, `ngram-mod`)\n- [ ] Types are combinable via `--spec-type`; draftless wins over draft-model; `--spec-default` = `ngram-mod`\n- [ ] Drafts are clamped (`--spec-draft-n-max`); acceptance decays geometrically, so longer drafts have diminishing returns\n\n**API surface**\n- [ ] `/completion` sampling params and defaults live in the README (e.g. `temperature` 0.8, `top_k` 40, `top_p` 0.95, `min_p` 0.05)\n- [ ] Tests: `tools/server/tests/` (Python) and `tools/server/bench/` for load testing\n\n**Good first habits**\n- [ ] Slot/task state changes go through the queue thread; use the `SLT_*` logging macros for slot-scoped logs\n- [ ] Check `docs/` before assuming behavior \u2014 multimodal, function calling, and speculative decoding each have their own doc",
+   "reasoning_content": "The user is asking for a short checklist summarizing what we covered in this conversation, aimed at new contributors to the server code. Let me recall what we covered:\n\n1. Top-level directory layout + location of the HTTP server (tools/server/)\n2. Server features from the README\n3. Slot selection logic (get_available_slot in server-context.cpp) \u2014 explicit id, size class, LCP similarity, LRU fallback, deferral\n4. Why LCP over LRU, tradeoffs\n5. get_common_prefix function (server-common.cpp) \u2014 text-only and multimodal branches\n6. Standalone C++ function for common prefix similarity (exercise)\n7. Types of speculative decoding in docs/speculative.md\n8. JSON of sampling parameters for /completion\n9. Expected number of accepted tokens in speculative decoding (math)\n\nSo the checklist should be a concise orientation: where things are, key concepts, key files/functions, docs. Keep it short \u2014 it's a checklist. No tool calls needed; this is a summary of the conversation.\n"
+  }
+ ],
+ "record_rows": [
+  {
+   "turn": 2,
+   "user": 0,
+   "prompt_n": 631,
+   "cache_n": 0,
+   "prompt_ms": 5785.377,
+   "predicted_n": 102,
+   "predicted_ms": 2710.63,
+   "draft_n": 81,
+   "draft_acc": 75,
+   "wall_s": 8.51692509651184,
+   "finish": "tool_calls",
+   "seg": {
+    "think": [
+     36,
+     1010.0,
+     30,
+     27
+    ],
+    "prose": [
+     0,
+     0.0,
+     0,
+     0
+    ],
+    "code": [
+     0,
+     0.0,
+     0,
+     0
+    ],
+    "tool": [
+     66,
+     1700.63,
+     51,
+     48
+    ]
+   },
+   "sha": "37029a348740",
+   "match": null,
+   "tools": [
+    "list_dir",
+    "grep"
+   ]
+  },
+  {
+   "turn": 5,
+   "user": 0,
+   "prompt_n": 265,
+   "cache_n": 733,
+   "prompt_ms": 2398.275,
+   "predicted_n": 84,
+   "predicted_ms": 2313.043,
+   "draft_n": 69,
+   "draft_acc": 61,
+   "wall_s": 4.716609954833984,
+   "finish": "tool_calls",
+   "seg": {
+    "think": [
+     32,
+     1009.158,
+     30,
+     22
+    ],
+    "prose": [
+     0,
+     0.0,
+     0,
+     0
+    ],
+    "code": [
+     0,
+     0.0,
+     0,
+     0
+    ],
+    "tool": [
+     52,
+     1303.8850000000002,
+     39,
+     39
+    ]
+   },
+   "sha": "3a28ae7609c6",
+   "match": null,
+   "tools": [
+    "list_dir",
+    "list_dir"
+   ]
+  },
+  {
+   "turn": 8,
+   "user": 0,
+   "prompt_n": 498,
+   "cache_n": 1082,
+   "prompt_ms": 4143.588,
+   "predicted_n": 47,
+   "predicted_ms": 1460.422,
+   "draft_n": 42,
+   "draft_acc": 33,
+   "wall_s": 5.609061002731323,
+   "finish": "tool_calls",
+   "seg": {
+    "think": [
+     19,
+     769.592,
+     21,
+     14
+    ],
+    "prose": [
+     0,
+     0.0,
+     0,
+     0
+    ],
+    "code": [
+     0,
+     0.0,
+     0,
+     0
+    ],
+    "tool": [
+     28,
+     690.83,
+     21,
+     19
+    ]
+   },
+   "sha": "d0112089ff3e",
+   "match": null,
+   "tools": [
+    "list_dir"
+   ]
+  },
+  {
+   "turn": 10,
+   "user": 0,
+   "prompt_n": 138,
+   "cache_n": 1627,
+   "prompt_ms": 1433.675,
+   "predicted_n": 746,
+   "predicted_ms": 23781.734,
+   "draft_n": 714,
+   "draft_acc": 508,
+   "wall_s": 25.220772743225098,
+   "finish": "stop",
+   "seg": {
+    "think": [
+     209,
+     7125.945,
+     213,
+     137
+    ],
+    "prose": [
+     537,
+     16655.789,
+     501,
+     371
+    ],
+    "code": [
+     0,
+     0.0,
+     0,
+     0
+    ],
+    "tool": [
+     0,
+     0.0,
+     0,
+     0
+    ]
+   },
+   "sha": "cb3052defc5b",
+   "match": null,
+   "tools": []
+  },
+  {
+   "turn": 12,
+   "user": 1,
+   "prompt_n": 34,
+   "cache_n": 2511,
+   "prompt_ms": 590.854,
+   "predicted_n": 73,
+   "predicted_ms": 1967.144,
+   "draft_n": 57,
+   "draft_acc": 54,
+   "wall_s": 2.564854860305786,
+   "finish": "tool_calls",
+   "seg": {
+    "think": [
+     28,
+     774.788,
+     21,
+     20
+    ],
+    "prose": [
+     0,
+     0.0,
+     0,
+     0
+    ],
+    "code": [
+     0,
+     0.0,
+     0,
+     0
+    ],
+    "tool": [
+     45,
+     1192.356,
+     36,
+     34
+    ]
+   },
+   "sha": "b04e84d2cc5c",
+   "match": null,
+   "tools": [
+    "read_file"
+   ]
+  },
+  {
+   "turn": 14,
+   "user": 1,
+   "prompt_n": 2745,
+   "cache_n": 2618,
+   "prompt_ms": 21405.633,
+   "predicted_n": 253,
+   "predicted_ms": 7910.712,
+   "draft_n": 234,
+   "draft_acc": 175,
+   "wall_s": 29.32546615600586,
+   "finish": "stop",
+   "seg": {
+    "think": [
+     36,
+     1184.417,
+     33,
+     24
+    ],
+    "prose": [
+     217,
+     6726.295,
+     201,
+     151
+    ],
+    "code": [
+     0,
+     0.0,
+     0,
+     0
+    ],
+    "tool": [
+     0,
+     0.0,
+     0,
+     0
+    ]
+   },
+   "sha": "1b8ba84109c0",
+   "match": null,
+   "tools": []
+  },
+  {
+   "turn": 16,
+   "user": 2,
+   "prompt_n": 28,
+   "cache_n": 5616,
+   "prompt_ms": 566.677,
+   "predicted_n": 86,
+   "predicted_ms": 2782.541,
+   "draft_n": 81,
+   "draft_acc": 59,
+   "wall_s": 3.3584799766540527,
+   "finish": "tool_calls",
+   "seg": {
+    "think": [
+     46,
+     1778.926,
+     51,
+     31
+    ],
+    "prose": [
+     0,
+     0.0,
+     0,
+     0
+    ],
+    "code": [
+     0,
+     0.0,
+     0,
+     0
+    ],
+    "tool": [
+     40,
+     1003.6150000000002,
+     30,
+     28
+    ]
+   },
+   "sha": "6ede65fee52d",
+   "match": null,
+   "tools": [
+    "grep"
+   ]
+  },
+  {
+   "turn": 18,
+   "user": 2,
+   "prompt_n": 1871,
+   "cache_n": 5730,
+   "prompt_ms": 15205.59,
+   "predicted_n": 95,
+   "predicted_ms": 3305.112,
+   "draft_n": 96,
+   "draft_acc": 62,
+   "wall_s": 18.521806001663208,
+   "finish": "tool_calls",
+   "seg": {
+    "think": [
+     45,
+     1889.116,
+     54,
+     28
+    ],
+    "prose": [
+     0,
+     0.0,
+     0,
+     0
+    ],
+    "code": [
+     0,
+     0.0,
+     0,
+     0
+    ],
+    "tool": [
+     50,
+     1415.996,
+     42,
+     34
+    ]
+   },
+   "sha": "d1b4ba3bc7da",
+   "match": null,
+   "tools": [
+    "grep"
+   ]
+  },
+  {
+   "turn": 20,
+   "user": 2,
+   "prompt_n": 343,
+   "cache_n": 7695,
+   "prompt_ms": 3095.983,
+   "predicted_n": 79,
+   "predicted_ms": 2495.893,
+   "draft_n": 72,
+   "draft_acc": 55,
+   "wall_s": 5.603711843490601,
+   "finish": "tool_calls",
+   "seg": {
+    "think": [
+     37,
+     1489.612,
+     42,
+     25
+    ],
+    "prose": [
+     0,
+     0.0,
+     0,
+     0
+    ],
+    "code": [
+     0,
+     0.0,
+     0,
+     0
+    ],
+    "tool": [
+     42,
+     1006.281,
+     30,
+     30
+    ]
+   },
+   "sha": "089678cf9ef5",
+   "match": null,
+   "tools": [
+    "grep"
+   ]
+  },
+  {
+   "turn": 22,
+   "user": 2,
+   "prompt_n": 125,
+   "cache_n": 8117,
+   "prompt_ms": 1253.106,
+   "predicted_n": 81,
+   "predicted_ms": 2697.083,
+   "draft_n": 78,
+   "draft_acc": 55,
+   "wall_s": 3.9623632431030273,
+   "finish": "tool_calls",
+   "seg": {
+    "think": [
+     38,
+     1589.053,
+     45,
+     25
+    ],
+    "prose": [
+     0,
+     0.0,
+     0,
+     0
+    ],
+    "code": [
+     0,
+     0.0,
+     0,
+     0
+    ],
+    "tool": [
+     43,
+     1108.03,
+     33,
+     30
+    ]
+   },
+   "sha": "c64c2821b61f",
+   "match": null,
+   "tools": [
+    "grep"
+   ]
+  },
+  {
+   "turn": 24,
+   "user": 2,
+   "prompt_n": 1732,
+   "cache_n": 8323,
+   "prompt_ms": 14293.033,
+   "predicted_n": 122,
+   "predicted_ms": 4873.839,
+   "draft_n": 141,
+   "draft_acc": 75,
+   "wall_s": 19.180778980255127,
+   "finish": "tool_calls",
+   "seg": {
+    "think": [
+     52,
+     2120.064,
+     60,
+     34
+    ],
+    "prose": [
+     0,
+     0.0,
+     0,
+     0
+    ],
+    "code": [
+     0,
+     0.0,
+     0,
+     0
+    ],
+    "tool": [
+     70,
+     2753.775,
+     81,
+     41
+    ]
+   },
+   "sha": "5d7e2ea90d39",
+   "match": null,
+   "tools": [
+    "grep"
+   ]
+  },
+  {
+   "turn": 26,
+   "user": 2,
+   "prompt_n": 1946,
+   "cache_n": 10177,
+   "prompt_ms": 16456.39,
+   "predicted_n": 106,
+   "predicted_ms": 3250.12,
+   "draft_n": 93,
+   "draft_acc": 75,
+   "wall_s": 19.722333908081055,
+   "finish": "tool_calls",
+   "seg": {
+    "think": [
+     46,
+     1611.773,
+     45,
+     32
+    ],
+    "prose": [
+     0,
+     0.0,
+     0,
+     0
+    ],
+    "code": [
+     0,
+     0.0,
+     0,
+     0
+    ],
+    "tool": [
+     60,
+     1638.347,
+     48,
+     43
+    ]
+   },
+   "sha": "2b9f86a9f894",
+   "match": null,
+   "tools": [
+    "read_file"
+   ]
+  },
+  {
+   "turn": 28,
+   "user": 2,
+   "prompt_n": 1733,
+   "cache_n": 12229,
+   "prompt_ms": 15087.942,
+   "predicted_n": 86,
+   "predicted_ms": 2946.63,
+   "draft_n": 84,
+   "draft_acc": 57,
+   "wall_s": 18.051530122756958,
+   "finish": "tool_calls",
+   "seg": {
+    "think": [
+     27,
+     1099.837,
+     30,
+     19
+    ],
+    "prose": [
+     0,
+     0.0,
+     0,
+     0
+    ],
+    "code": [
+     0,
+     0.0,
+     0,
+     0
+    ],
+    "tool": [
+     59,
+     1846.7930000000001,
+     54,
+     38
+    ]
+   },
+   "sha": "ec4f7ee4bf65",
+   "match": null,
+   "tools": [
+    "read_file"
+   ]
+  },
+  {
+   "turn": 30,
+   "user": 2,
+   "prompt_n": 875,
+   "cache_n": 14047,
+   "prompt_ms": 7940.236,
+   "predicted_n": 189,
+   "predicted_ms": 5376.919,
+   "draft_n": 153,
+   "draft_acc": 137,
+   "wall_s": 13.335138082504272,
+   "finish": "tool_calls",
+   "seg": {
+    "think": [
+     73,
+     2190.272,
+     60,
+     52
+    ],
+    "prose": [
+     0,
+     0.0,
+     0,
+     0
+    ],
+    "code": [
+     0,
+     0.0,
+     0,
+     0
+    ],
+    "tool": [
+     116,
+     3186.647,
+     93,
+     85
+    ]
+   },
+   "sha": "61bb1d9c2fdb",
+   "match": null,
+   "tools": [
+    "read_file",
+    "read_file"
+   ]
+  },
+  {
+   "turn": 33,
+   "user": 2,
+   "prompt_n": 1456,
+   "cache_n": 15110,
+   "prompt_ms": 13069.821,
+   "predicted_n": 697,
+   "predicted_ms": 25745.561,
+   "draft_n": 741,
+   "draft_acc": 450,
+   "wall_s": 38.83502697944641,
+   "finish": "tool_calls",
+   "seg": {
+    "think": [
+     652,
+     24387.671,
+     702,
+     418
+    ],
+    "prose": [
+     0,
+     0.0,
+     0,
+     0
+    ],
+    "code": [
+     0,
+     0.0,
+     0,
+     0
+    ],
+    "tool": [
+     45,
+     1357.890000000003,
+     39,
+     32
+    ]
+   },
+   "sha": "b0981f65303d",
+   "match": null,
+   "tools": [
+    "grep"
+   ]
+  },
+  {
+   "turn": 35,
+   "user": 2,
+   "prompt_n": 105,
+   "cache_n": 17263,
+   "prompt_ms": 1347.479,
+   "predicted_n": 131,
+   "predicted_ms": 4669.172,
+   "draft_n": 132,
+   "draft_acc": 86,
+   "wall_s": 6.037016153335571,
+   "finish": "tool_calls",
+   "seg": {
+    "think": [
+     73,
+     3101.187,
+     87,
+     43
+    ],
+    "prose": [
+     0,
+     0.0,
+     0,
+     0
+    ],
+    "code": [
+     0,
+     0.0,
+     0,
+     0
+    ],
+    "tool": [
+     58,
+     1567.9849999999997,
+     45,
+     43
+    ]
+   },
+   "sha": "eaea58a624b6",
+   "match": null,
+   "tools": [
+    "read_file"
+   ]
+  },
+  {
+   "turn": 38,
+   "user": 3,
+   "prompt_n": 436,
+   "cache_n": 17498,
+   "prompt_ms": 4336.264,
+   "predicted_n": 834,
+   "predicted_ms": 34841.164,
+   "draft_n": 993,
+   "draft_acc": 503,
+   "wall_s": 39.19855999946594,
+   "finish": "tool_calls",
+   "seg": {
+    "think": [
+     788,
+     33583.27,
+     957,
+     470
+    ],
+    "prose": [
+     0,
+     0.0,
+     0,
+     0
+    ],
+    "code": [
+     0,
+     0.0,
+     0,
+     0
+    ],
+    "tool": [
+     46,
+     1257.8940000000002,
+     36,
+     33
+    ]
+   },
+   "sha": "12cb9007cf66",
+   "match": null,
+   "tools": [
+    "grep"
+   ]
+  },
+  {
+   "turn": 40,
+   "user": 3,
+   "prompt_n": 197,
+   "cache_n": 18768,
+   "prompt_ms": 2216.986,
+   "predicted_n": 70,
+   "predicted_ms": 2483.487,
+   "draft_n": 69,
+   "draft_acc": 47,
+   "wall_s": 4.722867012023926,
+   "finish": "tool_calls",
+   "seg": {
+    "think": [
+     29,
+     1222.86,
+     33,
+     18
+    ],
+    "prose": [
+     0,
+     0.0,
+     0,
+     0
+    ],
+    "code": [
+     0,
+     0.0,
+     0,
+     0
+    ],
+    "tool": [
+     41,
+     1260.6270000000002,
+     36,
+     29
+    ]
+   },
+   "sha": "db286f5d3d40",
+   "match": null,
+   "tools": [
+    "grep"
+   ]
+  },
+  {
+   "turn": 42,
+   "user": 3,
+   "prompt_n": 113,
+   "cache_n": 19035,
+   "prompt_ms": 1379.784,
+   "predicted_n": 101,
+   "predicted_ms": 3536.626,
+   "draft_n": 99,
+   "draft_acc": 68,
+   "wall_s": 4.939329147338867,
+   "finish": "tool_calls",
+   "seg": {
+    "think": [
+     43,
+     1856.508,
+     51,
+     28
+    ],
+    "prose": [
+     0,
+     0.0,
+     0,
+     0
+    ],
+    "code": [
+     0,
+     0.0,
+     0,
+     0
+    ],
+    "tool": [
+     58,
+     1680.1180000000002,
+     48,
+     40
+    ]
+   },
+   "sha": "7bfa5d2f6332",
+   "match": null,
+   "tools": [
+    "read_file"
+   ]
+  },
+  {
+   "turn": 44,
+   "user": 3,
+   "prompt_n": 278,
+   "cache_n": 19249,
+   "prompt_ms": 2892.384,
+   "predicted_n": 1601,
+   "predicted_ms": 59888.178,
+   "draft_n": 1701,
+   "draft_acc": 1034,
+   "wall_s": 62.8041410446167,
+   "finish": "stop",
+   "seg": {
+    "think": [
+     817,
+     33672.482,
+     957,
+     499
+    ],
+    "prose": [
+     784,
+     26215.695999999996,
+     744,
+     535
+    ],
+    "code": [
+     0,
+     0.0,
+     0,
+     0
+    ],
+    "tool": [
+     0,
+     0.0,
+     0,
+     0
+    ]
+   },
+   "sha": "f984622b52eb",
+   "match": null,
+   "tools": []
+  },
+  {
+   "turn": 46,
+   "user": 4,
+   "prompt_n": 30,
+   "cache_n": 21128,
+   "prompt_ms": 657.109,
+   "predicted_n": 105,
+   "predicted_ms": 3664.04,
+   "draft_n": 102,
+   "draft_acc": 70,
+   "wall_s": 4.34614896774292,
+   "finish": "tool_calls",
+   "seg": {
+    "think": [
+     63,
+     2605.148,
+     72,
+     41
+    ],
+    "prose": [
+     0,
+     0.0,
+     0,
+     0
+    ],
+    "code": [
+     0,
+     0.0,
+     0,
+     0
+    ],
+    "tool": [
+     42,
+     1058.8919999999998,
+     30,
+     29
+    ]
+   },
+   "sha": "2bbc0ebd6b63",
+   "match": null,
+   "tools": [
+    "grep"
+   ]
+  },
+  {
+   "turn": 48,
+   "user": 4,
+   "prompt_n": 272,
+   "cache_n": 21262,
+   "prompt_ms": 2897.147,
+   "predicted_n": 160,
+   "predicted_ms": 4722.284,
+   "draft_n": 132,
+   "draft_acc": 115,
+   "wall_s": 7.645290851593018,
+   "finish": "tool_calls",
+   "seg": {
+    "think": [
+     46,
+     1659.566,
+     45,
+     30
+    ],
+    "prose": [
+     0,
+     0.0,
+     0,
+     0
+    ],
+    "code": [
+     0,
+     0.0,
+     0,
+     0
+    ],
+    "tool": [
+     114,
+     3062.718,
+     87,
+     85
+    ]
+   },
+   "sha": "60335c48931d",
+   "match": null,
+   "tools": [
+    "read_file",
+    "read_file"
+   ]
+  },
+  {
+   "turn": 51,
+   "user": 4,
+   "prompt_n": 1171,
+   "cache_n": 21693,
+   "prompt_ms": 11165.709,
+   "predicted_n": 83,
+   "predicted_ms": 2832.125,
+   "draft_n": 78,
+   "draft_acc": 56,
+   "wall_s": 14.024817943572998,
+   "finish": "tool_calls",
+   "seg": {
+    "think": [
+     25,
+     919.869,
+     24,
+     17
+    ],
+    "prose": [
+     0,
+     0.0,
+     0,
+     0
+    ],
+    "code": [
+     0,
+     0.0,
+     0,
+     0
+    ],
+    "tool": [
+     58,
+     1912.256,
+     54,
+     39
+    ]
+   },
+   "sha": "86e49ce3020d",
+   "match": null,
+   "tools": [
+    "read_file"
+   ]
+  },
+  {
+   "turn": 53,
+   "user": 4,
+   "prompt_n": 588,
+   "cache_n": 22946,
+   "prompt_ms": 5832.024,
+   "predicted_n": 109,
+   "predicted_ms": 3581.272,
+   "draft_n": 99,
+   "draft_acc": 76,
+   "wall_s": 9.441293954849243,
+   "finish": "tool_calls",
+   "seg": {
+    "think": [
+     51,
+     1987.399,
+     54,
+     34
+    ],
+    "prose": [
+     0,
+     0.0,
+     0,
+     0
+    ],
+    "code": [
+     0,
+     0.0,
+     0,
+     0
+    ],
+    "tool": [
+     58,
+     1593.873,
+     45,
+     42
+    ]
+   },
+   "sha": "019fe07515fb",
+   "match": null,
+   "tools": [
+    "read_file"
+   ]
+  },
+  {
+   "turn": 55,
+   "user": 4,
+   "prompt_n": 683,
+   "cache_n": 23643,
+   "prompt_ms": 6795.067,
+   "predicted_n": 84,
+   "predicted_ms": 2518.871,
+   "draft_n": 69,
+   "draft_acc": 61,
+   "wall_s": 9.342596769332886,
+   "finish": "tool_calls",
+   "seg": {
+    "think": [
+     26,
+     925.308,
+     24,
+     20
+    ],
+    "prose": [
+     0,
+     0.0,
+     0,
+     0
+    ],
+    "code": [
+     0,
+     0.0,
+     0,
+     0
+    ],
+    "tool": [
+     58,
+     1593.563,
+     45,
+     41
+    ]
+   },
+   "sha": "5158db0e31ff",
+   "match": null,
+   "tools": [
+    "read_file"
+   ]
+  },
+  {
+   "turn": 57,
+   "user": 4,
+   "prompt_n": 485,
+   "cache_n": 24410,
+   "prompt_ms": 5148.713,
+   "predicted_n": 1750,
+   "predicted_ms": 62423.344,
+   "draft_n": 1743,
+   "draft_acc": 1169,
+   "wall_s": 67.6017279624939,
+   "finish": "stop",
+   "seg": {
+    "think": [
+     644,
+     24108.403,
+     675,
+     418
+    ],
+    "prose": [
+     717,
+     27650.709,
+     771,
+     463
+    ],
+    "code": [
+     389,
+     10664.232,
+     297,
+     288
+    ],
+    "tool": [
+     0,
+     0.0,
+     0,
+     0
+    ]
+   },
+   "sha": "37c96dba05cc",
+   "match": null,
+   "tools": []
+  },
+  {
+   "turn": 59,
+   "user": 5,
+   "prompt_n": 50,
+   "cache_n": 26645,
+   "prompt_ms": 960.465,
+   "predicted_n": 2541,
+   "predicted_ms": 84170.924,
+   "draft_n": 2340,
+   "draft_acc": 1761,
+   "wall_s": 85.16243195533752,
+   "finish": "stop",
+   "seg": {
+    "think": [
+     1666,
+     55951.586,
+     1557,
+     1147
+    ],
+    "prose": [
+     300,
+     11445.317000000003,
+     318,
+     195
+    ],
+    "code": [
+     575,
+     16774.020999999993,
+     465,
+     419
+    ],
+    "tool": [
+     0,
+     0.0,
+     0,
+     0
+    ]
+   },
+   "sha": "1e52f44f1fa3",
+   "match": null,
+   "tools": []
+  },
+  {
+   "turn": 61,
+   "user": 6,
+   "prompt_n": 31,
+   "cache_n": 29236,
+   "prompt_ms": 630.879,
+   "predicted_n": 53,
+   "predicted_ms": 1756.842,
+   "draft_n": 45,
+   "draft_acc": 38,
+   "wall_s": 2.419833183288574,
+   "finish": "tool_calls",
+   "seg": {
+    "think": [
+     23,
+     869.093,
+     21,
+     16
+    ],
+    "prose": [
+     0,
+     0.0,
+     0,
+     0
+    ],
+    "code": [
+     0,
+     0.0,
+     0,
+     0
+    ],
+    "tool": [
+     30,
+     887.7490000000001,
+     24,
+     22
+    ]
+   },
+   "sha": "72d80ec0a837",
+   "match": null,
+   "tools": [
+    "read_file"
+   ]
+  },
+  {
+   "turn": 63,
+   "user": 6,
+   "prompt_n": 2838,
+   "cache_n": 29320,
+   "prompt_ms": 28657.521,
+   "predicted_n": 76,
+   "predicted_ms": 2463.687,
+   "draft_n": 66,
+   "draft_acc": 54,
+   "wall_s": 31.15523099899292,
+   "finish": "tool_calls",
+   "seg": {
+    "think": [
+     18,
+     727.648,
+     18,
+     14
+    ],
+    "prose": [
+     0,
+     0.0,
+     0,
+     0
+    ],
+    "code": [
+     0,
+     0.0,
+     0,
+     0
+    ],
+    "tool": [
+     58,
+     1736.0389999999998,
+     48,
+     40
+    ]
+   },
+   "sha": "6d19b29bc4a5",
+   "match": null,
+   "tools": [
+    "read_file"
+   ]
+  },
+  {
+   "turn": 65,
+   "user": 6,
+   "prompt_n": 2214,
+   "cache_n": 32234,
+   "prompt_ms": 22804.99,
+   "predicted_n": 139,
+   "predicted_ms": 4812.674,
+   "draft_n": 129,
+   "draft_acc": 96,
+   "wall_s": 27.65323495864868,
+   "finish": "tool_calls",
+   "seg": {
+    "think": [
+     94,
+     3464.449,
+     93,
+     62
+    ],
+    "prose": [
+     0,
+     0.0,
+     0,
+     0
+    ],
+    "code": [
+     0,
+     0.0,
+     0,
+     0
+    ],
+    "tool": [
+     45,
+     1348.225,
+     36,
+     34
+    ]
+   },
+   "sha": "c79f84eb02c2",
+   "match": null,
+   "tools": [
+    "grep"
+   ]
+  },
+  {
+   "turn": 67,
+   "user": 6,
+   "prompt_n": 105,
+   "cache_n": 34587,
+   "prompt_ms": 1508.89,
+   "predicted_n": 82,
+   "predicted_ms": 2711.164,
+   "draft_n": 72,
+   "draft_acc": 58,
+   "wall_s": 4.2563440799713135,
+   "finish": "tool_calls",
+   "seg": {
+    "think": [
+     24,
+     950.456,
+     24,
+     15
+    ],
+    "prose": [
+     0,
+     0.0,
+     0,
+     0
+    ],
+    "code": [
+     0,
+     0.0,
+     0,
+     0
+    ],
+    "tool": [
+     58,
+     1760.708,
+     48,
+     43
+    ]
+   },
+   "sha": "73ae1eac8ebc",
+   "match": null,
+   "tools": [
+    "read_file"
+   ]
+  },
+  {
+   "turn": 69,
+   "user": 6,
+   "prompt_n": 1196,
+   "cache_n": 34688,
+   "prompt_ms": 12594.97,
+   "predicted_n": 1787,
+   "predicted_ms": 63617.926,
+   "draft_n": 1728,
+   "draft_acc": 1210,
+   "wall_s": 76.25009298324585,
+   "finish": "stop",
+   "seg": {
+    "think": [
+     877,
+     31592.323,
+     861,
+     589
+    ],
+    "prose": [
+     910,
+     32025.603,
+     867,
+     621
+    ],
+    "code": [
+     0,
+     0.0,
+     0,
+     0
+    ],
+    "tool": [
+     0,
+     0.0,
+     0,
+     0
+    ]
+   },
+   "sha": "4a512c593e3f",
+   "match": null,
+   "tools": []
+  },
+  {
+   "turn": 71,
+   "user": 7,
+   "prompt_n": 49,
+   "cache_n": 37670,
+   "prompt_ms": 961.046,
+   "predicted_n": 146,
+   "predicted_ms": 5476.434,
+   "draft_n": 147,
+   "draft_acc": 97,
+   "wall_s": 6.476246118545532,
+   "finish": "tool_calls",
+   "seg": {
+    "think": [
+     91,
+     3710.831,
+     99,
+     57
+    ],
+    "prose": [
+     0,
+     0.0,
+     0,
+     0
+    ],
+    "code": [
+     0,
+     0.0,
+     0,
+     0
+    ],
+    "tool": [
+     55,
+     1765.603,
+     48,
+     40
+    ]
+   },
+   "sha": "cd4b1a2bf701",
+   "match": null,
+   "tools": [
+    "grep"
+   ]
+  },
+  {
+   "turn": 73,
+   "user": 7,
+   "prompt_n": 1480,
+   "cache_n": 37715,
+   "prompt_ms": 15976.865,
+   "predicted_n": 93,
+   "predicted_ms": 3181.273,
+   "draft_n": 84,
+   "draft_acc": 64,
+   "wall_s": 19.197861194610596,
+   "finish": "tool_calls",
+   "seg": {
+    "think": [
+     35,
+     1406.355,
+     36,
+     23
+    ],
+    "prose": [
+     0,
+     0.0,
+     0,
+     0
+    ],
+    "code": [
+     0,
+     0.0,
+     0,
+     0
+    ],
+    "tool": [
+     58,
+     1774.9180000000001,
+     48,
+     41
+    ]
+   },
+   "sha": "6f1648c764bd",
+   "match": null,
+   "tools": [
+    "read_file"
+   ]
+  },
+  {
+   "turn": 75,
+   "user": 7,
+   "prompt_n": 807,
+   "cache_n": 39287,
+   "prompt_ms": 9003.515,
+   "predicted_n": 596,
+   "predicted_ms": 18802.716,
+   "draft_n": 504,
+   "draft_acc": 428,
+   "wall_s": 27.84730291366577,
+   "finish": "stop",
+   "seg": {
+    "think": [
+     191,
+     6573.422,
+     174,
+     133
+    ],
+    "prose": [
+     118,
+     4006.798,
+     108,
+     79
+    ],
+    "code": [
+     287,
+     8222.496000000001,
+     222,
+     216
+    ],
+    "tool": [
+     0,
+     0.0,
+     0,
+     0
+    ]
+   },
+   "sha": "183d010d72e4",
+   "match": null,
+   "tools": []
+  },
+  {
+   "turn": 77,
+   "user": 8,
+   "prompt_n": 66,
+   "cache_n": 40690,
+   "prompt_ms": 1023.235,
+   "predicted_n": 1835,
+   "predicted_ms": 63360.42,
+   "draft_n": 1698,
+   "draft_acc": 1269,
+   "wall_s": 64.42500901222229,
+   "finish": "stop",
+   "seg": {
+    "think": [
+     1201,
+     40131.375,
+     1077,
+     843
+    ],
+    "prose": [
+     634,
+     23229.045,
+     621,
+     426
+    ],
+    "code": [
+     0,
+     0.0,
+     0,
+     0
+    ],
+    "tool": [
+     0,
+     0.0,
+     0,
+     0
+    ]
+   },
+   "sha": "c2fcaf515f2f",
+   "match": null,
+   "tools": []
+  },
+  {
+   "turn": 79,
+   "user": 9,
+   "prompt_n": 30,
+   "cache_n": 42591,
+   "prompt_ms": 722.991,
+   "predicted_n": 893,
+   "predicted_ms": 36551.106,
+   "draft_n": 975,
+   "draft_acc": 568,
+   "wall_s": 37.31615591049194,
+   "finish": "stop",
+   "seg": {
+    "think": [
+     218,
+     8703.889,
+     231,
+     140
+    ],
+    "prose": [
+     675,
+     27847.217,
+     744,
+     428
+    ],
+    "code": [
+     0,
+     0.0,
+     0,
+     0
+    ],
+    "tool": [
+     0,
+     0.0,
+     0,
+     0
+    ]
+   },
+   "sha": "4ea69fd0e004",
+   "match": null,
+   "tools": []
+  }
+ ]
+}
