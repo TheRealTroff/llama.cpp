@@ -16,7 +16,7 @@ OUT=${OUT:-/Users/troff/play/kvquant-experiments/results}; TAG=${TAG:-session-$L
 mkdir -p "$OUT"
 source "$B/perf/pick.sh"
 pick_check "$LINE" || exit 1
-echo "=== session $MODE $TAG: line=$LINE kv=$KV arms=[$ARMS] passes=$PASSES script=$SCRIPT turns=${TURNS:-all}"
+echo "=== session $MODE $TAG: line=$LINE kv=$KV ctx=${CTX:-pick} arms=[$ARMS] passes=$PASSES script=$SCRIPT turns=${TURNS:-all}"
 echo "commit : $(git -C "$B" rev-parse --short HEAD) on $(git -C "$B" rev-parse --abbrev-ref HEAD); binary $BIN/llama-server $(date -r "$BIN/llama-server" '+%m-%d %H:%M'); extra: ${EXTRA_ENV:-none}"
 pid=
 stop_server() { if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then kill -TERM "$pid"; for _ in $(seq 1 60); do kill -0 "$pid" 2>/dev/null || break; sleep 1; done; kill -9 "$pid" 2>/dev/null; wait "$pid" 2>/dev/null; fi; pid=; }
@@ -29,6 +29,7 @@ start_server() {  # start_server <arm> <label>
     *) echo "unknown arm $arm"; exit 1 ;;
   esac
   pick_env "$LINE" "$KV"; pick_args "$LINE" "$KV"
+  if [ -n "${CTX:-}" ]; then PICK_ARGS=(-c "$CTX" "${PICK_ARGS[@]:2}"); fi   # CTX=<n> replaces the pick's -c (a script longer than the pick's context)
   case "$arm" in
     ev)     spec=("${PICK_SPEC[@]}") ;;
     nospec) spec=() ;;
@@ -53,7 +54,7 @@ if [ "$MODE" = record ]; then
   start_server "$arm" record
   echo "--- record under arm $arm (${#PICK_ENV[@]} pick flags)"
   python3 "$B/perf/session.py" record --user "${USER_SCRIPT:?USER_SCRIPT=<user script json>}" --root "$WORK" --out "$SCRIPT" --port "$PORT" \
-      --note "line=$LINE kv=$KV arm=$arm commit=$(git -C "$B" rev-parse --short HEAD)" ${EFFORT:+--effort "$EFFORT"} ${CTX_LIMIT:+--ctx-limit "$CTX_LIMIT"} ${MAX_STEPS:+--max-steps "$MAX_STEPS"}
+      --note "line=$LINE kv=$KV arm=$arm commit=$(git -C "$B" rev-parse --short HEAD)" ${EFFORT:+--effort "$EFFORT"} ${CTX_LIMIT:+--ctx-limit "$CTX_LIMIT"} ${MAX_STEPS:+--max-steps "$MAX_STEPS"} ${MAX_TOKENS:+--max-tokens "$MAX_TOKENS"}
   stop_server
   exit 0
 fi

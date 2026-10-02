@@ -235,6 +235,15 @@ def cmd_record(a):
         for step in range(a.max_steps):
             msg, t, seg, finish = generate(a.port, TOOLS, messages, a.max_tokens, a.effort)
             rows.append(turn_row(len(messages), ui, t, seg, finish, msg)); show(rows[-1])
+            if finish == "length":  # a turn cut by max_tokens is not a turn (a cut tool call must not run): the script ends before this user turn
+                rows.pop()
+                while messages[-1]["role"] != "user":
+                    if messages.pop()["role"] == "assistant":
+                        rows.pop()
+                messages.pop()
+                full = True
+                print(f"  user {ui}: a turn hit max_tokens {a.max_tokens}; this user turn is dropped and the recording stops", flush=True)
+                break
             messages.append(msg)
             full = t.get("cache_n", 0) + t.get("prompt_n", 0) + t.get("predicted_n", 0) > a.ctx_limit
             if not msg.get("tool_calls") or full:
@@ -247,7 +256,7 @@ def cmd_record(a):
                             "recorded": time.strftime("%Y-%m-%d %H:%M")}, "tools": TOOLS, "messages": messages, "record_rows": rows},
                   open(a.out, "w"), indent=1)
         if full:
-            print(f"  context limit {a.ctx_limit} reached after user turn {ui}: stop", flush=True)
+            print(f"  context limit {a.ctx_limit} or a cut turn at user turn {ui}: stop", flush=True)
             break
     print(f"recorded {len(messages)} messages, {sum(1 for m in messages if m['role'] == 'assistant')} assistant turns -> {a.out}")
 
@@ -313,7 +322,7 @@ if __name__ == "__main__":
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("record")
     p.add_argument("--user", required=True); p.add_argument("--root", required=True); p.add_argument("--out", required=True)
-    p.add_argument("--port", type=int, default=8098); p.add_argument("--max-tokens", type=int, default=4096)
+    p.add_argument("--port", type=int, default=8098); p.add_argument("--max-tokens", type=int, default=16384)
     p.add_argument("--max-steps", type=int, default=10); p.add_argument("--effort", default=None); p.add_argument("--note", default="")
     p.add_argument("--ctx-limit", type=int, default=92000)
     p.set_defaults(fn=cmd_record)
