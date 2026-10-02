@@ -1,6 +1,6 @@
 # The session corpus: a recorded agent session, replayed teacher-forced (2026-10-01, owner: "time we created a more realistic corpus ... a series of back and forths with some discussion, some code explains, some tool calls, some doc reads"; "absolutely with thinking on")
 
-Status: **BUILT + MEASURED on `exp/session-corpus` (both lines): the read-only pilot (`pilot10`), the edit session (`edit11`, write/edit/compile tools), Scripts only, no server change; runs on prod's binary. the long three-language session (`long29`, context to 140K). Open: slot saves at chosen turns, the k histogram per segment. Merge = owner.**
+Status: **MERGED to prod 2026-10-02 (`c98f2af5c`, owner: "Ok, merge it"; was `exp/session-corpus`). Built + measured on both lines: the read-only pilot (`pilot10`), the edit session (`edit11`, write/edit/compile tools), the long three-language session (`long29`, context to 140K). Scripts only, no server change. Open: the second pass of `long29`, its 12 unrecorded user turns, slot saves at chosen turns, the k histogram per segment.**
 
 ## Why
 
