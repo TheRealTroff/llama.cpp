@@ -128,6 +128,23 @@ end of the system text, the effort line still at the head):
   (2981 thinking tokens, caught the evaluation order on a re-check) - one trajectory, the shape of the owner's anecdata that xhigh
   pays on some problems.
 
+## The sentence in the user turn (owner: "would that be fundamentally different from just saying ... in a message?"; `umsg-*` arms, 19:34-20:39)
+
+Same 16 prompts on the stock template at level medium (no system line), the template's own xhigh or low sentence prepended to the
+user message (`effort-pos.py VARIANTS`): the one change against stock-xhigh/-low is where the trained string sits.
+
+| | stock-xhigh | tail-xhigh | umsg-xhigh | stock-low | tail-low | umsg-low | stock-medium |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| thinking tokens | 73157 (64964 eq-cap) | 69394 | 72271 | 18095 | 19560 | 17497 | 16580 |
+| capped, no answer | 6/16 | 8/16 | 8/16 (tail's eight) | 0 | 0 | 0 | 0 |
+
+The sentence works from the user turn as from the system block, at both levels. pyout was right under umsg-xhigh (2756 thinking
+tokens) as under sharp-xhigh (2981): the two trajectories that thought ~3K on it got it, the seven at <= 1.1K did not.
+
+So there are two switches: the level in the system block (what the clients emit; the tail template makes a change cost ~500
+tokens) and the sentence typed into a message (per task, zero prefix cost, no template change; stays in the history for later
+turns, and nothing in opencode/pi emits it from their level setting). Natural-language phrasings: `nl-*` arms below.
+
 ## What the switch costs (`perf/effort-switch-cost.py`, `effortpos-oct03/run-switch.sh`, ud, one slot `-c 32768`, depth 3)
 
 One captured agent request sent four times with `reasoning_effort` xhigh, low, none (thinking off), xhigh; 8 tokens generated each.
