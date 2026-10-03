@@ -143,7 +143,32 @@ tokens) as under sharp-xhigh (2981): the two trajectories that thought ~3K on it
 
 So there are two switches: the level in the system block (what the clients emit; the tail template makes a change cost ~500
 tokens) and the sentence typed into a message (per task, zero prefix cost, no template change; stays in the history for later
-turns, and nothing in opencode/pi emits it from their level setting). Natural-language phrasings: `nl-*` arms below.
+turns, and nothing in opencode/pi emits it from their level setting).
+
+### Natural language instead of the trained sentence (`nl-*` arms, 20:39-21:17)
+
+Same setup, the user message prefixed with "I want you to think really hard about this." (`nl-hard`) or "Keep it simple, don't
+overthink it." (`nl-simple`). open 9 = the design/debug prompts, easy 7 = the checkable ones.
+
+| arm | thinking | open 9 | easy 7 | capped | answer tokens |
+|---|---:|---:|---:|---:|---:|
+| stock-xhigh (trained sentence, system block) | 73157 | 70027 | 3130 | 6/16 | 3242 |
+| umsg-xhigh (trained sentence, user turn) | 72271 | 66631 | 5640 | 8/16 | 1661 |
+| **nl-hard** | **26749** | 20418 | 6331 | **0/16** | 21335 |
+| stock-medium (nothing) | 16580 | 13036 | 3544 | 0 | 18200 |
+| stock-low / umsg-low (trained sentence) | 18095 / 17497 | 15186 / 14654 | 2909 / 2843 | 0 | 15352 / 13358 |
+| **nl-simple** | **9469** | 6336 | 3133 | 0 | 8876 |
+
+Every arm: the same 7 checkable answers right, pyout wrong (the two ~3K-thinking xhigh trajectories excepted).
+
+- "Don't overthink it" is twice the brake the trained low sentence is (9.5K vs 18.1K; open prompts 6.3K vs 15.2K); the trained
+  low sentence is barely distinguishable from saying nothing. It halves the answers too (btree 1024 tokens vs 2821 at medium).
+- "Think really hard" is a graded push: 1.6x medium, nothing capped, every prompt answered. The trained xhigh sentence is 4x and
+  puts 6-8 prompts past an 8K budget with no answer.
+- Ladder in thinking tokens: don't-overthink 9.5K < nothing 16.6K ~ low 18K < think-hard 27K << xhigh 65-73K. The two phrases fill
+  the middle the template leaves empty.
+- Reading: for a human in a session the phrases are the better per-task knobs (graded, zero prefix cost, no template); the trained
+  xhigh sentence is the "may not finish in budget" setting. The agent clients emit the level, so the tail template keeps its place.
 
 ## What the switch costs (`perf/effort-switch-cost.py`, `effortpos-oct03/run-switch.sh`, ud, one slot `-c 32768`, depth 3)
 
