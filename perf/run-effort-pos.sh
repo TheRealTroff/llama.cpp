@@ -4,11 +4,12 @@
 #     perf/run-effort-pos.sh > kvquant-experiments/logs/effortpos-oct03.log 2>&1 & disown
 # One pick server per template (stock = embedded, tail = perf/qwen3.8-effort-tail.jinja), ud line, Turbo4, depth 3
 # pinned (texts compare by sha), one slot of CTX. Each server: /apply-template renders of every prompt and level,
-# then the three levels of every prompt at temp 0. B = the tree whose binary and pick.sh serve; E = this experiment tree.
+# then the three levels of every prompt at temp 0, max_tokens 8192 (xhigh can think 16K+ on a design prompt; a capped cell
+# still sorts into the xhigh bucket). B = the tree whose binary and pick.sh serve; E = this experiment tree.
 set -u
 B=${B:?export B=<serving tree>}; E=${E:-$(cd "$(dirname "$0")/.." && pwd)}
 TAG=${TAG:-effortpos-$(date +%b%d | tr A-Z a-z)}; LINE=${LINE:-ud}; CTX=${CTX:-32768}; DEPTH=${DEPTH:-3}; PORT=${PORT:-8101}
-LEVELS=${LEVELS:-xhigh,low,medium}; TMPLS=${TMPLS:-stock tail}; PROMPTS=${PROMPTS:-$E/perf/effort-pos-prompts.json}
+LEVELS=${LEVELS:-xhigh,low,medium}; TMPLS=${TMPLS:-stock tail}; PROMPTS=${PROMPTS:-$E/perf/effort-pos-prompts.json}; MAX_TOKENS=${MAX_TOKENS:-8192}
 OUT=${OUT:-/Users/troff/play/kvquant-experiments/effortpos/$TAG}; mkdir -p "$OUT"
 SLOTDIR=$OUT/slots; mkdir -p "$SLOTDIR"
 
@@ -32,7 +33,7 @@ for TMPL in $TMPLS; do
   wait_health "$PORT" "$SPID" || exit 1
   grep -m1 -o 'chat_template.*' "$OUT/server-$TMPL.log" | head -c 200; echo
   python3 "$E/perf/effort-pos.py" render --port "$PORT" --prompts "$PROMPTS" --levels "$LEVELS" --out "$OUT/render-$TMPL.json"
-  python3 "$E/perf/effort-pos.py" run --port "$PORT" --prompts "$PROMPTS" --tmpl "$TMPL" --levels "$LEVELS" --out "$OUT"
+  python3 "$E/perf/effort-pos.py" run --port "$PORT" --prompts "$PROMPTS" --tmpl "$TMPL" --levels "$LEVELS" --max-tokens "$MAX_TOKENS" --out "$OUT"
   echo "=== $(date '+%H:%M:%S') template $TMPL done; stopping server $SPID"
   kill "$SPID"; wait "$SPID" 2>/dev/null
   sleep 5

@@ -79,10 +79,15 @@ def cmd_run(a):
 
 
 def cmd_report(a):
+    expect = {p["id"]: p.get("expect") for p in load_prompts(a.prompts)[1]}  # re-judged here: a pattern fix must not need a rerun
     rows = {}
     for f in sorted(os.listdir(a.dir)):
         if f.endswith(".json") and not f.startswith("render-"):
             r = json.load(open(os.path.join(a.dir, f)))
+            if "arm" not in r:  # another file in the results directory (a session recording)
+                continue
+            if expect.get(r["id"]):
+                r["correct"] = bool(re.search(expect[r["id"]], r["content"]))
             rows.setdefault(r["id"], {})[r["arm"]] = r
     arms = sorted({arm for d in rows.values() for arm in d})
     order = [x for x in ("stock-xhigh", "tail-xhigh", "stock-low", "tail-low", "stock-medium", "tail-medium") if x in arms]
@@ -126,6 +131,6 @@ if __name__ == "__main__":
         if name == "run":
             p.add_argument("--tmpl", required=True, choices=["stock", "tail"])
             p.add_argument("--max-tokens", type=int, default=16384)
-    p = sub.add_parser("report"); p.add_argument("dir")
+    p = sub.add_parser("report"); p.add_argument("dir"); p.add_argument("--prompts", default=os.path.join(HERE, "effort-pos-prompts.json"))
     a = ap.parse_args()
     {"render": cmd_render, "run": cmd_run, "report": cmd_report}[a.cmd](a)
