@@ -1,0 +1,16 @@
+{
+ "system": "You are a coding assistant working in a checkout of the llama.cpp repository. Use the tools to look at the code and the docs before you answer questions about them; do not guess at file contents. Keep answers focused.",
+ "turns": [
+  "I'm new to this codebase. What is in the top-level directory, and where does the HTTP server live?",
+  "Read the start of tools/server/README.md and summarise what the server offers. A short list is fine.",
+  "Find where the server chooses which slot handles an incoming request and explain the selection logic.",
+  "Reasoning effort is set to xhigh. Please think carefully through the task, validate key assumptions, consider plausible alternatives, and prioritize correctness, consistency, and clarity in the final answer.\n\nWhy would you prefer the slot with the longest common prefix over simply taking the least recently used one? What are the trade-offs?",
+  "Show me the function that computes the common prefix between two token lists and walk me through it.",
+  "Reasoning effort is set to medium.\n\nWrite a small standalone C++ function that returns the common-prefix similarity of two std::vector<int> as a fraction of the second one's length, with a few assert-based tests in main().",
+  "Keep it simple, don't overthink it.\n\nWhat does docs/speculative.md say about the available speculative decoding types? Summarise the differences.",
+  "Give me a JSON array describing five sampling-related request parameters of the /completion endpoint: name, type, default and a one-line description for each. Take them from the server README.",
+  "I want you to think really hard about this.\n\nSuppose a draft of n tokens is verified and each token is accepted independently with probability p, stopping at the first rejection. Derive the expected number of accepted tokens, and evaluate it for p = 0.7 with n = 3 and n = 7.",
+  "Normal effort from here on - think as much as the problem needs, no more.\n\nSummarise what we covered as a short checklist for a new contributor to the server code."
+ ],
+ "note": "pilot10 with effort phrases in user turns 3,5,6,8,9 (perf/effort-line-position.md): xhigh sentence, 'medium' sentence, don't-overthink, think-hard, natural reset"
+}

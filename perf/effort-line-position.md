@@ -1,6 +1,6 @@
 # Reasoning-effort line position: can the template move it off token 1? (2026-10-03, owner: "The goal is to be able to switch")
 
-Status: **DONE 2026-10-03 evening, owner decides adoption** (branch `exp/effort-line-position`, worktree `llama.cpp-effortpos`; serving
+Status: **DONE 2026-10-03 night, owner decides adoption** (sections in the order the questions came) (branch `exp/effort-line-position`, worktree `llama.cpp-effortpos`; serving
 binary = prod `089c2367e`, no C++ change). The tail template works: the model reads the effort line at the end of the system block
 as at the head (Q&A calibration 16 prompts x 3 levels, and a recorded tool session at xhigh and low), and a level change or a
 thinking toggle inside a session then costs ~500 tokens / 5 s of prefill instead of the whole prompt (85 s at 10.7K). To serve
@@ -169,6 +169,33 @@ Every arm: the same 7 checkable answers right, pyout wrong (the two ~3K-thinking
   the middle the template leaves empty.
 - Reading: for a human in a session the phrases are the better per-task knobs (graded, zero prefix cost, no template); the trained
   xhigh sentence is the "may not finish in budget" setting. The agent clients emit the level, so the tail template keeps its place.
+
+### Phrases inside a tool session (owner: "how would I switch back to medium after having said whatever xhigh expands to?"; 21:30-22:05)
+
+Two more pilot10 recordings at level medium on the stock template: A plain (the medium agent baseline), B with phrases in user turns
+(`perf/effort-pos-pilot10-phrases.user.json`): u3 the trained xhigh sentence, u4 plain (persistence), u5 "Reasoning effort is set to
+medium." (a switch-back candidate; the template has no medium sentence), u6 "Keep it simple, don't overthink it.", u7 plain, u8 "I want
+you to think really hard about this.", u9 "Normal effort from here on - think as much as the problem needs, no more." B is byte-identical
+to A through u2 (deterministic until the first phrase). Thinking tokens per user turn:
+
+| user turn | phrase in B | xhigh recordings | low | medium (A) | phrases (B) | B/A |
+|---|---|---:|---:|---:|---:|---:|
+| u3 | xhigh sentence | 1322-1677 | 1188 | 603 | 2104 | 3.5x |
+| u4 | (plain) | 855-1265 | 654 | 518 | 796 | 1.5x |
+| u5 | "effort is set to medium." | 1560-1666 | 562 | 995 | 1166 | 1.2x |
+| u6 | "don't overthink it" | 1036-1068 | 211 | 221 | 574 | 2.6x |
+| u7 | (plain) | 317-342 | 172 | 198 | 150 | 0.8x |
+| u8 | "think really hard" | 1201-1239 | 1350 | 1038 | 1628 | 1.6x |
+| u9 | natural reset | 218-264 | 180 | 35 | 259 | (A is the outlier) |
+| total | | 7800-8419 | 5175 | 4271 | 7340 | |
+
+- **Medium is the leanest agent regime** (A: 29 turns, 19 tool calls, 12.7K generated, 4271 thinking = 34%; low 5175, xhigh 7800-8419).
+- The xhigh sentence works mid-session from a user turn (3.5x), carries into the next plain turn (1.5x) and is gone two turns later
+  (0.8x at u7). **Switching back = say nothing; it decays within ~2 turns.** The "set to medium" sentence landed at 1.2x - compatible
+  with helping, not separable from the decay; it did not hurt.
+- "Think really hard" is 1.6x in-session, its Q&A ratio. "Don't overthink it" did NOT brake here (2.6x A at that turn vs 0.57x
+  single-turn): the history after an xhigh turn pulls the other way, or a fork. One trajectory each; a second recording with the
+  phrases on other turns would firm up those two rows.
 
 ## What the switch costs (`perf/effort-switch-cost.py`, `effortpos-oct03/run-switch.sh`, ud, one slot `-c 32768`, depth 3)
 
