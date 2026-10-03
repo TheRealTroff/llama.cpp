@@ -14,6 +14,14 @@ import argparse, json, os, re, sys, time, urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
+XHIGH = ("Reasoning effort is set to xhigh. Please think carefully through the task, validate key assumptions, consider "
+         "plausible alternatives, and prioritize correctness, consistency, and clarity in the final answer.")
+LOW = "Reasoning effort is set to low. Keep your thinking brief and focused, moving directly to the conclusion without unnecessary elaboration."
+# user-message variants: the template level stays medium (no system line); the text is prepended to the user message.
+# umsg-* = the template's own sentences (same string, user turn instead of system block); nl-* = what a user would type.
+VARIANTS = {"umsg-xhigh": XHIGH, "umsg-low": LOW,
+            "nl-hard": "I want you to think really hard about this.", "nl-simple": "Keep it simple, don't overthink it."}
+
 
 def post(port, path, body, timeout=7200):
     req = urllib.request.Request(f"http://127.0.0.1:{port}{path}", data=json.dumps(body).encode(),
@@ -33,8 +41,9 @@ def load_prompts(path):
     return d["system"], d["prompts"]
 
 
-def messages(system, p):
-    return [{"role": "system", "content": system}, {"role": "user", "content": p["text"]}]
+def messages(system, p, prefix=None):
+    user = p["text"] if not prefix else prefix + "\n\n" + p["text"]
+    return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
 def cmd_render(a):
@@ -51,14 +60,15 @@ def cmd_render(a):
 def cmd_run(a):
     system, prompts = load_prompts(a.prompts)
     os.makedirs(a.out, exist_ok=True)
-    levels = a.levels.split(",")
+    # arms: either the template levels (<tmpl>-<level>) or user-message variants (medium level + a prefixed sentence)
+    arms = [(f"{a.tmpl}-{lvl}", lvl, None) for lvl in a.levels.split(",")] if not a.variants else \
+           [(v, "medium", VARIANTS[v]) for v in a.variants.split(",")]
     for p in prompts:
-        for lvl in levels:
-            name = f"{a.tmpl}-{lvl}"
+        for name, lvl, prefix in arms:
             path = os.path.join(a.out, f"{p['id']}.{name}.json")
             if os.path.exists(path):
                 continue
-            body = {"messages": messages(system, p), "reasoning_effort": lvl, "temperature": 0,
+            body = {"messages": messages(system, p, prefix), "reasoning_effort": lvl, "temperature": 0,
                     "max_tokens": a.max_tokens, "cache_prompt": True, "id_slot": 0}
             t0 = time.time()
             r = post(a.port, "/v1/chat/completions", body)
@@ -67,7 +77,7 @@ def cmd_run(a):
             msg = ch["message"]
             think = msg.get("reasoning_content") or ""
             content = msg.get("content") or ""
-            row = {"id": p["id"], "arm": name, "tmpl": a.tmpl, "level": lvl, "finish": ch.get("finish_reason"),
+            row = {"id": p["id"], "arm": name, "tmpl": a.tmpl, "level": lvl, "user_prefix": prefix, "finish": ch.get("finish_reason"),
                    "think_tok": ntok(a.port, think), "answer_tok": ntok(a.port, content),
                    "predicted_n": r.get("timings", {}).get("predicted_n"), "prompt_n": r.get("timings", {}).get("prompt_n"),
                    "wall_s": round(wall, 1), "think": think, "content": content}
@@ -90,7 +100,7 @@ def cmd_report(a):
                 r["correct"] = bool(re.search(expect[r["id"]], r["content"]))
             rows.setdefault(r["id"], {})[r["arm"]] = r
     arms = sorted({arm for d in rows.values() for arm in d})
-    order = [x for x in ("stock-xhigh", "tail-xhigh", "sharp-xhigh", "stock-low", "tail-low", "sharp-low", "stock-medium", "tail-medium", "sharp-medium") if x in arms]
+    order = [x for x in ("stock-xhigh", "tail-xhigh", "sharp-xhigh", "umsg-xhigh", "nl-hard", "stock-low", "tail-low", "sharp-low", "umsg-low", "nl-simple", "stock-medium", "tail-medium", "sharp-medium") if x in arms]
     arms = order + [x for x in arms if x not in order]
     print("thinking tokens (answer tokens) [finish!=stop marked *, correct=Y/N]")
     print("| prompt | " + " | ".join(arms) + " |")
@@ -109,14 +119,16 @@ def cmd_report(a):
         print(f"| {pid} | " + " | ".join(cells) + " |")
     print("| **sum think** | " + " | ".join(f"**{tot[a][0]}** /{tot[a][1]}" for a in arms) + " |")
     # the calibration: per level, moved vs stock as a ratio over prompts both ran
-    for lvl, other in (("xhigh", "tail"), ("low", "tail"), ("medium", "tail"), ("xhigh", "sharp"), ("medium", "sharp")):
-        s, t = f"stock-{lvl}", f"{other}-{lvl}"
+    pairs_ = [(f"stock-{l}", f"{o}-{l}") for l, o in (("xhigh", "tail"), ("low", "tail"), ("medium", "tail"), ("xhigh", "sharp"), ("medium", "sharp"))]
+    pairs_ += [("stock-xhigh", "umsg-xhigh"), ("stock-low", "umsg-low"), ("stock-xhigh", "nl-hard"), ("stock-low", "nl-simple"), ("stock-medium", "nl-simple")]
+    for s, t in pairs_:
+        lvl, other = s.split("-", 1)[1], t
         if s in arms and t in arms:
             pairs = [(d[s]["think_tok"], d[t]["think_tok"]) for d in rows.values() if s in d and t in d]
             if pairs:
                 ss, tt = sum(x for x, _ in pairs), sum(y for _, y in pairs)
                 same = sum(1 for d in rows.values() if s in d and t in d and d[s]["content"] == d[t]["content"])
-                print(f"{lvl}: {other}/stock thinking = {tt}/{ss} = {tt / max(ss, 1):.2f} over {len(pairs)} prompts; identical answers {same}/{len(pairs)}")
+                print(f"{t} / {s} thinking = {tt}/{ss} = {tt / max(ss, 1):.2f} over {len(pairs)} prompts; identical answers {same}/{len(pairs)}")
 
 
 if __name__ == "__main__":
@@ -131,6 +143,7 @@ if __name__ == "__main__":
         if name == "run":
             p.add_argument("--tmpl", required=True, choices=["stock", "tail", "sharp"])
             p.add_argument("--max-tokens", type=int, default=16384)
+            p.add_argument("--variants", default="", help="comma list of user-message variants (see VARIANTS) instead of --levels")
     p = sub.add_parser("report"); p.add_argument("dir"); p.add_argument("--prompts", default=os.path.join(HERE, "effort-pos-prompts.json"))
     a = ap.parse_args()
     {"render": cmd_render, "run": cmd_run, "report": cmd_report}[a.cmd](a)

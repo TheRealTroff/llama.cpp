@@ -34,7 +34,11 @@ for TMPL in $TMPLS; do
   wait_health "$PORT" "$SPID" || exit 1
   grep -m1 -o 'chat_template.*' "$OUT/server-$TMPL.log" | head -c 200; echo
   python3 "$E/perf/effort-pos.py" render --port "$PORT" --prompts "$PROMPTS" --levels "$LEVELS" --out "$OUT/render-$TMPL.json"
-  python3 "$E/perf/effort-pos.py" run --port "$PORT" --prompts "$PROMPTS" --tmpl "$TMPL" --levels "$LEVELS" --max-tokens "$MAX_TOKENS" --out "$OUT"
+  if [ -n "${VARIANTS:-}" ]; then   # user-message variants on this template at level medium (effort-pos.py VARIANTS)
+    python3 "$E/perf/effort-pos.py" run --port "$PORT" --prompts "$PROMPTS" --tmpl "$TMPL" --variants "$VARIANTS" --max-tokens "$MAX_TOKENS" --out "$OUT"
+  else
+    python3 "$E/perf/effort-pos.py" run --port "$PORT" --prompts "$PROMPTS" --tmpl "$TMPL" --levels "$LEVELS" --max-tokens "$MAX_TOKENS" --out "$OUT"
+  fi
   echo "=== $(date '+%H:%M:%S') template $TMPL done; stopping server $SPID"
   kill "$SPID"; wait "$SPID" 2>/dev/null
   sleep 5
