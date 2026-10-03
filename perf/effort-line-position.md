@@ -1,6 +1,12 @@
 # Reasoning-effort line position: can the template move it off token 1? (2026-10-03, owner: "The goal is to be able to switch")
 
-Status: **RUNNING** (branch `exp/effort-line-position`, worktree `llama.cpp-effortpos`; serving binary = prod `089c2367e`).
+Status: **DONE 2026-10-03 evening, owner decides adoption** (branch `exp/effort-line-position`, worktree `llama.cpp-effortpos`; serving
+binary = prod `089c2367e`, no C++ change). The tail template works: the model reads the effort line at the end of the system block
+as at the head (Q&A calibration 16 prompts x 3 levels, and a recorded tool session at xhigh and low), and a level change or a
+thinking toggle inside a session then costs ~500 tokens / 5 s of prefill instead of the whole prompt (85 s at 10.7K). To serve
+it: `--chat-template-file perf/qwen3.8-effort-tail.jinja` (env `LLAMA_ARG_CHAT_TEMPLATE_FILE`); the pick mints are unaffected
+(pick_prompt renders no system block), server-made prefix saves rebuild themselves under the new token hashes, the session-corpus
+replays should carry the same template (`run-session.sh EXTRA_ENV`) once it is the serving default.
 
 ## Why
 
@@ -81,7 +87,41 @@ Side finding: at the template's default xhigh the model runs away on 6 of 9 open
 no answer) under both templates; medium (no line) finishes all of them in 1-2.3K. Same failure mode perf/sharp-template.md
 saw at a 4K cap; Sharp's default is medium.
 
-## Agentic confirmation
+## Agentic confirmation (`perf/session.py record`, pilot10 user script, ud, depth 3, 2026-10-03 17:51-18:16)
 
-(running: pilot10 recorded under the tail template at xhigh and at low, `effortpos-oct03/pilot10-tail-{xhigh,low}.json`,
-against the stock-xhigh recording `perf/session/pilot10.json`)
+The line sits after a 1.7K-token tools block and the system text here, 3-11K tokens in for the real clients. pilot10 recorded
+under the tail template at xhigh and at low (`effortpos-oct03/pilot10-tail-{xhigh,low}.json`, `LLAMA_ARG_CHAT_TEMPLATE_FILE`
+through `run-session.sh EXTRA_ENV`, `EFFORT=`), against the stock-xhigh recording `perf/session/pilot10.json`:
+
+| recording | assistant turns | tool-call turns | generated | thinking | prose / code / tool | user turn 2 | final ctx |
+|---|--:|--:|--:|--:|---|---|--:|
+| stock-xhigh | 37 | 28 | 16115 | 8419 (52%) | 4892 / 1251 / 1553 | 10 steps (cap) | 43.5K |
+| tail-xhigh | 38 | 29 | 16470 | 7800 (47%) | 5312 / 1270 / 2088 | 10 steps (cap) | 45.2K |
+| tail-low | 29 | 19 | 12952 | 5175 (40%) | 4928 / 1275 / 1574 | 5 steps | 34.1K |
+
+Thinking per user turn, stock-xhigh vs tail-xhigh: u3 1677/1322, u4 855/1265, u5 1666/1560, u6 1036/1068, u8 1201/1239 -
+the same session. tail-low: -34% thinking, a third fewer tool calls, the step-cap turn resolved in 5 steps, 22% less context at
+the end. A recording is one trajectory (the model drives the tools), so these are regimes, not measurements to the token.
+
+**Verdict: the effort line works at the end of the system block, in Q&A and in a tool session, at both levels.**
+
+## What the switch costs (`perf/effort-switch-cost.py`, `effortpos-oct03/run-switch.sh`, ud, one slot `-c 32768`, depth 3)
+
+One captured agent request sent four times with `reasoning_effort` xhigh, low, none (thinking off), xhigh; 8 tokens generated each.
+
+| opencode `oc-a1-006` (10.7K) | stock: prompt_n / cache_n / prefill s | tail: prompt_n / cache_n / prefill s |
+|---|---|---|
+| xhigh, first request | 10725 / 0 / 85.2 | 10725 / 0 / 85.3 |
+| -> low | 10713 / 0 / 85.0 | 504 / 10209 / 4.9 |
+| -> none | 10689 / 0 / 84.7 | 480 / 10209 / 4.6 |
+| -> xhigh again | 4 / 10721 / 0.1 | 516 / 10209 / 4.9 |
+
+pi `pi-a1-001` (2.2K): stock 2198 / 2186 / 2162 tokens, 17 s each, then 4 tokens on the return; tail 504 / 480 / 516 after the first, 4.5 s.
+
+- Stock: every level not seen before in the slot is a full re-prefill (token 1 differs, the common prefix is 3 tokens). The return
+  to xhigh is a RAM prompt-cache hit: the displaced state was saved because the new prompt shared nothing with it.
+- Tail: any switch costs ~500 tokens, the distance from the last recurrent-state checkpoint to the line (the hybrid model resumes at a
+  checkpoint, `--ctx-checkpoints`), ~5 s at 10.7K or at 2.2K. The return to xhigh costs the same 500 (the slot's state was continued,
+  not displaced, so nothing went to the RAM cache) - 5 s instead of stock's 0.1 s on that one path, 5 s instead of 85 on the others.
+- With prefix saves (`LLAMA_PREFIX_DIR`): under stock a save matches one level only; under tail the head and project layers are
+  shared by every level (the line is in the unsaved tail: the project cut is >= 508 tokens before the first user message).
