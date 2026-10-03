@@ -109,6 +109,25 @@ the end. A recording is one trajectory (the model drives the tools), so these ar
 
 **Verdict: the effort line works at the end of the system block, in Q&A and in a tool session, at both levels.**
 
+## Sharp + xhigh (owner: "have you tried sharp+xhigh?"; `sharp-{xhigh,medium}` arms, 2026-10-03 18:45-19:33)
+
+perf/sharp-template.md compared stock at its xhigh default with Sharp at its medium default plus the terseness block, so "Sharp
+reins in thinking" was confounded. Same 16 prompts under `perf/sharp_chat_template.jinja` (froggeric v22.1: the terse block at the
+end of the system text, the effort line still at the head):
+
+| | stock-xhigh | sharp-xhigh | stock-medium | sharp-medium |
+|---|---:|---:|---:|---:|
+| thinking tokens | 73157 (64964 at equal cap) | 59068 | 16580 | 15339 |
+| answer tokens | 3242 | 2188 | 18200 | 10525 |
+| capped, no answer | 6/16 | 6/16 (the same six) | 0 | 0 |
+
+- The terse block does not rescue one of the six open prompts at xhigh; the effort sentence wins. On the mid prompts that finish it
+  trims thinking (heapify 2835 -> 1270, sql-2nd 3672 -> 1374, tcp 6175 -> 2788).
+- At medium it leaves thinking alone (0.93x) and cuts answers 42%: an instruction about the answer acts on the answer.
+- So the September gain was the medium default, not the block. pyout: sharp-xhigh is the only arm of eight that got it right
+  (2981 thinking tokens, caught the evaluation order on a re-check) - one trajectory, the shape of the owner's anecdata that xhigh
+  pays on some problems.
+
 ## What the switch costs (`perf/effort-switch-cost.py`, `effortpos-oct03/run-switch.sh`, ud, one slot `-c 32768`, depth 3)
 
 One captured agent request sent four times with `reasoning_effort` xhigh, low, none (thinking off), xhigh; 8 tokens generated each.
