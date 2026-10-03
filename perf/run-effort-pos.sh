@@ -26,6 +26,7 @@ wait_health() {  # wait_health <port> <pid>
 for TMPL in $TMPLS; do
   EXTRA_ARGS=""
   [ "$TMPL" = tail ] && EXTRA_ARGS="--chat-template-file $E/perf/qwen3.8-effort-tail.jinja"
+  [ "$TMPL" = sharp ] && EXTRA_ARGS="--chat-template-file $E/perf/sharp_chat_template.jinja"   # froggeric v22.1: terseness block at the end of the system text, effort line still at the head
   echo "=== $(date '+%H:%M:%S') template $TMPL: starting server on $PORT ($EXTRA_ARGS)"
   B=$B LINE=$LINE CTX=$CTX DEPTH=$DEPTH PORT=$PORT SLOTDIR=$SLOTDIR EXTRA_ARGS="$EXTRA_ARGS" \
     "$B/perf/run-prefix-server.sh" > "$OUT/server-$TMPL.log" 2>&1 &

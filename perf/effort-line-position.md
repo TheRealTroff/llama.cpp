@@ -75,7 +75,7 @@ thinking tokens (answer tokens); `*` = hit the 8192 cap (stock-xhigh btree ran b
 - **tail-xhigh behaves as xhigh**: 69.4K (1.07x stock at equal caps), 8 of 16 capped (stock's 6 plus heapify and tcp),
   xhigh/low separation 3.5x. The "line ignored" signature would have been ~16.6K (the medium sum); it is 4x that.
 - **tail-low behaves as low**: 19.6K vs 18.1K (1.08x), 0 capped, every checkable answer right.
-- **Correctness unchanged** except heapify tail-xhigh, which is a runaway cap (no answer), not a wrong one. pyout is wrong in
+- **Correctness unchanged** except heapify tail-xhigh, which hit the cap (no answer), not a wrong one. pyout is wrong in
   all six arms (the model believes `print(f(1), f(2))` shows `[1] [1, 2]`; both arguments are the same list, it is `[1, 2] [1, 2]`).
 - **Per-prompt counts are greedy forks, not signal**: the moved line changes the prompt tokens, the greedy text forks within a
   few hundred tokens, and the thinking length then wanders (heapify low 491 -> 1785, tcp low 3292 -> 1053, sql-2nd xhigh
@@ -83,9 +83,13 @@ thinking tokens (answer tokens); `*` = hit the 8192 cap (stock-xhigh btree ran b
   answers) and on no prompt at low. Read the sums and the capped counts, not a row.
 
 Verdict on the Q&A arms: **the model reads the effort sentence at the end of the system block as it reads it at the head.**
-Side finding: at the template's default xhigh the model runs away on 6 of 9 open design/debug prompts (8K+ tokens of thinking,
-no answer) under both templates; medium (no line) finishes all of them in 1-2.3K. Same failure mode perf/sharp-template.md
-saw at a 4K cap; Sharp's default is medium.
+Side finding: at the template's default xhigh the model exhausts an 8K thinking budget without answering on 6 of 9 open
+design/debug prompts, under both templates; medium (no line) finishes all of them in 1-2.3K. It is not stuck (owner: "it just
+thinks every problem has spin 12"): 8-gram repetition in the capped traces is 0.3-7% (a looping model is at 30%+), and the btree
+trace is still adding correct nuance at the cap (PostgreSQL leaf linkage, fan-out arithmetic for an 8 KB page, a worked 100M-row
+height). The sentence is a prior on how hard the problem is; a mismatch costs in either direction (owner: at too high a level it
+builds bells and whistles nobody asked for) - which is the case for switching per task rather than per session. Same failure mode
+perf/sharp-template.md saw at a 4K cap; Sharp's default is medium.
 
 ## Agentic confirmation (`perf/session.py record`, pilot10 user script, ud, depth 3, 2026-10-03 17:51-18:16)
 

@@ -90,7 +90,7 @@ def cmd_report(a):
                 r["correct"] = bool(re.search(expect[r["id"]], r["content"]))
             rows.setdefault(r["id"], {})[r["arm"]] = r
     arms = sorted({arm for d in rows.values() for arm in d})
-    order = [x for x in ("stock-xhigh", "tail-xhigh", "stock-low", "tail-low", "stock-medium", "tail-medium") if x in arms]
+    order = [x for x in ("stock-xhigh", "tail-xhigh", "sharp-xhigh", "stock-low", "tail-low", "sharp-low", "stock-medium", "tail-medium", "sharp-medium") if x in arms]
     arms = order + [x for x in arms if x not in order]
     print("thinking tokens (answer tokens) [finish!=stop marked *, correct=Y/N]")
     print("| prompt | " + " | ".join(arms) + " |")
@@ -109,14 +109,14 @@ def cmd_report(a):
         print(f"| {pid} | " + " | ".join(cells) + " |")
     print("| **sum think** | " + " | ".join(f"**{tot[a][0]}** /{tot[a][1]}" for a in arms) + " |")
     # the calibration: per level, moved vs stock as a ratio over prompts both ran
-    for lvl in ("xhigh", "low", "medium"):
-        s, t = f"stock-{lvl}", f"tail-{lvl}"
+    for lvl, other in (("xhigh", "tail"), ("low", "tail"), ("medium", "tail"), ("xhigh", "sharp"), ("medium", "sharp")):
+        s, t = f"stock-{lvl}", f"{other}-{lvl}"
         if s in arms and t in arms:
             pairs = [(d[s]["think_tok"], d[t]["think_tok"]) for d in rows.values() if s in d and t in d]
             if pairs:
                 ss, tt = sum(x for x, _ in pairs), sum(y for _, y in pairs)
                 same = sum(1 for d in rows.values() if s in d and t in d and d[s]["content"] == d[t]["content"])
-                print(f"{lvl}: tail/stock thinking = {tt}/{ss} = {tt / max(ss, 1):.2f} over {len(pairs)} prompts; identical answers {same}/{len(pairs)}")
+                print(f"{lvl}: {other}/stock thinking = {tt}/{ss} = {tt / max(ss, 1):.2f} over {len(pairs)} prompts; identical answers {same}/{len(pairs)}")
 
 
 if __name__ == "__main__":
@@ -129,7 +129,7 @@ if __name__ == "__main__":
         p.add_argument("--levels", default="xhigh,low,medium")
         p.add_argument("--out", required=True)
         if name == "run":
-            p.add_argument("--tmpl", required=True, choices=["stock", "tail"])
+            p.add_argument("--tmpl", required=True, choices=["stock", "tail", "sharp"])
             p.add_argument("--max-tokens", type=int, default=16384)
     p = sub.add_parser("report"); p.add_argument("dir"); p.add_argument("--prompts", default=os.path.join(HERE, "effort-pos-prompts.json"))
     a = ap.parse_args()
