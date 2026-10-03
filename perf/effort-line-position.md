@@ -194,8 +194,36 @@ to A through u2 (deterministic until the first phrase). Thinking tokens per user
   (0.8x at u7). **Switching back = say nothing; it decays within ~2 turns.** The "set to medium" sentence landed at 1.2x - compatible
   with helping, not separable from the decay; it did not hurt.
 - "Think really hard" is 1.6x in-session, its Q&A ratio. "Don't overthink it" did NOT brake here (2.6x A at that turn vs 0.57x
-  single-turn): the history after an xhigh turn pulls the other way, or a fork. One trajectory each; a second recording with the
-  phrases on other turns would firm up those two rows.
+  single-turn). Replication C below says why.
+
+### Replication with the phrases on other turns (C, `perf/effort-pos-pilot10-phrases2.user.json`, 22:35-22:55)
+
+u2 "don't overthink it" with a clean medium history, u3 plain, u4 the xhigh sentence, u5 "set to medium" at distance 1, u6 plain,
+u7 "don't overthink it" at distance 3 from the xhigh turn. Identical to A through u1.
+
+| turn | B phrase | C phrase | xhigh recordings | A | B | C |
+|---|---|---|---:|---:|---:|---:|
+| u2 | - | don't overthink (clean) | 449-1089 | 477 | 477 | 109 (0.2x) |
+| u3 | xhigh sentence | plain | 1322-1677 | 603 | 2104 (3.5x) | 84 (0.1x) |
+| u4 | plain | xhigh sentence | 855-1265 | 518 | 796 (1.5x) | 419 (0.8x) |
+| u5 | "set to medium" | "set to medium" (d1) | 1560-1666 | 995 | 1166 (1.2x) | 704 (0.7x) |
+| u6 | don't overthink | plain (d2) | 1036-1068 | 221 | 574 (2.6x) | 238 (1.1x) |
+| u7 | plain | don't overthink (d3) | 317-342 | 198 | 150 (0.8x) | 156 (0.8x) |
+| u8 | think hard | plain | 1201-1239 | 1038 | 1628 (1.6x) | 699 (0.7x) |
+| u9 | reset | plain | 218-264 | 35 | 259 | 222 |
+| total | | | 7800-8419 | 4271 | 7340 | 2817 |
+
+**Phrases steer the session, not the turn (history anchoring).** The same sentence, two histories: the xhigh sentence after a medium
+history 3.5x (B u3), after a terse history 0.8x (C u4). "Don't overthink it" after a medium history 0.2x and the next plain turn 0.1x
+(C u2-u3); after an xhigh-regime history 2.6x (B u6). One phrase at u2 ran C's whole session at 66% of medium; one sentence at u3 ran
+B's at 172%. The likely mechanism: the stock template keeps every earlier turn's `reasoning_content` in the history
+(`preserve_thinking` defaults on), so the model sees its own recent thinking lengths as the local norm; a phrase moves the norm, later
+turns inherit it, a counter-phrase one turn later fights the visible history. B's "decay" was the anchor drifting back as the tasks
+got smaller, not the sentence wearing off.
+
+Use: say it once, early; expect it to stick; to switch back say the opposite (not "medium") and allow a turn or two. The sharp test of
+the mechanism is `preserve_thinking=false` (prior thinking dropped from the history; the template supports it) - phrases should then
+act per turn - but that changes the model's behaviour and the cache story everywhere: a separate experiment.
 
 ## What the switch costs (`perf/effort-switch-cost.py`, `effortpos-oct03/run-switch.sh`, ud, one slot `-c 32768`, depth 3)
 
