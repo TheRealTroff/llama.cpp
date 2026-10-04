@@ -769,6 +769,12 @@ harnesses live there and that directory is not version controlled). That script 
 only place the flag set is written down as runnable code. Do not hand-roll a server
 invocation to get a headline number - that is how the partial-env run below happened.
 
+To **serve** it (2026-10-04): **`perf/serve.sh <q4|ud>`** starts the line for real use from the same manifest, detached
+(q4 on 192.168.64.1:8093, ud on :8094; `stop` / `status` / `log`; knobs HOST, PORT, KV, CTX, NP, SIZES, PREFIX=1 for the
+agent prefix saves, EFFORT). It adds `--reasoning-effort medium`: a client that sends no `reasoning_effort` gets no effort
+sentence instead of the template's xhigh (owner's choice, `effort-line-position.md`; a request carrying a level still wins).
+Stop the q4 server before a mint (the harness holds 8093).
+
 What each flag buys, and where it came from:
 
 | flag | default | effect | writeup |
