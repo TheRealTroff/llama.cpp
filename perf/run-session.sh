@@ -54,7 +54,7 @@ if [ "$MODE" = record ]; then
   start_server "$arm" record
   echo "--- record under arm $arm (${#PICK_ENV[@]} pick flags)"
   python3 "$B/perf/session.py" record --user "${USER_SCRIPT:?USER_SCRIPT=<user script json>}" --root "$WORK" --out "$SCRIPT" --port "$PORT" \
-      --note "line=$LINE kv=$KV arm=$arm commit=$(git -C "$B" rev-parse --short HEAD)" ${EFFORT:+--effort "$EFFORT"} ${CTX_LIMIT:+--ctx-limit "$CTX_LIMIT"} ${MAX_STEPS:+--max-steps "$MAX_STEPS"} ${MAX_TOKENS:+--max-tokens "$MAX_TOKENS"}
+      --note "line=$LINE kv=$KV arm=$arm commit=$(git -C "$B" rev-parse --short HEAD)" ${EFFORT:+--effort "$EFFORT"} ${TEMPLATE_KWARGS:+--template-kwargs "$TEMPLATE_KWARGS"} ${CTX_LIMIT:+--ctx-limit "$CTX_LIMIT"} ${MAX_STEPS:+--max-steps "$MAX_STEPS"} ${MAX_TOKENS:+--max-tokens "$MAX_TOKENS"}
   stop_server
   exit 0
 fi

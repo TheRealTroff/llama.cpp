@@ -148,12 +148,14 @@ def msg_sha(m):
     return hashlib.sha1(s.encode()).hexdigest()[:12]
 
 
-def generate(port, tools, messages, max_tokens, effort=None):
+def generate(port, tools, messages, max_tokens, effort=None, template_kwargs=None):
     # one streamed chat completion -> (assistant message, timings, segments {kind: [n, ms, draft_n, draft_acc]}, finish)
     body = {"messages": wire(messages), "tools": tools, "temperature": 0, "max_tokens": max_tokens, "stream": True,
             "timings_per_token": True, "id_slot": 0, "cache_prompt": True}
     if effort:
         body["chat_template_kwargs"] = {"reasoning_effort": effort}
+    if template_kwargs:  # e.g. {"preserve_thinking": false} (perf/effort-line-position.md)
+        body["chat_template_kwargs"] = {**body.get("chat_template_kwargs", {}), **template_kwargs}
     req = urllib.request.Request(f"http://127.0.0.1:{port}/v1/chat/completions", data=json.dumps(body).encode(),
                                  headers={"Content-Type": "application/json"})
     think, content, calls, finish, last = "", "", {}, None, {}
@@ -233,7 +235,7 @@ def cmd_record(a):
         messages.append({"role": "user", "content": u})
         print(f"user {ui}: {u[:100]}", flush=True)
         for step in range(a.max_steps):
-            msg, t, seg, finish = generate(a.port, TOOLS, messages, a.max_tokens, a.effort)
+            msg, t, seg, finish = generate(a.port, TOOLS, messages, a.max_tokens, a.effort, json.loads(a.template_kwargs) if a.template_kwargs else None)
             rows.append(turn_row(len(messages), ui, t, seg, finish, msg)); show(rows[-1])
             if finish == "length":  # a turn cut by max_tokens is not a turn (a cut tool call must not run): the script ends before this user turn
                 rows.pop()
@@ -252,7 +254,7 @@ def cmd_record(a):
                 messages.append({"role": "tool", "tool_call_id": c["id"], "content": run_tool(root, c["function"]["name"], c["function"]["arguments"])})
         else:
             print(f"  user {ui}: step cap {a.max_steps} reached", flush=True)
-        json.dump({"meta": {"user_script": os.path.basename(a.user), "root": a.root, "note": a.note, "effort": a.effort, "max_tokens": a.max_tokens,
+        json.dump({"meta": {"user_script": os.path.basename(a.user), "root": a.root, "note": a.note, "effort": a.effort, "max_tokens": a.max_tokens, "template_kwargs": a.template_kwargs,
                             "recorded": time.strftime("%Y-%m-%d %H:%M")}, "tools": TOOLS, "messages": messages, "record_rows": rows},
                   open(a.out, "w"), indent=1)
         if full:
@@ -325,6 +327,7 @@ if __name__ == "__main__":
     p.add_argument("--port", type=int, default=8098); p.add_argument("--max-tokens", type=int, default=16384)
     p.add_argument("--max-steps", type=int, default=10); p.add_argument("--effort", default=None); p.add_argument("--note", default="")
     p.add_argument("--ctx-limit", type=int, default=92000)
+    p.add_argument("--template-kwargs", default="", help='JSON merged into chat_template_kwargs, e.g. {"preserve_thinking": false}')
     p.set_defaults(fn=cmd_record)
     p = sub.add_parser("replay")
     p.add_argument("--script", required=True); p.add_argument("--out", required=True); p.add_argument("--label", default="arm")
