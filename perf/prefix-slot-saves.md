@@ -167,3 +167,21 @@ wrote the saves in flight: ws1 5426 tokens 41.9 s -> `auto-4608` whole (64 ms); 
 layer `auto-7680` (51 / 51 ms). Cold restart, replay: `auto-4608` restored 42 ms, 818 tokens 7.3 s; `auto-7680` restored 74 ms,
 885 tokens 8.0 s. Generated-token sha1 cold == warm for both (1c6ce678df11, 7ea39cf8b55e). Same file names as on q4: the name is
 a hash of the prompt tokens, which do not depend on the line.
+
+### 2026-10-05 00:30: opencode in the container, both lines (owner: "can you do the opencode saves?" - no owner action needed)
+
+Capture without the owner: `container run --rm --env-file ... -v <ws>:/workspace agent-idasql:latest opencode run "<msg>"`
+(no -it, headless) against `capture.py 8093 . 192.168.64.1` in two workspaces (`container_images/image0`, no AGENTS.md;
+`llama.cpp`); the ud server is stopped for the minute the capture holds 8093. opencode 1.18.34 sends the title request first
+(559 tokens, no tools, 3 tokens shared) then the main one: 11028 / 14144 tokens, 7207 shared (65%) = 10 tools (21.1K chars) +
+system text up to the `<env>` block; the divergence is inside `<env>` (git-repo flag / date / AGENTS.md), so TODAY'S DATE sits
+in the project layer, not the head: the head survives the day change, a project layer goes stale daily (open refresh item).
+Captures `container-oct04/oc-idasql-00{1..4}.json` (001/003 = title requests).
+
+Harness-driven save cycle, same recipe as pi (warm `chat` x2 -> restart -> cold `chat` x2):
+- ud: fresh 86.3 / 112.3 s -> writes `auto-10240` whole (461 MiB, 75 ms), head `auto-7168` (412 MiB, 84 ms) + layer
+  `auto-13312` (395 MiB, 67 ms); cold restores 54 / 108 ms, 788 / 832 tokens to prefill, 7.4 / 7.8 s; sha1 cold == warm
+  (c558b82cb8be, e0b6a6b6e455).
+- q4: fresh 80.7 / 105.0 s -> the same three files; cold 6.7 / 7.1 s; sha1 cold == warm (604059255365, 960e8ccccfc5).
+Each line's dir now holds six saves (pi + opencode, two workspaces each), 2.3 GB per line, budget 16 GiB (LLAMA_PREFIX_MAX_MIB).
+Serving state left: ud on 192.168.64.1:8093 (`PORT=8093 PREFIX=1 perf/serve.sh ud`; status/stop need PORT=8093 too).
