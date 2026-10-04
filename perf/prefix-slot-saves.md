@@ -157,3 +157,13 @@ Trap found on the way (owner's image repo `~/play/container_images/image0`, not 
 mounted `.git` is a file whose gitdir points at the main checkout on the host, git's repo discovery dies ("not a git
 repository") with 128 and the container never reaches its shell. Fix = `git -C / config ... || true` (reproduced on the host);
 git inside such a container also needs the main checkout's `.git` mounted read-only at its host path to read history.
+
+### 2026-10-05 00:xx: the ud line (owner: "I would prefer to do the ud line next")
+
+Served as `PORT=8093 PREFIX=1 perf/serve.sh ud` - the ud line on the q4 port, so the image's pi config needs no change; the saves
+directory is per line (`slots/serve-ud/prefix`) and `.meta` refuses the other line's files anyway. Driven entirely from the
+harness with the captured requests (the owner did nothing): tokens identical to q4 (5426 / 8565, 3985 shared). Warm prefills
+wrote the saves in flight: ws1 5426 tokens 41.9 s -> `auto-4608` whole (64 ms); ws2 8565 tokens 66.4 s -> head `auto-3584` +
+layer `auto-7680` (51 / 51 ms). Cold restart, replay: `auto-4608` restored 42 ms, 818 tokens 7.3 s; `auto-7680` restored 74 ms,
+885 tokens 8.0 s. Generated-token sha1 cold == warm for both (1c6ce678df11, 7ea39cf8b55e). Same file names as on q4: the name is
+a hash of the prompt tokens, which do not depend on the line.
