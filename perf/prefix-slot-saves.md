@@ -126,4 +126,34 @@ B=<tree> LINE=q4 TAG=prefix-<date>-q4 perf/run-prefix-gate.sh      # PHASES="mak
 - Refresh: a changed prompt just stops matching; stale files are not removed. opencode's date makes a project save one day long, its head is not affected.
 - Checkpoints are 150 MiB each and a save carries 2-4; a head needs none when the prompt contains all of it.
 - A save without `.spec` leaves the previous conversation's drafter ring in place (acceptance only).
-- The container's real prompts.
+- ~~The container's real prompts.~~ DONE 2026-10-04, see the section below.
+
+## 2026-10-04: the container's real prompts, served (q4, `perf/serve.sh q4` with `PREFIX=1`)
+
+Setup facts (owner: "keep it narrow, not 0.0.0.0"): the agents run in Apple `container` images on the bridge `bridge100`
+(container 192.168.64.x/24, gateway + DNS = the host at 192.168.64.1). `serve.sh` binds `192.168.64.1` only - proven with a probe
+listener: reachable from the container, refused on the LAN address. The image's pi config points at `http://192.168.64.1:8093/v1`
+(the q4 port, model id free-form, no `reasoning` field = no `reasoning_effort` sent = the launch's `--reasoning-effort medium`
+prevails); opencode's config points at the same URL. `capture.py <port> <outdir> [bind]` now takes a bind address, so a capture
+sits on the agents' own URL with no config change in the container; `prefix-save.py` honours `HOST=` (default 127.0.0.1).
+Captures: `kvquant-experiments/data/agent-prompts/container-oct04/pi-idasql-00{1,2,3}.json` (image `agent-idasql`, pi 1.0.2 +
+goal-x + 15 idasql skills; two turns in a workspace without AGENTS.md, one turn in `llama.cpp`).
+
+Tokens on the q4 server at medium (no effort line): first workspace 5426 / 5449 (same session, 5425 shared), llama.cpp workspace
+8565, shared across the two 3985 (73%) = 27 tools (12.2K chars, identical) + pi's system text up to the end of its `<docs>` block;
+the divergence is pi's `<project_context>` (AGENTS.md) in one and `<skills>` directly in the other.
+
+Live run, three pi sessions in the container, nothing special sent by the client: session 1 (first workspace) wrote the whole
+save `auto-4608` (370 MiB, 67 ms); session 2 (llama.cpp) prefilled 8567 tokens from 0 in 61.9 s (138 t/s - the save of the other
+project is not a prefix of it) and wrote the head `auto-3584` + the layer `auto-7680` on it (354 / 362 MiB, 79 / 71 ms); a fresh
+session 3 in the first workspace resumed at 4911 from the RAM prompt cache (the disk save is not consulted while RAM has more).
+After a server restart, the captured requests replayed with `HOST=192.168.64.1 perf/prefix-save.py --port 8093 --slot -1 chat`:
+first workspace `auto-4608` restored (74 ms), prompt_n 818 / cache_n 4608, 6.6 s; llama.cpp `auto-7680` restored (166 ms),
+prompt_n 885 / cache_n 7680, 7.2 s (vs 61.9 s fresh). The first project stays whole (known open item). Saves live in
+`kvquant-experiments/slots/serve-q4/prefix`, ~1.1 GB per project incl. the drafter pair.
+
+Trap found on the way (owner's image repo `~/play/container_images/image0`, not fixed here): `scripts/entrypoint.sh` runs
+`git config --global ... safe.directory /workspace` under `set -e` with the workdir at `/workspace`; in a LINKED WORKTREE the
+mounted `.git` is a file whose gitdir points at the main checkout on the host, git's repo discovery dies ("not a git
+repository") with 128 and the container never reaches its shell. Fix = `git -C / config ... || true` (reproduced on the host);
+git inside such a container also needs the main checkout's `.git` mounted read-only at its host path to read history.

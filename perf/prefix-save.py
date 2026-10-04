@@ -7,10 +7,11 @@
 #   multi   <capture.json>...            the captures sent at the same time (one thread each), --slot -1 lets the server pick
 #   save    <name> | restore <name>      POST /slots/<slot>?action=...
 # A capture is what capture.py records: {"body": {"messages": [...], "tools": [...]}} (kvquant-experiments/data/agent-prompts).
-import argparse, hashlib, json, sys, threading, time, urllib.request
+import argparse, hashlib, json, os, sys, threading, time, urllib.request
+HOST = os.environ.get("HOST", "127.0.0.1")  # PREFIX_HOST: the serving lines bind the container bridge (perf/serve.sh)
 
 def post(port, path, obj, timeout=3600):
-    req = urllib.request.Request(f"http://127.0.0.1:{port}{path}", json.dumps(obj).encode(), {"Content-Type": "application/json"})
+    req = urllib.request.Request(f"http://{HOST}:{port}{path}", json.dumps(obj).encode(), {"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.load(r)
 
