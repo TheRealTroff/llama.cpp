@@ -1,6 +1,6 @@
 # Reasoning-effort line position: can the template move it off token 1? (2026-10-03, owner: "The goal is to be able to switch")
 
-Status: **DONE 2026-10-03 night, owner decides adoption** (sections in the order the questions came) (branch `exp/effort-line-position`, worktree `llama.cpp-effortpos`; serving
+Status: **DONE 2026-10-04 (mechanism test added), owner decides adoption** (sections in the order the questions came) (branch `exp/effort-line-position`, worktree `llama.cpp-effortpos`; serving
 binary = prod `089c2367e`, no C++ change). The tail template works: the model reads the effort line at the end of the system block
 as at the head (Q&A calibration 16 prompts x 3 levels, and a recorded tool session at xhigh and low), and a level change or a
 thinking toggle inside a session then costs ~500 tokens / 5 s of prefill instead of the whole prompt (85 s at 10.7K). To serve
@@ -221,9 +221,37 @@ B's at 172%. The likely mechanism: the stock template keeps every earlier turn's
 turns inherit it, a counter-phrase one turn later fights the visible history. B's "decay" was the anchor drifting back as the tasks
 got smaller, not the sentence wearing off.
 
-Use: say it once, early; expect it to stick; to switch back say the opposite (not "medium") and allow a turn or two. The sharp test of
-the mechanism is `preserve_thinking=false` (prior thinking dropped from the history; the template supports it) - phrases should then
-act per turn - but that changes the model's behaviour and the cache story everywhere: a separate experiment.
+Use: say it once, early; expect it to stick; to switch back say the opposite (not "medium") and allow a turn or two.
+
+### The mechanism test: `preserve_thinking=false` (D, 2026-10-04; owner: "You'll track the memory and amount of prefill?")
+
+C's script again with `chat_template_kwargs: {"preserve_thinking": false}` (`run-session.sh TEMPLATE_KWARGS`, `session.py
+--template-kwargs`): assistant turns before the latest user message render without their `<think>` block (the current tool loop keeps
+its own). Identical to C through u0.
+
+| turn | phrase | A think | C think (retained) | D think (stripped) | C prefill tok (s) | D prefill tok (s) | C ctx end | D ctx end |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| u0 | | 90 | 90 | 90 | 3479 (29) | 3479 (29) | 4351 | 4351 |
+| u1 | | 96 | 96 | 96 | 34 (1) | 3800 (29) | 4678 | 4576 |
+| u2 | don't overthink (clean) | 477 | 109 | 193 | 4491 (37) | 3267 (27) | 9735 | 8060 |
+| u3 | plain | 603 | 84 | 487 | 37 (1) | 3621 (29) | 10237 | 8701 |
+| u4 | xhigh sentence | 518 | 419 | 754 | 1466 (13) | 2443 (21) | 13083 | 12134 |
+| u5 | "set to medium" | 995 | 704 | 1290 | 112 (2) | 3585 (30) | 14957 | 14210 |
+| u6 | plain | 221 | 238 | 679 | 5607 (51) | 8079 (71) | 21648 | 20352 |
+| u7 | don't overthink | 198 | 156 | 169 | 1873 (18) | 11266 (99) | 24045 | 22687 |
+| u8 | plain | 1038 | 699 | 1241 | 67 (1) | 3376 (31) | 25300 | 24235 |
+| u9 | plain | 35 | 222 | 604 | 30 (1) | 452 (5) | 26118 | 24226 |
+| total | | 4271 | 2817 | 5603 | 17196 (153 s) | 43368 (372 s) | | |
+
+- **Prefill 2.5x**: every user turn re-prefills the previous loop (2.4-3.8K tokens on ordinary turns, 11.3K / 99 s after the big
+  tool-output loop) where C re-prefilled 30-112. Prefix saves (system block) are untouched; the slot's own cache is discarded per turn.
+- **Context only 7% smaller** (24.2K vs 26.1K): this session retained little thinking (C 2.8K) and D generated a third more (12.0K vs
+  8.9K). The saving scales with the thinking a session carries (an xhigh pilot10 would shed ~20%); it never pays for the prefill.
+- **Anchoring confirmed**: with the model's prior reasoning out of the history the terse regime does not form (u3 0.1x -> 0.8x) and
+  the xhigh sentence takes where C's terse history suppressed it (u4 0.8x -> 1.5x). The phrase text itself stays in the history and,
+  with nothing to anchor against it, the xhigh sentence lifts the two following turns (u5 1.3x, u6 3.1x): phrases become closer to
+  per-turn, not independent. D thought 2x C: without its notes the model re-derives (retention is trained behaviour).
+- Not a serving option; the mechanism question is closed.
 
 ## What the switch costs (`perf/effort-switch-cost.py`, `effortpos-oct03/run-switch.sh`, ud, one slot `-c 32768`, depth 3)
 
