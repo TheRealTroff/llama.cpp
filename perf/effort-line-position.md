@@ -1,12 +1,20 @@
 # Reasoning-effort line position: can the template move it off token 1? (2026-10-03, owner: "The goal is to be able to switch")
 
-Status: **DONE 2026-10-04 (mechanism test added), owner decides adoption** (sections in the order the questions came) (branch `exp/effort-line-position`, worktree `llama.cpp-effortpos`; serving
-binary = prod `089c2367e`, no C++ change). The tail template works: the model reads the effort line at the end of the system block
-as at the head (Q&A calibration 16 prompts x 3 levels, and a recorded tool session at xhigh and low), and a level change or a
-thinking toggle inside a session then costs ~500 tokens / 5 s of prefill instead of the whole prompt (85 s at 10.7K). To serve
-it: `--chat-template-file perf/qwen3.8-effort-tail.jinja` (env `LLAMA_ARG_CHAT_TEMPLATE_FILE`); the pick mints are unaffected
-(pick_prompt renders no system block), server-made prefix saves rebuild themselves under the new token hashes, the session-corpus
-replays should carry the same template (`run-session.sh EXTRA_ENV`) once it is the serving default.
+Status: **DONE 2026-10-04. Owner's decision: level medium in the clients, in-session phrasing for effort; the tail template is
+NOT adopted** (shelved here, measured, for the day levels are switched through a client). What that means in practice:
+- Serving: add `--reasoning-effort medium` to the llama-server launch (a template-kwarg default; a request with no `reasoning_effort`
+  then renders no effort sentence instead of the template's xhigh; a request carrying a level still wins). No pick or mint change:
+  `pick_prompt` renders no system block.
+- Clients (guards, only if a level is ever set there): opencode - define `variants` as `low`/`medium`/`xhigh` (its built-in `max`
+  makes the template raise); pi - `thinkingLevelMap: {minimal: "low", high: "xhigh", off: "none"}` (`minimal` raises, `off` sends
+  nothing = thinking on). Both send nothing when the level is untouched.
+- Phrasing: once, early; "I want you to think really hard about this." = 1.6x; the trained xhigh sentence = the big hammer; "Keep it
+  simple, don't overthink it." = the brake; reverse by saying the opposite and allow a turn or two (phrases steer the session through
+  retained reasoning, section "Replication").
+Branch `exp/effort-line-position` (worktree `llama.cpp-effortpos`; serving binary = prod `089c2367e`, no C++ change). The merge is
+documentation and tooling only: this note, the calibration driver (`effort-pos.py`, prompts, `run-effort-pos.sh`), `effort-switch-cost.py`,
+the two templates, the phrase user scripts, `session.py --template-kwargs` / `run-session.sh TEMPLATE_KWARGS`, the prefix-slot-saves.md
+client correction.
 
 ## Why
 
