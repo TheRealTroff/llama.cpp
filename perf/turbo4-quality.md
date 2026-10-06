@@ -148,3 +148,27 @@ the acch-off arm also carries that lever's own small delta):
 
 Every arm of the first script also reproduced to the digit on the rerun. Closed.
 
+
+## 2026-10-06 addendum: Turbo4 == upstream (Hadamard-rotated) q4_0 in quality, on both models measured
+
+Never compared before this date: every Turbo4 quality number on record was against the f16 cache. Cache-only KLD on the
+ud file (`-SOA-V3`, prod `a28eaae84`, default env, `TURBO_AUTO_ASYMMETRIC=0`), f16/f16 base, wikitext 8192 x 2
+(logs `kvquant-experiments/results/kld-qwen-rotq4-c8192-*.log`):
+
+| K / V | mean KLD | median | 99% | same top |
+|---|--:|--:|--:|--:|
+| turbo4 / turbo4 | 0.00245 | 0.00092 | 0.023 | 98.16% |
+| q4_0 / q4_0 | 0.00239 | 0.00081 | 0.020 | 98.11% |
+| turbo4 / q8_0 | 0.00128 | 0.00038 | 0.014 | 98.61% |
+| q4_0 / q8_0 | 0.00127 | 0.00035 | 0.012 | 98.58% |
+
+Identical within the error bars, symmetric and K-only. The same held on antares-1b (dense, 40 cached layers, no QK-norm:
+turbo4 0.145 vs q4_0 0.142 with V q8_0), and there q4_0 WITHOUT the rotation (`LLAMA_ATTN_ROT_DISABLE=1`) read 0.300 -
+the Hadamard rotation is what does the work; upstream's q4_0 KV path (`attn_rot_k`, in ggml-org master) already has it,
+so plain `-ctk q4_0` is "rotate, then 4-bit block-absmax" and Turbo4 is "rotate, then 4-bit Lloyd-Max" - the codebook
+buys nothing measurable. (Note the turbo4/turbo4 figure here, 0.0025, is 3x below the Sep 2 table's 0.0075: different
+file - ud vs uniform-Q4_0 - and default env; not a regression, a different base.) What Turbo4 still has over q4_0: 4.125
+vs 4.5 bpw (-8% cache bytes) and the fork's Turbo4 FA kernel line (TR form, GQA/Q24 tiles, head-major), which the q4_0
+KV FA path never received. The open comparison is therefore SPEED at equal quality, not quality:
+`-ctk q4_0 -ctv q4_0` under the pick vs the Turbo4 line (kvquant-experiments/results/kld-antares-oct06.md has the
+antares side and the per-layer analysis).
