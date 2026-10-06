@@ -8,14 +8,21 @@ fi
 
 B=${B:-/Users/troff/play/llama.cpp-prod}
 BIN=${BIN:-$B/build/bin}
-M=${M:-/Users/troff/play/Qwen3.8-27B-uniform-Q4_0-SOA-V1.gguf}
+# LINE=q4|ud picks the model file and the manifest env (perf/pick.sh), as run-prod-pick.sh does (2026-10-06; before this
+# the env was a Sep 6 copy of the q4 line and the ud file ran without its SoA routes)
+LINE=${LINE:-q4}
+case "$LINE" in
+    q4) M=${M:-/Users/troff/play/Qwen3.8-27B-uniform-Q4_0-SOA-V1.gguf} ;;
+    ud) M=${M:-/Users/troff/play/Qwen3.8-27B-UD-Q4_K_M-SOA-V3.gguf} ;;
+    *) echo "LINE must be q4 or ud" >&2; exit 1 ;;
+esac
 MD=${MD:-/Users/troff/play/Qwen3.8-27B-DFlash2-pureQ4_0-SOA-V1.gguf}
 PORT=${PORT:-8095}
 OUT=${OUT:-/Users/troff/play/kvquant-experiments/results}
 DEPTH=${DEPTH:-7}
 # KV=turbo4 runs the Turbo4 line (export TURBO_AUTO_ASYMMETRIC=0 alongside for the sym pick).
 KV=${KV:-f16}
-TAG=${TAG:-dflash-corpus-$KV-n$DEPTH-$(date +%m%d-%H%M)}
+TAG=${TAG:-dflash-corpus-$LINE-$KV-n$DEPTH-$(date +%m%d-%H%M)}
 NPRED=${NPRED:-300}
 REPS=${REPS:-2}
 COOL=${COOL:-5}
@@ -29,29 +36,14 @@ PROMPTS=(
     "$B/perf/prompts/05-json-boilerplate.txt"
 )
 
-COMMON_ENV=(
-    GGML_MV_NC=2
-    GGML_MM_SKINNY=6
-    GGML_MM_SKINNY_SOA=1
-    GGML_FA_VEC_MAX=3
-    GGML_FA_MM_NWG=8
-    GGML_GDN_FUSE_WB=1
-    GGML_MV_REPACK=1
-    GGML_MV_SOA_PIN=1
-    GGML_MV_SOA_W3=1
-    GGML_MV_SOA_W4=1
-    GGML_MV_SOA_W4_R4KP=3
-    GGML_MV_SOA_W5=4
-    GGML_MV_SOA_W5_HALF=1
-    GGML_MV_SOA_WL_XL=1
-    GGML_METAL_GET_MEMCPY=1
-    DFLASH_FUSED_INJECT=1
-    DFLASH_ASYNC_INJECT=1
-    LLAMA_DRAFT_WINDOW=1024
-    GGML_MM_ACC_HALF=1
-    GGML_MM_N64=1
-    LLAMA_GDN_REPLAY=1
-)
+# the manifest env: the f16 pick env for KV=f16, the Turbo4 line's env (TR / GQA / sym flags) for every quantized cache -
+# those flags only engage on the turbo4 and f16 FA routes, so KV=q4_0 is "same env, different -ctk" (turbo4-quality.md)
+source "$B/perf/pick.sh"
+pick_check "$LINE" || exit 1
+if [ "$KV" = f16 ]; then pick_env "$LINE" f16; else pick_env "$LINE"; fi
+COMMON_ENV=("${PICK_ENV[@]}")
+KVARGS=(-ctk "$KV" -ctv "$KV")
+[ "$KV" != f16 ] && KVARGS+=(-ctkd f16 -ctvd f16)   # the draft KV stays f16, as the pick runs it
 
 mkdir -p "$OUT"
 for path in "$BIN/llama-server" "$M" "$MD" "${PROMPTS[@]}"; do
@@ -67,7 +59,7 @@ fi
 
 printf 'label\trep\tprompt\tprompt_n\tdraft_n_max\tverify_width\ttps\tpredicted_ms\tpredicted_n\tdraft_tokens\tdraft_accepted\taccept_pct\trounds\tround_ms\toutput_per_round\tsha1\tbytes\n' > "$TSV"
 
-echo "=== DFlash tiny corpus at n=$DEPTH, KV $KV: $TAG ==="
+echo "=== DFlash tiny corpus at n=$DEPTH, line $LINE, KV $KV: $TAG ==="
 echo "commit : $(git -C "$B" rev-parse --short HEAD) on $(git -C "$B" rev-parse --abbrev-ref HEAD) ($(git -C "$B" status --porcelain | wc -l | tr -d ' ') dirty)"
 echo "binary : $(stat -f '%Sm' "$BIN/llama-server")"
 echo "env    : ${COMMON_ENV[*]}"
@@ -94,6 +86,8 @@ run_one() {
     local rep=$1 prompt=$2
     local name label slog response
     name=$(basename "$prompt" .txt)
+    prompt=$(pick_prompt "$prompt")   # chat-templated like every benchmark since 2026-09-17 (PICK_CHAT=0 = raw); a raw
+                                      # prompt makes the current pick emit EOS after one token (seen 2026-10-06)
     label=$name-r$rep
     slog=$OUT/$TAG-$label.server.log
     response=$OUT/$TAG-$label.json
@@ -104,7 +98,7 @@ run_one() {
     fi
 
     env "${COMMON_ENV[@]}" "$BIN/llama-server" \
-        -m "$M" -c 10240 -fa on -ctk "$KV" -ctv "$KV" \
+        -m "$M" -c 10240 -fa on "${KVARGS[@]}" \
         -md "$MD" --spec-type draft-dflash --spec-draft-n-max "$DEPTH" \
         --port "$PORT" >"$slog" 2>&1 &
     server_pid=$!

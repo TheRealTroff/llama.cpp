@@ -172,3 +172,6 @@ vs 4.5 bpw (-8% cache bytes) and the fork's Turbo4 FA kernel line (TR form, GQA/
 KV FA path never received. The open comparison is therefore SPEED at equal quality, not quality:
 `-ctk q4_0 -ctv q4_0` under the pick vs the Turbo4 line (kvquant-experiments/results/kld-antares-oct06.md has the
 antares side and the per-layer analysis).
+
+Speed at equal quality measured the same day: `turbo4-vs-q40-speed.md` - q4_0 2% faster per round at ~150 tokens of
+context, Turbo4 +5% at 8K, +19% at 24K, +64% at 96K (the FA kernel line, not the format).

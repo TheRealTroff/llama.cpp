@@ -6,7 +6,8 @@
 # wired+anonymous delta vs idle. Turbo4 moves the text (a quantized cache), so its sha is its
 # own lineage - compare t/s only within a KV type across arms, and read the KLD row (run-quant-kld.sh
 # KV=turbo4 on the step-15 q8_0 logits) for quality.
-#   ARMS: space-separated label:kv:depth:ctx   (depth 0 = no spec)
+#   ARMS: space-separated label:kv:depth:ctx   (depth 0 = no spec; kv = f16 | turbo4 | q4_0 | q8_0 ...)
+#   PROMPT=<file> (default benchprompt.txt) NPRED=<n> PORT=<port>
 set -u
 if [ -z "${CAFFEINATED:-}" ]; then
     exec env CAFFEINATED=1 caffeinate -dimsu "$0" "$@"
@@ -19,6 +20,7 @@ PORT=${PORT:-8093}
 OUT=/Users/troff/play/kvquant-experiments/results
 TAG=${TAG:-ud-turbo4-$(date +%m%d-%H%M)}
 NPRED=${NPRED:-600}
+PROMPT=${PROMPT:-/Users/troff/play/benchprompt.txt}   # a long-prompt file fills the context (kvquant-experiments/data/longprompt-*.txt)
 ARMS=${ARMS:-"f16-d3-1:f16:3:10240 t4-d3-1:turbo4:3:10240 t4-d3-2:turbo4:3:10240 f16-d3-2:f16:3:10240 t4-d2:turbo4:2:10240 t4-d4:turbo4:4:10240 t4-d3-100k:turbo4:3:102400 f16-b1:f16:0:10240 t4-b1:turbo4:0:10240"}
 EXTRA_ENV=${EXTRA_ENV:-}
 EXTRA_ARGS=${EXTRA_ARGS:-}
@@ -63,9 +65,11 @@ run_one() {
   if [ "$depth" = 0 ]; then spec=(--spec-type none); else spec=(-md "$MD" --spec-type draft-dflash --spec-draft-n-max "$depth"); fi
   envv=("${PICK_ENV[@]}")
   kvargs=(-ctk f16 -ctv f16)
-  if [ "$kv" = turbo4 ]; then
+  if [ "$kv" != f16 ]; then
+    # any quantized cache (turbo4, q4_0, q8_0, ...) runs under the Turbo4 line's env - the TR / GQA flags only
+    # engage on the turbo4 and f16 routes, so a q4_0 arm is "same env, different -ctk" (turbo4-quality.md, 2026-10-06)
     envv+=("${TURBO_ENV[@]}")
-    kvargs=(-ctk turbo4 -ctv turbo4 -ctkd f16 -ctvd f16)
+    kvargs=(-ctk "$kv" -ctv "$kv" -ctkd f16 -ctvd f16)
   fi
   for i in $(seq 1 60); do lsof -ti :$PORT >/dev/null 2>&1 || break; sleep 2; done
   if lsof -ti :$PORT >/dev/null 2>&1; then echo "[$label] ABORT: port busy"; return 1; fi
@@ -82,7 +86,7 @@ run_one() {
   [ $ok = 1 ] || { echo "[$label] health timeout"; kill -9 $pid; return 1; }
   python3 -c "
 import json
-p = open('/Users/troff/play/benchprompt.txt').read()
+p = open('$PROMPT').read()
 print(json.dumps({'prompt': p, 'n_predict': $NPRED, 'temperature': 0}))" \
   | curl -s -H "Content-Type: application/json" -X POST "http://127.0.0.1:$PORT/completion" -d @- > "$OUT/$TAG-$label.json"
   local fp=$(footprint -p $pid 2>/dev/null | sed -n 's/.*Footprint: \([0-9.]* [KMG]B\).*/\1/p' | head -1 | tr -d ' ')
