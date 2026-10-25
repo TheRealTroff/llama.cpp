@@ -53,6 +53,66 @@ static bool ggml_metal_prof_enabled(void) {
     return g_prof_enabled > 0;
 }
 
+static int ggml_metal_prof_mode(void) {
+    return ggml_metal_prof_enabled() ? g_prof_enabled : 0;
+}
+
+// GGML_METAL_PROFILE=2: group-timed profiling - one timed CONCURRENT encoder per concurrency group (the barrier is the
+// encoder boundary), so each entry is the measured wall of a group of ops that the real encoder runs concurrently; the
+// members are the per-op keys of mode 1, so a mode-1 log joins on them (perf/census-groups.py: the exposed-time bounds).
+#define GGML_METAL_PROF_MAX_GROUPS 8192
+
+struct ggml_metal_prof_group {
+    uint32_t   gid;      // FNV-1a of the member list
+    int        n;        // members
+    uint64_t   ticks;
+    uint64_t   count;
+    NSString * members;  // one mode-1 key per line
+};
+
+static struct ggml_metal_prof_group g_prof_groups[GGML_METAL_PROF_MAX_GROUPS];
+static int                          g_prof_n_groups     = 0;
+static uint64_t                     g_prof_split        = 0; // barriers inside a node's encode (stay inside a group)
+static uint64_t                     g_prof_groups_lost  = 0; // groups past the sample buffer (untimed)
+
+static uint32_t ggml_metal_prof_fnv(const char * str) {
+    uint32_t h = 2166136261u;
+    for (; *str; ++str) {
+        h ^= (uint8_t) *str;
+        h *= 16777619u;
+    }
+    return h;
+}
+
+static void ggml_metal_prof_group_add(NSString * members, int n, uint64_t ticks) {
+    const uint32_t gid = ggml_metal_prof_fnv([members UTF8String]);
+
+    [g_prof_lock lock];
+    for (int i = 0; i < g_prof_n_groups; ++i) {
+        if (g_prof_groups[i].gid == gid && [g_prof_groups[i].members isEqualToString:members]) {
+            g_prof_groups[i].ticks += ticks;
+            g_prof_groups[i].count += 1;
+            [g_prof_lock unlock];
+            return;
+        }
+    }
+    if (g_prof_n_groups < GGML_METAL_PROF_MAX_GROUPS) {
+        struct ggml_metal_prof_group * e = &g_prof_groups[g_prof_n_groups++];
+        e->gid     = gid;
+        e->n       = n;
+        e->ticks   = ticks;
+        e->count   = 1;
+        e->members = [members retain];
+    }
+    [g_prof_lock unlock];
+}
+
+static int ggml_metal_prof_group_cmp(const void * a, const void * b) {
+    const struct ggml_metal_prof_group * ea = a;
+    const struct ggml_metal_prof_group * eb = b;
+    return ea->ticks < eb->ticks ? 1 : ea->ticks > eb->ticks ? -1 : 0;
+}
+
 static void ggml_metal_prof_add(const char * key, uint64_t ticks) {
     [g_prof_lock lock];
     for (int i = 0; i < g_prof_n_entries; ++i) {
@@ -181,6 +241,28 @@ static void ggml_metal_prof_dump(id<MTLDevice> device) {
     for (int i = 0; i < g_prof_n_entries; ++i) {
         const double ms = 1e-6*factor*g_prof_entries[i].ticks;
         fprintf(stderr, "ggml_metal_prof: %10.3f %10llu %10.2f  %s\n", ms, g_prof_entries[i].count, 1e3*ms/g_prof_entries[i].count, g_prof_entries[i].key);
+    }
+
+    if (g_prof_n_groups > 0) {
+        qsort(g_prof_groups, g_prof_n_groups, sizeof(g_prof_groups[0]), ggml_metal_prof_group_cmp);
+
+        double total_ms = 0.0;
+        for (int i = 0; i < g_prof_n_groups; ++i) {
+            total_ms += 1e-6*factor*g_prof_groups[i].ticks;
+        }
+
+        fprintf(stderr, "ggml_metal_prof_group: total group wall = %.3f ms, groups = %d, in-node barriers = %llu, untimed groups = %llu\n",
+                total_ms, g_prof_n_groups, g_prof_split, g_prof_groups_lost);
+        fprintf(stderr, "ggml_metal_prof_group: %10s %10s %10s  %s\n", "total ms", "count", "us/call", "group");
+        for (int i = 0; i < g_prof_n_groups; ++i) {
+            const double ms = 1e-6*factor*g_prof_groups[i].ticks;
+            fprintf(stderr, "ggml_metal_prof_group: %10.3f %10llu %10.2f  gid=%08x n=%d\n", ms, g_prof_groups[i].count, 1e3*ms/g_prof_groups[i].count, g_prof_groups[i].gid, g_prof_groups[i].n);
+            for (NSString * m in [g_prof_groups[i].members componentsSeparatedByString:@"\n"]) {
+                if ([m length] > 0) {
+                    fprintf(stderr, "ggml_metal_prof_gmember: gid=%08x %s\n", g_prof_groups[i].gid, [m UTF8String]);
+                }
+            }
+        }
     }
 }
 
@@ -1203,7 +1285,82 @@ void ggml_metal_set_n_cb(ggml_metal_t ctx, int n_cb) {
 
         id<MTLCommandBuffer> cmd_buf = ctx->cmd_bufs[cb_idx].obj;
 
-        if (ggml_metal_prof_enabled()) {
+        if (ggml_metal_prof_mode() == 2) {
+            // one timed concurrent encoder per concurrency group: the group's wall, with its member ops recorded
+            id<MTLDevice> device = ggml_metal_device_get_obj(ctx->dev);
+
+            id<MTLCounterSampleBuffer> sb = ggml_metal_prof_new_smpbuf(device);
+            GGML_ASSERT(sb != nil);
+
+            ggml_metal_op_t ctx_op = ggml_metal_op_init(
+                ctx->dev,
+                cmd_buf,
+                ctx->gf,
+                idx_start,
+                idx_end,
+                ctx->use_fusion,
+                ctx->use_concurrency,
+                false,
+                ctx->debug_graph,
+                ctx->debug_fusion,
+                NULL,
+                0);
+
+            ggml_metal_op_prof_groups_begin(ctx_op, (void *) sb, GGML_METAL_PROF_MAX_SAMPLES);
+
+            for (int idx = 0; idx < ggml_metal_op_n_nodes(ctx_op); ++idx) {
+                const int res = ggml_metal_op_encode(ctx_op, idx);
+                if (res == 0) {
+                    break;
+                }
+
+                idx += res - 1;
+            }
+
+            const int n_groups = ggml_metal_op_prof_n_groups(ctx_op);
+            const int n_timed  = MIN(n_groups, GGML_METAL_PROF_MAX_SAMPLES/2);
+
+            NSMutableArray * sigs = [[NSMutableArray alloc] init];
+            int ns[GGML_METAL_PROF_MAX_SAMPLES/2];
+            for (int g = 0; g < n_timed; ++g) {
+                NSMutableString * sig = [[NSMutableString alloc] init];
+                const int n = ggml_metal_op_prof_group_n_nodes(ctx_op, g);
+                for (int i = 0; i < n; ++i) {
+                    char key[192];
+                    ggml_metal_prof_make_key(ctx->prof_id, ctx->gf->nodes[ggml_metal_op_prof_group_node(ctx_op, g, i)], key, sizeof(key));
+                    [sig appendFormat:@"%s\n", key];
+                }
+                ns[g] = n;
+                [sigs addObject:sig];
+                [sig release];
+            }
+
+            [g_prof_lock lock];
+            g_prof_split       += ggml_metal_op_prof_n_split(ctx_op);
+            g_prof_groups_lost += n_groups - n_timed;
+            [g_prof_lock unlock];
+
+            ggml_metal_op_free(ctx_op); // ends the last group's encoder
+
+            NSData * nsd = [NSData dataWithBytes:ns length:n_timed*sizeof(int)];
+
+            [cmd_buf addCompletedHandler:^(id<MTLCommandBuffer> cb) {
+                GGML_UNUSED(cb);
+                NSData * data = [sb resolveCounterRange:NSMakeRange(0, 2*n_timed)];
+                if (data && data.length >= 2*n_timed*sizeof(uint64_t)) {
+                    const uint64_t * ts = (const uint64_t *) data.bytes;
+                    const int * nn = (const int *) nsd.bytes;
+                    for (int g = 0; g < n_timed; ++g) {
+                        if (nn[g] > 0 && ts[2*g] != 0 && ts[2*g + 1] != (uint64_t) -1 && ts[2*g + 1] > ts[2*g]) {
+                            ggml_metal_prof_group_add(sigs[g], nn[g], ts[2*g + 1] - ts[2*g]);
+                        }
+                    }
+                }
+            }];
+
+            [sb release];
+            [sigs release];
+        } else if (ggml_metal_prof_enabled()) {
             // one encoder per op so the timestamp samples at the encoder boundaries give per-op GPU time
             id<MTLDevice> device = ggml_metal_device_get_obj(ctx->dev);
 

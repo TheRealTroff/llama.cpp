@@ -31,6 +31,16 @@ int ggml_metal_op_node_idx(ggml_metal_op_t ctx, int i);
 
 int ggml_metal_op_encode(ggml_metal_op_t ctx, int idx);
 
+// group-timed profiling (GGML_METAL_PROFILE=2, perf/census-groups.md): the concurrent encoder is split at every
+// node-level concurrency barrier into one timed concurrent encoder per group (the barrier is the encoder boundary), and the
+// raw graph indices of the nodes encoded in each group are recorded. A barrier inside a node's own encode (fused paths, the
+// src1 copy) stays a memory barrier within the group and is counted as a split.
+void ggml_metal_op_prof_groups_begin(ggml_metal_op_t ctx, void * smpbuf, int max_samples);
+int  ggml_metal_op_prof_n_groups     (ggml_metal_op_t ctx);
+int  ggml_metal_op_prof_group_n_nodes(ggml_metal_op_t ctx, int g);
+int  ggml_metal_op_prof_group_node   (ggml_metal_op_t ctx, int g, int i);
+int  ggml_metal_op_prof_n_split      (ggml_metal_op_t ctx);
+
 //
 // available ops:
 //
