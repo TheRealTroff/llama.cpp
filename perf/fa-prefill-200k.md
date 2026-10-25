@@ -51,4 +51,37 @@ profiled log through the live census, CENSUS_KV=turbo4, kv case 98304) - results
 
 ## Results
 
-(pending: the qt16w_turbo4 tier view, then the lever list)
+### The long-KV form traced (`census-ud-96k-oct25-prefa`, the Sep 15 96K log through the live census, CENSUS_KV=turbo4)
+
+The prefill FA row at kv 95744 matched the 98304 Turbo4 case and traced `kernel_flash_attn_ext_qt16w_turbo4_dk256_dv256`
+(nsg=8, 86 registers, 0 spill, 82/18 issue/stall, 263.8 ms per call = 4.54 TFLOPS = 1.53x the roof) - the pick's kernel.
+**Its per-instruction counts are NOT usable:** this census pass undercounted executed instructions on every MMA row (the same
+`mul_mm_n64_iq4_xs_f16` at the same shape reads 1.26 instr/GFLOP here vs 2.15 in the Oct 24 census; the FA row's executed
+total is below its own MMA count, gflop x 1e9 / 1024); the replay log carries `error: 'shaders' has no info`. Timings and
+compile-time facts stand, shares at best qualitative (two inner loops 38% + 32%, a per-chunk body 10%). Trap recorded in
+`kernel-census.md`; a row whose executed total is under its MMA count must be flagged, not read.
+
+### Isolated tile forms at the 98304 case (`run-fa-prefill-tile-ab.sh`, prod binary, 2 reps)
+
+| form | per call | TFLOPS | vs the pick |
+|---|--:|--:|--:|
+| **Turbo4 16-row `qt16w` (the pick above 32K)** | **264.2 ms** | 4.69 | - |
+| Turbo4 8-row `qtl4w` (GGML_FA_Q16=0) | 278.0 ms | 4.45 | +5.2% |
+| f16 16-row `qt16` | 242.1 ms | 5.11 | **-8.4%** |
+| f16 8-row `qt` | 299.0 ms | 4.18 | +13.2% |
+
+(the 8448 arms all ran the 8-row forms - the 16-row gate is 32K - and are not a comparison.)
+
+- **The dequant tax is 9%**: the f16 twin of the same tile is 242 ms. A dequant-free Turbo4 kernel does not exist, so ~22 ms
+  per call is the whole Turbo4-specific prize; the other 90% of the distance to the roof is the FA tile structure itself
+  (the f16 16-row form is still 1.37x the mul_mm roof).
+- **The 16-row tile bought f16 19% and Turbo4 only 5%.** Same halving of K/V loads and dequant per MMA on both; what the
+  Turbo4 form did not shed is the per-chunk O scratch round trip (the scratch form writes and re-reads Q x 256 floats of O per
+  64-key chunk; the 24-row decode tile moved O into registers for exactly this - `OR` form, byte-identical) and, at Q=16 x
+  nsg=8, the per-simdgroup share of the softmax body. Candidate levers, in order:
+  1. **O register-resident 16-row prefill form** (`OR=true`, the `qtl4w16o` instantiation exists for decode): 8 accumulators
+     per simdgroup at nsg=8, byte-identical by construction; price = registers (86 now, 0 spill).
+  2. **32-row tile** on top of it (each dequantized K/V tile feeds 4 MMAs): the scratch form cannot fit (32 KB at Q=16), the
+     OR form could - 16 accumulators per simdgroup at nsg=8 plus a shorter Q^T register head; register budget question,
+     prescreen first.
+  3. The dequant form itself: 9% ceiling, last.
