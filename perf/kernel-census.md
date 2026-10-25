@@ -193,6 +193,28 @@ Readings (the table says; nothing below is priced or built):
   (`mul_mv_ext_q4_0_f32_r1_4`, 28x floor, 76% stall) = 3.5 / 4.0 ms per round. A 147 KB weight x 8 columns is a ~3 us dispatch
   at the floor; the kernels run one or two threadgroups. Candidate: a tiny-ne01 route (split-K or row-per-simdgroup) or the two
   projections concatenated offline into one 5120x96 matmul. The same shape at n=512 costs 207 us x 1536 = 0.32 s of prefill (0.5%).
+  **History (cross-reference added 2026-10-25, before anyone builds on this row):** this is the lever `round-decomp-post-fa-split.md`
+  ranked #1 on 2026-08-22 and `small-ne01-routing.md` REFUTED at e2e the same day: the mv-nc route (`GGML_MV_NC_SMALL=<ne01_max>`,
+  q4_0 only, still in the tree, default off) cut the profiled call 81.5 -> 52.2 us and the profiled t/s +2.4%, unprofiled 0.0%
+  (23.51/23.52 vs 23.57/23.53, sha identical). Cause: `ssm_beta`/`ssm_alpha` hang off the same normed input as `ssm_in` and run
+  under it in the concurrent encoder; the census (one timed encoder per op) serializes them and charges the full latency. Later
+  notes (`ud-model.md` step 7 table, `longctx-inventory-sep15.md`, `slot-save-hybrid.md`, `w8-decomp-sep18.md`) carry the row as
+  'the known serialization artifact'. So the ~5% is the serialized upper bound, not a wall number. What the Aug test did NOT
+  cover: the ud line (q8_0 has no mv-nc route), width 8, and the Oct graph (fusion, rs slide, head-major, GDN decode kernels all
+  landed since). Cheapest re-check before any new kernel: `GGML_MV_NC_SMALL=2048` on the q4 line, pinned width 8, UNPROFILED t/s
+  x2 vs control - if that is flat again the row stays closed on both lines; the 5120x96 concat is a file-layout change (one
+  dispatch instead of two) and only worth pricing if the route test moves the wall.
+  **MEASURED 2026-10-25 02:29-02:53 (`perf/gdn-proj-shadow.md` on branch `exp/gdn-proj-shadow`, harness
+  `run-gdn-proj-shadow.sh`, deletion gate `GGML_MM_SKIP_NE01=48`): the row is NOT on the wall.** Pinned width 8, two interleaved
+  passes: deleting both projections returns 0.5-1.3 ms of the 121 ms q4 round and -0.2/+0.4 ms of the 153 ms ud round (charged
+  6.8 / 8.1 ms); the mv-nc route captures none of it (sha moves - not byte-identical at width 8); widened to the k/v rows it
+  loses 1-1.8 ms. The 5120x96 concat is bounded at ~0.5 ms on q4, 0 on ud. CLOSED on both lines. Rule for this table: a
+  small-op row is a wall claim only after its skip arm - `GGML_MM_SKIP_NE01=<rows>` is one arm away for the next one
+  (`q4_0 5120x1024 n=8`, 1.7% serialized).
+  **The 5120x1024 row MEASURED the same morning (`gdn-proj-shadow.md` second section): q4 -1.06/-1.08 ms of the 106 ms verify
+  wait = ~45% of its 2.4 ms charge is on the wall (0.9% of the round); ud +0.2 (nothing). Replacement bound 1.07 ms; the mv-nc
+  route loses there; a new small-ne01 skinny form is the only route, <1% on q4 only - ranked small, owner. The shadow is
+  row-specific (85-100% vs ~55%): no fixed discount, measure each small-op row.**
 - `MUL_MAT q4_0 5120x1024 n=8` (q4, 32 calls/round): 74 us, 5.5x floor, 65% stall = 2.4 ms/round (1.7%); 2.7x at width 4.
 - Width-8 skinny tiles (ud, cache-resident in the perf loop so the x-floor column is NOT a DRAM reading there - the CACHE flag):
   iq4_xs 403 us / q4_K 359 / q5_K 426-505 / q3_K 415 / q6_K head 5.7 ms per call, issue 70-91%, 65-69 regs, 0 spill; -6..-8% per
@@ -241,3 +263,11 @@ carries (`_soa` is a bare flag). What the filled rows say:
 - q4 `q4_0 5120x1024` at the ubatch: `mul_mm_acch_q4_0_f16` 826 us, 1.09x roof, 2.09x instr best, 2.4x loads best (0.42 s).
 - ud n64 tiles at the attention shapes (10240/6144 rows): 0.99-1.03x roof like the FFN shapes, but 1.6-1.9x the instructions
   of the class best (q4_K 1.61x, q5_K 1.93x) - the K-quant dequant tax on a narrower tile, paid at the roof.
+
+**Trap 2026-10-25 (`census-ud-96k-oct25-prefa`, the Sep 15 96K log re-run for the Turbo4 prefill FA row):** the per-instruction
+profile of that pass counted a FRACTION of each dispatch on every MMA row - the same `mul_mm_n64_iq4_xs_f16` at the same shape
+read 1.26 instr/GFLOP against 2.15 in the Oct 24 census, and the FA row (`qt16w_turbo4`, 263.8 ms, 86 regs, 0 spill) read 0.42
+with an executed total below its own MMA count. The replay log carried `error: 'shaders' has no info`. Timings, registers,
+spill and issue/stall shares stand; instruction and load columns of such a row are void. `kernel-census.py` now computes
+`mma_min_instr = gflop*1e9/1024` per MMA row and flags `UNDERCOUNT` (the row is also kept out of the class best). The
+long-KV prefill FA work itself: `perf/fa-prefill-200k.md` on `exp/fa-prefill-200k`.

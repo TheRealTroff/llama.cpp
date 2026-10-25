@@ -189,6 +189,12 @@ def metrics(args):
             gf = m['gflop']
             if m['cls'] == 'mma' and gf > 0:
                 m['instr_per_gflop'] = exd/gf/1e6; m['load14_per_gflop'] = ld/gf/1e6
+                # sanity (2026-10-25, census-ud-96k-oct25-prefa): one 8x8x8 simdgroup MMA is 1024 flop, so an MMA-class row
+                # must execute at least gflop*1e9/1024 instructions per dispatch; a profile below that counted a fraction of
+                # the dispatch (that pass read 1.26 instr/GFLOP for a kernel the Oct 24 census read at 2.15, and the FA row at
+                # 0.42) - its per-instruction columns are void and must not set the class best
+                m['mma_min_instr'] = gf*1e9/1024
+                m['undercount'] = exd < m['mma_min_instr']
             if m.get('us_run'):
                 m['tflops'] = gf/(m['us_run']*1e-6)/1e3 if gf > 0 else None
                 # stream class: x the byte floor; mma class: x the measured 6.96 TFLOPS mul_mm roof
@@ -209,7 +215,7 @@ def report(args):
         prev = {m['id']: m for m in json.load(open(args.diff))}
     best = {}
     for m in ms:
-        if m['cls'] == 'mma' and m.get('instr_per_gflop'):
+        if m['cls'] == 'mma' and m.get('instr_per_gflop') and not m.get('undercount'):
             best['instr_per_gflop'] = min(best.get('instr_per_gflop', 1e9), m['instr_per_gflop'])
             best['load14_per_gflop'] = min(best.get('load14_per_gflop', 1e9), m['load14_per_gflop'])
     lines = []
@@ -218,7 +224,9 @@ def report(args):
     snap = []
     for m in ms:
         flag = []
-        if m['cls'] == 'mma' and m.get('instr_per_gflop'):
+        if m.get('undercount'):
+            flag.append(f"UNDERCOUNT: executed {m['exec_per_disp']/1e6:.0f}M < MMA count {m['mma_min_instr']/1e6:.0f}M - the profile covered a fraction of the dispatch, per-instruction columns void")
+        elif m['cls'] == 'mma' and m.get('instr_per_gflop') and best.get('instr_per_gflop'):
             if m['instr_per_gflop'] > 1.3*best['instr_per_gflop']: flag.append(f"instr {m['instr_per_gflop']/best['instr_per_gflop']:.2f}x best")
             if m['load14_per_gflop'] > 2*best['load14_per_gflop']: flag.append(f"loads {m['load14_per_gflop']/best['load14_per_gflop']:.1f}x best")
         if m.get('floor_flag') == 'CACHE': flag.append('CACHE: under the DRAM floor, tensor is cache-resident in the perf loop')
