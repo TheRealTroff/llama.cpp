@@ -2026,6 +2026,22 @@ bool ggml_metal_flash_attn_ext_q16(const ggml_tensor * op, int32_t gqa_heads) {
     return fa_q16_dec && tr16 && op->src[0]->ne[1]*gqa_heads >= 16;
 }
 
+// GGML_FA_Q32 (exp/fa-prefill-200k, perf/fa-prefill-200k.md): the 32-row prefill tile of the Turbo4 TR form - the O-resident
+// 16-row tile at Q = 32, each dequantized K/V tile feeding four query tiles. Prefill-sized query batches (gqah 1) above
+// GGML_FA_Q32_KVMIN (default 32768), in the line's class (TR 9 -> qt32wo, TR 7 -> qtn32o); needs the Q16 route on
+bool ggml_metal_flash_attn_ext_q32(const ggml_tensor * op, int32_t gqa_heads) {
+    static const int fa_q32 = getenv("GGML_FA_Q32") != nullptr ? atoi(getenv("GGML_FA_Q32")) : 0;
+    if (fa_q32 <= 0 || gqa_heads != 1 || op->src[0]->ne[1] < 32 || op->src[1]->type != GGML_TYPE_TURBO4_0) {
+        return false;
+    }
+    const int fa_tr = ggml_metal_flash_attn_ext_tr(op);
+    if (!(fa_tr == 9 || fa_tr == 7) || !ggml_metal_flash_attn_ext_q16(op, gqa_heads)) {
+        return false;
+    }
+    static const int fa_q32_kvmin = getenv("GGML_FA_Q32_KVMIN") != nullptr ? atoi(getenv("GGML_FA_Q32_KVMIN")) : 32768;
+    return op->src[1]->ne[1] > fa_q32_kvmin;
+}
+
 // GGML_FA_Q24: the 24-row decode tile of the Turbo4 TR form (perf/longctx-inventory-sep15.md): the GQA route's
 // query rows x heads (4 x 6) in one threadgroup, each dequantized K/V tile feeding three query tiles, O
 // register-resident. 1 = staged pair table (qtl4w24), 2 = constant table (qt24w); "=0" off.
@@ -2148,6 +2164,10 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext(
         if (fa_q16_or > 0 && (fa_tr == 9 || fa_tr == 7) && op->src[0]->ne[1] >= 32 && ggml_metal_flash_attn_ext_q16(op, gqa_heads)) {
             // TR 7 (the q4 line's folded-norm class): the decode probe's qtnw16o is that class's O-resident 16-row tile
             form = fa_tr == 7 ? "qtnw16o" : fa_q16_or == 2 ? "qtl4w16o" : "qt16wo";
+        }
+        if (nqptg == 32) {
+            // GGML_FA_Q32: the 32-row prefill tile in the line's class (the host sizes its threadgroup memory without O scratch)
+            form = fa_tr == 7 ? "qtn32o" : "qt32wo";
         }
         const int q24 = (nqptg == 24 || nqptg == 16) ? ggml_metal_flash_attn_ext_q24(op, gqa_heads) : 0;
         if (q24 > 0 && nqptg == 24) {

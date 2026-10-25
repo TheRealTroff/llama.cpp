@@ -5209,7 +5209,9 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
         // half8x8 kernel
         // the 24-row decode tile (GGML_FA_Q24, O register-resident) before the 16-row prefill tile
         const int is_or = ggml_metal_flash_attn_ext_q24(op, use_gqa_reuse ? gqa_ratio : 1) > 0 ? 1 : 0;
-        const int nqptg = is_or ? 24 : ggml_metal_flash_attn_ext_q16(op, use_gqa_reuse ? gqa_ratio : 1) ? 16 : OP_FLASH_ATTN_EXT_NQPSG; // queries per threadgroup
+        // GGML_FA_Q32 (exp/fa-prefill-200k): the 32-row prefill tile - O resident like the 24-row one (no O scratch), on the plain grid
+        const int is_q32 = !is_or && ggml_metal_flash_attn_ext_q32(op, use_gqa_reuse ? gqa_ratio : 1) ? 1 : 0;
+        const int nqptg = is_or ? 24 : is_q32 ? 32 : ggml_metal_flash_attn_ext_q16(op, use_gqa_reuse ? gqa_ratio : 1) ? 16 : OP_FLASH_ATTN_EXT_NQPSG; // queries per threadgroup
         const int ncpsg = OP_FLASH_ATTN_EXT_NCPSG; // cache values per simdgroup
 
         GGML_ASSERT(nqptg <= 32);
@@ -5298,7 +5300,7 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
 
         // the Turbo4 TR form dequantizes into registers and needs no K scratch; at the 16-row tile the
         // rest of the layout is exactly the 32 KB threadgroup budget (perf/ud-model.md step 16)
-        const int is_q = ggml_is_quantized(op->src[1]->type) && !(nqptg == 16 && ggml_metal_flash_attn_ext_tr(op) > 0) ? 1 : 0;
+        const int is_q = ggml_is_quantized(op->src[1]->type) && !((nqptg == 16 || nqptg == 32) && ggml_metal_flash_attn_ext_tr(op) > 0) ? 1 : 0;
 
         // 2*(2*ncpsg)
         // ncpsg soft_max values + ncpsg mask values
@@ -5311,7 +5313,7 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
         // the per-row softmax factors (24 x (256 + 4 x 64) halves + 16 x 32 x 8 = exactly 32 KB at nsg 8)
 // the O scratch width follows the kernel: 64-padded for the 16-row tile and 64-multiple heads, 32-padded otherwise (dk 72)
 #define FATTN_PV(nsg) (ne20 % 64 == 0 ? GGML_PAD(ne20, 64) : nqptg > 8 ? GGML_PAD(ne20, 32*(nsg)) : GGML_PAD(ne20, 8*(nsg)))
-#define FATTN_SMEM(nsg) (GGML_PAD((nqptg*(ne00 + (is_or ? 0 : 2*FATTN_PV(nsg)) + 2*(2*ncpsg)) + is_q*(16*32*(nsg)))*(sizeof(float)/2), 16))
+#define FATTN_SMEM(nsg) (GGML_PAD((nqptg*(ne00 + ((is_or || is_q32) ? 0 : 2*FATTN_PV(nsg)) + 2*(2*ncpsg)) + is_q*(16*32*(nsg)))*(sizeof(float)/2), 16))
 
         //int64_t nsgmax = 4;
         //
@@ -5333,7 +5335,7 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
         // spill where 4 simdgroups spill 32 B, perf/fa-long-context.md); GGML_FA_Q16_NSG overrides
         static const int env_fa_q16_nsg = getenv("GGML_FA_Q16_NSG") ? atoi(getenv("GGML_FA_Q16_NSG")) : 8;
         static const int env_fa_q24_nsg = getenv("GGML_FA_Q24_NSG") ? atoi(getenv("GGML_FA_Q24_NSG")) : 8;
-        int32_t nsg = ne00 >= 512 ? 8 : (nqptg == 24 ? env_fa_q24_nsg : nqptg == 16 ? env_fa_q16_nsg : 4);
+        int32_t nsg = ne00 >= 512 ? 8 : (nqptg == 24 ? env_fa_q24_nsg : nqptg == 32 ? 8 : nqptg == 16 ? env_fa_q16_nsg : 4);
         // dk 72: the 16-row tile needs 4 column tiles per simdgroup (PV 128 / 4 simdgroups), GGML_FA_Q16_NSG_DK72 overrides
         static const int env_fa_q16_nsg_dk72 = getenv("GGML_FA_Q16_NSG_DK72") ? atoi(getenv("GGML_FA_Q16_NSG_DK72")) : 4;
         if (nqptg == 16 && ne00 == 72) {

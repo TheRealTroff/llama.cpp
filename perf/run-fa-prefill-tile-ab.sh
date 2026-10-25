@@ -10,7 +10,7 @@ B=${B:-/Users/troff/play/llama.cpp-fa200k}
 BIN=${BIN:-/Users/troff/play/llama.cpp-prod/build/bin}
 KVS=${KVS:-98304 8448}; NB=${NB:-512}; REPS=${REPS:-2}
 export PICK_SPEC_EV=0
-source "$B/perf/pick.sh"; pick_env ud turbo4
+LINE=${LINE:-ud}; source "$B/perf/pick.sh"; pick_env $LINE turbo4
 echo "=== prefill FA tile forms, isolated (binary $(date -r "$BIN/test-backend-ops" '+%m-%d %H:%M'))"
 run() {  # run <label> <type> [ENV=VAL ...]
   local label=$1 typ=$2; shift 2
@@ -34,5 +34,11 @@ for kv in $KVS; do
     run turbo4-16row-OR1 turbo4 GGML_FA_Q16_OR=1
     run turbo4-16row-OR2 turbo4 GGML_FA_Q16_OR=2
     run turbo4-16row     turbo4 ;;
+  esac
+  case " $ARMS " in *" q32 "*)   # the 32-row O-resident tile (GGML_FA_Q32, prescreen 48 B spill at qr 0) against the OR2 16-row form
+    run turbo4-16row-OR2 turbo4 GGML_FA_Q16_OR=2 GGML_FA_Q16_KVMIN=0
+    run turbo4-32row     turbo4 GGML_FA_Q32=1 GGML_FA_Q32_KVMIN=0 GGML_FA_Q16_KVMIN=0
+    run turbo4-16row-OR2 turbo4 GGML_FA_Q16_OR=2 GGML_FA_Q16_KVMIN=0
+    run turbo4-32row     turbo4 GGML_FA_Q32=1 GGML_FA_Q32_KVMIN=0 GGML_FA_Q16_KVMIN=0 ;;
   esac
 done
