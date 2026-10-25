@@ -233,5 +233,8 @@ run (owner's call: no numerics change, the pick block is unchanged; the t/s refe
 
 Every sha = its record (the q4 controller fork of the 18:45 gate did not recur). The t/s are 1.3-1.7% under the afternoon's mint on
 both lines - the same offset the 16:45 gate on the unmerged tree showed against that mint; FA is ~3% of the 8K round and this lever
-~0.1% of it, so this is the warm box after a day of sweeps, not the kernel (`mint-controller-arm-is-statistical`: hot ambient = a
-sha mint). The t/s reference stays `prodpick-oct25-fa200k`; the full mint for this state is not run.
+~0.1% of it, so it is not the kernel. ~~This is the warm box after a day of sweeps (hot ambient = a sha mint).~~ Owner 2026-10-25:
+"probably not heat, but the whole machine state is a complicated thing" - a 1-2% t/s offset between runs hours apart is the
+machine's state (whatever else it ran, holds in memory, or has cached), not something to attribute without measuring it; the
+shas are the gate, the t/s a reference under its own conditions. The t/s reference stays `prodpick-oct25-fa200k`; the full mint
+for this state is not run.
