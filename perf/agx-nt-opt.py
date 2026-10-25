@@ -39,8 +39,52 @@ VALUE_OFF = 112
 
 def lldb_module():
     sys.path.insert(0, subprocess.check_output(['lldb', '-P'], text=True).strip())
-    import lldb
+    try:
+        import lldb
+    except ImportError:
+        # Xcode's lldb module is built for Apple's python (_lldb.cpython-39 under Xcode 27.1); a
+        # Homebrew/conda python3 on PATH fails with "cannot import name '_lldb'". Re-exec there.
+        if sys.executable != '/usr/bin/python3':
+            os.execv('/usr/bin/python3', ['/usr/bin/python3'] + sys.argv)
+        raise
     return lldb
+
+def agx_platform_version():
+    """Target OS version for applegpu-nt: the running OS by default (the runtime compiles for it; a 26.0 target selected the
+    macOS-26 backend libapplegpu25-nt and produced bodies 1-3 instructions longer than the hardware's on q5_K/q3_K/FA,
+    2026-10-24). Override: AGX_PLATFORM_VERSION=26.0."""
+    v = os.environ.get('AGX_PLATFORM_VERSION')
+    if not v:
+        v = subprocess.check_output(['sw_vers', '-productVersion'], text=True).strip().split('.')[0] + '.0'
+    return v
+
+def agx_backend_module(bindir, platform_version):
+    """The backend dylib air-nt loads for this macOS target, from the toolchain's lib/air-nt/config.yaml
+    (13-14: libapplegpu23-nt, 15: 24, 26: 25, 27+: libapplegpu-nt). Override: AGX_NT_MODULE=<name without .dylib>."""
+    if os.environ.get('AGX_NT_MODULE'):
+        return os.environ['AGX_NT_MODULE']
+    mdir = os.path.join(bindir, '..', 'metal')
+    ver = sorted([d for d in os.listdir(mdir) if d.isdigit()], key=int)[-1]
+    cfg = os.path.join(mdir, ver, 'lib', 'air-nt', 'config.yaml')
+    want = float(platform_version.split('.')[0])
+    cur = {}
+    if os.path.exists(cfg):
+        for line in open(cfg):
+            t = line.strip()
+            if t.startswith('- path:'):
+                if cur.get('platform') == 'macos' and cur.get('min', 0) <= want <= cur.get('max', 1e9):
+                    return os.path.basename(cur['path']).replace('.dylib', '')
+                cur = {'path': t.split(':', 1)[1].strip()}
+            elif t.startswith('platform:'): cur['platform'] = t.split(':', 1)[1].strip()
+            elif t.startswith('min-version:'): cur['min'] = float(t.split(':', 1)[1].strip().split('.')[0])
+            elif t.startswith('max-version:'): cur['max'] = float(t.split(':', 1)[1].strip().split('.')[0])
+        if cur.get('platform') == 'macos' and cur.get('min', 0) <= want <= cur.get('max', 1e9):
+            return os.path.basename(cur['path']).replace('.dylib', '')
+    return 'libapplegpu-nt'
+
+def default_module():
+    bindir = os.path.dirname(subprocess.check_output(['xcrun', '--find', 'metal'], text=True).strip())
+    return agx_backend_module(bindir, agx_platform_version())
 
 def debug_translator():
     return subprocess.check_output(['/bin/zsh', os.path.join(HERE, 'agx-nt-debug.sh')], text=True).strip()
@@ -125,8 +169,13 @@ def run(args, opts, module, mode_hook=None):
     pipeline_script(args.kernel, args.cvs, sp)
     out = os.path.abspath(args.gpubin or (args.kernel + '.gpubin'))
     errf = os.path.abspath(args.stderr or (args.kernel + '.nt.err'))
-    argv = ['-arch', arch, '-platform_version', 'macos', '26.0', '26.0', '-N', sp,
+    argv = ['-arch', arch, '-platform_version', 'macos', agx_platform_version(), agx_platform_version(), '-N', sp,
             os.path.abspath(args.metallib), '-o', out]
+    # a gpubin left by an earlier run (other constants, other source) must not survive this one: the packager
+    # fallback below keys on the file's absence, and the Oct 24 census joined 16 rows against stale binaries
+    for stale in (out, errf):
+        if os.path.exists(stale):
+            os.remove(stale)
     dbg = lldb.SBDebugger.Create(); dbg.SetAsync(False)
     tgt = dbg.CreateTarget(exe)
     bp = tgt.BreakpointCreateByRegex('^AIRNT')
@@ -211,7 +260,7 @@ def main():
     ap.add_argument('--cvi', action='append', default=[], help='IDX=VAL int32 function constant')
     ap.add_argument('--cvb', action='append', default=[], help='IDX=VAL bool function constant')
     ap.add_argument('--opt', action='append', default=[], help='NAME[=INT] backend option to set')
-    ap.add_argument('--module', default='libapplegpu-nt', help='module holding the option registry')
+    ap.add_argument('--module', default=None, help='module holding the option registry (default: the backend config.yaml maps the target OS to; AGX_NT_MODULE overrides)')
     ap.add_argument('--int', action='store_true', help='write 4 bytes even for 0/1 values')
     ap.add_argument('--arch', default=None)
     ap.add_argument('-o', '--out', default=None, help='mir: output file')
@@ -229,6 +278,8 @@ def main():
         opts = [('print-after-all', 1)]
     if not opts:
         sys.exit('nothing to set (--opt)')
+    if args.module is None:
+        args.module = default_module()
     out, errf = run(args, opts, args.module)
     if args.mode in ('mir', 'passes'):
         mf, passes = extract_last_mf(errf)

@@ -1,5 +1,17 @@
 # Reaching the AGX backend inside applegpu-nt (2026-09-09, OPEN)
 
+> **State 2026-10-24 (Xcode 27.1, Metal Toolchain 27A266a, metal 32023.921.6): the route works again.** It was down
+> from 2026-09-18 ("cannot emit pipeline") for two reasons that have nothing to do with the flag-flip mechanism itself:
+> the debug copy lacked the toolchain's `lib/applegpu25-nt/` runtime metallibs (`agx-nt-debug.sh` linked only `*.dylib`;
+> fixed - it links every `lib/` entry), and the scripts' hardcoded `-platform_version macos 26.0` selected the **macOS-26
+> backend `libapplegpu25-nt`** (config.yaml maps the TARGET OS version to a backend dylib: 26 -> applegpu25, 27+ ->
+> libapplegpu-nt; ~~a per-generation split~~ - the first reading tonight was wrong); the option in `libapplegpu-nt` was never
+> read because that library was not the one translating, and the 26-target bodies were 1-3 instructions longer than the
+> hardware's on q5_K/q3_K/FA. Both translators now target the running OS and take the module from config.yaml
+> (`AGX_PLATFORM_VERSION`, `AGX_NT_MODULE`). `VALUE_OFF=112` and the `^AIRNT` breakpoint
+> are unchanged. Verified: `print-after-all` watch = 177 accesses, `kernel_silu_back_f32` MIR (19 instr) aligns to the native
+> body. The Python must be Apple's (`xcrun python3`, 3.9) for the lldb module; the script re-execs itself there.
+
 Purpose: the GPU cost-model plan (why kernel speed stays unpredictable after ~50 kernels)
 needs per-instruction *classes* for every instruction the profiler attributes stalls to.
 The structural decoder (`perf/agx-disasm.py`) gives offsets and bytes but no mnemonics.

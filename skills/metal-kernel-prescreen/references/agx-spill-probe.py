@@ -33,6 +33,16 @@ import tempfile
 BIN = os.path.dirname(subprocess.check_output(['xcrun', '--find', 'metal'], text=True).strip())
 
 
+def agx_platform_version():
+    """Target OS version for applegpu-nt: the running OS by default (the runtime compiles for it; a 26.0 target selected the
+    macOS-26 backend libapplegpu25-nt and produced bodies 1-3 instructions longer than the hardware's on q5_K/q3_K/FA,
+    2026-10-24). Override: AGX_PLATFORM_VERSION=26.0."""
+    v = os.environ.get('AGX_PLATFORM_VERSION')
+    if not v:
+        v = subprocess.check_output(['sw_vers', '-productVersion'], text=True).strip().split('.')[0] + '.0'
+    return v
+
+
 def host_arch():
     return subprocess.check_output([os.path.join(BIN, 'metal-arch')], text=True).strip()
 
@@ -128,7 +138,7 @@ def translate(lib, kernel, cvs, arch, outdir):
     out = os.path.join(outdir, 'out.gpubin')
     open(sp, 'w').write(json.dumps(script))
     base = [os.path.join(BIN, 'applegpu-nt'), '-arch', arch,
-            '-platform_version', 'macos', '26.0', '26.0', '-N', sp, os.path.abspath(lib)]
+            '-platform_version', 'macos', agx_platform_version(), agx_platform_version(), '-N', sp, os.path.abspath(lib)]
     r = subprocess.run(base + ['-o', out], capture_output=True, text=True)
     if r.returncode == 0 and os.path.exists(out):
         return out, 'pkg', None

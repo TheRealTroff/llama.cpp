@@ -111,9 +111,18 @@ Two facts that make the comparison valid and cheap:
 > the session alive (`gpudebug -l`, `--terminate all`); in an interactive session the `shaders` leaf fills a
 > few seconds AFTER "Profile data collected"; offline `metal` compiles for the prescreen/translator need
 > `-mmacosx-version-min=26.0` (Xcode 27 emits AIR 2.9, `applegpu-nt` targets 2.8). Still down under Xcode 27:
-> `--backend dy` (no DYDesktopDevice) and the lldb machine-IR join (`agx-nt-opt.py mir`, "cannot emit
-> pipeline" from the re-signed debug copy) - census rows say "no join"; read sizes (14 B = loads) meanwhile.
+> `--backend dy` (no DYDesktopDevice; superseded by gpudebug). ~~and the lldb machine-IR join (`agx-nt-opt.py mir`, "cannot emit
+> pipeline" from the re-signed debug copy) - census rows say "no join"; read sizes (14 B = loads) meanwhile.~~ The MIR join is
+> BACK 2026-10-24: the debug copy needed the toolchain's whole `lib/` linked (runtime metallibs in `lib/applegpu25-nt/`), and
+> the translators must target the RUNNING OS (`-platform_version macos 27.0`: config.yaml picks the backend dylib by target
+> version, 26 -> libapplegpu25-nt, 27+ -> libapplegpu-nt; the Sep 9 hardcoded 26.0 made bodies 1-3 instructions longer than
+> the hardware's and the flag flip land in the wrong library) - both scripts now default to `sw_vers`, `AGX_PLATFORM_VERSION`
+> / `AGX_NT_MODULE` override; `-mmacosx-version-min=26.0` is unnecessary at platform 27;
+> details in `perf/agx-backend-access.md` (state block) and `perf/kernel-census.md`.
 > Under Xcode 26.6 on macOS 27 both backends were empty (`APSCounterData entries: 0`, empty performance leaves).
+> **Every Xcode update removes the Metal Toolchain component again** (seen 2026-10-24 with Xcode 27.1): if `xcrun metal
+> --version` says "missing Metal Toolchain", re-run the download, then re-verify this route on a COPY of an existing trace
+> (profiling embeds into the bundle) and rebuild `build-air/ggml.metallib` by hand - the census only rebuilds it on a source change.
 
 ```sh
 references/metal-profile-headless.py \
@@ -472,3 +481,22 @@ fewer registers - and 17.1M dynamic instructions per decode dispatch against 5.3
 Static stats cannot see a loop that is not unrolled, a scratch round trip or a transposed load (3 load
 instructions per tile): read `exec/disp` and the tier view first, then the hot loop's 14 B count against the
 loads the source needs. Fixed by the register-resident dequant form (`metal-kernel-prescreen` skill).
+
+## Rare path or common path? A never-firing probe, then the profile (2026-10-05, exp/mm-token-scale)
+
+The in-tile overflow scale for mul_mm cost +5% per op in two forms (a per-step threadgroup flag with a mid-loop
+accumulator rescale; a running max in staging). Two cheap steps found where:
+
+- **Never-firing probe**: set the detection threshold to 1e30 and time again. Same cost (-4.4% e2e) = the rare path is
+  innocent, the common path pays. Do this before profiling any "rare" branch.
+- **Profile the pair** (`test-backend-ops perf` capture, `metal-profile-headless.py`, then
+  `gpuprofiler-stats.py <out>/streamData` - it takes the FILE, not the output dir): temporary registers 52 -> 68..73
+  and hot-loop instructions per K-step 121 -> 144..156 (hot rows = executed >= 0.9 max, from
+  `perf/shaderprof-table.py --json`; note `perf/shaderprof-compare.py` wants `label=path` arms and printed empty rows
+  for these list-form JSONs - compute the hot-loop numbers directly). MMA kernels convert ~+20-30% loop instructions
+  into ~+5% time.
+- **The fix that paid: detect from the accumulators after the loop** - an inf staged into a half B tile makes every
+  product of that column inf or NaN (0 * inf), so a post-loop exponent-bit test on `mc[i].thread_elements()`
+  (`(as_type<uint>(x) & 0x7f800000) == 0x7f800000`; `isfinite` may fold to true under the fork's fast math) + one
+  `simd_any` + one barrier is complete detection at zero hot-loop cost. The rare tile then redoes the whole K loop with
+  the scales applied from the start. +0.2% per op, -0.9% e2e on antares-1b (only the overflowing column tiles redo).

@@ -32,7 +32,10 @@ cp -R "$SRC/lib/air-nt" "$SRC/lib/applegpu-nt" "$T/lib/"
 for f in "$SRC"/lib/*.dylib; do
     b=$(basename "$f"); [[ -e "$T/lib/$b" && ! -L "$T/lib/$b" ]] || ln -sf "$f" "$T/lib/$b"   # real copies stay; links are refreshed (the cryptex mount path changes on every toolchain activation)
 done
-ln -sf "$SRC/lib/amd_13/libAMDNTPlugin.dylib" "$T/lib/amd_13/"   # -sf: a stale link to a moved toolchain fails -e and then ln (2026-09-18)
+ln -sf "$SRC/lib/amd_13/libAMDNTPlugin.dylib" "$T/lib/amd_13/"
+for f in "$SRC"/lib/*; do   # 2026-10-24: the 27.x toolchain keeps the backend's runtime metallibs in lib/applegpu25-nt/ (+ clang/, metalfe/, runtime.*.split);
+    b=$(basename "$f"); [[ -e "$T/lib/$b" ]] || ln -s "$f" "$T/lib/$b"   # without them the copy translates nothing ("Failed to open bitcode file", "cannot emit pipeline")
+done   # -sf: a stale link to a moved toolchain fails -e and then ln (2026-09-18)
 cp "$SRC"/ToolchainInfo.* "$T/" 2>/dev/null || true
 # ad-hoc signatures: required for lldb to attach and for a patched dylib to load
 codesign -f -s - "$T/bin/air-nt" 2>/dev/null

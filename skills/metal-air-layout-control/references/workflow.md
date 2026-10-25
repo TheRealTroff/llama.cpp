@@ -20,7 +20,7 @@ Determine the actual host Apple GPU architecture rather than guessing it. Record
 
 ```sh
 applegpu-nt -arch applegpu_g16s \
-  -platform_version macos 26.0 26.0 \
+  -platform_version macos 27.0 27.0 \   # = the RUNNING OS: config.yaml picks the backend dylib by target version (26 -> libapplegpu25-nt, 27+ -> libapplegpu-nt); a stale 26.0 translates 1-3 instructions longer than the runtime (2026-10-24)
   -N /tmp/target.mtlp-json /tmp/base.metallib -o /tmp/base.gpubin
 ```
 

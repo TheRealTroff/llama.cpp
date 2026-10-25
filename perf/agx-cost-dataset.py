@@ -33,14 +33,26 @@ FAMILIES = [
                                          'ns10': ('i', 20), 'ns20': ('i', 21), 'nsg': ('i', 22), 'nwg': ('i', 23), 'nq': ('i', 24)}),
     ('kernel_flash_attn_ext_pad', 100, {'mask': ('b', 0), 'ncpsg': ('i', 25)}),
     ('kernel_flash_attn_ext_blk', 200, {'nqptg': ('i', 24), 'ncpsg': ('i', 25)}),
-    ('kernel_flash_attn_ext', 300, {'mask': ('b', 0), 'sinks': ('b', 1), 'bias': ('b', 2), 'scap': ('b', 3), 'kvpad': ('b', 4), 'bcm': ('b', 10),
-                                     'ns10': ('i', 20), 'ns20': ('i', 21), 'nsg': ('i', 22), 'nwg': ('i', 23), 'gqah': ('i', 24), 'qr': ('i', 25)}),
+    # 4th field (optional): constants the runtime ALWAYS sets but names only when true - the offline instantiation must set
+    # them to that default or the binary differs from the trace (2026-10-24: every FA row of the Oct 24 census had "no join"
+    # over has_kvlen/has_kvoff/t4probe = false; ggml-metal-device.cpp names them _kvl=1/_kvo=1/_t4p=1 only when set)
+    ('kernel_flash_attn_ext', 300, {'mask': ('b', 0), 'sinks': ('b', 1), 'bias': ('b', 2), 'scap': ('b', 3), 'kvpad': ('b', 4),
+                                     'kvl': ('b', 5), 'kvo': ('b', 6), 't4p': ('b', 7), 'bcm': ('b', 10),
+                                     'ns10': ('i', 20), 'ns20': ('i', 21), 'nsg': ('i', 22), 'nwg': ('i', 23), 'gqah': ('i', 24), 'qr': ('i', 25)},
+                                    {'kvl': 0, 'kvo': 0, 't4p': 0}),
+    # skinny tile levers (set only when nonzero, named only then): iq4lut (+9), q5k (+10), kq2 (+11: q4_K/q5_K header-once AND
+    # the iq4_xs header fold GGML_MM_SKINNY_IQ4XS_HDR share the slot), q6k (+12) - w8-decomp-sep18.md / skinny-iq4xs-hdr.md
     ('kernel_mul_mm', 700, {'bci': ('b', 0), 'bco': ('b', 1), 'ne12': ('s', 2), 'ne13': ('s', 3), 'r2': ('s', 4), 'r3': ('s', 5), 'soa': ('b', 6),
-                             'exact': ('b', 7), 'bsp': ('s', 8)}),
+                             'exact': ('b', 7), 'bsp': ('s', 8), 'iq4lut': ('s', 9), 'q5k': ('s', 10), 'kq2': ('s', 11), 'q6k': ('s', 12)},
+                            # always set by the runtime, named only when true/relevant: soa (+6, bool) and ne13 (+3 = 1 on every
+                            # 2-D projection). Undefined offline they left q4_0's code unchanged but q8_0's skinny tile came out
+                            # at half the hardware's 443 instructions (2026-10-25, the 5120x48 GDN projection row).
+                            {'soa': 0, 'ne13': 1}),
     ('kernel_mul_mv', 600, {'nsg': ('s', 0), 'nxpsg': ('s', 1), 'ne12': ('s', 2), 'r2': ('s', 3), 'r3': ('s', 4), 'nr0': ('s', 5), 'exact': ('b', 707)}),
-    ('kernel_gated_delta_net', 1600, {'ne20': ('s', 0), 'ne30': ('s', 1), 'K': ('s', 2), 'wb': ('b', 3), 'xk': ('b', 4)}),
+    ('kernel_gated_delta_net', 1600, {'ne20': ('s', 0), 'ne30': ('s', 1), 'K': ('s', 2), 'wb': ('b', 3), 'xk': ('b', 4), 'gate': ('b', 5)}),   # gate +5 (2026-10-24)
     ('kernel_bin', 1300, {'op': ('s', 0), 'nf': ('s', 1), 'rb': ('b', 2), 'cb': ('b', 3)}),
-    ('kernel_ssm_conv', 900, {'ssm_conv_bs': ('s', 0)}),
+    # the suffix regex keys on the token before '=': '_ssm_conv_bs=256' parses as 'bs' (2026-10-24: unresolved constant -> no dump)
+    ('kernel_ssm_conv', 900, {'ssm_conv_bs': ('s', 0), 'bs': ('s', 0)}),
     ('kernel_solve_tri', 1000, {'nsg': ('s', 0), 'n': ('s', 1), 'k': ('s', 2)}),
     ('kernel_sum_rows', 1400, {'op': ('s', 0)}),
     ('kernel_count_equal', 1100, {'nsg': ('s', 0)}),
@@ -79,6 +91,16 @@ def constant_args(kernel, capture_log):
                 if k in keys and keys[k][0] == 'b':
                     t, idx = keys[k]; a = ['--cvb', '%d=1' % (fam[1] + idx if idx < 100 else idx)]
                     if a[1] not in args: args += a
+            # constants the runtime always sets (see FAMILIES): default them when the name does not carry them
+            if len(fam) > 3:
+                named = set(re.findall(r'_([A-Za-z0-9]+)=', suffix))
+                for k, v in fam[3].items():
+                    if k not in named and k in keys:
+                        t, idx = keys[k]
+                        a = (fam[1] + idx) if idx < 100 else idx
+                        if any(x.startswith('%d=' % a) for x in args):
+                            continue   # already set from the name (a bare flag such as '_soa' is not in `named`)
+                        args += [{'s': '--cv', 'i': '--cvi', 'b': '--cvb'}[t], '%d=%s' % (a, v)]
         if args not in out:
             out.append(args)
     return out or [[]]

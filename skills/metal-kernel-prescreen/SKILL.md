@@ -61,9 +61,12 @@ xcrun metal -c ggml/src/ggml-metal/ggml-metal.metal -o /tmp/x.air \
 xcrun metallib /tmp/x.air -o /tmp/x.metallib
 ```
 
-Under Xcode 27 add `-mmacosx-version-min=26.0`: its `metal` emits AIR 2.9 and `applegpu-nt` targets 2.8 ("incompatible
-module, module AIR version (2.9) is bigger than the one of the target (2.8)"); the Metal Toolchain is a separate
-`xcodebuild -downloadComponent MetalToolchain` (2026-09-18). `-DTURBO_USE_PAIR_LUT=1` mirrors the runtime's preprocessor macro (`ggml-metal-device.m` sets it before
+~~Under Xcode 27 add `-mmacosx-version-min=26.0`: its `metal` emits AIR 2.9 and `applegpu-nt` targets 2.8 ("incompatible
+module, module AIR version (2.9) is bigger than the one of the target (2.8)");~~ 2026-10-24: that error was the probe's
+hardcoded `-platform_version macos 26.0` (the macOS-26 backend); `agx-spill-probe.py` now targets the running OS (27.0 ->
+`libapplegpu-nt`, no version-min needed, AIR 2.9 fine) - and a 26 target translates kernels 1-3 instructions LONGER than the
+runtime's binary on some kernels, so never prescreen against a target the runtime is not compiling for; the Metal Toolchain is a separate
+`xcodebuild -downloadComponent MetalToolchain` (2026-09-18). Every Xcode update removes that component again (2026-10-24, Xcode 27.1): check `xcrun metal --version` first; without the version-min flag the 27.1 toolchain fails with `image not loaded: object`. `-DTURBO_USE_PAIR_LUT=1` mirrors the runtime's preprocessor macro (`ggml-metal-device.m` sets it before
 compiling the embedded source): without it the Turbo4 FA forms fail with "use of undeclared identifier
 'turbo_pairs_4bit'" and no `.air` is written (2026-09-16, macOS 27 / Xcode 26.6). Check for other macros in
 that file's `preprocessorMacros` block when a new define appears there.
@@ -529,3 +532,20 @@ without a GPU launch, in this order:
   with it every FA kernel fails "cannot locate all required functions". The FA kernels package via the `stage` route;
   `--keep` works there. And the zsh trap again: a `CV="--cvb ..."` string expanded unquoted in the tool shell is ONE
   argument (the probe then reports the same "cannot locate" error) - run sweeps under `bash -c`.
+
+## A default-off lever must leave the plain kernel's instruction stream identical (2026-10-05, exp/mm-token-scale)
+
+The mul_mm per-token activation scale (`GGML_MM_TOKSCALE`) added a pass loop around the K loop. Gated by a
+FUNCTION CONSTANT, the plain specialization still changed codegen (q8_0 tile 3506 -> 3494 B at bco=0, 4360 -> 4364 at
+bco=1; f16 3148 -> 3146): function constants are resolved after AIR generation, so the loop's structure reaches the
+backend even when its trip count specializes to 1. As a TEMPLATE parameter (`bool TSC = false`, separate `_tsc`
+instantiations) it folds at AIR time - but only once the setup code was back in its original order and position
+(statements moved into the loop scope still perturbed one variant with the template form).
+
+- Check with instruction streams, not text size: equal `text` is not identity, and two `.gpubin`s of the same kernel
+  differ in their Mach-O metadata. `references/plain-stream-identity.sh <dir>` translates the plain kernels from a
+  `prod.metallib` and a candidate metallib in `<dir>` and compares the concatenated instruction bytes from
+  `perf/agx-disasm.py --json` (edit the kernel list and FCs inside; it names the candidate `p7.metallib`).
+- Every spelling of the lever's live state costs registers in the HOT loop even when the code that uses it is rare:
+  rebuilding x/y in a redo pass kept the setup values live through the K loop; rewinding the pointers by the known
+  per-step advance (y -= nsteps*NK, x -= nsteps*((2 + nl - 1)/nl) for nl <= 2) keeps them dead.
