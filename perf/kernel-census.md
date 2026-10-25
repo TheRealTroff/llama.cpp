@@ -62,6 +62,18 @@ says NO PERF CASE: add one), an uncaptured timing (2 reps), a capture, a headles
 per-instruction decode, then `kernel-census.py metrics`. `report` prints the table, appends it to
 this file when asked (`--md`), writes a JSON snapshot and diffs against the previous one.
 
+**Serialized is not wall - read the exposed-time bound next to a row (2026-10-25 evening, `census-groups.md`, merged `9fd97533c`).**
+The census's us/call comes from `GGML_METAL_PROFILE=1` (one serial encoder per op = the op's latency alone). `GGML_METAL_PROFILE=2`
+times the real concurrent schedule per concurrency group (one timed concurrent encoder per barrier-delimited group; the M4 Pro
+samples counters at encoder boundaries only, so the barrier is the finest timestamp there is), and `perf/census-groups.py
+<mode1.log> <mode2.log>` bounds every op's wall contribution: `exposed_hi = min(t, W - max other member)`, `exposed_lo = max(0, W -
+(S - t))`. `run-census-full.sh` now runs both modes and prints the bounds above each decode census. Calibrated against the deletion
+probes of `gdn-proj-shadow.md` (every measurement inside its bound): the 5120x48 GDN projections - #1 of the Aug 22 and Oct 24
+censuses - are 7-8 ms charged, at most 1.9 (q4) / 1.0 (ud) ms exposed. Decode hiding is 1.15-1.18x overall and lives almost
+entirely in the GDN input group (S/W 1.6-1.7; the ffn gate+up pair 1.09, every other group 1.00); **prefill has no hiding** - a
+prefill row's serialized time is its wall. Rank decode levers by `exposed_hi`; a row with `hi/ser` under ~0.3 is a shadow row; a
+surviving small-op row still gets the skip arm (`GGML_MM_SKIP_NE01`, exp/gdn-proj-shadow) before a kernel is built for it.
+
 ## What the table normalizes
 
 - **mma class** (MUL_MAT at ne11 > 8, FLASH_ATTN_EXT): executed instructions per GFLOP, 14 B

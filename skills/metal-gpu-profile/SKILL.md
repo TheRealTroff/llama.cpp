@@ -45,6 +45,14 @@ it for all of them. Steps 1-3 below are what it runs per kernel, and what you us
 a flagged row.
 
 Read the census row in this order (2026-09-09, `perf/agx-backend-access.md`):
+0. **Is its time on the wall at all?** (2026-10-25, `perf/census-groups.md`) The row's us/call is a SERIALIZED latency
+   (`GGML_METAL_PROFILE=1`, one serial encoder per op). `GGML_METAL_PROFILE=2` times the real concurrent schedule per
+   concurrency group (the M4 Pro samples counters at encoder boundaries only, so the barrier is the finest timestamp), and
+   `perf/census-groups.py <mode1.log> <mode2.log>` bounds each op's wall share `[exposed_lo, exposed_hi]` from its group's
+   measured wall and its neighbours' latencies. Calibrated against deletion probes: the twice-#1 5120x48 GDN projections are 7-8
+   ms charged, at most 1-1.9 ms exposed. Rank decode levers by `exposed_hi`; prefill rows need no correction (no hiding there);
+   a row with `lo` ~0 is a skip-arm candidate, never a lever, until `GGML_MM_SKIP_NE01` says otherwise. `run-census-full.sh`
+   runs both modes.
 1. **`x floor@252`** first. It is time over bytes at the measured practical peak (252 GB/s, a 37 MB
    CPY; 273 is the LPDDR5X nominal). Under 1.1 the row is flagged FLOOR (the width-1 mul_mv kernels sit at 1.03-1.07; 1.1-1.3 is NEAR: stream-side levers only): the kernel streams at
    the DRAM limit and NO per-instruction reading applies, whatever issue/stall says (the

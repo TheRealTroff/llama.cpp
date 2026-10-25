@@ -1,4 +1,4 @@
-# From profile to wall: the concurrency-group profile (GGML_METAL_PROFILE=2) and per-op exposed-time bounds - BUILT + CALIBRATED 2026-10-25 evening, merge = owner
+# From profile to wall: the concurrency-group profile (GGML_METAL_PROFILE=2) and per-op exposed-time bounds - BUILT + CALIBRATED + MERGED 2026-10-25 evening (owner: "Merge"; prod `9fd97533c`)
 
 Owner (after the decode FA at 200K landed): "What is really going on with the 'shadowing'? Can we do better in our predictions
 going from profiling to real perf?" -> "Let's see what it gives us." Branch `exp/census-groups`, worktree `llama.cpp-censusgroups`,
@@ -103,9 +103,18 @@ deletion probe.
 - Not captured: cross-group interaction through the cache/DRAM, CPU-exposed gaps between command buffers (the submit profiler's
   job), and the drafter/target split (both are in the decode phase here, keyed `m1`/`m2`).
 
-### Next (owner)
+### Done at the merge / open
 
-1. Merge `GGML_METAL_PROFILE=2` + `census-groups.py` to prod (inert unless set; the mode-1 path is untouched) and add the two
-   columns to `kernel-census.py` (the census already parses the mode-1 log; it would take the mode-2 log of the same run as a second
-   input, `run-census-full.sh` STEPS="anchor metalprof metalgroups").
-2. Keep the skip arm for rows whose `hi` is still worth building for.
+1. MERGED prod `9fd97533c` (inert unless `GGML_METAL_PROFILE=2`; the mode-1 and unprofiled paths are unchanged - post-merge sha
+   sanity in the section below). `run-census-full.sh` runs `metalprof metalgroups` and prints the bounds above each decode census.
+2. OPEN: the two columns inside `kernel-census.py`'s own table (today the join is a separate `-groups.txt` beside the census).
+3. The skip arm stays the exact step for rows whose `hi` is still worth building for.
+
+### Post-merge sanity on the prod build (`cgroups-merge-oct25-{ud,q4}`, prod `9fd97533c`, unprofiled)
+
+| line | pick-n6-300 (f16, canonical) | turbo4-n3-300 |
+|---|---|---|
+| ud | 31.70 t/s acc 69.0% `9c53aaade052` = record | 32.33 t/s acc 72.4% `d180ae89f168` = record |
+| q4 | 32.92 t/s acc 63.5% `d2953fccfb41` = record | 34.94 t/s acc 67.8% `f07b0f8c58e6` = record |
+
+The unprofiled encode path is unchanged by construction (`prof_group` false takes the old branches); the shas say the same.

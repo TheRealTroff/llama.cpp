@@ -21,7 +21,10 @@ echo "toolchain: $(xcrun metal --version 2>&1 | head -1)"
 if lsof -ti :8093 -ti :8094 >/dev/null 2>&1; then echo "WARNING: a serving server is up on 8093/8094 - it shares the GPU with every timing below"; fi
 
 echo; echo "### 1. profiled runs"
-TAG=$TAG LINES="$LINES" DEPTHS="$DEPTHS" STEPS=metalprof PORT=$PORT KV=turbo4 NPRED=300 "$B/perf/run-w8-decomp.sh" || echo "profiled runs: exit $?"
+# metalprof = one serial encoder per op (the census rows' serialized us/call); metalgroups = GGML_METAL_PROFILE=2, one timed
+# CONCURRENT encoder per concurrency group -> perf/census-groups.py writes $RES/$TAG-<line>-d<depth>-groups.txt: per op the wall it
+# can own, bounded [exposed_lo, exposed_hi], beside the serialized charge (perf/census-groups.md). Rank levers by exposed_hi.
+TAG=$TAG LINES="$LINES" DEPTHS="$DEPTHS" STEPS="${STEPS:-metalprof metalgroups}" PORT=$PORT KV=turbo4 NPRED=300 "$B/perf/run-w8-decomp.sh" || echo "profiled runs: exit $?"
 
 echo; echo "### 2. censuses"
 source "$B/perf/pick.sh"
@@ -32,6 +35,7 @@ for line in $LINES; do
     log=$RES/$TAG-$line-d$depth-metalprof.server.log; w=$((depth+1))
     [ -s "$log" ] || { echo "$line d$depth: no profiled log $log"; continue; }
     echo; echo "--- $line width $w decode census ($(date +%H:%M)) ---"
+    [ -s "$RES/$TAG-$line-d$depth-groups.txt" ] && { echo "exposed-time bounds (census-groups.py, top rows):"; sed -n '1,5p;/^per op/,$p' "$RES/$TAG-$line-d$depth-groups.txt" | head -28 | sed 's/^/    /'; }
     ENVS="$ENVS" TOP=$TOP_DEC PHASE=decode PREV=$prev "$B/perf/kernel-census.sh" "$log" "$TAG-$line-w$w-dec" 2>&1 | tail -40
     if [ "$depth" = "$(echo $DEPTHS | awk '{print $1}')" ]; then
       echo; echo "--- $line prefill census ($(date +%H:%M)) ---"

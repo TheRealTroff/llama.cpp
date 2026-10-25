@@ -1179,6 +1179,11 @@ must be a separate checkout. Two arms that agree to the microsecond are a routin
   matmul shape's shadow in one pinned-width arm - run it before building a kernel for a small-op census row.
   Second row the same morning: q4 `attn_k/attn_v 5120x1024 n=8` is ~45% on the wall (1.07 ms, 0.9% of the round, x2), ud 0 -
   the shadow is row-specific, no fixed discount.
+  **Bound it before probing it (2026-10-25 evening, `census-groups.md`, merged `9fd97533c`): `GGML_METAL_PROFILE=2` times the real
+  concurrent schedule per concurrency group, and `perf/census-groups.py` joins it with the mode-1 log into a per-op wall bound
+  [exposed_lo, exposed_hi] (every deletion-probe measurement above falls inside its bound; the 5120x48 row caps at 1.9 / 1.0 ms of
+  its 7-8 ms charge). Decode hiding 1.15-1.18x, almost all in the GDN input group; prefill 1.00 everywhere. The full census runs
+  both modes (`run-census-full.sh`); rank by `exposed_hi`, not by the serialized charge.
 - **An isolated per-call A/B (`test-backend-ops perf`) is a warm-cache, one-op-in-a-loop number; before
   explaining a per-call-to-round shortfall by overlap, profile the graph.** `GGML_METAL_PROFILE=1`
   runs one encoder per op, so its per-shape us/call is the kernel's in-graph time with nothing
@@ -1743,6 +1748,15 @@ Refuted - do not reopen without new information:
   19.18 -> 19.47 t/s (+1.5%, same sha), the 32-row prefill tile shares the loop (-0.9% of the 200K ubatch); 8K Turbo4 shas = records
   both lines. Two-chunk-per-iteration and token-row-mask forms REFUTED (spill 48 -> 144 B; at 96 registers the tile pays for every live
   value). Item 1 of the long-context inventory closes at ~-4% per call unless the tile shape changes.
+- **`census-groups.md` (branch `exp/census-groups`, merged `9fd97533c`) - BUILT + CALIBRATED + MERGED 2026-10-25 evening (owner:
+  "What is really going on with the shadowing? Can we do better in our predictions going from profiling to real perf?" -> "Merge"):
+  the concurrency-group profile `GGML_METAL_PROFILE=2` (one timed CONCURRENT encoder per barrier-delimited group, members recorded;
+  the M4 Pro timestamps at encoder boundaries only) and `perf/census-groups.py`'s per-op exposed-time bounds.** Mode 2 reproduces
+  the anchor sha and round (+1.5-6% = ~1100 encoder splits per round); the group walls add up to the GPU round (hiding 1.18x q4 /
+  1.15x ud = anchor vs mode 1). Calibration against the deletion probes: q4 5120x48 charged 7.0 -> [0.07, 1.9] (measured 0.5-1.3),
+  ud 8.5 -> [0.03, 0.95] (~0), q4 k/v 2.5 -> [0.03, 1.45] (1.07), ud k/v 3.3 -> [0, 2.0] (~0: loose where small ops share a big
+  neighbour's group - lo 0 = skip-arm candidate). The only decode group with real overlap is the GDN input block (S/W 1.6-1.7);
+  prefill has none. `run-census-full.sh` runs both modes; open: the two columns inside `kernel-census.py`'s own table.
 - `mv-nc-cliff-probe.md` - the NC>=3 cliff is a fixed ~112 us penalty; fixing it yields
   parity, not a win.
 - `omlx-target-recheck.md` - why the old "17 -> 35" framing was wrong.
