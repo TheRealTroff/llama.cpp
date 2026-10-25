@@ -1,0 +1,5103 @@
+{
+"classes": [
+"FP16",
+"FP32",
+"INT16",
+"INT32",
+"OALU",
+"DLD",
+"DST",
+"TLD",
+"TST",
+"SPL",
+"BR",
+"NONE"
+],
+"trials": 3,
+"binaries": [
+{
+"kernel": "kernel_mul_mm_acch_n64_q4_0_f16",
+"rows": [
+"census-1024-q4-pre/pre00-mul_mat-q4_0_soa-5120x17408-n512",
+"census-1024-q4-pre/pre01-mul_mat-q4_0_soa-17408x5120-n512",
+"census-1024-q4-pre/pre02-mul_mat-q4_0_soa-5120x10240-n512",
+"census-1024-q4-pre/pre03-mul_mat-q4_0_soa-6144x5120-n512",
+"census-1024-q4-pre/pre04-mul_mat-q4_0_soa-5120x6144-n512",
+"census-1024-q4-pre/pre05-mul_mat-q4_0_soa-5120x12288-n512"
+]
+},
+{
+"kernel": "kernel_swiglu_f32",
+"rows": [
+"census-1024-q4-pre/pre07-swiglu-f32-17408x512-n512",
+"census-1024-q4-w4-dec/dec15-swiglu-f32-17408x4-n4",
+"census-1024-q4-w8-dec/dec15-swiglu-f32-17408x8-n8",
+"census-1024-ud-pre/pre13-swiglu-f32-17408x512-n512",
+"census-ud-96k-oct25-prefa/pre03-swiglu-f32-17408x512-n512"
+]
+},
+{
+"kernel": "kernel_mul_mm_acch_q4_0_f16",
+"rows": [
+"census-1024-q4-pre/pre08-mul_mat-q4_0-5120x1024-n512",
+"census-1024-q4-pre/pre10-mul_mat-q4_0-5120x48-n512"
+]
+},
+{
+"kernel": "kernel_flash_attn_ext_qtnw_turbo4_dk256_dv256",
+"rows": [
+"census-1024-q4-pre/pre11-flash_attn_ext-f32-256x512-n8448"
+]
+},
+{
+"kernel": "kernel_bin_fuse_f32_f32_f32_4",
+"rows": [
+"census-1024-q4-pre/pre12-add-f32-5120x512-n512",
+"census-1024-q4-w4-dec/dec11-add-f32-5120x4-n4",
+"census-1024-q4-w8-dec/dec12-add-f32-5120x8-n8",
+"census-1024-ud-pre/pre15-add-f32-5120x512-n512",
+"census-ud-96k-oct25-prefa/pre05-add-f32-5120x512-n512"
+]
+},
+{
+"kernel": "kernel_ssm_conv_f32_f32_batched_4",
+"rows": [
+"census-1024-q4-pre/pre13-ssm_conv-f32-515x10240-n512",
+"census-1024-ud-pre/pre16-ssm_conv-f32-515x10240-n512",
+"census-ud-96k-oct25-prefa/pre06-ssm_conv-f32-515x10240-n512"
+]
+},
+{
+"kernel": "kernel_rms_norm_f32_4",
+"rows": [
+"census-1024-q4-pre/pre14-rms_norm-f32-128x48-n48",
+"census-1024-ud-pre/pre17-rms_norm-f32-128x48-n48",
+"census-ud-96k-oct25-prefa/pre07-rms_norm-f32-128x48-n48"
+]
+},
+{
+"kernel": "kernel_mul_mv_q4_0_soa_w4_r4kp_v3",
+"rows": [
+"census-1024-q4-w4-dec/dec00-mul_mat-q4_0_soa-5120x17408-n4",
+"census-1024-q4-w4-dec/dec01-mul_mat-q4_0_soa-17408x5120-n4",
+"census-1024-q4-w4-dec/dec02-mul_mat-q4_0_soa-5120x10240-n4",
+"census-1024-q4-w4-dec/dec03-mul_mat-q4_0_soa-6144x5120-n4",
+"census-1024-q4-w4-dec/dec04-mul_mat-q4_0_soa-5120x6144-n4",
+"census-1024-q4-w4-dec/dec06-mul_mat-q4_0_soa-5120x248320-n4",
+"census-1024-q4-w4-dec/dec08-mul_mat-q4_0_soa-5120x12288-n4"
+]
+},
+{
+"kernel": "kernel_mul_mv_ext_q4_0_f32_r1_4",
+"rows": [
+"census-1024-q4-w4-dec/dec05-mul_mat-q4_0-5120x48-n4",
+"census-1024-q4-w4-dec/dec12-mul_mat-q4_0-5120x1024-n4"
+]
+},
+{
+"kernel": "kernel_gated_delta_net_f32_4",
+"rows": [
+"census-1024-q4-w4-dec/dec07-gated_delta_net-f32-128x16-n266",
+"census-1024-q4-w8-dec/dec06-gated_delta_net-f32-128x16-n276",
+"census-1024-ud-w4-dec/dec09-gated_delta_net-f32-128x16-n266",
+"census-1024-ud-w8-dec/dec09-gated_delta_net-f32-128x16-n276"
+]
+},
+{
+"kernel": "kernel_flash_attn_ext_qtnw24_turbo4_dk256_dv256",
+"rows": [
+"census-1024-q4-w4-dec/dec09-flash_attn_ext-f32-256x4-n8448",
+"census-1024-q4-w4-dec/dec10-flash_attn_ext-f32-256x4-n8704"
+]
+},
+{
+"kernel": "kernel_mul_mv_q4_0_soa_w2",
+"rows": [
+"census-1024-q4-w4-dec/dec13-mul_mat-q4_0_soa-5120x17408-n2",
+"census-1024-q4-w8-dec/dec13-mul_mat-q4_0_soa-5120x17408-n2"
+]
+},
+{
+"kernel": "kernel_mul_mm_skinny_q4_0_soa_f32",
+"rows": [
+"census-1024-q4-w8-dec/dec00-mul_mat-q4_0_soa-5120x17408-n8",
+"census-1024-q4-w8-dec/dec01-mul_mat-q4_0_soa-17408x5120-n8",
+"census-1024-q4-w8-dec/dec02-mul_mat-q4_0_soa-5120x10240-n8",
+"census-1024-q4-w8-dec/dec03-mul_mat-q4_0_soa-6144x5120-n8",
+"census-1024-q4-w8-dec/dec05-mul_mat-q4_0_soa-5120x6144-n8",
+"census-1024-q4-w8-dec/dec07-mul_mat-q4_0_soa-5120x248320-n8",
+"census-1024-q4-w8-dec/dec08-mul_mat-q4_0_soa-5120x12288-n8"
+]
+},
+{
+"kernel": "kernel_mul_mm_skinny_q4_0_f32",
+"rows": [
+"census-1024-q4-w8-dec/dec04-mul_mat-q4_0-5120x48-n8",
+"census-1024-q4-w8-dec/dec11-mul_mat-q4_0-5120x1024-n8"
+]
+},
+{
+"kernel": "kernel_flash_attn_ext_qtnw24_turbo4_dk256_dv256",
+"rows": [
+"census-1024-q4-w8-dec/dec09-flash_attn_ext-f32-256x8-n8704",
+"census-1024-q4-w8-dec/dec10-flash_attn_ext-f32-256x8-n8448"
+]
+},
+{
+"kernel": "kernel_mul_mm_n64_iq4_xs_f16",
+"rows": [
+"census-1024-ud-pre/pre00-mul_mat-iq4_xs_soa-5120x17408-n512",
+"census-1024-ud-pre/pre03-mul_mat-iq4_xs_soa-17408x5120-n512",
+"census-1024-ud-pre/pre11-mul_mat-iq4_xs_soa-5120x12288-n512",
+"census-ud-96k-oct25-prefa/pre00-mul_mat-iq4_xs_soa-5120x17408-n512"
+]
+},
+{
+"kernel": "kernel_mul_mm_n64_q4_K_f16",
+"rows": [
+"census-1024-ud-pre/pre01-mul_mat-q4_K_soa-5120x17408-n512",
+"census-1024-ud-pre/pre05-mul_mat-q4_K_soa-5120x10240-n512",
+"census-1024-ud-pre/pre07-mul_mat-q4_K_soa-17408x5120-n512",
+"census-1024-ud-pre/pre08-mul_mat-q4_K_soa-5120x6144-n512"
+]
+},
+{
+"kernel": "kernel_mul_mm_n64_q5_K_f16",
+"rows": [
+"census-1024-ud-pre/pre02-mul_mat-q5_K_soa-5120x17408-n512",
+"census-1024-ud-pre/pre04-mul_mat-q5_K_soa-17408x5120-n512",
+"census-1024-ud-pre/pre06-mul_mat-q5_K_soa-6144x5120-n512",
+"census-1024-ud-pre/pre09-mul_mat-q5_K_soa-5120x10240-n512",
+"census-ud-96k-oct25-prefa/pre01-mul_mat-q5_K_soa-5120x17408-n512"
+]
+},
+{
+"kernel": "kernel_mul_mm_n64_q3_K_f16",
+"rows": [
+"census-1024-ud-pre/pre10-mul_mat-q3_K_soa-5120x17408-n512"
+]
+},
+{
+"kernel": "kernel_flash_attn_ext_qtl4w_turbo4_dk256_dv256",
+"rows": [
+"census-1024-ud-pre/pre14-flash_attn_ext-f32-256x512-n8448"
+]
+},
+{
+"kernel": "kernel_mul_mv_iq4_xs_soa_w4_v5",
+"rows": [
+"census-1024-ud-w4-dec/dec00-mul_mat-iq4_xs_soa-5120x17408-n4",
+"census-1024-ud-w4-dec/dec04-mul_mat-iq4_xs_soa-17408x5120-n4"
+]
+},
+{
+"kernel": "kernel_mul_mv_q5_K_soa_w4_v2",
+"rows": [
+"census-1024-ud-w4-dec/dec01-mul_mat-q5_K_soa-5120x17408-n4",
+"census-1024-ud-w4-dec/dec03-mul_mat-q5_K_soa-17408x5120-n4",
+"census-1024-ud-w4-dec/dec05-mul_mat-q5_K_soa-6144x5120-n4",
+"census-1024-ud-w4-dec/dec12-mul_mat-q5_K_soa-5120x10240-n4"
+]
+},
+{
+"kernel": "kernel_mul_mv_q4_K_soa_w4_v2",
+"rows": [
+"census-1024-ud-w4-dec/dec02-mul_mat-q4_K_soa-5120x17408-n4",
+"census-1024-ud-w4-dec/dec07-mul_mat-q4_K_soa-5120x10240-n4",
+"census-1024-ud-w4-dec/dec10-mul_mat-q4_K_soa-17408x5120-n4",
+"census-1024-ud-w4-dec/dec11-mul_mat-q4_K_soa-5120x6144-n4"
+]
+},
+{
+"kernel": "kernel_mul_mv_q6_K_soa_w4_v1",
+"rows": [
+"census-1024-ud-w4-dec/dec06-mul_mat-q6_K_soa-5120x248320-n4"
+]
+},
+{
+"kernel": "kernel_mul_mv_ext_q8_0_f32_r1_4",
+"rows": [
+"census-1024-ud-w4-dec/dec08-mul_mat-q8_0-5120x48-n4"
+]
+},
+{
+"kernel": "kernel_mul_mv_q3_K_soa_w4_v1",
+"rows": [
+"census-1024-ud-w4-dec/dec13-mul_mat-q3_K_soa-5120x17408-n4"
+]
+},
+{
+"kernel": "kernel_flash_attn_ext_qtl4w24_turbo4_dk256_dv256",
+"rows": [
+"census-1024-ud-w4-dec/dec14-flash_attn_ext-f32-256x4-n8704",
+"census-1024-ud-w4-dec/dec15-flash_attn_ext-f32-256x4-n8448",
+"fadec200k-oct25-ud/dec00-flash_attn_ext-f32-256x4-n206336"
+]
+},
+{
+"kernel": "kernel_mul_mm_skinny_iq4_xs_f32",
+"rows": [
+"census-1024-ud-w8-dec/dec00-mul_mat-iq4_xs_soa-5120x17408-n8",
+"census-1024-ud-w8-dec/dec03-mul_mat-iq4_xs_soa-17408x5120-n8"
+]
+},
+{
+"kernel": "kernel_mul_mm_skinny_q5_K_f32",
+"rows": [
+"census-1024-ud-w8-dec/dec01-mul_mat-q5_K_soa-5120x17408-n8",
+"census-1024-ud-w8-dec/dec02-mul_mat-q5_K_soa-17408x5120-n8",
+"census-1024-ud-w8-dec/dec05-mul_mat-q5_K_soa-6144x5120-n8",
+"census-1024-ud-w8-dec/dec12-mul_mat-q5_K_soa-5120x10240-n8"
+]
+},
+{
+"kernel": "kernel_mul_mm_skinny_q4_K_f32",
+"rows": [
+"census-1024-ud-w8-dec/dec04-mul_mat-q4_K_soa-5120x17408-n8",
+"census-1024-ud-w8-dec/dec07-mul_mat-q4_K_soa-5120x10240-n8",
+"census-1024-ud-w8-dec/dec10-mul_mat-q4_K_soa-17408x5120-n8",
+"census-1024-ud-w8-dec/dec11-mul_mat-q4_K_soa-5120x6144-n8"
+]
+},
+{
+"kernel": "kernel_mul_mm_skinny_q8_0_f32",
+"rows": [
+"census-1024-ud-w8-dec/dec06-mul_mat-q8_0-5120x48-n8"
+]
+},
+{
+"kernel": "kernel_mul_mm_skinny_q6_K_f32",
+"rows": [
+"census-1024-ud-w8-dec/dec08-mul_mat-q6_K_soa-5120x248320-n8"
+]
+},
+{
+"kernel": "kernel_flash_attn_ext_qtl4w24_turbo4_dk256_dv256",
+"rows": [
+"census-1024-ud-w8-dec/dec13-flash_attn_ext-f32-256x8-n8448",
+"census-1024-ud-w8-dec/dec14-flash_attn_ext-f32-256x8-n8704"
+]
+},
+{
+"kernel": "kernel_mul_mm_skinny_q3_K_f32",
+"rows": [
+"census-1024-ud-w8-dec/dec15-mul_mat-q3_K_soa-5120x17408-n8"
+]
+},
+{
+"kernel": "kernel_mul_mv_iq4_xs_soa_w4_v5",
+"rows": [
+"census-ud-25k-sep15/dec20-mul_mat-iq4_xs_soa-5120x17408-n4",
+"census-ud-96k-sep15/dec25-mul_mat-iq4_xs_soa-5120x17408-n4",
+"census-ud-96k-sep15-nwg20/dec25-mul_mat-iq4_xs_soa-5120x17408-n4",
+"census-ud-sep06/dec10-mul_mat-iq4_xs-5120x17408-n4",
+"census-ud-sep06/dec21-mul_mat-iq4_xs-17408x5120-n4"
+]
+},
+{
+"kernel": "kernel_flash_attn_ext_qtl4w_turbo4_dk256_dv256",
+"rows": [
+"census-ud-25k-sep15/dec22-flash_attn_ext-f32-256x4-n25088",
+"census-ud-96k-sep15/dec21-flash_attn_ext-f32-256x4-n95744"
+]
+},
+{
+"kernel": "kernel_mul_mm_n64_iq4_xs_f16",
+"rows": [
+"census-ud-25k-sep15/pre00-mul_mat-iq4_xs_soa-5120x17408-n512",
+"census-ud-25k-sep15/pre03-mul_mat-iq4_xs_soa-17408x5120-n512",
+"census-ud-96k-sep15/pre00-mul_mat-iq4_xs_soa-5120x17408-n512",
+"census-ud-96k-sep15/pre03-mul_mat-iq4_xs_soa-17408x5120-n512",
+"census-ud-96k-sep15-nwg20/pre00-mul_mat-iq4_xs_soa-5120x17408-n512",
+"census-ud-96k-sep15-nwg20/pre03-mul_mat-iq4_xs_soa-17408x5120-n512"
+]
+},
+{
+"kernel": "kernel_mul_mm_n64_q5_K_f16",
+"rows": [
+"census-ud-25k-sep15/pre01-mul_mat-q5_K_soa-5120x17408-n512",
+"census-ud-25k-sep15/pre04-mul_mat-q5_K_soa-17408x5120-n512",
+"census-ud-25k-sep15/pre06-mul_mat-q5_K_soa-6144x5120-n512",
+"census-ud-96k-sep15/pre01-mul_mat-q5_K_soa-5120x17408-n512",
+"census-ud-96k-sep15/pre04-mul_mat-q5_K_soa-17408x5120-n512",
+"census-ud-96k-sep15/pre06-mul_mat-q5_K_soa-6144x5120-n512",
+"census-ud-96k-sep15-nwg20/pre01-mul_mat-q5_K_soa-5120x17408-n512",
+"census-ud-96k-sep15-nwg20/pre04-mul_mat-q5_K_soa-17408x5120-n512",
+"census-ud-96k-sep15-nwg20/pre06-mul_mat-q5_K_soa-6144x5120-n512"
+]
+},
+{
+"kernel": "kernel_mul_mm_n64_q4_K_f16",
+"rows": [
+"census-ud-25k-sep15/pre02-mul_mat-q4_K_soa-5120x17408-n512",
+"census-ud-25k-sep15/pre07-mul_mat-q4_K_soa-17408x5120-n512",
+"census-ud-96k-sep15/pre02-mul_mat-q4_K_soa-5120x17408-n512",
+"census-ud-96k-sep15/pre07-mul_mat-q4_K_soa-17408x5120-n512",
+"census-ud-96k-sep15-nwg20/pre02-mul_mat-q4_K_soa-5120x17408-n512",
+"census-ud-96k-sep15-nwg20/pre07-mul_mat-q4_K_soa-17408x5120-n512"
+]
+},
+{
+"kernel": "kernel_mul_mm_n64_q3_K_f16",
+"rows": [
+"census-ud-25k-sep15/pre10-mul_mat-q3_K_soa-5120x17408-n512",
+"census-ud-96k-sep15/pre10-mul_mat-q3_K_soa-5120x17408-n512",
+"census-ud-96k-sep15-nwg20/pre10-mul_mat-q3_K_soa-5120x17408-n512"
+]
+},
+{
+"kernel": "kernel_gated_delta_net_f32_4_nr4",
+"rows": [
+"census-ud-25k-sep15/pre12-gated_delta_net-f32-128x16-n774",
+"census-ud-96k-sep15/pre12-gated_delta_net-f32-128x16-n774",
+"census-ud-96k-sep15-nwg20/pre12-gated_delta_net-f32-128x16-n774"
+]
+},
+{
+"kernel": "kernel_mul_mm_n64_q6_K_f16",
+"rows": [
+"census-ud-25k-sep15/pre17-mul_mat-q6_K_soa-6144x5120-n512",
+"census-ud-96k-sep15/pre17-mul_mat-q6_K_soa-6144x5120-n512",
+"census-ud-96k-sep15-nwg20/pre17-mul_mat-q6_K_soa-6144x5120-n512"
+]
+},
+{
+"kernel": "kernel_mul_mm_n64_iq3_s_f16",
+"rows": [
+"census-ud-25k-sep15/pre18-mul_mat-iq3_s_soa-17408x5120-n512",
+"census-ud-96k-sep15/pre18-mul_mat-iq3_s_soa-17408x5120-n512",
+"census-ud-96k-sep15-nwg20/pre18-mul_mat-iq3_s_soa-17408x5120-n512"
+]
+},
+{
+"kernel": "kernel_mul_mm_n64_iq4_nl_f16",
+"rows": [
+"census-ud-25k-sep15/pre19-mul_mat-iq4_nl_soa-17408x5120-n512",
+"census-ud-96k-sep15/pre19-mul_mat-iq4_nl_soa-17408x5120-n512",
+"census-ud-96k-sep15-nwg20/pre19-mul_mat-iq4_nl_soa-17408x5120-n512"
+]
+},
+{
+"kernel": "kernel_swiglu_f32",
+"rows": [
+"census-ud-25k-sep15/pre21-swiglu-f32-17408x512-n512",
+"census-ud-96k-sep15/pre20-swiglu-f32-17408x512-n512",
+"census-ud-96k-sep15-nwg20/pre20-swiglu-f32-17408x512-n512",
+"census-ud-sep06/pre24-swiglu-f32-17408x512-n512"
+]
+},
+{
+"kernel": "kernel_flash_attn_ext_qtl4w_turbo4_dk256_dv256",
+"rows": [
+"census-ud-25k-sep15/pre23-flash_attn_ext-f32-256x512-n25088"
+]
+},
+{
+"kernel": "kernel_bin_fuse_f32_f32_f32_4",
+"rows": [
+"census-ud-25k-sep15/pre24-add-f32-5120x512-n512",
+"census-ud-96k-sep15/pre23-add-f32-5120x512-n512",
+"census-ud-96k-sep15-nwg20/pre23-add-f32-5120x512-n512",
+"census-ud-sep06/pre27-add-f32-5120x512-n512"
+]
+},
+{
+"kernel": "kernel_flash_attn_ext_qtl4w24_turbo4_dk256_dv256",
+"rows": [
+"census-ud-96k-fa24/dec21-flash_attn_ext-f32-256x4-n95744"
+]
+},
+{
+"kernel": "kernel_flash_attn_ext_qt16w_turbo4_dk256_dv256",
+"rows": [
+"census-ud-96k-oct25-prefa/pre04-flash_attn_ext-f32-256x512-n95744"
+]
+},
+{
+"kernel": "kernel_flash_attn_ext_qt16w_turbo4_dk256_dv256",
+"rows": [
+"census-ud-96k-sep15/pre22-flash_attn_ext-f32-256x512-n95744",
+"census-ud-96k-sep15-nwg20/pre22-flash_attn_ext-f32-256x512-n95744"
+]
+},
+{
+"kernel": "kernel_flash_attn_ext_qtl4w_turbo4_dk256_dv256",
+"rows": [
+"census-ud-96k-sep15-nwg20/dec21-flash_attn_ext-f32-256x4-n95744"
+]
+},
+{
+"kernel": "kernel_mul_mv_q5_K_soa_w4_v2",
+"rows": [
+"census-ud-sep06/dec14-mul_mat-q5_K-5120x17408-n4",
+"census-ud-sep06/dec18-mul_mat-q5_K-17408x5120-n4"
+]
+},
+{
+"kernel": "kernel_mul_mv_q4_K_soa_w4_v2",
+"rows": [
+"census-ud-sep06/dec19-mul_mat-q4_K-5120x17408-n4"
+]
+},
+{
+"kernel": "kernel_flash_attn_ext_qt_f16_dk256_dv256",
+"rows": [
+"census-ud-sep06/dec25-flash_attn_ext-f32-256x4-n8704"
+]
+},
+{
+"kernel": "kernel_gated_delta_net_f32_4",
+"rows": [
+"census-ud-sep06/dec28-gated_delta_net-f32-128x16-n266",
+"census-ud-sep06/pre08-gated_delta_net-f32-128x16-n774"
+]
+},
+{
+"kernel": "kernel_mul_mm_n64_iq4_xs_f16",
+"rows": [
+"census-ud-sep06/pre00-mul_mat-iq4_xs-5120x17408-n512",
+"census-ud-sep06/pre03-mul_mat-iq4_xs-17408x5120-n512",
+"census-ud-sep06/pre13-mul_mat-iq4_xs-5120x12288-n512",
+"census-ud-sep06/pre16-mul_mat-iq4_xs-5120x6144-n512",
+"census-ud-sep06/pre20-mul_mat-iq4_xs-5120x10240-n512"
+]
+},
+{
+"kernel": "kernel_mul_mm_n64_q5_K_f16",
+"rows": [
+"census-ud-sep06/pre01-mul_mat-q5_K-5120x17408-n512",
+"census-ud-sep06/pre04-mul_mat-q5_K-17408x5120-n512",
+"census-ud-sep06/pre06-mul_mat-q5_K-6144x5120-n512",
+"census-ud-sep06/pre11-mul_mat-q5_K-5120x10240-n512",
+"census-ud-sep06/pre15-mul_mat-q5_K-5120x6144-n512"
+]
+},
+{
+"kernel": "kernel_mul_mm_n64_q4_K_f16",
+"rows": [
+"census-ud-sep06/pre02-mul_mat-q4_K-5120x17408-n512",
+"census-ud-sep06/pre05-mul_mat-q4_K-5120x10240-n512",
+"census-ud-sep06/pre07-mul_mat-q4_K-17408x5120-n512",
+"census-ud-sep06/pre09-mul_mat-q4_K-5120x6144-n512",
+"census-ud-sep06/pre17-mul_mat-q4_K-5120x12288-n512"
+]
+},
+{
+"kernel": "kernel_mul_mm_n64_q3_K_f16",
+"rows": [
+"census-ud-sep06/pre12-mul_mat-q3_K-5120x17408-n512"
+]
+},
+{
+"kernel": "kernel_mul_mm_n64_iq3_s_f16",
+"rows": [
+"census-ud-sep06/pre22-mul_mat-iq3_s-17408x5120-n512"
+]
+},
+{
+"kernel": "kernel_mul_mm_n64_q6_K_f16",
+"rows": [
+"census-ud-sep06/pre23-mul_mat-q6_K-6144x5120-n512"
+]
+},
+{
+"kernel": "kernel_flash_attn_ext_qt_f16_dk256_dv256",
+"rows": [
+"census-ud-sep06/pre26-flash_attn_ext-f32-256x512-n8448"
+]
+},
+{
+"kernel": "kernel_rms_norm_f32_4",
+"rows": [
+"census-ud-sep06/pre30-rms_norm-f32-5120x512-n512"
+]
+}
+],
+"opcodes": {
+"423": {
+"cls": "OALU",
+"pinned": true,
+"hard": false,
+"alt": [
+"OALU"
+],
+"static": 102,
+"executed": 636749616,
+"name": null
+},
+"424": {
+"cls": "OALU",
+"pinned": true,
+"hard": false,
+"alt": [
+"OALU"
+],
+"static": 75,
+"executed": 588840960,
+"name": null
+},
+"425": {
+"cls": "OALU",
+"pinned": true,
+"hard": false,
+"alt": [
+"OALU"
+],
+"static": 37,
+"executed": 84166656,
+"name": null
+},
+"426": {
+"cls": "OALU",
+"pinned": true,
+"hard": false,
+"alt": [
+"OALU"
+],
+"static": 95,
+"executed": 592999216,
+"name": null
+},
+"428": {
+"cls": "INT16",
+"pinned": false,
+"hard": false,
+"alt": [
+"INT16",
+"NONE",
+"OALU"
+],
+"static": 2,
+"executed": 16711680,
+"name": null
+},
+"435": {
+"cls": "OALU",
+"pinned": true,
+"hard": false,
+"alt": [
+"OALU"
+],
+"static": 153,
+"executed": 1749467968,
+"name": null
+},
+"437": {
+"cls": "OALU",
+"pinned": false,
+"hard": false,
+"alt": [
+"INT32",
+"OALU",
+"SPL"
+],
+"static": 2,
+"executed": 5570560,
+"name": null
+},
+"442": {
+"cls": "OALU",
+"pinned": true,
+"hard": false,
+"alt": [
+"OALU"
+],
+"static": 197,
+"executed": 1147839941,
+"name": null
+},
+"443": {
+"cls": "OALU",
+"pinned": true,
+"hard": false,
+"alt": [
+"OALU"
+],
+"static": 58,
+"executed": 287848064,
+"name": null
+},
+"444": {
+"cls": "OALU",
+"pinned": true,
+"hard": false,
+"alt": [
+"OALU"
+],
+"static": 112,
+"executed": 606328440,
+"name": null
+},
+"445": {
+"cls": "OALU",
+"pinned": true,
+"hard": false,
+"alt": [
+"OALU"
+],
+"static": 142,
+"executed": 422077190,
+"name": null
+},
+"447": {
+"cls": "OALU",
+"pinned": true,
+"hard": false,
+"alt": [
+"OALU"
+],
+"static": 112,
+"executed": 508875696,
+"name": null
+},
+"454": {
+"cls": "OALU",
+"pinned": true,
+"hard": false,
+"alt": [
+"OALU"
+],
+"static": 155,
+"executed": 695410322,
+"name": null
+},
+"459": {
+"cls": "BR",
+"pinned": true,
+"hard": false,
+"alt": [
+"BR"
+],
+"static": 94,
+"executed": 1190358576,
+"name": "jmp"
+},
+"463": {
+"cls": "BR",
+"pinned": true,
+"hard": false,
+"alt": [
+"BR"
+],
+"static": 114,
+"executed": 527048668,
+"name": "jmp"
+},
+"466": {
+"cls": "NONE",
+"pinned": false,
+"hard": false,
+"alt": [
+"NONE",
+"SPL"
+],
+"static": 95,
+"executed": 236969674,
+"name": null
+},
+"479": {
+"cls": "BR",
+"pinned": true,
+"hard": false,
+"alt": [
+"BR"
+],
+"static": 117,
+"executed": 434507409,
+"name": null
+},
+"483": {
+"cls": "BR",
+"pinned": true,
+"hard": false,
+"alt": [
+"BR"
+],
+"static": 178,
+"executed": 220309948,
+"name": null
+},
+"554": {
+"cls": "NONE",
+"pinned": false,
+"hard": false,
+"alt": [
+"NONE",
+"SPL"
+],
+"static": 824,
+"executed": 275924576,
+"name": "mov.imm32"
+},
+"555": {
+"cls": "SPL",
+"pinned": false,
+"hard": false,
+"alt": [
+"NONE",
+"SPL"
+],
+"static": 140,
+"executed": 111461052,
+"name": "mov.imm16"
+},
+"574": {
+"cls": "NONE",
+"pinned": false,
+"hard": false,
+"alt": [
+"NONE",
+"SPL"
+],
+"static": 659,
+"executed": 306152114,
+"name": null
+},
+"575": {
+"cls": "NONE",
+"pinned": true,
+"hard": false,
+"alt": [
+"NONE"
+],
+"static": 188,
+"executed": 157958304,
+"name": null
+},
+"577": {
+"cls": "OALU",
+"pinned": true,
+"hard": false,
+"alt": [
+"OALU"
+],
+"static": 206,
+"executed": 747274120,
+"name": null
+},
+"578": {
+"cls": "SPL",
+"pinned": true,
+"hard": false,
+"alt": [
+"SPL"
+],
+"static": 80,
+"executed": 1081736416,
+"name": null
+},
+"579": {
+"cls": "OALU",
+"pinned": false,
+"hard": false,
+"alt": [
+"INT16",
+"OALU"
+],
+"static": 14,
+"executed": 108622160,
+"name": null
+},
+"582": {
+"cls": "INT16",
+"pinned": false,
+"hard": false,
+"alt": [
+"INT16",
+"OALU"
+],
+"static": 157,
+"executed": 740686504,
+"name": null
+},
+"583": {
+"cls": "INT32",
+"pinned": false,
+"hard": false,
+"alt": [
+"FP32",
+"INT32"
+],
+"static": 13,
+"executed": 27537760,
+"name": null
+},
+"586": {
+"cls": "SPL",
+"pinned": false,
+"hard": false,
+"alt": [
+"NONE",
+"SPL"
+],
+"static": 196,
+"executed": 425865824,
+"name": null
+},
+"590": {
+"cls": "SPL",
+"pinned": true,
+"hard": false,
+"alt": [
+"SPL"
+],
+"static": 178,
+"executed": 873048704,
+"name": null
+},
+"595": {
+"cls": "SPL",
+"pinned": true,
+"hard": true,
+"alt": [
+"SPL"
+],
+"static": 33,
+"executed": 34340266,
+"name": null
+},
+"597": {
+"cls": "OALU",
+"pinned": true,
+"hard": false,
+"alt": [
+"OALU"
+],
+"static": 327,
+"executed": 377203209,
+"name": null
+},
+"598": {
+"cls": "OALU",
+"pinned": true,
+"hard": false,
+"alt": [
+"OALU"
+],
+"static": 101,
+"executed": 399021453,
+"name": null
+},
+"599": {
+"cls": "SPL",
+"pinned": true,
+"hard": true,
+"alt": [
+"SPL"
+],
+"static": 19,
+"executed": 35528196,
+"name": null
+},
+"602": {
+"cls": "OALU",
+"pinned": true,
+"hard": false,
+"alt": [
+"OALU"
+],
+"static": 277,
+"executed": 340212328,
+"name": null
+},
+"603": {
+"cls": "OALU",
+"pinned": true,
+"hard": false,
+"alt": [
+"OALU"
+],
+"static": 20,
+"executed": 42978128,
+"name": null
+},
+"606": {
+"cls": "NONE",
+"pinned": false,
+"hard": false,
+"alt": [
+"NONE",
+"SPL"
+],
+"static": 212,
+"executed": 663717213,
+"name": null
+},
+"610": {
+"cls": "SPL",
+"pinned": false,
+"hard": false,
+"alt": [
+"NONE",
+"SPL"
+],
+"static": 167,
+"executed": 451715448,
+"name": null
+},
+"615": {
+"cls": "SPL",
+"pinned": true,
+"hard": true,
+"alt": [
+"SPL"
+],
+"static": 47,
+"executed": 3538260,
+"name": null
+},
+"619": {
+"cls": "SPL",
+"pinned": true,
+"hard": true,
+"alt": [
+"SPL"
+],
+"static": 3,
+"executed": 256256,
+"name": null
+},
+"684": {
+"cls": "OALU",
+"pinned": false,
+"hard": false,
+"alt": [
+"INT32",
+"OALU"
+],
+"static": 28,
+"executed": 71087820,
+"name": "stop"
+},
+"697": {
+"cls": "FP32",
+"pinned": false,
+"hard": false,
+"alt": [
+"FP32",
+"INT32"
+],
+"static": 2,
+"executed": 39321600,
+"name": null
+},
+"706": {
+"cls": "NONE",
+"pinned": false,
+"hard": false,
+"alt": [
+"NONE",
+"SPL"
+],
+"static": 35,
+"executed": 44683806,
+"name": null
+},
+"719": {
+"cls": "OALU",
+"pinned": true,
+"hard": false,
+"alt": [
+"OALU"
+],
+"static": 7,
+"executed": 12487114,
+"name": null
+},
+"798": {
+"cls": "FP16",
+"pinned": true,
+"hard": true,
+"alt": [
+"FP16"
+],
+"static": 64,
+"executed": 1794435840,
+"name": null
+},
+"860": {
+"cls": "FP16",
+"pinned": true,
+"hard": false,
+"alt": [
+"FP16"
+],
+"static": 96,
+"executed": 914571264,
+"name": null
+},
+"862": {
+"cls": "FP16",
+"pinned": true,
+"hard": true,
+"alt": [
+"FP16"
+],
+"static": 96,
+"executed": 3141795840,
+"name": "mul.f16"
+},
+"864": {
+"cls": "FP16",
+"pinned": true,
+"hard": true,
+"alt": [
+"FP16"
+],
+"static": 1,
+"executed": 11141120,
+"name": null
+},
+"884": {
+"cls": "FP16",
+"pinned": true,
+"hard": true,
+"alt": [
+"FP16"
+],
+"static": 224,
+"executed": 3208165504,
+"name": null
+},
+"886": {
+"cls": "FP16",
+"pinned": true,
+"hard": true,
+"alt": [
+"FP16"
+],
+"static": 14,
+"executed": 120044800,
+"name": null
+},
+"998": {
+"cls": "FP32",
+"pinned": true,
+"hard": false,
+"alt": [
+"FP32"
+],
+"static": 171,
+"executed": 1639692848,
+"name": "mul.f32"
+},
+"999": {
+"cls": "FP32",
+"pinned": true,
+"hard": false,
+"alt": [
+"FP32"
+],
+"static": 114,
+"executed": 1014961880,
+"name": null
+},
+"1002": {
+"cls": "FP32",
+"pinned": false,
+"hard": false,
+"alt": [
+"FP32",
+"INT16"
+],
+"static": 32,
+"executed": 540016640,
+"name": null
+},
+"1003": {
+"cls": "FP32",
+"pinned": true,
+"hard": false,
+"alt": [
+"FP32"
+],
+"static": 8,
+"executed": 147271680,
+"name": null
+},
+"1004": {
+"cls": "FP32",
+"pinned": false,
+"hard": false,
+"alt": [
+"FP32",
+"INT16"
+],
+"static": 2,
+"executed": 33751040,
+"name": null
+},
+"1006": {
+"cls": "FP32",
+"pinned": false,
+"hard": false,
+"alt": [
+"FP32",
+"NONE"
+],
+"static": 1,
+"executed": 358744064,
+"name": null
+},
+"1016": {
+"cls": "FP32",
+"pinned": false,
+"hard": false,
+"alt": [
+"FP32",
+"INT16",
+"OALU"
+],
+"static": 60,
+"executed": 1871360,
+"name": null
+},
+"1020": {
+"cls": "FP32",
+"pinned": true,
+"hard": false,
+"alt": [
+"FP32"
+],
+"static": 310,
+"executed": 577924157,
+"name": null
+},
+"1021": {
+"cls": "FP32",
+"pinned": true,
+"hard": false,
+"alt": [
+"FP32"
+],
+"static": 176,
+"executed": 876584848,
+"name": null
+},
+"1024": {
+"cls": "FP32",
+"pinned": false,
+"hard": false,
+"alt": [
+"FP32",
+"INT16"
+],
+"static": 16,
+"executed": 103440384,
+"name": null
+},
+"1025": {
+"cls": "FP32",
+"pinned": true,
+"hard": false,
+"alt": [
+"FP32"
+],
+"static": 16,
+"executed": 139892624,
+"name": null
+},
+"1026": {
+"cls": "FP32",
+"pinned": true,
+"hard": false,
+"alt": [
+"FP32"
+],
+"static": 13,
+"executed": 18162816,
+"name": null
+},
+"1028": {
+"cls": "FP32",
+"pinned": true,
+"hard": false,
+"alt": [
+"FP32"
+],
+"static": 49,
+"executed": 511901024,
+"name": null
+},
+"1038": {
+"cls": "FP32",
+"pinned": true,
+"hard": false,
+"alt": [
+"FP32"
+],
+"static": 152,
+"executed": 583621328,
+"name": null
+},
+"1272": {
+"cls": "FP32",
+"pinned": true,
+"hard": false,
+"alt": [
+"FP32"
+],
+"static": 48,
+"executed": 804954400,
+"name": null
+},
+"1294": {
+"cls": "FP32",
+"pinned": true,
+"hard": false,
+"alt": [
+"FP32"
+],
+"static": 56,
+"executed": 157646992,
+"name": null
+},
+"2190": {
+"cls": "FP32",
+"pinned": true,
+"hard": false,
+"alt": [
+"FP32"
+],
+"static": 167,
+"executed": 10009983248,
+"name": "fma.f32"
+},
+"2191": {
+"cls": "FP32",
+"pinned": false,
+"hard": false,
+"alt": [
+"FP32",
+"INT16"
+],
+"static": 14,
+"executed": 12828672,
+"name": null
+},
+"2206": {
+"cls": "FP32",
+"pinned": true,
+"hard": false,
+"alt": [
+"FP32"
+],
+"static": 32,
+"executed": 589086720,
+"name": null
+},
+"2210": {
+"cls": "FP32",
+"pinned": true,
+"hard": false,
+"alt": [
+"FP32"
+],
+"static": 384,
+"executed": 12567183360,
+"name": "fma.f16xf16->f32"
+},
+"2212": {
+"cls": "FP32",
+"pinned": true,
+"hard": false,
+"alt": [
+"FP32"
+],
+"static": 347,
+"executed": 1746376976,
+"name": null
+},
+"2213": {
+"cls": "FP32",
+"pinned": true,
+"hard": false,
+"alt": [
+"FP32"
+],
+"static": 32,
+"executed": 113659584,
+"name": null
+},
+"2216": {
+"cls": "FP32",
+"pinned": true,
+"hard": false,
+"alt": [
+"FP32"
+],
+"static": 24,
+"executed": 67254352,
+"name": null
+},
+"2217": {
+"cls": "FP32",
+"pinned": true,
+"hard": false,
+"alt": [
+"FP32"
+],
+"static": 8,
+"executed": 98618880,
+"name": null
+},
+"2228": {
+"cls": "FP32",
+"pinned": true,
+"hard": false,
+"alt": [
+"FP32"
+],
+"static": 32,
+"executed": 460783616,
+"name": null
+},
+"2232": {
+"cls": "FP32",
+"pinned": true,
+"hard": false,
+"alt": [
+"FP32"
+],
+"static": 768,
+"executed": 9189372416,
+"name": null
+},
+"2254": {
+"cls": "FP32",
+"pinned": true,
+"hard": false,
+"alt": [
+"FP32"
+],
+"static": 92,
+"executed": 1053818880,
+"name": null
+},
+"2258": {
+"cls": "OALU",
+"pinned": false,
+"hard": false,
+"alt": [
+"FP32",
+"OALU"
+],
+"static": 4,
+"executed": 7864320,
+"name": null
+},
+"2276": {
+"cls": "FP32",
+"pinned": true,
+"hard": false,
+"alt": [
+"FP32"
+],
+"static": 160,
+"executed": 817765376,
+"name": null
+},
+"2277": {
+"cls": "FP32",
+"pinned": true,
+"hard": false,
+"alt": [
+"FP32"
+],
+"static": 40,
+"executed": 130201600,
+"name": null
+},
+"2281": {
+"cls": "FP32",
+"pinned": true,
+"hard": false,
+"alt": [
+"FP32"
+],
+"static": 40,
+"executed": 130201600,
+"name": null
+},
+"2846": {
+"cls": "FP32",
+"pinned": true,
+"hard": false,
+"alt": [
+"FP32"
+],
+"static": 288,
+"executed": 1084126208,
+"name": null
+},
+"2862": {
+"cls": "FP32",
+"pinned": true,
+"hard": false,
+"alt": [
+"FP32"
+],
+"static": 1029,
+"executed": 9244250912,
+"name": null
+},
+"2864": {
+"cls": "OALU",
+"pinned": false,
+"hard": false,
+"alt": [
+"INT16",
+"INT32",
+"OALU"
+],
+"static": 11,
+"executed": 29253856,
+"name": null
+},
+"2868": {
+"cls": "FP32",
+"pinned": true,
+"hard": false,
+"alt": [
+"FP32"
+],
+"static": 272,
+"executed": 322821120,
+"name": null
+},
+"2884": {
+"cls": "FP32",
+"pinned": true,
+"hard": false,
+"alt": [
+"FP32"
+],
+"static": 718,
+"executed": 2697273120,
+"name": null
+},
+"2886": {
+"cls": "OALU",
+"pinned": true,
+"hard": false,
+"alt": [
+"OALU"
+],
+"static": 18,
+"executed": 10088160,
+"name": null
+},
+"3290": {
+"cls": "FP32",
+"pinned": true,
+"hard": false,
+"alt": [
+"FP32"
+],
+"static": 385,
+"executed": 9996556240,
+"name": "add.f32"
+},
+"3291": {
+"cls": "FP32",
+"pinned": true,
+"hard": false,
+"alt": [
+"FP32"
+],
+"static": 16,
+"executed": 154173440,
+"name": "add.f32"
+},
+"3294": {
+"cls": "INT32",
+"pinned": false,
+"hard": false,
+"alt": [
+"FP32",
+"INT32"
+],
+"static": 3,
+"executed": 33423360,
+"name": null
+},
+"3298": {
+"cls": "OALU",
+"pinned": false,
+"hard": false,
+"alt": [
+"FP32",
+"OALU",
+"SPL"
+],
+"static": 3,
+"executed": 22282240,
+"name": null
+},
+"3299": {
+"cls": "FP32",
+"pinned": false,
+"hard": false,
+"alt": [
+"FP32",
+"OALU"
+],
+"static": 2,
+"executed": 33751040,
+"name": null
+},
+"3306": {
+"cls": "FP32",
+"pinned": true,
+"hard": false,
+"alt": [
+"FP32"
+],
+"static": 96,
+"executed": 851968000,
+"name": null
+},
+"3307": {
+"cls": "FP32",
+"pinned": true,
+"hard": false,
+"alt": [
+"FP32"
+],
+"static": 512,
+"executed": 2566088704,
+"name": null
+},
+"3312": {
+"cls": "FP32",
+"pinned": true,
+"hard": false,
+"alt": [
+"FP32"
+],
+"static": 475,
+"executed": 1270627454,
+"name": null
+},
+"3313": {
+"cls": "FP32",
+"pinned": true,
+"hard": false,
+"alt": [
+"FP32"
+],
+"static": 133,
+"executed": 299918704,
+"name": null
+},
+"3317": {
+"cls": "FP32",
+"pinned": true,
+"hard": false,
+"alt": [
+"FP32"
+],
+"static": 9,
+"executed": 65584640,
+"name": null
+},
+"3320": {
+"cls": "FP32",
+"pinned": true,
+"hard": false,
+"alt": [
+"FP32"
+],
+"static": 11,
+"executed": 46664304,
+"name": null
+},
+"3321": {
+"cls": "FP32",
+"pinned": true,
+"hard": false,
+"alt": [
+"FP32"
+],
+"static": 3,
+"executed": 15696512,
+"name": null
+},
+"3328": {
+"cls": "FP32",
+"pinned": true,
+"hard": false,
+"alt": [
+"FP32"
+],
+"static": 224,
+"executed": 532665344,
+"name": null
+},
+"3329": {
+"cls": "FP32",
+"pinned": true,
+"hard": false,
+"alt": [
+"FP32"
+],
+"static": 384,
+"executed": 606117888,
+"name": null
+},
+"3658": {
+"cls": "FP32",
+"pinned": true,
+"hard": false,
+"alt": [
+"FP32"
+],
+"static": 7,
+"executed": 358780992,
+"name": null
+},
+"3680": {
+"cls": "FP32",
+"pinned": true,
+"hard": false,
+"alt": [
+"FP32"
+],
+"static": 7,
+"executed": 89635912,
+"name": null
+},
+"3850": {
+"cls": "SPL",
+"pinned": false,
+"hard": false,
+"alt": [
+"FP32",
+"SPL"
+],
+"static": 1,
+"executed": 13329664,
+"name": null
+},
+"3872": {
+"cls": "FP32",
+"pinned": true,
+"hard": false,
+"alt": [
+"FP32"
+],
+"static": 1,
+"executed": 933774,
+"name": null
+},
+"5664": {
+"cls": "INT16",
+"pinned": true,
+"hard": false,
+"alt": [
+"INT16"
+],
+"static": 1,
+"executed": 19689784,
+"name": null
+},
+"9320": {
+"cls": "OALU",
+"pinned": false,
+"hard": false,
+"alt": [
+"INT32",
+"OALU"
+],
+"static": 138,
+"executed": 213286140,
+"name": null
+},
+"9700": {
+"cls": "INT16",
+"pinned": false,
+"hard": false,
+"alt": [
+"INT16",
+"OALU"
+],
+"static": 49,
+"executed": 77964332,
+"name": null
+},
+"9724": {
+"cls": "INT32",
+"pinned": false,
+"hard": false,
+"alt": [
+"INT32",
+"OALU"
+],
+"static": 6,
+"executed": 36928,
+"name": null
+},
+"10225": {
+"cls": "OALU",
+"pinned": true,
+"hard": false,
+"alt": [
+"OALU"
+],
+"static": 193,
+"executed": 89872836,
+"name": null
+},
+"10267": {
+"cls": "OALU",
+"pinned": true,
+"hard": false,
+"alt": [
+"OALU"
+],
+"static": 657,
+"executed": 352234944,
+"name": "add.i64"
+},
+"10268": {
+"cls": "OALU",
+"pinned": true,
+"hard": false,
+"alt": [
+"OALU"
+],
+"static": 34,
+"executed": 39583520,
+"name": "add.i64"
+},
+"10272": {
+"cls": "INT32",
+"pinned": false,
+"hard": false,
+"alt": [
+"INT32",
+"OALU"
+],
+"static": 21,
+"executed": 20162520,
+"name": null
+},
+"10274": {
+"cls": "OALU",
+"pinned": true,
+"hard": false,
+"alt": [
+"OALU"
+],
+"static": 28,
+"executed": 625536,
+"name": null
+},
+"10279": {
+"cls": "INT32",
+"pinned": true,
+"hard": false,
+"alt": [
+"INT32"
+],
+"static": 487,
+"executed": 1957397012,
+"name": null
+},
+"10280": {
+"cls": "INT32",
+"pinned": true,
+"hard": false,
+"alt": [
+"INT32"
+],
+"static": 109,
+"executed": 493454300,
+"name": null
+},
+"10282": {
+"cls": "INT32",
+"pinned": true,
+"hard": false,
+"alt": [
+"INT32"
+],
+"static": 951,
+"executed": 3170516344,
+"name": "iadd/uniform"
+},
+"10283": {
+"cls": "INT32",
+"pinned": false,
+"hard": false,
+"alt": [
+"INT32",
+"OALU"
+],
+"static": 124,
+"executed": 659457184,
+"name": null
+},
+"10284": {
+"cls": "INT32",
+"pinned": false,
+"hard": false,
+"alt": [
+"INT32",
+"OALU"
+],
+"static": 5,
+"executed": 360465984,
+"name": null
+},
+"10285": {
+"cls": "INT32",
+"pinned": true,
+"hard": false,
+"alt": [
+"INT32"
+],
+"static": 462,
+"executed": 1080848292,
+"name": null
+},
+"10286": {
+"cls": "OALU",
+"pinned": false,
+"hard": false,
+"alt": [
+"INT32",
+"OALU"
+],
+"static": 23,
+"executed": 24640064,
+"name": null
+},
+"10289": {
+"cls": "INT16",
+"pinned": true,
+"hard": false,
+"alt": [
+"INT16"
+],
+"static": 270,
+"executed": 1694750152,
+"name": null
+},
+"10295": {
+"cls": "INT16",
+"pinned": true,
+"hard": false,
+"alt": [
+"INT16"
+],
+"static": 546,
+"executed": 3475504416,
+"name": null
+},
+"10369": {
+"cls": "OALU",
+"pinned": true,
+"hard": false,
+"alt": [
+"OALU"
+],
+"static": 77,
+"executed": 121967932,
+"name": null
+},
+"10370": {
+"cls": "OALU",
+"pinned": false,
+"hard": false,
+"alt": [
+"INT16",
+"OALU"
+],
+"static": 58,
+"executed": 1169044192,
+"name": null
+},
+"10372": {
+"cls": "OALU",
+"pinned": false,
+"hard": false,
+"alt": [
+"INT16",
+"NONE",
+"OALU"
+],
+"static": 37,
+"executed": 493003680,
+"name": null
+},
+"10378": {
+"cls": "OALU",
+"pinned": false,
+"hard": false,
+"alt": [
+"FP32",
+"OALU"
+],
+"static": 2,
+"executed": 30912,
+"name": null
+},
+"10381": {
+"cls": "INT32",
+"pinned": false,
+"hard": false,
+"alt": [
+"INT32",
+"OALU"
+],
+"static": 11,
+"executed": 5353056,
+"name": null
+},
+"10605": {
+"cls": "OALU",
+"pinned": true,
+"hard": false,
+"alt": [
+"OALU"
+],
+"static": 73,
+"executed": 29603644,
+"name": null
+},
+"10629": {
+"cls": "OALU",
+"pinned": false,
+"hard": false,
+"alt": [
+"OALU",
+"SPL"
+],
+"static": 6,
+"executed": 13544,
+"name": null
+},
+"10789": {
+"cls": "INT32",
+"pinned": false,
+"hard": false,
+"alt": [
+"INT32",
+"SPL"
+],
+"static": 5,
+"executed": 63360,
+"name": null
+},
+"10790": {
+"cls": "OALU",
+"pinned": true,
+"hard": false,
+"alt": [
+"OALU"
+],
+"static": 130,
+"executed": 2087140948,
+"name": null
+},
+"10793": {
+"cls": "OALU",
+"pinned": true,
+"hard": false,
+"alt": [
+"OALU"
+],
+"static": 308,
+"executed": 561259088,
+"name": null
+},
+"10795": {
+"cls": "INT32",
+"pinned": false,
+"hard": false,
+"alt": [
+"FP32",
+"INT16",
+"INT32"
+],
+"static": 6,
+"executed": 36928,
+"name": null
+},
+"10801": {
+"cls": "FP32",
+"pinned": false,
+"hard": false,
+"alt": [
+"FP32",
+"INT32"
+],
+"static": 10,
+"executed": 90121808,
+"name": null
+},
+"10802": {
+"cls": "INT16",
+"pinned": false,
+"hard": false,
+"alt": [
+"INT16",
+"OALU"
+],
+"static": 11,
+"executed": 71598080,
+"name": null
+},
+"10825": {
+"cls": "INT32",
+"pinned": true,
+"hard": false,
+"alt": [
+"INT32"
+],
+"static": 95,
+"executed": 139624356,
+"name": null
+},
+"10826": {
+"cls": "INT32",
+"pinned": true,
+"hard": false,
+"alt": [
+"INT32"
+],
+"static": 422,
+"executed": 980295980,
+"name": "uniform.alu32"
+},
+"10828": {
+"cls": "INT32",
+"pinned": false,
+"hard": false,
+"alt": [
+"INT32",
+"OALU"
+],
+"static": 4,
+"executed": 9707520,
+"name": null
+},
+"10829": {
+"cls": "INT32",
+"pinned": true,
+"hard": false,
+"alt": [
+"INT32"
+],
+"static": 35,
+"executed": 5056672,
+"name": null
+},
+"10831": {
+"cls": "OALU",
+"pinned": false,
+"hard": false,
+"alt": [
+"INT32",
+"OALU"
+],
+"static": 3,
+"executed": 8085504,
+"name": null
+},
+"10834": {
+"cls": "INT32",
+"pinned": false,
+"hard": false,
+"alt": [
+"INT16",
+"INT32",
+"NONE"
+],
+"static": 2,
+"executed": 344573504,
+"name": null
+},
+"10860": {
+"cls": "INT32",
+"pinned": false,
+"hard": false,
+"alt": [
+"INT32",
+"OALU"
+],
+"static": 3,
+"executed": 84480,
+"name": null
+},
+"11067": {
+"cls": "OALU",
+"pinned": true,
+"hard": false,
+"alt": [
+"OALU"
+],
+"static": 262,
+"executed": 125236452,
+"name": null
+},
+"11068": {
+"cls": "OALU",
+"pinned": true,
+"hard": false,
+"alt": [
+"OALU"
+],
+"static": 66,
+"executed": 24292110,
+"name": null
+},
+"11072": {
+"cls": "OALU",
+"pinned": false,
+"hard": false,
+"alt": [
+"INT16",
+"OALU"
+],
+"static": 39,
+"executed": 16129332,
+"name": null
+},
+"11074": {
+"cls": "INT32",
+"pinned": false,
+"hard": false,
+"alt": [
+"INT32",
+"OALU"
+],
+"static": 25,
+"executed": 1394652,
+"name": null
+},
+"11079": {
+"cls": "INT32",
+"pinned": true,
+"hard": false,
+"alt": [
+"INT32"
+],
+"static": 613,
+"executed": 1374590412,
+"name": null
+},
+"11080": {
+"cls": "INT32",
+"pinned": true,
+"hard": false,
+"alt": [
+"INT32"
+],
+"static": 87,
+"executed": 191907948,
+"name": null
+},
+"11082": {
+"cls": "INT32",
+"pinned": true,
+"hard": false,
+"alt": [
+"INT32"
+],
+"static": 1531,
+"executed": 2670532670,
+"name": null
+},
+"11083": {
+"cls": "INT32",
+"pinned": true,
+"hard": false,
+"alt": [
+"INT32"
+],
+"static": 182,
+"executed": 275041104,
+"name": null
+},
+"11084": {
+"cls": "INT32",
+"pinned": true,
+"hard": false,
+"alt": [
+"INT32"
+],
+"static": 39,
+"executed": 60073933,
+"name": null
+},
+"11085": {
+"cls": "INT32",
+"pinned": true,
+"hard": false,
+"alt": [
+"INT32"
+],
+"static": 578,
+"executed": 725053298,
+"name": null
+},
+"11086": {
+"cls": "INT32",
+"pinned": true,
+"hard": false,
+"alt": [
+"INT32"
+],
+"static": 56,
+"executed": 13368040,
+"name": null
+},
+"11089": {
+"cls": "INT16",
+"pinned": true,
+"hard": false,
+"alt": [
+"INT16"
+],
+"static": 292,
+"executed": 267633905,
+"name": null
+},
+"11095": {
+"cls": "INT16",
+"pinned": true,
+"hard": false,
+"alt": [
+"INT16"
+],
+"static": 579,
+"executed": 1120997940,
+"name": null
+},
+"11110": {
+"cls": "SPL",
+"pinned": true,
+"hard": true,
+"alt": [
+"SPL"
+],
+"static": 1,
+"executed": 3384,
+"name": null
+},
+"11169": {
+"cls": "INT16",
+"pinned": true,
+"hard": false,
+"alt": [
+"INT16"
+],
+"static": 78,
+"executed": 68472635,
+"name": null
+},
+"11170": {
+"cls": "INT16",
+"pinned": true,
+"hard": false,
+"alt": [
+"INT16"
+],
+"static": 104,
+"executed": 396018694,
+"name": null
+},
+"11172": {
+"cls": "INT16",
+"pinned": true,
+"hard": false,
+"alt": [
+"INT16"
+],
+"static": 40,
+"executed": 94779824,
+"name": null
+},
+"11179": {
+"cls": "OALU",
+"pinned": true,
+"hard": false,
+"alt": [
+"OALU"
+],
+"static": 273,
+"executed": 1657745200,
+"name": "shift/mask"
+},
+"11180": {
+"cls": "OALU",
+"pinned": true,
+"hard": false,
+"alt": [
+"OALU"
+],
+"static": 28,
+"executed": 186777600,
+"name": null
+},
+"11181": {
+"cls": "INT32",
+"pinned": false,
+"hard": false,
+"alt": [
+"INT16",
+"INT32"
+],
+"static": 18,
+"executed": 4358024,
+"name": null
+},
+"11182": {
+"cls": "FP32",
+"pinned": false,
+"hard": false,
+"alt": [
+"FP32",
+"OALU",
+"SPL"
+],
+"static": 4,
+"executed": 7864320,
+"name": "shift/mask"
+},
+"11183": {
+"cls": "OALU",
+"pinned": true,
+"hard": false,
+"alt": [
+"OALU"
+],
+"static": 64,
+"executed": 1178173440,
+"name": null
+},
+"11309": {
+"cls": "INT16",
+"pinned": false,
+"hard": false,
+"alt": [
+"FP32",
+"INT16",
+"SPL"
+],
+"static": 4,
+"executed": 14301344,
+"name": null
+},
+"11314": {
+"cls": "INT32",
+"pinned": true,
+"hard": false,
+"alt": [
+"INT32"
+],
+"static": 6,
+"executed": 84480,
+"name": null
+},
+"11321": {
+"cls": "INT16",
+"pinned": false,
+"hard": false,
+"alt": [
+"INT16",
+"OALU",
+"SPL"
+],
+"static": 7,
+"executed": 6414336,
+"name": null
+},
+"11322": {
+"cls": "INT32",
+"pinned": false,
+"hard": false,
+"alt": [
+"INT16",
+"INT32"
+],
+"static": 5,
+"executed": 8113664,
+"name": null
+},
+"11362": {
+"cls": "INT32",
+"pinned": false,
+"hard": false,
+"alt": [
+"INT32",
+"OALU"
+],
+"static": 5,
+"executed": 11468800,
+"name": null
+},
+"11363": {
+"cls": "INT32",
+"pinned": true,
+"hard": false,
+"alt": [
+"INT32"
+],
+"static": 17,
+"executed": 135659520,
+"name": null
+},
+"11364": {
+"cls": "INT32",
+"pinned": true,
+"hard": false,
+"alt": [
+"INT32"
+],
+"static": 154,
+"executed": 318050672,
+"name": null
+},
+"11365": {
+"cls": "INT32",
+"pinned": true,
+"hard": false,
+"alt": [
+"INT32"
+],
+"static": 54,
+"executed": 119100576,
+"name": null
+},
+"11373": {
+"cls": "INT16",
+"pinned": true,
+"hard": false,
+"alt": [
+"INT16"
+],
+"static": 10,
+"executed": 146304,
+"name": null
+},
+"11375": {
+"cls": "INT32",
+"pinned": false,
+"hard": false,
+"alt": [
+"INT32",
+"OALU"
+],
+"static": 21,
+"executed": 20162520,
+"name": null
+},
+"11379": {
+"cls": "INT32",
+"pinned": true,
+"hard": false,
+"alt": [
+"INT32"
+],
+"static": 16,
+"executed": 44564480,
+"name": null
+},
+"11385": {
+"cls": "INT32",
+"pinned": false,
+"hard": false,
+"alt": [
+"INT32",
+"NONE"
+],
+"static": 26,
+"executed": 1099776,
+"name": null
+},
+"11392": {
+"cls": "FP32",
+"pinned": false,
+"hard": false,
+"alt": [
+"FP32",
+"SPL"
+],
+"static": 2,
+"executed": 22282240,
+"name": null
+},
+"11395": {
+"cls": "INT16",
+"pinned": false,
+"hard": false,
+"alt": [
+"FP32",
+"INT16"
+],
+"static": 19,
+"executed": 398295040,
+"name": null
+},
+"11432": {
+"cls": "INT16",
+"pinned": true,
+"hard": false,
+"alt": [
+"INT16"
+],
+"static": 31,
+"executed": 20308824,
+"name": null
+},
+"11437": {
+"cls": "OALU",
+"pinned": false,
+"hard": false,
+"alt": [
+"INT16",
+"OALU"
+],
+"static": 31,
+"executed": 20308824,
+"name": null
+},
+"11452": {
+"cls": "INT32",
+"pinned": false,
+"hard": false,
+"alt": [
+"INT16",
+"INT32",
+"OALU"
+],
+"static": 5,
+"executed": 17086624,
+"name": null
+},
+"11457": {
+"cls": "INT16",
+"pinned": false,
+"hard": false,
+"alt": [
+"INT16",
+"INT32"
+],
+"static": 1,
+"executed": 2785280,
+"name": null
+},
+"11458": {
+"cls": "INT32",
+"pinned": true,
+"hard": false,
+"alt": [
+"INT32"
+],
+"static": 16,
+"executed": 361758720,
+"name": null
+},
+"11461": {
+"cls": "FP32",
+"pinned": false,
+"hard": false,
+"alt": [
+"FP32",
+"INT16"
+],
+"static": 2,
+"executed": 5570560,
+"name": null
+},
+"11462": {
+"cls": "INT16",
+"pinned": true,
+"hard": false,
+"alt": [
+"INT16"
+],
+"static": 461,
+"executed": 1062770400,
+"name": null
+},
+"11466": {
+"cls": "INT16",
+"pinned": false,
+"hard": false,
+"alt": [
+"FP32",
+"INT16"
+],
+"static": 10,
+"executed": 1726080,
+"name": null
+},
+"11467": {
+"cls": "INT16",
+"pinned": true,
+"hard": false,
+"alt": [
+"INT16"
+],
+"static": 16,
+"executed": 133693440,
+"name": null
+},
+"11468": {
+"cls": "INT16",
+"pinned": false,
+"hard": false,
+"alt": [
+"FP32",
+"INT16"
+],
+"static": 16,
+"executed": 178257920,
+"name": null
+},
+"11482": {
+"cls": "INT16",
+"pinned": true,
+"hard": false,
+"alt": [
+"INT16"
+],
+"static": 53,
+"executed": 107602200,
+"name": null
+},
+"11483": {
+"cls": "INT16",
+"pinned": false,
+"hard": false,
+"alt": [
+"INT16",
+"INT32"
+],
+"static": 2,
+"executed": 28160,
+"name": null
+},
+"11486": {
+"cls": "OALU",
+"pinned": false,
+"hard": false,
+"alt": [
+"INT32",
+"OALU"
+],
+"static": 8,
+"executed": 40990912,
+"name": null
+},
+"11487": {
+"cls": "INT16",
+"pinned": true,
+"hard": false,
+"alt": [
+"INT16"
+],
+"static": 28,
+"executed": 127303680,
+"name": null
+},
+"11488": {
+"cls": "INT32",
+"pinned": false,
+"hard": false,
+"alt": [
+"FP32",
+"INT32"
+],
+"static": 1,
+"executed": 22609920,
+"name": null
+},
+"11490": {
+"cls": "INT16",
+"pinned": false,
+"hard": false,
+"alt": [
+"FP32",
+"INT16"
+],
+"static": 1,
+"executed": 11141120,
+"name": null
+},
+"11664": {
+"cls": "INT32",
+"pinned": false,
+"hard": false,
+"alt": [
+"INT32",
+"OALU"
+],
+"static": 35,
+"executed": 108164736,
+"name": null
+},
+"11665": {
+"cls": "NONE",
+"pinned": false,
+"hard": false,
+"alt": [
+"INT16",
+"NONE",
+"OALU"
+],
+"static": 14,
+"executed": 286240,
+"name": null
+},
+"11666": {
+"cls": "INT32",
+"pinned": true,
+"hard": false,
+"alt": [
+"INT32"
+],
+"static": 37,
+"executed": 139640044,
+"name": null
+},
+"11667": {
+"cls": "INT32",
+"pinned": false,
+"hard": false,
+"alt": [
+"INT32",
+"OALU"
+],
+"static": 96,
+"executed": 139501732,
+"name": null
+},
+"11668": {
+"cls": "OALU",
+"pinned": false,
+"hard": false,
+"alt": [
+"INT32",
+"OALU"
+],
+"static": 59,
+"executed": 74612504,
+"name": null
+},
+"11669": {
+"cls": "INT32",
+"pinned": true,
+"hard": false,
+"alt": [
+"INT32"
+],
+"static": 4,
+"executed": 23592960,
+"name": null
+},
+"11670": {
+"cls": "NONE",
+"pinned": false,
+"hard": false,
+"alt": [
+"INT32",
+"NONE"
+],
+"static": 7,
+"executed": 129856,
+"name": null
+},
+"11680": {
+"cls": "INT16",
+"pinned": false,
+"hard": false,
+"alt": [
+"INT16",
+"OALU"
+],
+"static": 5,
+"executed": 21463040,
+"name": null
+},
+"11720": {
+"cls": "INT16",
+"pinned": true,
+"hard": false,
+"alt": [
+"INT16"
+],
+"static": 12,
+"executed": 1030752,
+"name": null
+},
+"11721": {
+"cls": "OALU",
+"pinned": true,
+"hard": false,
+"alt": [
+"OALU"
+],
+"static": 119,
+"executed": 324912551,
+"name": null
+},
+"11724": {
+"cls": "OALU",
+"pinned": true,
+"hard": false,
+"alt": [
+"OALU"
+],
+"static": 437,
+"executed": 360547756,
+"name": null
+},
+"11726": {
+"cls": "OALU",
+"pinned": true,
+"hard": false,
+"alt": [
+"OALU"
+],
+"static": 7,
+"executed": 380484,
+"name": null
+},
+"11732": {
+"cls": "SPL",
+"pinned": false,
+"hard": false,
+"alt": [
+"OALU",
+"SPL"
+],
+"static": 13,
+"executed": 15281892,
+"name": null
+},
+"11733": {
+"cls": "NONE",
+"pinned": false,
+"hard": false,
+"alt": [
+"INT16",
+"NONE"
+],
+"static": 4,
+"executed": 3991184,
+"name": null
+},
+"11753": {
+"cls": "INT32",
+"pinned": false,
+"hard": false,
+"alt": [
+"INT32",
+"SPL"
+],
+"static": 1,
+"executed": 3065516,
+"name": null
+},
+"11756": {
+"cls": "INT32",
+"pinned": true,
+"hard": false,
+"alt": [
+"INT32"
+],
+"static": 114,
+"executed": 53780928,
+"name": null
+},
+"11757": {
+"cls": "INT32",
+"pinned": true,
+"hard": false,
+"alt": [
+"INT32"
+],
+"static": 618,
+"executed": 511379418,
+"name": null
+},
+"11759": {
+"cls": "INT32",
+"pinned": true,
+"hard": false,
+"alt": [
+"INT32"
+],
+"static": 9,
+"executed": 10693918,
+"name": null
+},
+"11760": {
+"cls": "INT32",
+"pinned": true,
+"hard": false,
+"alt": [
+"INT32"
+],
+"static": 28,
+"executed": 3227571,
+"name": null
+},
+"11762": {
+"cls": "INT32",
+"pinned": true,
+"hard": false,
+"alt": [
+"INT32"
+],
+"static": 6,
+"executed": 5854262,
+"name": null
+},
+"11765": {
+"cls": "INT32",
+"pinned": false,
+"hard": false,
+"alt": [
+"INT32",
+"OALU"
+],
+"static": 1,
+"executed": 37760144,
+"name": null
+},
+"11768": {
+"cls": "FP32",
+"pinned": false,
+"hard": false,
+"alt": [
+"FP32",
+"INT16"
+],
+"static": 2,
+"executed": 2276384,
+"name": null
+},
+"11789": {
+"cls": "INT16",
+"pinned": true,
+"hard": false,
+"alt": [
+"INT16"
+],
+"static": 11,
+"executed": 9004824,
+"name": null
+},
+"11791": {
+"cls": "INT16",
+"pinned": false,
+"hard": false,
+"alt": [
+"INT16",
+"INT32"
+],
+"static": 12,
+"executed": 2061504,
+"name": null
+},
+"11839": {
+"cls": "OALU",
+"pinned": false,
+"hard": false,
+"alt": [
+"INT16",
+"INT32",
+"OALU"
+],
+"static": 15,
+"executed": 326848,
+"name": null
+},
+"11840": {
+"cls": "SPL",
+"pinned": false,
+"hard": false,
+"alt": [
+"FP32",
+"OALU",
+"SPL"
+],
+"static": 18,
+"executed": 18961920,
+"name": null
+},
+"11842": {
+"cls": "INT16",
+"pinned": false,
+"hard": false,
+"alt": [
+"FP32",
+"INT16",
+"OALU"
+],
+"static": 19,
+"executed": 15067936,
+"name": null
+},
+"11843": {
+"cls": "NONE",
+"pinned": false,
+"hard": false,
+"alt": [
+"NONE",
+"OALU"
+],
+"static": 5,
+"executed": 5165760,
+"name": null
+},
+"12104": {
+"cls": "OALU",
+"pinned": true,
+"hard": false,
+"alt": [
+"OALU"
+],
+"static": 633,
+"executed": 2013221632,
+"name": null
+},
+"12105": {
+"cls": "OALU",
+"pinned": true,
+"hard": false,
+"alt": [
+"OALU"
+],
+"static": 111,
+"executed": 253961856,
+"name": null
+},
+"12107": {
+"cls": "OALU",
+"pinned": true,
+"hard": false,
+"alt": [
+"OALU"
+],
+"static": 128,
+"executed": 1992009600,
+"name": null
+},
+"12108": {
+"cls": "OALU",
+"pinned": true,
+"hard": false,
+"alt": [
+"OALU"
+],
+"static": 64,
+"executed": 921567232,
+"name": null
+},
+"12234": {
+"cls": "OALU",
+"pinned": false,
+"hard": false,
+"alt": [
+"INT16",
+"OALU"
+],
+"static": 3,
+"executed": 1338724,
+"name": null
+},
+"12236": {
+"cls": "OALU",
+"pinned": true,
+"hard": false,
+"alt": [
+"OALU"
+],
+"static": 1,
+"executed": 19689784,
+"name": null
+},
+"12239": {
+"cls": "INT16",
+"pinned": true,
+"hard": false,
+"alt": [
+"INT16"
+],
+"static": 24,
+"executed": 2061504,
+"name": null
+},
+"12240": {
+"cls": "OALU",
+"pinned": true,
+"hard": false,
+"alt": [
+"OALU"
+],
+"static": 2,
+"executed": 39379568,
+"name": null
+},
+"12246": {
+"cls": "INT16",
+"pinned": true,
+"hard": false,
+"alt": [
+"INT16"
+],
+"static": 8,
+"executed": 4309548,
+"name": null
+},
+"12247": {
+"cls": "INT16",
+"pinned": true,
+"hard": false,
+"alt": [
+"INT16"
+],
+"static": 25,
+"executed": 8095728,
+"name": null
+},
+"12279": {
+"cls": "INT32",
+"pinned": true,
+"hard": false,
+"alt": [
+"INT32"
+],
+"static": 2,
+"executed": 23690,
+"name": null
+},
+"12287": {
+"cls": "INT32",
+"pinned": true,
+"hard": false,
+"alt": [
+"INT32"
+],
+"static": 3,
+"executed": 25186920,
+"name": null
+},
+"12288": {
+"cls": "INT32",
+"pinned": true,
+"hard": false,
+"alt": [
+"INT32"
+],
+"static": 80,
+"executed": 120248320,
+"name": null
+},
+"12289": {
+"cls": "INT32",
+"pinned": true,
+"hard": false,
+"alt": [
+"INT32"
+],
+"static": 184,
+"executed": 200122328,
+"name": null
+},
+"12290": {
+"cls": "INT32",
+"pinned": true,
+"hard": false,
+"alt": [
+"INT32"
+],
+"static": 62,
+"executed": 101384880,
+"name": null
+},
+"12297": {
+"cls": "INT32",
+"pinned": true,
+"hard": false,
+"alt": [
+"INT32"
+],
+"static": 1,
+"executed": 154092,
+"name": null
+},
+"12298": {
+"cls": "OALU",
+"pinned": false,
+"hard": false,
+"alt": [
+"INT16",
+"OALU"
+],
+"static": 24,
+"executed": 2061504,
+"name": null
+},
+"12300": {
+"cls": "INT32",
+"pinned": true,
+"hard": false,
+"alt": [
+"INT32"
+],
+"static": 75,
+"executed": 23282242,
+"name": null
+},
+"12310": {
+"cls": "INT32",
+"pinned": true,
+"hard": false,
+"alt": [
+"INT32"
+],
+"static": 26,
+"executed": 1706364,
+"name": null
+},
+"12317": {
+"cls": "INT32",
+"pinned": true,
+"hard": false,
+"alt": [
+"INT32"
+],
+"static": 1,
+"executed": 32192,
+"name": null
+},
+"12320": {
+"cls": "INT32",
+"pinned": true,
+"hard": false,
+"alt": [
+"INT32"
+],
+"static": 70,
+"executed": 133278432,
+"name": null
+},
+"12328": {
+"cls": "TLD",
+"pinned": true,
+"hard": true,
+"alt": [
+"TLD"
+],
+"static": 591,
+"executed": 5026706592,
+"name": null
+},
+"12357": {
+"cls": "INT16",
+"pinned": false,
+"hard": false,
+"alt": [
+"INT16",
+"OALU"
+],
+"static": 62,
+"executed": 17823896,
+"name": null
+},
+"12362": {
+"cls": "INT16",
+"pinned": true,
+"hard": false,
+"alt": [
+"INT16"
+],
+"static": 62,
+"executed": 17823896,
+"name": null
+},
+"12364": {
+"cls": "TLD",
+"pinned": true,
+"hard": true,
+"alt": [
+"TLD"
+],
+"static": 10,
+"executed": 23037184,
+"name": null
+},
+"12376": {
+"cls": "TLD",
+"pinned": true,
+"hard": true,
+"alt": [
+"TLD"
+],
+"static": 331,
+"executed": 1007620384,
+"name": null
+},
+"12377": {
+"cls": "INT16",
+"pinned": false,
+"hard": false,
+"alt": [
+"INT16",
+"OALU"
+],
+"static": 5,
+"executed": 40718292,
+"name": null
+},
+"12383": {
+"cls": "INT16",
+"pinned": false,
+"hard": false,
+"alt": [
+"FP32",
+"INT16"
+],
+"static": 16,
+"executed": 103440384,
+"name": null
+},
+"12387": {
+"cls": "INT16",
+"pinned": true,
+"hard": false,
+"alt": [
+"INT16"
+],
+"static": 623,
+"executed": 769185168,
+"name": null
+},
+"12391": {
+"cls": "INT16",
+"pinned": true,
+"hard": false,
+"alt": [
+"INT16"
+],
+"static": 18,
+"executed": 5137056,
+"name": null
+},
+"12392": {
+"cls": "INT16",
+"pinned": true,
+"hard": false,
+"alt": [
+"INT16"
+],
+"static": 4,
+"executed": 49309440,
+"name": null
+},
+"12397": {
+"cls": "INT16",
+"pinned": true,
+"hard": false,
+"alt": [
+"INT16"
+],
+"static": 10,
+"executed": 20440674,
+"name": null
+},
+"12400": {
+"cls": "TLD",
+"pinned": true,
+"hard": true,
+"alt": [
+"TLD"
+],
+"static": 42,
+"executed": 64897216,
+"name": null
+},
+"12407": {
+"cls": "INT16",
+"pinned": true,
+"hard": false,
+"alt": [
+"INT16"
+],
+"static": 84,
+"executed": 51485086,
+"name": null
+},
+"12408": {
+"cls": "NONE",
+"pinned": false,
+"hard": false,
+"alt": [
+"INT16",
+"NONE",
+"OALU"
+],
+"static": 8,
+"executed": 687168,
+"name": null
+},
+"12411": {
+"cls": "INT16",
+"pinned": false,
+"hard": false,
+"alt": [
+"INT16",
+"OALU"
+],
+"static": 4,
+"executed": 9879510,
+"name": null
+},
+"12412": {
+"cls": "INT16",
+"pinned": true,
+"hard": false,
+"alt": [
+"INT16"
+],
+"static": 3,
+"executed": 18642172,
+"name": null
+},
+"12413": {
+"cls": "INT16",
+"pinned": true,
+"hard": false,
+"alt": [
+"INT16"
+],
+"static": 1,
+"executed": 6465024,
+"name": null
+},
+"12573": {
+"cls": "INT16",
+"pinned": false,
+"hard": false,
+"alt": [
+"INT16",
+"OALU"
+],
+"static": 1,
+"executed": 19689784,
+"name": null
+},
+"12576": {
+"cls": "OALU",
+"pinned": false,
+"hard": false,
+"alt": [
+"INT16",
+"OALU"
+],
+"static": 1,
+"executed": 19689784,
+"name": null
+},
+"12577": {
+"cls": "OALU",
+"pinned": false,
+"hard": false,
+"alt": [
+"INT16",
+"OALU"
+],
+"static": 1,
+"executed": 19689784,
+"name": null
+},
+"12578": {
+"cls": "INT16",
+"pinned": true,
+"hard": false,
+"alt": [
+"INT16"
+],
+"static": 1,
+"executed": 19689784,
+"name": null
+},
+"12589": {
+"cls": "INT32",
+"pinned": true,
+"hard": false,
+"alt": [
+"INT32"
+],
+"static": 40,
+"executed": 32137648,
+"name": null
+},
+"12590": {
+"cls": "OALU",
+"pinned": false,
+"hard": false,
+"alt": [
+"FP32",
+"INT32",
+"OALU"
+],
+"static": 10,
+"executed": 357128,
+"name": null
+},
+"12591": {
+"cls": "INT32",
+"pinned": true,
+"hard": false,
+"alt": [
+"INT32"
+],
+"static": 90,
+"executed": 102766876,
+"name": null
+},
+"12592": {
+"cls": "INT32",
+"pinned": true,
+"hard": false,
+"alt": [
+"INT32"
+],
+"static": 135,
+"executed": 57691480,
+"name": null
+},
+"12593": {
+"cls": "INT32",
+"pinned": true,
+"hard": false,
+"alt": [
+"INT32"
+],
+"static": 92,
+"executed": 34249848,
+"name": null
+},
+"12594": {
+"cls": "INT32",
+"pinned": true,
+"hard": false,
+"alt": [
+"INT32"
+],
+"static": 19,
+"executed": 34733020,
+"name": null
+},
+"12595": {
+"cls": "FP32",
+"pinned": false,
+"hard": false,
+"alt": [
+"FP32",
+"INT32",
+"OALU"
+],
+"static": 6,
+"executed": 13544,
+"name": null
+},
+"12605": {
+"cls": "INT16",
+"pinned": false,
+"hard": false,
+"alt": [
+"INT16",
+"NONE",
+"SPL"
+],
+"static": 3,
+"executed": 3133784,
+"name": null
+},
+"12646": {
+"cls": "DLD",
+"pinned": true,
+"hard": true,
+"alt": [
+"DLD"
+],
+"static": 89,
+"executed": 1343294832,
+"name": "ld.s8/s16"
+},
+"12649": {
+"cls": "DLD",
+"pinned": true,
+"hard": true,
+"alt": [
+"DLD"
+],
+"static": 47,
+"executed": 2085273280,
+"name": null
+},
+"12652": {
+"cls": "DLD",
+"pinned": true,
+"hard": true,
+"alt": [
+"DLD"
+],
+"static": 11,
+"executed": 26539728,
+"name": null
+},
+"12655": {
+"cls": "DLD",
+"pinned": true,
+"hard": true,
+"alt": [
+"DLD"
+],
+"static": 187,
+"executed": 404893600,
+"name": null
+},
+"12658": {
+"cls": "DLD",
+"pinned": true,
+"hard": true,
+"alt": [
+"DLD"
+],
+"static": 1,
+"executed": 2785280,
+"name": null
+},
+"12661": {
+"cls": "DLD",
+"pinned": true,
+"hard": true,
+"alt": [
+"DLD"
+],
+"static": 19,
+"executed": 178257920,
+"name": null
+},
+"12667": {
+"cls": "DLD",
+"pinned": true,
+"hard": true,
+"alt": [
+"DLD"
+],
+"static": 3,
+"executed": 9292992,
+"name": null
+},
+"12673": {
+"cls": "DLD",
+"pinned": true,
+"hard": true,
+"alt": [
+"DLD"
+],
+"static": 4,
+"executed": 7864320,
+"name": null
+},
+"12676": {
+"cls": "DLD",
+"pinned": true,
+"hard": true,
+"alt": [
+"DLD"
+],
+"static": 85,
+"executed": 376082688,
+"name": null
+},
+"12679": {
+"cls": "DLD",
+"pinned": true,
+"hard": true,
+"alt": [
+"DLD"
+],
+"static": 32,
+"executed": 76012352,
+"name": null
+},
+"12682": {
+"cls": "DLD",
+"pinned": true,
+"hard": true,
+"alt": [
+"DLD"
+],
+"static": 71,
+"executed": 1923790400,
+"name": "ld.s32"
+},
+"12685": {
+"cls": "DLD",
+"pinned": true,
+"hard": true,
+"alt": [
+"DLD"
+],
+"static": 2,
+"executed": 45219840,
+"name": null
+},
+"12688": {
+"cls": "DLD",
+"pinned": true,
+"hard": true,
+"alt": [
+"DLD"
+],
+"static": 4,
+"executed": 689147008,
+"name": null
+},
+"12691": {
+"cls": "DLD",
+"pinned": true,
+"hard": true,
+"alt": [
+"DLD"
+],
+"static": 19,
+"executed": 316031488,
+"name": null
+},
+"12694": {
+"cls": "DLD",
+"pinned": true,
+"hard": true,
+"alt": [
+"DLD"
+],
+"static": 12,
+"executed": 303255232,
+"name": null
+},
+"12709": {
+"cls": "DLD",
+"pinned": true,
+"hard": true,
+"alt": [
+"DLD"
+],
+"static": 39,
+"executed": 1526441836,
+"name": "ld.v8s16"
+},
+"12712": {
+"cls": "DLD",
+"pinned": true,
+"hard": true,
+"alt": [
+"DLD"
+],
+"static": 21,
+"executed": 2278304,
+"name": null
+},
+"12713": {
+"cls": "SPL",
+"pinned": true,
+"hard": false,
+"alt": [
+"SPL"
+],
+"static": 12,
+"executed": 8212608,
+"name": null
+},
+"12715": {
+"cls": "DLD",
+"pinned": true,
+"hard": true,
+"alt": [
+"DLD"
+],
+"static": 41,
+"executed": 259057484,
+"name": null
+},
+"12716": {
+"cls": "SPL",
+"pinned": false,
+"hard": false,
+"alt": [
+"INT16",
+"NONE",
+"SPL"
+],
+"static": 5,
+"executed": 1995592,
+"name": null
+},
+"13189": {
+"cls": "TLD",
+"pinned": true,
+"hard": true,
+"alt": [
+"TLD"
+],
+"static": 2,
+"executed": 0,
+"name": null
+},
+"13201": {
+"cls": "TLD",
+"pinned": true,
+"hard": true,
+"alt": [
+"TLD"
+],
+"static": 866,
+"executed": 3219713852,
+"name": null
+},
+"13225": {
+"cls": "TLD",
+"pinned": true,
+"hard": true,
+"alt": [
+"TLD"
+],
+"static": 2,
+"executed": 616576,
+"name": null
+},
+"13237": {
+"cls": "TLD",
+"pinned": true,
+"hard": true,
+"alt": [
+"TLD"
+],
+"static": 35,
+"executed": 26390652,
+"name": null
+},
+"13240": {
+"cls": "TST",
+"pinned": true,
+"hard": true,
+"alt": [
+"TST"
+],
+"static": 268,
+"executed": 2049959424,
+"name": null
+},
+"13249": {
+"cls": "TLD",
+"pinned": true,
+"hard": true,
+"alt": [
+"TLD"
+],
+"static": 230,
+"executed": 232239520,
+"name": null
+},
+"13252": {
+"cls": "TST",
+"pinned": true,
+"hard": true,
+"alt": [
+"TST"
+],
+"static": 15,
+"executed": 33030048,
+"name": null
+},
+"13273": {
+"cls": "TLD",
+"pinned": true,
+"hard": true,
+"alt": [
+"TLD"
+],
+"static": 24,
+"executed": 5162704,
+"name": null
+},
+"13288": {
+"cls": "TST",
+"pinned": true,
+"hard": true,
+"alt": [
+"TST"
+],
+"static": 53,
+"executed": 97388864,
+"name": null
+},
+"13300": {
+"cls": "TST",
+"pinned": true,
+"hard": true,
+"alt": [
+"TST"
+],
+"static": 67,
+"executed": 172740320,
+"name": null
+},
+"13324": {
+"cls": "TST",
+"pinned": true,
+"hard": true,
+"alt": [
+"TST"
+],
+"static": 74,
+"executed": 353343168,
+"name": null
+},
+"13483": {
+"cls": "INT32",
+"pinned": true,
+"hard": false,
+"alt": [
+"INT32"
+],
+"static": 1,
+"executed": 14080,
+"name": null
+},
+"13519": {
+"cls": "DLD",
+"pinned": true,
+"hard": true,
+"alt": [
+"DLD"
+],
+"static": 159,
+"executed": 813938688,
+"name": null
+},
+"13522": {
+"cls": "DLD",
+"pinned": true,
+"hard": true,
+"alt": [
+"DLD"
+],
+"static": 36,
+"executed": 316324010,
+"name": null
+},
+"13525": {
+"cls": "DLD",
+"pinned": true,
+"hard": true,
+"alt": [
+"DLD"
+],
+"static": 24,
+"executed": 84876952,
+"name": null
+},
+"13528": {
+"cls": "DLD",
+"pinned": true,
+"hard": true,
+"alt": [
+"DLD"
+],
+"static": 49,
+"executed": 119428850,
+"name": null
+},
+"13531": {
+"cls": "DLD",
+"pinned": true,
+"hard": true,
+"alt": [
+"DLD"
+],
+"static": 3,
+"executed": 1995592,
+"name": null
+},
+"13534": {
+"cls": "DLD",
+"pinned": true,
+"hard": true,
+"alt": [
+"DLD"
+],
+"static": 4,
+"executed": 15728640,
+"name": null
+},
+"13540": {
+"cls": "DLD",
+"pinned": true,
+"hard": true,
+"alt": [
+"DLD"
+],
+"static": 1,
+"executed": 783576,
+"name": null
+},
+"13546": {
+"cls": "DLD",
+"pinned": true,
+"hard": true,
+"alt": [
+"DLD"
+],
+"static": 3,
+"executed": 173848,
+"name": null
+},
+"13549": {
+"cls": "DLD",
+"pinned": true,
+"hard": true,
+"alt": [
+"DLD"
+],
+"static": 103,
+"executed": 120346984,
+"name": null
+},
+"13552": {
+"cls": "DLD",
+"pinned": true,
+"hard": true,
+"alt": [
+"DLD"
+],
+"static": 56,
+"executed": 47713936,
+"name": null
+},
+"13555": {
+"cls": "DLD",
+"pinned": true,
+"hard": true,
+"alt": [
+"DLD"
+],
+"static": 113,
+"executed": 866840592,
+"name": null
+},
+"13558": {
+"cls": "DLD",
+"pinned": true,
+"hard": true,
+"alt": [
+"DLD"
+],
+"static": 2,
+"executed": 12930048,
+"name": null
+},
+"13559": {
+"cls": "OALU",
+"pinned": false,
+"hard": false,
+"alt": [
+"NONE",
+"OALU",
+"SPL"
+],
+"static": 2,
+"executed": 13926400,
+"name": null
+},
+"13561": {
+"cls": "DLD",
+"pinned": true,
+"hard": true,
+"alt": [
+"DLD"
+],
+"static": 2,
+"executed": 75520288,
+"name": null
+},
+"13564": {
+"cls": "DLD",
+"pinned": true,
+"hard": true,
+"alt": [
+"DLD"
+],
+"static": 34,
+"executed": 96700524,
+"name": null
+},
+"13567": {
+"cls": "DLD",
+"pinned": true,
+"hard": true,
+"alt": [
+"DLD"
+],
+"static": 8,
+"executed": 2502844,
+"name": null
+},
+"13575": {
+"cls": "OALU",
+"pinned": false,
+"hard": false,
+"alt": [
+"NONE",
+"OALU"
+],
+"static": 8,
+"executed": 7997952,
+"name": null
+},
+"13582": {
+"cls": "DLD",
+"pinned": true,
+"hard": true,
+"alt": [
+"DLD"
+],
+"static": 56,
+"executed": 478056882,
+"name": null
+},
+"13585": {
+"cls": "DLD",
+"pinned": true,
+"hard": true,
+"alt": [
+"DLD"
+],
+"static": 1,
+"executed": 38804,
+"name": null
+},
+"13588": {
+"cls": "DLD",
+"pinned": true,
+"hard": true,
+"alt": [
+"DLD"
+],
+"static": 51,
+"executed": 378612400,
+"name": null
+},
+"14056": {
+"cls": "NONE",
+"pinned": false,
+"hard": false,
+"alt": [
+"NONE",
+"SPL"
+],
+"static": 62,
+"executed": 293408144,
+"name": null
+},
+"14059": {
+"cls": "NONE",
+"pinned": false,
+"hard": false,
+"alt": [
+"INT32",
+"NONE"
+],
+"static": 130,
+"executed": 156796644,
+"name": "get_sr"
+},
+"14060": {
+"cls": "SPL",
+"pinned": false,
+"hard": false,
+"alt": [
+"NONE",
+"SPL"
+],
+"static": 73,
+"executed": 611981336,
+"name": "get_sr"
+},
+"14061": {
+"cls": "SPL",
+"pinned": true,
+"hard": true,
+"alt": [
+"SPL"
+],
+"static": 36,
+"executed": 8602752,
+"name": null
+},
+"14062": {
+"cls": "SPL",
+"pinned": true,
+"hard": true,
+"alt": [
+"SPL"
+],
+"static": 4,
+"executed": 56320,
+"name": null
+},
+"14161": {
+"cls": "TST",
+"pinned": true,
+"hard": true,
+"alt": [
+"TST"
+],
+"static": 240,
+"executed": 1149623104,
+"name": null
+},
+"14173": {
+"cls": "TST",
+"pinned": true,
+"hard": true,
+"alt": [
+"TST"
+],
+"static": 45,
+"executed": 13247520,
+"name": null
+},
+"14209": {
+"cls": "TST",
+"pinned": true,
+"hard": true,
+"alt": [
+"TST"
+],
+"static": 88,
+"executed": 40643196,
+"name": null
+},
+"14221": {
+"cls": "TST",
+"pinned": true,
+"hard": true,
+"alt": [
+"TST"
+],
+"static": 61,
+"executed": 23962876,
+"name": null
+},
+"14245": {
+"cls": "TST",
+"pinned": true,
+"hard": true,
+"alt": [
+"TST"
+],
+"static": 85,
+"executed": 372551464,
+"name": null
+},
+"14310": {
+"cls": "OALU",
+"pinned": true,
+"hard": false,
+"alt": [
+"OALU"
+],
+"static": 145,
+"executed": 328440576,
+"name": null
+},
+"14389": {
+"cls": "OALU",
+"pinned": false,
+"hard": false,
+"alt": [
+"FP32",
+"INT16",
+"OALU"
+],
+"static": 2,
+"executed": 13926400,
+"name": null
+},
+"14391": {
+"cls": "OALU",
+"pinned": true,
+"hard": false,
+"alt": [
+"OALU"
+],
+"static": 176,
+"executed": 331964672,
+"name": null
+},
+"14392": {
+"cls": "OALU",
+"pinned": false,
+"hard": false,
+"alt": [
+"FP32",
+"INT32",
+"OALU"
+],
+"static": 4,
+"executed": 7864320,
+"name": null
+},
+"14394": {
+"cls": "NONE",
+"pinned": false,
+"hard": false,
+"alt": [
+"INT16",
+"NONE"
+],
+"static": 28,
+"executed": 1198848,
+"name": null
+},
+"14400": {
+"cls": "OALU",
+"pinned": true,
+"hard": false,
+"alt": [
+"OALU"
+],
+"static": 121,
+"executed": 281600576,
+"name": null
+},
+"14404": {
+"cls": "INT32",
+"pinned": false,
+"hard": false,
+"alt": [
+"FP32",
+"INT16",
+"INT32"
+],
+"static": 4,
+"executed": 343584,
+"name": null
+},
+"14421": {
+"cls": "OALU",
+"pinned": false,
+"hard": false,
+"alt": [
+"FP32",
+"OALU"
+],
+"static": 13,
+"executed": 119624352,
+"name": null
+},
+"14423": {
+"cls": "OALU",
+"pinned": false,
+"hard": false,
+"alt": [
+"INT16",
+"INT32",
+"OALU"
+],
+"static": 1,
+"executed": 2785280,
+"name": null
+},
+"14468": {
+"cls": "OALU",
+"pinned": true,
+"hard": false,
+"alt": [
+"OALU"
+],
+"static": 6,
+"executed": 34445052,
+"name": null
+},
+"14480": {
+"cls": "OALU",
+"pinned": true,
+"hard": false,
+"alt": [
+"OALU"
+],
+"static": 1,
+"executed": 6745726,
+"name": null
+},
+"14496": {
+"cls": "OALU",
+"pinned": true,
+"hard": false,
+"alt": [
+"OALU"
+],
+"static": 8,
+"executed": 137863280,
+"name": null
+},
+"14509": {
+"cls": "FP32",
+"pinned": false,
+"hard": false,
+"alt": [
+"FP32",
+"NONE",
+"SPL"
+],
+"static": 12,
+"executed": 1030752,
+"name": null
+},
+"14977": {
+"cls": "OALU",
+"pinned": true,
+"hard": false,
+"alt": [
+"OALU"
+],
+"static": 63,
+"executed": 134739882,
+"name": null
+},
+"14980": {
+"cls": "SPL",
+"pinned": true,
+"hard": false,
+"alt": [
+"SPL"
+],
+"static": 123,
+"executed": 111982161,
+"name": null
+},
+"14981": {
+"cls": "SPL",
+"pinned": true,
+"hard": false,
+"alt": [
+"SPL"
+],
+"static": 104,
+"executed": 177271970,
+"name": null
+},
+"14982": {
+"cls": "SPL",
+"pinned": true,
+"hard": true,
+"alt": [
+"SPL"
+],
+"static": 68,
+"executed": 10339316,
+"name": null
+},
+"14983": {
+"cls": "SPL",
+"pinned": true,
+"hard": true,
+"alt": [
+"SPL"
+],
+"static": 5,
+"executed": 428064,
+"name": null
+},
+"15203": {
+"cls": "OALU",
+"pinned": true,
+"hard": false,
+"alt": [
+"OALU"
+],
+"static": 48,
+"executed": 4877856,
+"name": null
+},
+"15230": {
+"cls": "OALU",
+"pinned": true,
+"hard": false,
+"alt": [
+"OALU"
+],
+"static": 99,
+"executed": 181718746,
+"name": null
+},
+"15311": {
+"cls": "OALU",
+"pinned": true,
+"hard": false,
+"alt": [
+"OALU"
+],
+"static": 154,
+"executed": 312448990,
+"name": null
+},
+"15314": {
+"cls": "OALU",
+"pinned": true,
+"hard": false,
+"alt": [
+"OALU"
+],
+"static": 24,
+"executed": 19582738,
+"name": null
+},
+"15320": {
+"cls": "OALU",
+"pinned": true,
+"hard": false,
+"alt": [
+"OALU"
+],
+"static": 88,
+"executed": 174604602,
+"name": null
+},
+"15341": {
+"cls": "OALU",
+"pinned": false,
+"hard": false,
+"alt": [
+"INT16",
+"OALU"
+],
+"static": 16,
+"executed": 6656688,
+"name": null
+},
+"16805": {
+"cls": "INT32",
+"pinned": false,
+"hard": false,
+"alt": [
+"INT32",
+"OALU"
+],
+"static": 3,
+"executed": 98181120,
+"name": null
+},
+"16817": {
+"cls": "INT16",
+"pinned": true,
+"hard": false,
+"alt": [
+"INT16"
+],
+"static": 17,
+"executed": 214704384,
+"name": null
+},
+"16842": {
+"cls": "OALU",
+"pinned": true,
+"hard": false,
+"alt": [
+"OALU"
+],
+"static": 75,
+"executed": 2142677536,
+"name": null
+},
+"16858": {
+"cls": "OALU",
+"pinned": false,
+"hard": false,
+"alt": [
+"FP32",
+"OALU"
+],
+"static": 15,
+"executed": 33878944,
+"name": null
+},
+"16957": {
+"cls": "INT32",
+"pinned": true,
+"hard": false,
+"alt": [
+"INT32"
+],
+"static": 32,
+"executed": 179272806,
+"name": null
+},
+"16969": {
+"cls": "INT16",
+"pinned": true,
+"hard": false,
+"alt": [
+"INT16"
+],
+"static": 13,
+"executed": 42189374,
+"name": null
+},
+"16994": {
+"cls": "OALU",
+"pinned": true,
+"hard": false,
+"alt": [
+"OALU"
+],
+"static": 126,
+"executed": 187015228,
+"name": null
+},
+"17010": {
+"cls": "INT16",
+"pinned": false,
+"hard": false,
+"alt": [
+"FP32",
+"INT16",
+"OALU"
+],
+"static": 18,
+"executed": 10088160,
+"name": null
+},
+"17013": {
+"cls": "OALU",
+"pinned": true,
+"hard": false,
+"alt": [
+"OALU"
+],
+"static": 102,
+"executed": 1357639680,
+"name": "bfe"
+},
+"17014": {
+"cls": "OALU",
+"pinned": true,
+"hard": false,
+"alt": [
+"OALU"
+],
+"static": 16,
+"executed": 104857600,
+"name": null
+},
+"17015": {
+"cls": "OALU",
+"pinned": true,
+"hard": false,
+"alt": [
+"OALU"
+],
+"static": 17,
+"executed": 310133248,
+"name": null
+},
+"17016": {
+"cls": "OALU",
+"pinned": true,
+"hard": false,
+"alt": [
+"OALU"
+],
+"static": 308,
+"executed": 1550768080,
+"name": "bfe"
+},
+"17017": {
+"cls": "OALU",
+"pinned": false,
+"hard": false,
+"alt": [
+"NONE",
+"OALU"
+],
+"static": 6,
+"executed": 52920320,
+"name": null
+},
+"17040": {
+"cls": "OALU",
+"pinned": true,
+"hard": false,
+"alt": [
+"OALU"
+],
+"static": 36,
+"executed": 1079992320,
+"name": null
+},
+"17042": {
+"cls": "OALU",
+"pinned": true,
+"hard": false,
+"alt": [
+"OALU"
+],
+"static": 224,
+"executed": 629354496,
+"name": null
+},
+"17043": {
+"cls": "OALU",
+"pinned": true,
+"hard": false,
+"alt": [
+"OALU"
+],
+"static": 133,
+"executed": 1503069520,
+"name": null
+},
+"17165": {
+"cls": "OALU",
+"pinned": true,
+"hard": false,
+"alt": [
+"OALU"
+],
+"static": 344,
+"executed": 2614746258,
+"name": null
+},
+"17166": {
+"cls": "OALU",
+"pinned": false,
+"hard": false,
+"alt": [
+"INT16",
+"OALU"
+],
+"static": 1,
+"executed": 6745726,
+"name": null
+},
+"17167": {
+"cls": "OALU",
+"pinned": true,
+"hard": false,
+"alt": [
+"OALU"
+],
+"static": 26,
+"executed": 35682338,
+"name": null
+},
+"17168": {
+"cls": "OALU",
+"pinned": true,
+"hard": false,
+"alt": [
+"OALU"
+],
+"static": 386,
+"executed": 806969339,
+"name": null
+},
+"17169": {
+"cls": "SPL",
+"pinned": false,
+"hard": false,
+"alt": [
+"NONE",
+"SPL"
+],
+"static": 2,
+"executed": 12717182,
+"name": null
+},
+"17170": {
+"cls": "OALU",
+"pinned": true,
+"hard": false,
+"alt": [
+"OALU"
+],
+"static": 1,
+"executed": 52258,
+"name": null
+},
+"17192": {
+"cls": "OALU",
+"pinned": true,
+"hard": false,
+"alt": [
+"OALU"
+],
+"static": 36,
+"executed": 465805120,
+"name": null
+},
+"17194": {
+"cls": "OALU",
+"pinned": true,
+"hard": false,
+"alt": [
+"OALU"
+],
+"static": 288,
+"executed": 265456640,
+"name": null
+},
+"17195": {
+"cls": "OALU",
+"pinned": true,
+"hard": false,
+"alt": [
+"OALU"
+],
+"static": 180,
+"executed": 587011422,
+"name": null
+},
+"17229": {
+"cls": "DST",
+"pinned": true,
+"hard": true,
+"alt": [
+"DST"
+],
+"static": 5,
+"executed": 496756288,
+"name": null
+},
+"17238": {
+"cls": "DST",
+"pinned": true,
+"hard": true,
+"alt": [
+"DST"
+],
+"static": 5,
+"executed": 63360,
+"name": null
+},
+"17241": {
+"cls": "DST",
+"pinned": true,
+"hard": true,
+"alt": [
+"DST"
+],
+"static": 12,
+"executed": 168960,
+"name": null
+},
+"17244": {
+"cls": "DST",
+"pinned": true,
+"hard": true,
+"alt": [
+"DST"
+],
+"static": 212,
+"executed": 8931840,
+"name": null
+},
+"17256": {
+"cls": "DST",
+"pinned": true,
+"hard": true,
+"alt": [
+"DST"
+],
+"static": 17,
+"executed": 327107180,
+"name": null
+},
+"17259": {
+"cls": "DST",
+"pinned": true,
+"hard": true,
+"alt": [
+"DST"
+],
+"static": 9,
+"executed": 1270936,
+"name": null
+},
+"17333": {
+"cls": "DST",
+"pinned": true,
+"hard": true,
+"alt": [
+"DST"
+],
+"static": 26,
+"executed": 131935595,
+"name": null
+},
+"17336": {
+"cls": "DST",
+"pinned": true,
+"hard": true,
+"alt": [
+"DST"
+],
+"static": 8,
+"executed": 11348384,
+"name": null
+},
+"17339": {
+"cls": "DST",
+"pinned": true,
+"hard": true,
+"alt": [
+"DST"
+],
+"static": 2,
+"executed": 20056724,
+"name": null
+},
+"17342": {
+"cls": "DST",
+"pinned": true,
+"hard": true,
+"alt": [
+"DST"
+],
+"static": 12,
+"executed": 1030752,
+"name": null
+},
+"17345": {
+"cls": "DST",
+"pinned": true,
+"hard": true,
+"alt": [
+"DST"
+],
+"static": 48,
+"executed": 4123008,
+"name": null
+},
+"17348": {
+"cls": "DST",
+"pinned": true,
+"hard": true,
+"alt": [
+"DST"
+],
+"static": 64,
+"executed": 1636672,
+"name": null
+},
+"17360": {
+"cls": "DST",
+"pinned": true,
+"hard": true,
+"alt": [
+"DST"
+],
+"static": 11,
+"executed": 29843082,
+"name": null
+},
+"17363": {
+"cls": "DST",
+"pinned": true,
+"hard": true,
+"alt": [
+"DST"
+],
+"static": 6,
+"executed": 13544,
+"name": null
+},
+"17771": {
+"cls": "INT32",
+"pinned": false,
+"hard": false,
+"alt": [
+"INT32",
+"NONE",
+"OALU"
+],
+"static": 25,
+"executed": 54258688,
+"name": null
+},
+"17772": {
+"cls": "FP32",
+"pinned": false,
+"hard": false,
+"alt": [
+"FP32",
+"OALU"
+],
+"static": 3,
+"executed": 44992,
+"name": null
+},
+"17782": {
+"cls": "FP32",
+"pinned": false,
+"hard": false,
+"alt": [
+"FP32",
+"SPL"
+],
+"static": 2,
+"executed": 30912,
+"name": null
+},
+"17880": {
+"cls": "OALU",
+"pinned": true,
+"hard": false,
+"alt": [
+"OALU"
+],
+"static": 28,
+"executed": 55461936,
+"name": null
+},
+"17881": {
+"cls": "INT32",
+"pinned": false,
+"hard": false,
+"alt": [
+"INT16",
+"INT32"
+],
+"static": 4,
+"executed": 343584,
+"name": null
+},
+"17891": {
+"cls": "OALU",
+"pinned": false,
+"hard": false,
+"alt": [
+"NONE",
+"OALU"
+],
+"static": 2,
+"executed": 203244,
+"name": null
+}
+}
+}

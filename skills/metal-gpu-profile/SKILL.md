@@ -66,6 +66,11 @@ Read the census row in this order (2026-09-09, `perf/agx-backend-access.md`):
    the instruction side, so a lever that only adds parallelism to one member (split-K) pays nothing in a group with S/W ~ 1,
    and a byte reduction prices at the group's measured GB/s, not at 252. `own` << `grp` is a latency chain; it pays only when
    the group has slack (S/W >> 1, the 48-row projections), not when it is saturated (S/W ~ 1, the k/v rows).
+   **Per type (2026-10-26):** `census-groups.py --census <dir>` adds executed instructions per us of wall by Xcode class and the
+   profiler issue-weighted rate (`perf/agx-opcode-classes.json`, solved by `agx-opcode-classes.py` over all census joins; re-run it
+   after a census adds binaries). No class has a common ceiling across saturated groups; the weighted rate separates the q4_0 SoA
+   groups (99-117 K units/us, ~90% of 20 cores x 4 issue x 1.5 GHz, issue-bound) from the K-quant groups (48-62, 15-30% stall,
+   65-69 regs: occupancy/latency, neither floor binds). Width 2 is the control: 1.03x the byte floor at 22 K units/us.
 1. **`x floor@252`** first. It is time over bytes at the measured practical peak (252 GB/s, a 37 MB
    CPY; 273 is the LPDDR5X nominal). Under 1.1 the row is flagged FLOOR (the width-1 mul_mv kernels sit at 1.03-1.07; 1.1-1.3 is NEAR: stream-side levers only): the kernel streams at
    the DRAM limit and NO per-instruction reading applies, whatever issue/stall says (the

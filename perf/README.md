@@ -1757,6 +1757,13 @@ Refuted - do not reopen without new information:
   ud 8.5 -> [0.03, 0.95] (~0), q4 k/v 2.5 -> [0.03, 1.45] (1.07), ud k/v 3.3 -> [0, 2.0] (~0: loose where small ops share a big
   neighbour's group - lo 0 = skip-arm candidate). The only decode group with real overlap is the GDN input block (S/W 1.6-1.7);
   prefill has none. `run-census-full.sh` runs both modes; open: the two columns inside `kernel-census.py`'s own table.
+- **Byte floor + instructions per type per concurrency group (branch `exp/census-bytes-floor`, 2026-10-25/26, NOT merged - owner
+  decides):** `census-groups.py` prints each group's byte floor F = members' bytes / 252 GB/s, F/W and GB/s, and with `--census <dir>`
+  the executed instructions per us of wall by Xcode class plus the profiler issue-weighted rate; `agx-opcode-classes.py` solves the
+  opcode -> class map over every census binary (280/403 pinned, 94% of executed). Read at width 8: no decode matmul group is at the byte
+  floor (q4 0.51-0.79, ud 0.28-0.74); the q4_0 SoA groups are at 85-95% of the issue port under Apple's weights, the K-quant groups at
+  40-50% with 15-30% stall and 65-69 regs - neither floor binds them. Also fixed there: the census read `*_soa` rows at 2 B/weight
+  (every SoA row was flagged CACHE in the Oct 24 reports; real x_floor 1.3-2.7). `census-groups.md`, the two last sections.
 - `kv-splitk.md` (branch `exp/kv-splitk` only, NOT merged; parked 2026-10-25 night, owner: "the knowledge was the prize") - the split-K
   q4_0 skinny tile for the q4 k/v + 48-row rows, the first kernel priced against the concurrency-group wall: per call -40..-64%,
   serialized round -6 ms, group walls -0.4..-0.7 ms/round (0.4-0.6%), nearly all from the 48-row projections; the k/v rows'

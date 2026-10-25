@@ -63,8 +63,12 @@ def case_filter(r):
     return None, 'stream'
 
 def work(r):
-    """(gflop per call, bytes per call) from the op shape."""
+    """(gflop per call, bytes per call) from the op shape. A *_soa format reads the stored format's bytes
+    (2026-10-26: the 2-byte default for the unlisted SoA names put every SoA row 1.5-3.6x under its real
+    floor and flagged it CACHE in the Oct 24 reports; the real q4_0 SoA w8 rows are at 1.3-1.8x)."""
     op, t, s0, s1, dst = r['op'], r['typ'], r['s0'], r['s1'], r['dst']
+    if t.endswith('_soa'):
+        t = t[:-4]
     if op == 'MUL_MAT':
         gf = 2*s0[0]*s0[1]*s1[1]/1e9
         by = s0[0]*s0[1]*BPW.get(t, 2.0) + s0[0]*s1[1]*4 + s0[1]*s1[1]*4

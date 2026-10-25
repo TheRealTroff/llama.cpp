@@ -206,3 +206,61 @@ assumption). 252 GB/s is the CPY stream figure; ~230 is what a mul_mv has reache
 census's per-kernel instruction counts give each group an instruction total; against an aggregate issue rate that is a second
 floor, I/W, and a group below both floors is the one whose wall is set by occupancy, dispatch order or a latency chain - exactly
 where the short-chain probe (b) is worth running first. Bytes were the first column because they need no trace.
+
+### Instructions per type (2026-10-26, owner: "instructions per se is interesting, but per type would be even more so")
+
+The owner's reason for wanting the instruction stream decoded: execution units differ, so a group's wall may be set by one
+type, not by the count. Built on the same branch:
+
+- `perf/agx-opcode-classes.py`: an integer solve assigning each of the 403 MIR opcode numbers seen in the census joins to one
+  of Xcode's static classes (FP16 / FP32 / INT16 / INT32 / untyped ALU / device load / device store / threadgroup load / store /
+  spill / branch / none) so that all 63 distinct joined binaries' static counters come out. Hard pins from the MIR text: a memory
+  operand pins load/store by address space (1 and 2 device, 3 threadgroup, `%stack` spill - Xcode counts spill traffic under
+  neither); fast-math flags on a 16-bit destination pin FP16. Both are exact against Xcode on every binary. Residual 130
+  instructions over 182 rows, all in the FA kernels; **280/403 opcodes pinned across 3 tie-broken solves, 94.1% of executed
+  instructions**. Output `perf/agx-opcode-classes.json` (the 2026-09-09 pass pinned 36 of 159 from 15 binaries). The profiler's
+  fixed issue weight per opcode (`agx-backend-access.md`: cost = executed x w x k) is consistent across every kernel and splits
+  the untyped ALU bucket further: w4 = 32-bit shifts, bit-field extracts, uniform ALU; w6 = 16->32 converts; w8 = 64-bit pair
+  ops; w16 = the simdgroup matrix ops (filed under FP32 by Xcode).
+- `census-groups.py --census <dir>`: per concurrency group, executed instructions per us of group wall by class (K/us), the total,
+  and the issue-weighted total ("units", loads and stores at 0).
+
+**The table (width 8, `census-1024-*-w8-dec` joins over the `cgroups-oct25` walls):**
+
+| group | S/W | F/W | K instr/us | units/us | FP16 | FP32 | INT32 | OALU | DLD | TLD | stall % | regs |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| q4 ffn gate+up (q4_0 SoA) | 1.09 | 0.71 | 39.1 | 103 | 10.8 | 4.1 | 2.5 | 12.5 | 0.7 | 4.1 | 9 | 54 |
+| q4 ffn_down | 1.00 | 0.55 | 41.1 | 108 | 11.5 | 4.3 | 2.6 | 13.1 | 0.7 | 4.3 | 18 | 54 |
+| q4 lm_head | 1.00 | 0.74 | 44.5 | 117 | 12.3 | 4.6 | 2.9 | 14.2 | 0.8 | 4.7 | 4 | 54 |
+| q4 ffn gate+up at width 2 | 1.03 | 0.79 | 11.7 | 22 | 0 | 5.9 | 0.7 | 3.8 | 0.6 | 0 | 4 | 71 |
+| ud ffn gate+up (iq4_xs) | 1.10 | 0.51 | 28.2 | 62 | 0 | 6.6 | 3.2 | 6.6 | 4.5 | 2.8 | 22 | 65 |
+| ud ffn_down (q5_K) | 1.00 | 0.48 | 23.6 | 54 | 0 | 4.4 | 4.8 | 10.1 | 0.6 | 1.6 | 25 | 69 |
+| ud attn_out (q5_K) | 1.00 | 0.45 | 22.1 | 50 | 0 | 4.1 | 4.5 | 9.4 | 0.6 | 1.5 | 25 | 69 |
+| ud lm_head (q6_K) | 1.00 | 0.74 | 35.2 | 86 | 0 | 6.4 | 9.5 | 12.3 | 0.7 | 2.7 | 9 | 69 |
+| FA decode 8.5K (both) | 1.00 | 0.10 | 17 | 59 | 0 | 4.1 | 4.2 | 2.5 | 0.7 | 2.4 | 14 | 96 (+48 B spill) |
+
+**What it says.**
+
+1. **No class has a common ceiling across the saturated groups.** Each class maximum is set by whichever kernel uses that class
+   most (FP16 and OALU by the q4_0 SoA kernel, INT32 by q6_K, device loads by iq4_xs's LUT reads at 16% of its stream). With
+   Xcode's taxonomy alone the walls do not line up on one unit, so "which unit" is not answered by counting per type - the
+   per-type table is a necessary input, not the answer.
+2. **Apple's issue weights separate the two kernel families by 2x.** The q4_0 SoA groups run at 99-117 K weighted units/us;
+   20 cores x 4 issue/clock x ~1.5 GHz is ~120 K/us, so under Apple's apportioning model those groups are at 85-95% of a single
+   issue port per SIMD - issue-bound, which is also what their 4-18% stall says. The K-quant groups sit at 48-62 (q6_K head 86) with
+   15-30% stall and 65-69 registers against q4's 54: neither the byte floor (F/W 0.42-0.62) nor the issue port binds them. In the
+   q4_0 SoA stream the weighted budget is 42% simdgroup-matrix ops (w16), 39% w4 dequant shifts/extracts, 11% f16 arithmetic: the
+   dequant integer work costs as much issue as the matrix multiply itself. The weight table is Apple's apportioning model, not a
+   demonstrated hardware cost table (`agx-backend-access.md` finding 2) - this is a reading to test, and it makes two testable
+   predictions: (a) a q4_0 SoA change that removes w4 instructions per byte pays, one that removes bytes alone does not; (b) a K-quant
+   kernel responds to the footprint probe (fewer registers / more resident simdgroups), not to instruction removal.
+3. **The width-2 row is the control.** Same weights, same format, 1.03x the byte floor, 22 K units/us: at width 2 the kernel is on
+   the DRAM floor and the issue port is idle; by width 8 the per-byte instruction cost has moved the wall to the issue side.
+
+**Caveats.** The 403-opcode map has 123 ambiguous opcodes, 5.9% of executed instructions, mostly INT16-vs-OALU splits that do not
+move the table. Drafter (m2) rows have no census join (0% cover). The absolute executed counts are the profiler's; the census's own
+UNDERCOUNT check applies to mma rows only. The clock in the 120 K/us figure is nominal.
+
+**Next.** The two predictions above are each one arm: (a) is a kernel-form experiment the prescreen skill ranks offline; (b) is
+probe (c) of the ladder (fewer threadgroups / lower register budget via `-fmax-register`-style limits or a smaller tile) read
+against the K-quant groups' walls. A width-4 pair of the census + group profile would show the pick's own regime.

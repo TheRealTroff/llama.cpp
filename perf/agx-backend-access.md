@@ -291,6 +291,10 @@ the store 17256, the f16 multiply 862 (FP16), the FMA family 2210/2190/2206 and 
 FP32-count checks are in the file and override the solver where they conflict (998). More binaries
 pin more: every census run adds joins, so re-run the solve after the next census.
 
+**Re-solved 2026-10-26 (`perf/agx-opcode-classes.py`, `exp/census-bytes-floor`):** 63 binaries, 403 opcodes, memory ops and FP16
+pinned from the MIR text, spill traffic its own class - 280 opcodes pinned, 94.1% of executed instructions; the issue weight per
+opcode is consistent across every kernel (w16 = the simdgroup matrix ops). Table and reading in `census-groups.md`, "Instructions per type".
+
 ## The activation copy, confirmed on the server profile (2026-09-09 evening)
 
 `ggml-metal-ops.cpp` mul_mv: for every stored SoA / kq weight type at n >= 2 (`use_f16y`), the op

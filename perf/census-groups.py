@@ -25,7 +25,7 @@ chain the wall can see (the 48-row projections). CENSUS_KV (turbo4|f16|q8_0) pic
 Rounds are taken from the lm_head call count of each log (the two runs must have the same token count: same prompt, greedy,
 fixed depth). Phase split follows metalprof-buckets.is_decode on the mode-1 row.
 """
-import argparse, collections, importlib.util, os, re, sys
+import argparse, collections, importlib.util, json, os, re, sys
 
 spec = importlib.util.spec_from_file_location('mb', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'metalprof-buckets.py'))
 mb = importlib.util.module_from_spec(spec); spec.loader.exec_module(mb)
@@ -33,6 +33,37 @@ spec = importlib.util.spec_from_file_location('kc', os.path.join(os.path.dirname
 kc = importlib.util.module_from_spec(spec); spec.loader.exec_module(kc)
 
 KV_BPW = {'turbo4': 4.125/8, 'f16': 2.0, 'bf16': 2.0, 'q8_0': 34/32, 'q4_0': 18/32}
+
+
+def load_census_mix(census_dir, classes_json):
+    """Per census row (keyed like a mode-1 op): executed instructions per dispatch by class (perf/agx-opcode-classes.json)
+    and the profiler issue-weighted count (perf/agx-backend-access.md: cost = executed x w(opcode) x k with w fixed per opcode;
+    w is read off each join as cost/executed normalized to the kernel's smallest nonzero ratio, snapped to {1,2,4,6,8,16};
+    loads, stores and stop carry 0)."""
+    import glob
+    cj = json.load(open(classes_json)); ops = cj['opcodes']; CL = cj['classes']
+    mix = {}
+    for mf in sorted(glob.glob(os.path.join(census_dir, '*.metrics.json'))):
+        md = json.load(open(mf)); rid = md['id']; jf = os.path.join(census_dir, rid + '.join.json')
+        if not os.path.exists(jf) or not md.get('exec_per_disp'):
+            continue
+        ins = json.load(open(jf))['instructions']
+        ratio = {}
+        for i in ins:
+            if i['executed'] > 0 and i['cost'] > 0:
+                ratio.setdefault(i['op'], []).append(i['cost']/i['executed'])
+        kmin = min((sum(v)/len(v) for v in ratio.values()), default=1.0)
+        w_of = {op: min((1, 2, 4, 6, 8, 16), key=lambda c: abs(c - (sum(v)/len(v))/kmin)) for op, v in ratio.items()}
+        by_cls = collections.Counter(); units = 0.0; tot = 0
+        for i in ins:
+            c = ops.get(str(i['op']), {}).get('cls', 'NONE'); by_cls[c] += i['executed']; tot += i['executed']
+            units += i['executed']*w_of.get(i['op'], 0)
+        if not tot:
+            continue
+        epd = md['exec_per_disp']
+        key = f"m1 {md['op']} {md['typ']} {','.join(map(str, md['s0']))} {','.join(map(str, md['s1']))} {','.join(map(str, md['dst']))}"
+        mix[key] = dict(cls={c: epd*by_cls[c]/tot for c in CL}, units=epd*units/tot, exec=epd, rid=rid)
+    return mix, CL
 
 
 def op_bytes(row, kv_bpw, n_head_kv):
@@ -117,6 +148,8 @@ def main():
     ap.add_argument('--floor-gbs', type=float, default=kc.PRACTICAL_GBS/1e9, help='DRAM GB/s the byte floor is priced at (252 = measured CPY stream)')
     ap.add_argument('--kv', default=os.environ.get('CENSUS_KV', 'turbo4'), choices=sorted(KV_BPW), help='KV cache type of the run (bytes of the FA rows)')
     ap.add_argument('--n-head-kv', type=int, default=4, help='KV heads (Qwen3.8: k/v proj 1024 / head 256 = 4)')
+    ap.add_argument('--census', default=None, help='census dir of the same configuration (kernel-census.sh output): adds the per-type instruction table')
+    ap.add_argument('--classes', default=os.path.join(os.path.dirname(os.path.abspath(__file__)), 'agx-opcode-classes.json'), help='opcode -> class map (perf/agx-opcode-classes.py)')
     a = ap.parse_args()
     gbs = a.floor_gbs*1e9
     kv_bpw = KV_BPW[a.kv]
@@ -153,6 +186,7 @@ def main():
     op_grp_gbs = collections.defaultdict(float)    # key -> sum over occurrences of the group's aggregate GB/s (averaged at print)
     missing = collections.Counter()
     group_rows = []
+    group_members = {}
     tot_S = tot_W = tot_F = 0.0
     for gid, g in groups.items():
         ks = members.get(gid, [])
@@ -186,6 +220,7 @@ def main():
             op_bytes_rd[k] += b*n_rd; op_grp_gbs[k] += grp_gbs
         top = ks[ts.index(max(ts))]
         group_rows.append((W*n_rd/1e3, S*n_rd/1e3, W, S, len(ks), n_rd, top, gid, F, grp_gbs))
+        group_members[gid] = (ks, ts)
 
     n_groups_rd = sum(r[5] for r in group_rows)
     print(f'\n{a.phase}: serialized sum of parts {tot_S:.2f} ms/round (mode 1, over the mode-2 groups) vs sum of group walls {tot_W:.2f} ms/round (mode 2) = {tot_S/tot_W if tot_W else 0:.2f}x hiding; '
@@ -211,6 +246,35 @@ def main():
         own = b_rd/(s_*1e-3)/1e9 if s_ else 0.0
         grp = op_grp_gbs[k]/op_groups[k] if op_groups[k] else 0.0
         print(f'{s_:12.3f} {op_lo[k]:7.3f} {op_hi[k]:7.3f} {op_hi[k]/s_ if s_ else 0:6.2f} {op_groups[k]:6d} {b_rd/1e6:8.1f} {f_rd:7.3f} {own:5.0f} {grp:5.0f}  {k}')
+
+    if a.census:
+        if not os.path.exists(a.classes):
+            sys.exit(f'no opcode class map at {a.classes} (run perf/agx-opcode-classes.py over the census dirs)')
+        mix, CL = load_census_mix(a.census, a.classes)
+        short = [c for c in CL if c != 'NONE']
+        print(f'\nper group ({a.phase}, >= 1 ms/round): executed instructions per us of GROUP WALL by class, in thousands (K/us); '
+              f'units = the profiler issue-weighted rate (w per opcode, loads/stores 0); cover = share of S whose members have a census join')
+        print(f'{"W us":>6s} {"S/W":>4s} {"ms/rd":>5s} {"cover":>5s} |' + ''.join(f'{c:>6s}' for c in short) + f' | {"all":>5s} {"units":>6s}  heaviest member')
+        mx = collections.Counter(); printed = 0
+        for W_rd, S_rd, W, S, n, n_rd, top, gid, F, ggbs in sorted(group_rows, reverse=True):
+            if W_rd < 1.0:
+                continue
+            ks, ts = group_members[gid]
+            cov = sum(t for k, t in zip(ks, ts) if k in mix)/S if S else 0.0
+            tot = collections.Counter(); units = 0.0
+            for k in ks:
+                if k in mix:
+                    for c in CL: tot[c] += mix[k]['cls'][c]
+                    units += mix[k]['units']
+            rates = {c: tot[c]/1e3/W for c in CL}
+            if cov >= 0.9:
+                for c in CL: mx[c] = max(mx[c], rates[c])
+            print(f'{W:6.0f} {S/W if W else 0:4.2f} {W_rd:5.2f} {100*cov:4.0f}% |' + ''.join(f'{rates[c]:6.1f}' for c in short)
+                  + f' | {sum(rates.values()):5.1f} {units/1e3/W:6.1f}  {top.replace("m1 MUL_MAT ", "")[:48]}')
+            printed += 1
+            if printed >= a.groups + 8:
+                break
+        print(f'{"max":>6s} {"":4s} {"":5s} {"":5s} |' + ''.join(f'{mx[c]:6.1f}' for c in short) + '   (over groups with cover >= 90%)')
 
 
 if __name__ == '__main__':

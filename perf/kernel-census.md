@@ -180,6 +180,15 @@ in the pick env now), prefill FA (2.15x), GDN prefill (8.3x floor, ~1.0 s), q5_K
 
 ## 2026-10-24/25 - the full census of the current pick (owner: "let's start by getting a full census")
 
+> **Correction 2026-10-26 (branch `exp/census-bytes-floor`):** every `*_soa` row in the Oct 24/25 reports
+> (`census.rejoin.log`, the snapshot) carries an `x floor` of 0.37-0.73 and the flag `CACHE: under the DRAM floor` - that was the
+> byte model's 2-byte default for the unlisted SoA format names, not cache residency. At the stored format's bytes the q4_0 SoA
+> width-8 rows are at **1.30-1.77x** the 252 GB/s floor (lm_head 1.30, ffn gate+up 1.54, ffn_down 1.77) and the ud SoA rows at
+> 1.4-2.7x (q5_K 1.78-2.09, iq4_xs 2.13-2.34, q4_K 1.85-2.22, q6_K head 1.37); none is on the floor at width 8. `kernel-census.py work()` now strips the
+> suffix; the Oct 24 numbers in this section that do not depend on x_floor (us/call, ms/round, issue/stall, regs, instruction
+> counts) stand. See `census-groups.md`, "The byte floor per group" and "Instructions per type".
+
+
 Harness `perf/run-census-full.sh` (new): one profiled run per line x verify depth through `run-w8-decomp.sh STEPS=metalprof`
 (manifest env, Turbo4 KV, fixed depth, 8K chat-templated benchprompt, 300 tokens), then `kernel-census.sh` per log: a decode
 census per width (`PHASE=decode TOP=16`) and a prefill census per line (`PHASE=prefill TOP=12`), diffed against the Sep 18
