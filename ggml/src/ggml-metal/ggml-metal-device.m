@@ -536,13 +536,13 @@ ggml_metal_encoder_t ggml_metal_encoder_init(ggml_metal_cmd_buf_t cmd_buf_raw, b
     return res;
 }
 
-ggml_metal_encoder_t ggml_metal_encoder_init_timed(ggml_metal_cmd_buf_t cmd_buf_raw, void * smpbuf, int idx0) {
+static ggml_metal_encoder_t ggml_metal_encoder_init_timed_impl(ggml_metal_cmd_buf_t cmd_buf_raw, void * smpbuf, int idx0, bool concurrent) {
     ggml_metal_encoder_t res = calloc(1, sizeof(struct ggml_metal_encoder));
 
     id<MTLCommandBuffer> cmd_buf = (id<MTLCommandBuffer>) cmd_buf_raw;
 
     MTLComputePassDescriptor * desc = [MTLComputePassDescriptor computePassDescriptor];
-    desc.dispatchType = MTLDispatchTypeSerial;
+    desc.dispatchType = concurrent ? MTLDispatchTypeConcurrent : MTLDispatchTypeSerial;
     desc.sampleBufferAttachments[0].sampleBuffer = (id<MTLCounterSampleBuffer>) smpbuf;
     desc.sampleBufferAttachments[0].startOfEncoderSampleIndex = idx0;
     desc.sampleBufferAttachments[0].endOfEncoderSampleIndex   = idx0 + 1;
@@ -552,6 +552,14 @@ ggml_metal_encoder_t ggml_metal_encoder_init_timed(ggml_metal_cmd_buf_t cmd_buf_
     [res->obj retain];
 
     return res;
+}
+
+ggml_metal_encoder_t ggml_metal_encoder_init_timed(ggml_metal_cmd_buf_t cmd_buf_raw, void * smpbuf, int idx0) {
+    return ggml_metal_encoder_init_timed_impl(cmd_buf_raw, smpbuf, idx0, false);
+}
+
+ggml_metal_encoder_t ggml_metal_encoder_init_timed_concurrent(ggml_metal_cmd_buf_t cmd_buf_raw, void * smpbuf, int idx0) {
+    return ggml_metal_encoder_init_timed_impl(cmd_buf_raw, smpbuf, idx0, true);
 }
 
 void ggml_metal_encoder_free(ggml_metal_encoder_t encoder) {

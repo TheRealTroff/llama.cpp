@@ -601,6 +601,7 @@ struct ggml_metal_op {
         int  prof_idx0) {
         this->dev             = dev;
         this->lib             = ggml_metal_device_get_library(dev);
+        this->cmd_buf         = cmd_buf;
         this->enc             = prof_smpbuf ? ggml_metal_encoder_init_timed(cmd_buf, prof_smpbuf, prof_idx0) : ggml_metal_encoder_init(cmd_buf, use_concurrency);
         this->mem_ranges      = ggml_mem_ranges_init(debug_graph);
         this->idx_start       = idx_start;
@@ -661,12 +662,21 @@ struct ggml_metal_op {
 
     ggml_metal_device_t  dev;
     ggml_metal_library_t lib;
+    ggml_metal_cmd_buf_t cmd_buf;
     ggml_metal_encoder_t enc;
     ggml_mem_ranges_t    mem_ranges;
 
     bool use_fusion;
     bool use_concurrency;
     bool use_capture;
+
+    // group-timed profiling (GGML_METAL_PROFILE=2): one timed concurrent encoder per concurrency group
+    bool   prof_group       = false;
+    bool   prof_in_node     = false; // a node is registered in the current group and still encoding
+    int    prof_split       = 0;     // barriers taken inside a node's encode (not an encoder split)
+    int    prof_max_samples = 0;
+    void * prof_smpbuf      = nullptr;
+    std::vector<std::vector<int>> prof_groups; // raw graph indices per group
 
     int debug_graph;
     int debug_fusion;
@@ -837,6 +847,28 @@ static bool ggml_metal_op_concurrency_reset(ggml_metal_op_t ctx) {
         return true;
     }
 
+    if (ctx->prof_group && !ctx->prof_in_node) {
+        // group-timed profiling: the barrier becomes an encoder boundary - end the group's timed encoder, start the next
+        ggml_metal_encoder_end_encoding(ctx->enc);
+        ggml_metal_encoder_free(ctx->enc);
+
+        const int g = (int) ctx->prof_groups.size();
+        if (2*(g + 1) <= ctx->prof_max_samples) {
+            ctx->enc = ggml_metal_encoder_init_timed_concurrent(ctx->cmd_buf, ctx->prof_smpbuf, 2*g);
+        } else {
+            ctx->enc = ggml_metal_encoder_init(ctx->cmd_buf, true); // out of samples: untimed from here
+        }
+        ctx->prof_groups.emplace_back();
+
+        ggml_mem_ranges_reset(ctx->mem_ranges);
+
+        return true;
+    }
+
+    if (ctx->prof_group) {
+        ctx->prof_split++; // a barrier inside a node's encode: the op functions hold the encoder, so it stays a barrier
+    }
+
     ggml_metal_encoder_memory_barrier(ctx->enc);
 
     ggml_mem_ranges_reset(ctx->mem_ranges);
@@ -936,10 +968,17 @@ static int ggml_metal_op_encode_impl(ggml_metal_op_t ctx, int idx) {
     // otherwise, we add the new ranges to the encoding context and process the node concurrently
     //
     {
+        ctx->prof_in_node = false;
+
         const bool is_concurrent = ggml_metal_op_concurrency_check(ctx, node);
 
         if (!is_concurrent) {
             ggml_metal_op_concurrency_reset(ctx);
+        }
+
+        if (ctx->prof_group) {
+            ctx->prof_groups.back().push_back(ctx->node_idx(idx));
+            ctx->prof_in_node = true;
         }
 
         if (ctx->debug_graph > 0) {
@@ -1241,7 +1280,7 @@ static int ggml_metal_op_encode_impl(ggml_metal_op_t ctx, int idx) {
 }
 
 int ggml_metal_op_encode(ggml_metal_op_t ctx, int idx) {
-    if (ctx->use_capture) {
+    if (ctx->use_capture && !ctx->prof_group) {
         ggml_metal_encoder_debug_group_push(ctx->enc, ggml_op_desc(ctx->node(idx)));
     }
 
@@ -1251,11 +1290,43 @@ int ggml_metal_op_encode(ggml_metal_op_t ctx, int idx) {
                 "https://github.com/ggml-org/llama.cpp/pull/14849");
     }
 
-    if (ctx->use_capture) {
+    if (ctx->use_capture && !ctx->prof_group) {
         ggml_metal_encoder_debug_group_pop(ctx->enc);
     }
 
     return res;
+}
+
+void ggml_metal_op_prof_groups_begin(ggml_metal_op_t ctx, void * smpbuf, int max_samples) {
+    // replace the (still empty) encoder with the first group's timed concurrent encoder
+    ggml_metal_encoder_end_encoding(ctx->enc);
+    ggml_metal_encoder_free(ctx->enc);
+
+    ctx->prof_group       = true;
+    ctx->prof_in_node     = false;
+    ctx->prof_split       = 0;
+    ctx->prof_max_samples = max_samples;
+    ctx->prof_smpbuf      = smpbuf;
+    ctx->prof_groups.clear();
+    ctx->prof_groups.emplace_back();
+
+    ctx->enc = ggml_metal_encoder_init_timed_concurrent(ctx->cmd_buf, smpbuf, 0);
+}
+
+int ggml_metal_op_prof_n_groups(ggml_metal_op_t ctx) {
+    return (int) ctx->prof_groups.size();
+}
+
+int ggml_metal_op_prof_group_n_nodes(ggml_metal_op_t ctx, int g) {
+    return (int) ctx->prof_groups[g].size();
+}
+
+int ggml_metal_op_prof_group_node(ggml_metal_op_t ctx, int g, int i) {
+    return ctx->prof_groups[g][i];
+}
+
+int ggml_metal_op_prof_n_split(ggml_metal_op_t ctx) {
+    return ctx->prof_split;
 }
 
 int ggml_metal_op_concat(ggml_metal_op_t ctx, int idx) {

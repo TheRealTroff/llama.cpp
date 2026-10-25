@@ -8,6 +8,7 @@
 # and runs the Sep 5 round-decomposition instruments per arm:
 #   anchor    -lv 3         spec-prof per-round host split (round = dec_syn_tg GPU wait + draft_call; loop_body carries the prefill batch)
 #   metalprof GGML_METAL_PROFILE=1  per-op GPU time, serialized encoders (shares and per-call us, not wall)
+#   metalgroups GGML_METAL_PROFILE=2  per concurrency GROUP wall (timed concurrent encoders) + census-groups.py bounds
 # then perf/metalprof-buckets.py per arm and a side-by-side of the buckets.
 #   LINES="ud q4" DEPTHS="7 3" NPRED=300 KV=turbo4 PROMPT=<raw file, chat-rendered via pick_prompt>
 set -u
@@ -92,6 +93,16 @@ for line in $LINES; do
       run_server "$line" "$depth" metalprof GGML_METAL_PROFILE=1
       python3 "$B/perf/metalprof-buckets.py" "$OUT/$TAG-$line-d$depth-metalprof.server.log" --top 60 \
         > "$OUT/$TAG-$line-d$depth-buckets.txt" 2>&1 && head -16 "$OUT/$TAG-$line-d$depth-buckets.txt" | sed 's/^/    /'
+      ;;
+    esac
+    case " $STEPS " in *" metalgroups "*)
+      # GGML_METAL_PROFILE=2: one timed concurrent encoder per concurrency group (the group's WALL, members listed);
+      # perf/census-groups.py joins it with the metalprof log of the same config into per-op exposed-time bounds
+      run_server "$line" "$depth" metalgroups GGML_METAL_PROFILE=2
+      if [ -s "$OUT/$TAG-$line-d$depth-metalprof.server.log" ]; then
+        python3 "$B/perf/census-groups.py" "$OUT/$TAG-$line-d$depth-metalprof.server.log" "$OUT/$TAG-$line-d$depth-metalgroups.server.log" --top 40 \
+          > "$OUT/$TAG-$line-d$depth-groups.txt" 2>&1 && head -24 "$OUT/$TAG-$line-d$depth-groups.txt" | sed 's/^/    /'
+      fi
       ;;
     esac
   done
