@@ -100,6 +100,13 @@ deletion probe.
   serialized charge; a row with `hi/ser` under ~0.3 is a shadow row; prefill rows need no correction.
 - The group table itself names the neighbour that hides a row (the heaviest member of its group), which is the thing a
   replacement kernel or a fusion would have to beat.
+- **Checked against a real kernel the same night (`kv-splitk.md`, branch `exp/kv-splitk`):** a split-K form of the q4_0 skinny
+  tile cut the k/v rows 40% and the 48-row projections 48-64% per call (serialized round -6 ms); the group walls moved -14..-17 us
+  per layer in the GDN input group and only -3..-7 us in the attention group = 0.4-0.7 ms/round in all, which the anchor confirmed
+  once three controls had set the per-group floor (0.06 ms/round on these groups, 0.5-2 ms/round of machine-state drift on the big
+  stream groups that no kernel touched). ~~The k/v rows' exposure is the tail of a chain that starts behind q's threadgroups~~ -
+  wrong: a 40% shorter k/v chain gave back almost none of it; the exposure is contention with `attn_q` (threadgroup slots, the DRAM
+  queue), which a faster k/v kernel does not remove and a deletion probe does. The per-group diff is the attribution instrument.
 - Not captured: cross-group interaction through the cache/DRAM, CPU-exposed gaps between command buffers (the submit profiler's
   job), and the drafter/target split (both are in the decode phase here, keyed `m1`/`m2`).
 
