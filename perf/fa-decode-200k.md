@@ -1,4 +1,4 @@
-# The decode FA at 200K (2026-10-25 afternoon, owner: "let's adopt what we have right now and we can look at the decode FA at 200k separately" -> "Go ahead!")
+# The decode FA at 200K - PRICED, adoption = owner (2026-10-25 afternoon, owner: "let's adopt what we have right now and we can look at the decode FA at 200k separately" -> "Go ahead!")
 
 Branch `exp/fa-decode-200k`, worktree `~/play/llama.cpp-fa-dec200k` (own `build/` + `build-probe/`), off prod `0b191ee50` (the prefill
 FA levers adopted). Inventory item 1 (`longctx-inventory-sep15.md`): the width-4 decode FA at long context. Park = commit + remove the
@@ -146,7 +146,16 @@ each, 47/47 eval passes (the width 6-8 failures were the token-row count; fixed)
 which byte identity keeps), the second chunk matches form 1 at 200K and loses 5% at 8K. Forms 2-4 REFUTED; their code stays on
 the branch behind `GGML_METAL_FORM` for the record.
 
-## Where it stands (2026-10-25 evening)
+## Where it stands (2026-10-25 evening) - built, gated, priced; adoption = owner
+
+**Merge candidate: form 1 as the source default** for the TR tiles (one pragma: `#pragma clang loop unroll(full)` on the 64-dim
+chunk loop of the Turbo4 TR QK block; the q4 line's TRN class already ran per-block and is unchanged). Byte-identical in both
+classes (47/47 seeded dumps each), the 8K Turbo4 arms at their recorded shas on both lines, 200K decode +1.5% on the same text,
+8K ~0. There is no numerics change to flag, so no manifest entry is needed; if the owner wants an A/B switch in prod it would be
+a function constant on the pipeline (a second compiled variant per TR kernel), which this note does not recommend for a pragma.
+What else lands with it if merged: the `GGML_METAL_PROBE` / `GGML_METAL_FORM` runtime macro hook (a tool: inert unless set) and
+forms 2/4 behind `GGML_METAL_FORM` (refuted; could be stripped before the merge - the owner's call). Worktree
+`llama.cpp-fa-dec200k` left in place with its builds for the decision; park = remove it, keep the branch.
 
 **The lever: form 1, the QK 64-dim chunk loop of the Turbo4 TR tile fully unrolled** - a one-pragma change for the TRM < 3 class
 (the ud line; the q4 line's TRN form is unchanged by it): -3.9% per decode FA call at 200K, -3.6% at 96K, -2.8% at 8K, bitwise
@@ -160,4 +169,31 @@ token-row mask) return less than the register pressure they add. Reaching the ro
 operand fetch per MMA at all - a different tile shape than 24 rows allows at width 4. Item 1 of the inventory closes at ~-4%
 per call unless the shape changes (width 8's two 24-row tiles per KV head are the other 200K FA board: `fa-w8-gqa-tile.md`).
 
-_(e2e at 200K + the 8K sha gate: below)_
+### e2e at 200K
+
+First attempt, `run-slot-save-gate.sh PHASES=restore` on the chat-templated 200K prompt (the Sep 30 harness): under today's pick the
+model answers that prompt with **10 tokens and stops** (all four arms: `f357c52d099b`, 14 prompt tokens, acc 77.8%) - no timing
+basis (the Sep 30 runs got 300 tokens under that day's config). Same sha in every arm is the one thing it does show. Re-run on the
+prefill harness's book-continuation prompt (`longprompt-200k-plus4k.txt`, `run-fa-prefill-200k.sh NPRED=300`: the 4035 appended
+tokens prefill against the restored cache, then 300 decode tokens at kv ~206K with no EOS in sight):
+
+| arm (restore ud-200k, +4035 tokens prefill, 300 decode tokens, width 4 pinned) | prefill | **decode t/s** | acc | sha |
+|---|--:|--:|--:|---|
+| form 0 (the pick's kernels) x2 | 91.0 / 90.8 s | 19.18 / 19.19 | 71.6% | `54ce13a74d1d` |
+| **form 1** x2 | 90.2 / 90.1 s (-0.9%) | **19.49 / 19.46 (+1.5%)** | 71.6% | `54ce13a74d1d` |
+
+Same text, same acceptance, so the t/s compare directly: **+1.5% decode at 200K** = the kernel's -3.9% per call x FA's ~35% of
+the round, as predicted. The prefill moved too (-0.9% of the 4035-token ubatch): the pragma sits in the template every Turbo4 TR
+tile instantiates, so the adopted 32-row prefill tile (`qt32wo`) runs the unrolled loop as well - byte-identical (the dumps
+cover the 512-row cases) and a small bonus, not measured in isolation.
+
+### The 8K sha gate (`run-prod-pick.sh` Turbo4 controller arms, both lines, `EXTRA=GGML_METAL_FORM=1`, this tree's build 16:57)
+
+| line | 300 | 600 |
+|---|---|---|
+| ud | 31.73 t/s acc 72.4% `d180ae89f168` = record | 29.19 t/s acc 66.2% `abc0c5af7300` = record |
+| q4 | 34.22 t/s acc 67.8% `f07b0f8c58e6` = record | 33.99 t/s acc 64.1% `801cb0758d4e` = record |
+
+Every sha = its Oct 25 mint record (the t/s are 1.5-3% under the mint's: a hot afternoon GPU after the sweeps; FA is 3% of the 8K
+round and this lever is 0.1% of it). With the bitwise dumps this is the whole byte-identity case; the replay gate adds nothing a
+dump does not here (the kernel's output bytes are the same).
