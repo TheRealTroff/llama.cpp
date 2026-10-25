@@ -107,4 +107,57 @@ route, where the blk map is not used). The deletions are not additive and each p
   score slot no longer carries a mask region, which is what makes two 6 KB score buffers fit: 12 + 12 + 2.2 = 26.2 KB). Expected
   from the probes: half the Q^T loads (~-3.5%), half the barriers (~-3%), the mask round trip (~-2%): **-6..-8% per call, -2..-3% of
   the 200K round**, byte-identical. Register risk: +6 accumulator tiles (12 regs) on a kernel that already spills 48 B - prescreen
-  first.
+  first. **Built** (`GGML_METAL_FORM=2`; `3` = forms 1 + 2): prescreen text 16754 -> 18344 B (form 2) / 22036 (form 3), spill
+  48 -> **128** / **160** B, `qtnw24` (q4 class, TRM 3) untouched by construction. Form 0 under the restructured source is
+  byte-for-byte the old kernel (same 16754 / 48). Chunk B of an iteration is this threadgroup's NEXT split chunk (ic0 + NWG), so
+  the per-row online softmax sees exactly the sequence it sees today; the kvpad tail chunk keeps its own pointers in either slot.
+  Mask rows are staged per token (one simdgroup per token row, 4 rows instead of 24 per chunk) into the table scratch behind the
+  two `sms` arrays; the row-validity of the broadcast mask (`bc_mask`) is applied per row in the softmax.
+
+  **Timed (first build, ud class, us per call, interleaved x2; form 0 from the run before, same binary lineage):**
+
+  | kv | form 0 (pick) | form 1 | form 2 | form 3 (1 + 2) |
+  |---|--:|--:|--:|--:|
+  | 204800 | 3925 / 3917 | **3783 / 3780 (-3.7%)** | 3810 / 3800 (-3.0%) | 3842 / 3842 (-2.0%) |
+  | 98304 | 1907 / 1903 | **1836 / 1829** | 1861 / 1859 | 1875 / 1876 |
+  | 8448 | 189 | **184 / 183** | 194 (+2.5%) | 194 (+2.9%) |
+
+  Form 2 delivers less than half of what its three probes added up to and LOSES to the plain unroll; the two together are worse
+  than either (spill 160 B, text +31%). The register cost of the second chunk (six accumulator tiles, the chunk-B pointers, the
+  hoisted row maps) eats the fetch/barrier savings - the same lesson as the 32-row prefill tile's register head: at 96 registers
+  this kernel pays for every extra live value. First build also WRONG at widths 6-8 (12 of 47 eval cases): the token-row count
+  was Q/GQAH = 4, but a 24-row tile dispatched with a row offset (the 24 + 16 and 24 + 24 plans) holds up to 8 distinct tokens -
+  fixed (NTOK 8, one staging simdgroup per token row, runtime fallback to the per-row staging above 8). Widths 3-5 were right.
+- **Form 4 - form 1 + the token-row mask staging alone** (no second chunk): the cheap part of form 2 on top of the unroll.
+  Prescreen 18872 B / 48 B spill (no spill cost over form 1). Fixed form 2: 20388 B / 144 B.
+
+**Second build (NTOK fixed), gates and timing - ud class, us per call, interleaved x2, one run:**
+
+| kv | form 0 (pick) | **form 1** | form 2 | form 4 |
+|---|--:|--:|--:|--:|
+| 204800 | 3923 / 3925 | **3776 / 3769 (-3.9%)** | 3784 / 3788 (-3.5%) | 3804 / 3805 (-3.1%) |
+| 98304 | 1897 / 1899 (permuted 1925 / 1931) | **1830 / 1830 (1847 / 1849)** | 1847 / 1854 (1881 / 1871) | 1847 / 1847 (1863 / 1859) |
+| 8448 | 189.0 / 189.5 | **183.9 / 183.8 (-2.8%)** | 193.7 / 194.0 (+2.5%) | 185.5 / 185.3 |
+
+Bitwise gate (`GGML_TEST_SEED=7` dumps, every Turbo4 FA eval case, both classes): forms 2 and 4 = form 0, 47/47 files identical
+each, 47/47 eval passes (the width 6-8 failures were the token-row count; fixed). So every form is correct and byte-identical;
+**form 1 is the fastest at every length, and nothing stacks on it**: the token-row mask staging alone costs 0.8% over form 1
+(the per-row staging it replaces was cheap once the adds were gone; the probe's 2.4% was mostly the ADD and its dependency,
+which byte identity keeps), the second chunk matches form 1 at 200K and loses 5% at 8K. Forms 2-4 REFUTED; their code stays on
+the branch behind `GGML_METAL_FORM` for the record.
+
+## Where it stands (2026-10-25 evening)
+
+**The lever: form 1, the QK 64-dim chunk loop of the Turbo4 TR tile fully unrolled** - a one-pragma change for the TRM < 3 class
+(the ud line; the q4 line's TRN form is unchanged by it): -3.9% per decode FA call at 200K, -3.6% at 96K, -2.8% at 8K, bitwise
+identical in both classes, no spill change (48 B), text +8%. Worth ~2.5 ms of the 184 ms serialized width-4 round at 200K
+(-1.4%), ~0.1 ms at 8K. The same pragma applies to the 16-row prefill tiles of the same template (`qt16w`, `qtl4w16o`, `qt32wo`
+at Q 32 run the same loop) - NOT measured here; the prefill kernels have their own note.
+
+The honest ceiling, re-stated: the 24-row tile sits at 74% of the matmul roof and within 8% of the fork's best FA form. The
+deletion probes put every remaining fixed cost at 1-7% and the two structural forms that attack them (two chunks per iteration,
+token-row mask) return less than the register pressure they add. Reaching the roof would need a kernel that does not pay for
+operand fetch per MMA at all - a different tile shape than 24 rows allows at width 4. Item 1 of the inventory closes at ~-4%
+per call unless the shape changes (width 8's two 24-row tiles per KV head are the other 200K FA board: `fa-w8-gqa-tile.md`).
+
+_(e2e at 200K + the 8K sha gate: below)_

@@ -25,6 +25,20 @@ using namespace metal;
 
 #define FOR_UNROLL(x) _Pragma("clang loop unroll(full)") for (x)
 
+// exp/fa-decode-200k deletion probes (perf/fa-decode-200k.md): GGML_METAL_PROBE=<n> in the environment defines this macro at
+// the runtime compile; every value but 0 produces GARBAGE output and prices one deletion in the 24-row decode tile:
+// 1 = no Q^T tile loads in QK (filled tiles), 2 = no online softmax (P = raw scores), 3 = no chunk barriers,
+// 4 = no table lookup in the dequant (bytes and norms still loaded), 5 = no mask staging/add on the GQA route
+#ifndef GGML_METAL_PROBE
+#define GGML_METAL_PROBE 0
+#endif
+// GGML_METAL_FORM=<n>: the same hook for REAL (byte-identical) source forms under test on this branch; 0 = the pick's code,
+// 1 = the QK chunk loop unrolled, 2 = two chunks per iteration on the 24-row GQA tile, 3 = both, 4 = 1 + the token-row mask
+// staging of 2 without the second chunk
+#ifndef GGML_METAL_FORM
+#define GGML_METAL_FORM 0
+#endif
+
 #define N_SIMDWIDTH 32 // assuming SIMD group size is 32
 
 // ref: https://developer.apple.com/metal/Metal-Shading-Language-Specification.pdf
@@ -14034,8 +14048,10 @@ void kernel_flash_attn_ext_impl(
         // same per-row M/S sequence as two iterations, the PV walks A's then B's key tiles: byte-identical, three barriers per
         // 128 keys instead of six. The mask is taken as broadcast over heads (args.ne32 == 1).
         constexpr bool  CI2  = (GGML_METAL_FORM == 2 || GGML_METAL_FORM == 3) && OR && GQAH > 1 && Q == 24 && TRM == 1 && NSG == 8 && !SMS_SS;
-        constexpr short NTOK = GQAH > 1 ? Q/GQAH : 1;                  // token rows of the GQA tile
-        const bool ci2 = CI2 && FC_flash_attn_ext_has_mask;
+        constexpr bool  TKM  = CI2 || (GGML_METAL_FORM == 4 && OR && GQAH > 1 && Q == 24 && TRM == 1 && NSG == 8 && !SMS_SS); // token-row mask staging
+        constexpr short NTOK = 8;                                        // distinct token rows a 24-row GQA tile can hold (verify widths <= 8; one simdgroup stages each)
+        const bool tkm = TKM && FC_flash_attn_ext_has_mask && args.ne01 <= NTOK;   // else the per-row staging below
+        const bool ci2 = CI2 && tkm;
         threadgroup half2 * smk2 = (threadgroup half2 *) (sms + 2*Q);   // [2][NTOK][NW] the staged token mask rows (sms[Q..2Q) = chunk B's factors)
         device const char * const k0    = k;
         device const char * const v0    = v;
@@ -14145,7 +14161,7 @@ void kernel_flash_attn_ext_impl(
                     continue;
                 }
 
-                if constexpr (CI2) {
+                if (tkm) {
                     // one simdgroup per token row stages chunk A's (and B's) mask row; a token row past ne31 gets -MAXHALF
                     if (sgitg < NTOK && sgitg < args.ne01) {
                         const short it = sgitg;
@@ -14395,18 +14411,6 @@ void kernel_flash_attn_ext_impl(
                     for (short i = sgitg*NW + tiisg; i < 256; i += NSG*NW) { sluth[i] = turbo_pairs_4bit_h[i]; }
                     threadgroup_barrier(mem_flags::mem_threadgroup);
                 }
-// exp/fa-decode-200k deletion probes (perf/fa-decode-200k.md): GGML_METAL_PROBE=<n> in the environment defines this macro at
-// the runtime compile; every value but 0 produces GARBAGE output and prices one deletion in the 24-row decode tile:
-// 1 = no Q^T tile loads in QK (filled tiles), 2 = no online softmax (P = raw scores), 3 = no chunk barriers,
-// 4 = no table lookup in the dequant (bytes and norms still loaded), 5 = no mask staging/add on the GQA route
-#ifndef GGML_METAL_PROBE
-#define GGML_METAL_PROBE 0
-#endif
-// GGML_METAL_FORM=<n>: the same hook for REAL (byte-identical) source forms under test on this branch; 0 = the pick's code,
-// 1 = the QK chunk loop unrolled, 2 = two chunks per iteration on the 24-row GQA tile, 3 = both
-#ifndef GGML_METAL_FORM
-#define GGML_METAL_FORM 0
-#endif
 #define TR_PAIR(row, d) (TRM == 1 ? turbo4_pair_at_tg(row, d, slut) : TRM == 2 ? turbo4_pair_at_h(row, d) : TRM == 3 ? turbo4_pair_raw(row, d, sluth) : TRM == 4 ? turbo4_pair_raw_c(row, d) : turbo4_pair_at(row, d))
                 // LD forms: the chunk's 8 bytes per lane first, then the table by byte (TRN arithmetic: TRM 3/4)
                 static_assert(LD == 0 || TRM != 2, "LD forms: the float table (constant or staged, byte-identical) or the TRN arithmetic");
@@ -14471,7 +14475,7 @@ void kernel_flash_attn_ext_impl(
                 // block accumulator index is a constant (a dynamic register-array index would spill)
                 constexpr short CPB = TRM >= 3 ? QK_TURBO/64 : DK/64; // chunks per accumulator
                 FOR_UNROLL (short bi = 0; bi < NB; ++bi) {
-#if GGML_METAL_FORM == 1 || GGML_METAL_FORM == 3
+#if GGML_METAL_FORM == 1 || GGML_METAL_FORM == 3 || GGML_METAL_FORM == 4
                 // exp/fa-decode-200k form 1: the 64-dim chunk loop fully unrolled (every Q^T staging address a constant); 3 = 1 + 2
                 #pragma clang loop unroll(full)
 #else
@@ -14615,7 +14619,7 @@ void kernel_flash_attn_ext_impl(
 
                 // mqk = mqk + slope*mask
                 if (blk_cur != 2) {
-                    const half2 mk2 = CI2 ? (rvj[jj] ? smk2[(b*NTOK + itj[jj])*NW + tiisg] : half2(-MAXHALF, -MAXHALF)) : sm2[j*SH + tiisg];
+                    const half2 mk2 = tkm ? (rvj[jj] ? smk2[(b*NTOK + itj[jj])*NW + tiisg] : half2(-MAXHALF, -MAXHALF)) : sm2[j*SH + tiisg];
                     if (FC_flash_attn_ext_has_bias) {
                         s2 += float2(mk2)*slope;
                     } else {
