@@ -93,7 +93,7 @@ serialization artifact (`small-ne01-routing.md`: hidden under neighbors unprofil
 2. **Prefill FA kernel** - 36% of prefill at 96K (71% of the ubatch at 200K, measured 2026-10-25 from the slot save: `fa-prefill-200k.md`,
    where the O-resident 16-row tile `GGML_FA_Q16_OR=2` took -10.9% per call / -4.8..-6.8% of the 200K ubatch, byte-identical, and
    the 32-row tile on top of it (`GGML_FA_Q32=1`, 48 B spill, cheap) another -5.4% per call / -5.3% of the ubatch, bitwise identical
-   47/47 per class, replay-gated: -10.2% of the 200K ubatch vs the prod pick, PROPOSED both lines) - 36% of prefill at 96K, 65% of
+   47/47 per class, replay-gated: -10.2% of the 200K ubatch vs the prod pick, ADOPTED both lines 2026-10-25 afternoon: merged 1e7f2aa75, manifest 034f420f3, mint prodpick-oct25-fa200k) - 36% of prefill at 96K, 65% of
    the roof, flat in KV (no stream wall left). The structural options: ~~Q=32 (two 16-row tiles per K/V stream - register budget
    question, prescreen first)~~ DONE 2026-10-25 (spills 48 B and wins anyway; wider does not fit the 32 KB),
    K/V-chunk-major ordering so the 64 threadgroups of a head walk the cache together, the split of QK vs
