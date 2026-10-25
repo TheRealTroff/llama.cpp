@@ -14387,7 +14387,9 @@ void kernel_flash_attn_ext_impl(
                 // block accumulator index is a constant (a dynamic register-array index would spill)
                 constexpr short CPB = TRM >= 3 ? QK_TURBO/64 : DK/64; // chunks per accumulator
                 FOR_UNROLL (short bi = 0; bi < NB; ++bi) {
-                #pragma unroll 1
+                // the 64-dim chunk loop fully unrolled (every Q^T staging address a constant): -3.9% per decode FA call at
+                // 200K, -2.8% at 8K, bitwise identical in both numerics classes, no spill change (perf/fa-decode-200k.md form 1)
+                #pragma clang loop unroll(full)
                 for (short ch = (bi == 0 ? 1 : bi*CPB); ch < (bi + 1)*CPB; ++ch) {
                     if constexpr (LD > 0) {
                         FOR_UNROLL (short ccc = 0; ccc < NC; ++ccc) { TR_BYTES(pkr[ccc], 64*ch, kb[ccc]); kn[ccc] = TRM <= 1 ? TR_NORM(pkr[ccc], 64*ch) : 1.0f; }
