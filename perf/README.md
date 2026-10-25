@@ -32,6 +32,23 @@ one level down, and it bit the `GGML_MV_EXT_V2` work on 2026-08-22.
 
 ## The prod pick
 
+**2026-10-25 afternoon (owner: "let's adopt what we have right now and we can look at the decode FA at 200k separately"): the
+prefill FA levers from the 200K slot save are in the pick on both lines - `GGML_FA_Q16_OR=2 GGML_FA_Q16_KVMIN=0 GGML_FA_Q32=1
+GGML_FA_Q32_KVMIN=0` (BI class; merge `1e7f2aa75`, manifest `034f420f3`; `fa-prefill-200k.md`).** The 16-row Turbo4 prefill FA
+tile with the O accumulator register-resident, and the 32-row tile on top of it (each dequantized K/V tile feeds four query
+tiles; 48 B spill, cheap): per prefill FA call at 98K ud 264 -> 224 ms, q4 253 -> 220; at the 200K end the FA call 550.6 ->
+464.3 ms and the prefill ubatch 98.6 -> 88.0 s for 4035 appended tokens (-10.2%, 40.9 -> 45.9 t/s); 8K prompt eval -1.8%.
+Bitwise identical 47/47 seeded dump files per class, replay gate `faq32rg-oct25-{ud,q4}` 0 desync. **Mint
+`prodpick-oct25-fa200k-{q4,ud}` (prod `034f420f3`, binary 10-25 13:30, a warm afternoon after 2 h of runs):** q4 f16 32.70 /
+32.25 at 300 (`d2953fccfb41`), 34.48 / 34.53 at 600 (`441120c66064`), partial 22.08 (`95fb10b8e7da`), MTP 24.22, b1 14.82;
+Turbo4 34.82 at 300 (`f07b0f8c58e6`), 34.50 / 34.57 at 600 (`801cb0758d4e`), turbo4-b1 14.70 (`7c5254d01b12`). ud f16 31.95 /
+31.83 at 300 (`9c53aaade052`), 31.88 / 31.85 at 600 (`86b6e9b02cf0`), partial 14.77, MTP 19.52, b1 13.06 (`9c53aaade052`); Turbo4
+32.28 at 300 (`d180ae89f168`), 30.05 / 30.07 at 600 (`abc0c5af7300` x2), turbo4-b1 13.02 (`d180ae89f168`). **Every sha = its
+record on both lines; multi-slot split + classes PASS, vision one-slot + multi-slot PASS, both lines.** Decode t/s at or above
+the Oct 1 mint (a prefill-only lever; the Turbo4 600 controller arm read its canonical text in all four runs here, after a
+timing fork on the first 8K gate pass that the control arm then reproduced on its own - `mint-controller-arm-is-statistical`).
+Serving (`perf/serve.sh`) picks the manifest up on its next launch.
+
 **2026-10-01 evening (owner: "I think I'll take it"): the ud line's file is `-SOA-V3` - V2 with the Q6_K vocab head stored as
 `Q6_K_SOA` (`llama-gguf-repack --head`, `6d739adbf`; manifest `43c06ab80`; `ud-soa-head.md`; no q4 change, no code change in
 the runtime).** Priced the same day on `exp/ud-soa-head`: pairwise decode-path KLD vs the native head < 5e-7 mean at widths
