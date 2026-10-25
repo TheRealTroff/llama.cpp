@@ -126,3 +126,37 @@ FA delta in the real graph (-10.9%) is a little better than the isolated -8.7%. 
 **Status:** 8K pick gate on both lines (`faor-oct25-{ud,q4}-{control,or2}`, `GGML_FA_Q16_OR=2 GGML_FA_Q16_KVMIN=0` = the OR tile at
 every prefill length; TR 7 -> `qtnw16o` on q4) running; adoption = owner (manifest: BI class, both lines; a lineage check is the
 canonical sha pair per line).
+
+### 8K pick gate, both lines (`faor-oct25-{ud,q4}-{control,or2}`, this branch's build 09:57, `GGML_FA_Q16_OR=2 GGML_FA_Q16_KVMIN=0`)
+
+| line | arm | 600 t/s | sha 600 | 300 t/s | sha 300 |
+|---|---|--:|---|--:|---|
+| ud | control | 29.57 | `abc0c5af7300` | 31.85 | `d180ae89f168` |
+| ud | OR2 + gate 0 | 29.65 | `abc0c5af7300` | 31.82 | `d180ae89f168` |
+| q4 | control | 34.09 | `801cb0758d4e` | 34.30 | `f07b0f8c58e6` |
+| q4 | OR2 + gate 0 | 34.07 | `801cb0758d4e` | 34.29 | `f07b0f8c58e6` |
+
+**PASS: both lines' canonical shas hold with the O-resident tile at every prefill length; decode untouched.** (8K prefill moves
+by ~0.03 s of 60 - the win is the long end.)
+
+### The q4 class (TR 7, `qtnw16o`), isolated under the q4 pick env (45/45 CPU-reference cases with the gate forced to 0)
+
+| kv | 8-row `qtnw` (pick below 32K) | 16-row scratch `qtnw16` (pick above 32K) | 16-row OR `qtnw16o` |
+|---|--:|--:|--:|
+| 8448 | 20.6 ms | 21.3 | **19.8 (-4%)** |
+| 98304 | 247.4 ms | 253.1 | **230.0 (-7% vs 8-row, -9% vs the pick's qtnw16)** |
+
+On q4 the 16-row scratch tile the pick runs above 32K is SLOWER than the 8-row form (the Q16 gate was set on the f16 kernel and
+never re-timed per class); the OR form fixes that and wins at both lengths. The folded-norm class is cheaper than ud's at every
+form (247 vs 278 ms 8-row).
+
+## Where it stands (2026-10-25 10:15)
+
+- **Proposed for both lines, BI class: `GGML_FA_Q16_OR=2 GGML_FA_Q16_KVMIN=0`** (manifest entries + the pick harness; the branch
+  build carries the route and the `qt16wo` instantiation). Per prefill FA call: ud -9..-11%, q4 -4..-9%; 200K ubatch -4.8..-6.8%
+  (ud, e2e x3); canonical shas hold on both lines at 8K; 45/45 per class. Adoption + mint = owner.
+- Open on this branch: the 32-row tile (Q=32 OR: 16 accumulators per simdgroup at nsg=8, the Q^T register head shortened -
+  prescreen the registers first; the f16 8->16-row step was -19%, so a 16->32 step is worth a probe), and the dequant form (9%
+  ceiling). The decode FA at 200K (67 ms of the 185 ms serialized width-4 round in `fa200k-oct25-metalprof`) is the inventory's
+  item 1 and untouched here.
+- Worktree `llama.cpp-fa200k` left in place for the owner's decision (its build is the gate binary); park = remove it, keep the branch.
