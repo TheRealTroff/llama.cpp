@@ -309,6 +309,14 @@ comparison (respect any no-copying boundary - probe the FORM, not their code).
   AIR-level stage and `-mtranslator` is a closed whitelist. `AGX3_TEMP_REG_LIMIT` is
   ignored by the offline tool (it is read by the in-driver runtime compiler only).
 
+- **A small spill is a ranking, not a verdict (2026-10-25, `perf/fa-prefill-200k.md`).** The 32-row Turbo4
+  prefill FA tile probed 48 B/thread at its production specialization (160 B with the register head)
+  where every 16-row form probed 0 - and ran 7% faster per call at 98K and 5.6% at 8K, bitwise
+  identical, the whole 200K prefill ubatch -5.3%. On a kernel whose time is K/V stream plus MMA
+  the spill traffic hides; the owner's "we won't know until we try" was the right call. Use the
+  spill number to rank forms of ONE tile and to catch the 400 B cliffs; a tile change that trades
+  tens of bytes of spill for halving the dequant per query is timed, not refused.
+
 ## The benchmark arm must prove its own routing
 
 A synthetic A/B is only as real as the kernel each arm actually ran, and env-gated

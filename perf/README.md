@@ -1197,6 +1197,16 @@ must be a separate checkout. Two arms that agree to the microsecond are a routin
 - Vary one thing at a time. A bit-identical sha across three supposedly different configs
   means the configs were not different - real races do not reproduce bit-exactly.
 
+- **A bitwise route comparison through `test-backend-ops` needs `GGML_TEST_SEED` (2026-10-25).** Without it every
+  input is drawn from `random_device` per process and the `GGML_TEST_DUMP` files of two routes ALL differ - the first
+  pass of the 32-row FA tile's comparison read 45/45 DIFF for that reason alone; with `GGML_TEST_SEED=7` it was 47/47
+  identical. The stock Turbo4 FA eval cases cover prefill shapes only at kv 256; kv 8448 with nb 512 / 107 were added
+  for the real ubatch and tail shapes.
+- **The pick harness's `turbo4-n3-300/600` arms are controller arms (2026-10-25, re-learned).** TURBO_SPEC runs the
+  LLAMA_SPEC_EV controller with block cap 7; a sha that holds at 300 and moves at 600 there is a timing fork (the
+  control arm forked to a third sha on its own the same hour). Gate a kernel change on them with
+  `run-specev-replay-gate.sh` plus the seeded dump; do not chase the canonical pair (`mint-controller-arm-is-statistical`).
+
 ## File map
 
 - **`prefix-slot-saves.md` - MERGED 2026-10-02 evening (`2ed5f4a4e`, owner: "Move the test saves to offload and merge"; was `exp/prefix-slot-saves`; post-merge multi-slot gate PASS both lines, prefix restart + classes arms 18/18 equal to fresh): slot saves of agent base prompts (pi, opencode), restored by a server-side lookup.** `LLAMA_PREFIX_DIR=<dir>`; a head save (the tokens all projects of a client share, prefilled to the exact cut) and a project save; `SLOT_SAVE` writes `<file>.meta` (model file, KV types, layout) and only matching saves are listed. Gate `run-prefix-gate.sh` on both lines, one slot / `-np 4` / size classes, sequential and concurrent: opencode 10.7K-token prompt, other project 79-85 s -> 27-29 s with the head, same project 0.5 s; project saves exact, head saves equal to fresh except at near-ties (priced with `NOSPEC=1`). Two restore bugs fixed on the branch: a save was tied to the slot count (KV reader), and an out-of-bounds read after a single-sequence recurrent restore (segfault on multi-slot). Tools `run-prefix-server.sh`, `prefix-save.py`, `prefix-fork.py`; captures in `kvquant-experiments/data/agent-prompts`. **Evening: `LLAMA_PREFIX_AUTO=1` - the server writes the saves itself during ordinary prefills, a head per client and a project layer on it (`llama_state_seq_set_tail`), cut on ubatch boundaries with no checkpoints: every arm of `run-prefix-auto-gate.sh` equals a fresh prefill (dlogprob 0); a new session of a known project prefills ~1000 tokens (9 s opencode, 5 s pi), a layer is ~340 MiB.** Open: the controller arm. **2026-10-04: the container's real pi prompts served live (`perf/serve.sh q4 PREFIX=1`, agents on the `container` bridge at 192.168.64.1:8093): head 3985 tokens shared across workspaces, head + layer written in flight, after a restart both workspaces restore and prefill ~850 tokens (6.6-7.2 s vs 61.9 s fresh); `capture.py` bind arg, `prefix-save.py HOST=`. 2026-10-05: the ud line the same way (`PORT=8093 PREFIX=1 perf/serve.sh ud`, harness-driven from the captures): cold restores 7.3 / 8.0 s vs 41.9 / 66.4 s fresh, generated tokens cold == warm. opencode too, both lines, captured headless (`container run ... opencode run`): 11.0K / 14.1K-token prompts, 7207 shared, cold 6.7-7.8 s vs 81-112 s fresh, sha cold == warm; six saves per line, 2.3 GB.**
@@ -1693,7 +1703,7 @@ Refuted - do not reopen without new information:
 - `flash-attn-nq-refuted.md` - FA query batching. Correct, and does not pay; explains why
   parameterisation cannot work here.
 - `small-ne01-routing.md` - 2.3x per-call, 0.0% e2e. The source of methodology rule 2.
-- **`fa-prefill-200k.md` (branch `exp/fa-prefill-200k`) - PROPOSED 2026-10-25 (two levers, BI class, both lines), the long-context prefill lever, measured from the ud 200K slot
+- **`fa-prefill-200k.md` (branch `exp/fa-prefill-200k`, merged `1e7f2aa75`) - ADOPTED 2026-10-25 (two levers, BI class, both lines, manifest `034f420f3`, mint `prodpick-oct25-fa200k-{q4,ud}`), the long-context prefill lever, measured from the ud 200K slot
   save (restore + 4K appended tokens = prefill at kv 202-206K in 100 s instead of 53 min; `run-fa-prefill-200k.sh`):** FA is 71% of the
   200K prefill ubatch (550 ms per call x 16, 4.7 TFLOPS = 1.47x roof, flat in KV; 40.9 t/s at the 200K end); the pick's kernel above
   32K is the 16-row `qt16w`, not the 8-row the 8K census traced. Dequant tax 9% (f16 twin); the O scratch round trip was the cost:
@@ -1706,7 +1716,7 @@ Refuted - do not reopen without new information:
   identical 47/47 per class (`GGML_TEST_SEED` dump, two prefill-shaped eval cases added), replay gate PASS both lines.** The first 8K
   gate pass "moved" a ud sha: a controller fork (the control arm forked on its own next) - `turbo4-n3-*` arms are controller arms,
   their gate is the replay gate, not the canonical pair. PROPOSED both lines: `GGML_FA_Q16_OR=2 GGML_FA_Q16_KVMIN=0 GGML_FA_Q32=1
-  GGML_FA_Q32_KVMIN=0`, adoption + mint = owner. Also from that day: the 96K census pass undercounted (UNDERCOUNT flag in `kernel-census.py`).
+  GGML_FA_Q32_KVMIN=0` - ADOPTED the same afternoon (owner: 'let's adopt what we have right now'). Also from that day: the 96K census pass undercounted (UNDERCOUNT flag in `kernel-census.py`).
 - `mv-nc-cliff-probe.md` - the NC>=3 cliff is a fixed ~112 us penalty; fixing it yields
   parity, not a win.
 - `omlx-target-recheck.md` - why the old "17 -> 35" framing was wrong.

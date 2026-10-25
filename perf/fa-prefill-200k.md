@@ -1,4 +1,4 @@
-# Prefill FA at a 200K cache, measured from the slot save (2026-10-25, PROPOSED: two levers, BI class, both lines)
+# Prefill FA at a 200K cache, measured from the slot save (2026-10-25, ADOPTED: two levers, BI class, both lines - merged 1e7f2aa75, manifest 034f420f3)
 
 Owner, on the census's prefill FA row being "negligible at 8K, the long-context inventory's item": "I believe this kind of work
 is why we created the 200k slot saves? ... 200>96 but that should just make it all the clearer." It does.
@@ -236,9 +236,12 @@ the owner's race-evidence bar). Resolved three ways:
 not a gate for controller arms (the replay gate is; `kernel-census.md` and the mint note already say so - this is the second
 time this session it cost an hour).
 
-## Where it stands (2026-10-25 13:30)
+## Where it stands (2026-10-25 13:30; ADOPTED 14:00)
 
-- **Proposed for both lines, BI class: `GGML_FA_Q16_OR=2 GGML_FA_Q16_KVMIN=0 GGML_FA_Q32=1 GGML_FA_Q32_KVMIN=0`** (manifest
+- **ADOPTED 2026-10-25 (owner: "let's adopt what we have right now and we can look at the decode FA at 200k separately"):**
+  merged to prod `1e7f2aa75`, manifest `034f420f3` (four BI entries, both lines), mint `prodpick-oct25-fa200k-{q4,ud}` (results
+  in the README's prod pick block), worktree `llama.cpp-fa200k` removed, branch kept.
+- Was proposed for both lines, BI class: `GGML_FA_Q16_OR=2 GGML_FA_Q16_KVMIN=0 GGML_FA_Q32=1 GGML_FA_Q32_KVMIN=0`** (manifest
   entries + the pick harness; the branch build carries both routes and the `qt16wo` / `qt32wo` / `qtn32o` instantiations). The two
   levers stack: per prefill FA call at 98K ud -7% x -9% (278 -> 224 ms vs the pick's qt16w 264), q4 -4% x -9%; 200K prefill
   ubatch -10.2% vs the prod pick (98.6 -> 88.0 s for the 4035 appended tokens), 8K prompt eval -1.8%; bitwise identical 47/47 per
@@ -249,4 +252,4 @@ time this session it cost an hour).
 - Open on this branch: the dequant form (9% ceiling); a 48-row or 64-row tile does not fit (Q x (DK + 4C) halves is 32 KB at
   Q 32 already; C 32 would halve the chunk and needs the nsg 4 forms - 32 O tiles per simdgroup). The decode FA at 200K (67 ms of
   the 185 ms serialized width-4 round in `fa200k-oct25-metalprof`) is the inventory's item 1 and untouched here.
-- Worktree `llama.cpp-fa200k` left in place for the owner's decision (its build is the gate binary); park = remove it, keep the branch.
+- ~~Worktree `llama.cpp-fa200k` left in place for the owner's decision (its build is the gate binary); park = remove it, keep the branch.~~ Parked 2026-10-25 14:00 after the merge.
