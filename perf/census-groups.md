@@ -110,6 +110,19 @@ deletion probe.
 - Not captured: cross-group interaction through the cache/DRAM, CPU-exposed gaps between command buffers (the submit profiler's
   job), and the drafter/target split (both are in the decode phase here, keyed `m1`/`m2`).
 
+### The step that was missing (owner 2026-10-25 night: "we're still not great at predictions")
+
+The bound is a cap, not a forecast: the k/v and projection rows had near-identical bounds and paid 14x apart when both were made
+40-60% faster per call (`kv-splitk.md`). What a profile cannot tell apart - a group longer than its biggest member because of a
+CHAIN (start position, latency; a shorter chain fixes it) or because of CONTENTION (slots, the DRAM queue; only removing the op
+fixes it) - a probe ladder can, before any kernel is written: (a) the deletion probe = the cap for anything built for the row;
+(b) a SHORT-CHAIN probe = the same kernel with its K walk truncated to one slice (garbage output; same threadgroups, same slots,
+no chain) = the cap for a faster kernel of the same footprint, and (a) minus (b) = the contention share; (c) a smaller-footprint
+probe (fewer threadgroups/threads, full chain) = the cap for an occupancy change. One env knob and one group-profiled arm each,
+read against the row's own group wall over >= 3 controls. Run tonight, (b) would have priced the k/v split at ~0.1 ms and the
+projections at a few tenths before the kernel existed. Not built: the truncation knob (a `GGML_MM_SHORTK_NE01=<rows>` gate in the
+skinny route that sets the kernel's ne00 to one K-slice) is the next tooling item if the owner wants the ladder.
+
 ### Done at the merge / open
 
 1. MERGED prod `9fd97533c` (inert unless `GGML_METAL_PROFILE=2`; the mode-1 and unprofiled paths are unchanged - post-merge sha

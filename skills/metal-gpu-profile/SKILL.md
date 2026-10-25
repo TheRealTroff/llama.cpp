@@ -52,7 +52,14 @@ Read the census row in this order (2026-09-09, `perf/agx-backend-access.md`):
    measured wall and its neighbours' latencies. Calibrated against deletion probes: the twice-#1 5120x48 GDN projections are 7-8
    ms charged, at most 1-1.9 ms exposed. Rank decode levers by `exposed_hi`; prefill rows need no correction (no hiding there);
    a row with `lo` ~0 is a skip-arm candidate, never a lever, until `GGML_MM_SKIP_NE01` says otherwise. `run-census-full.sh`
-   runs both modes.
+   runs both modes. **The bound is a cap, not a forecast (2026-10-25 night, `exp/kv-splitk`):** two rows with near-identical
+   bounds paid oppositely when a split-K kernel cut both 40-60% per call - the 48-row projections gave back 14-17 of their 20 us
+   (chain + start position), the k/v rows 3-7 of their 45 us (contention with `attn_q`: a faster kernel of the same footprint
+   leaves it). A profile cannot tell chain from contention; a PROBE LADDER can, one env knob and one 2-minute group-profiled arm
+   each, BEFORE a kernel is built: (a) deletion (`GGML_MM_SKIP_NE01`) = the cap for anything; (b) short chain = the same kernel
+   with its K walk truncated to one slice (garbage output, same threadgroups and slots) = the cap for a faster kernel of the same
+   footprint, and (a)-(b) = the contention share; (c) fewer threadgroups/threads = the cap for a smaller footprint. Read each
+   against its own group's wall over >= 3 controls (the untouched groups drift 0.5-2 ms/round with the machine's state).
 1. **`x floor@252`** first. It is time over bytes at the measured practical peak (252 GB/s, a 37 MB
    CPY; 273 is the LPDDR5X nominal). Under 1.1 the row is flagged FLOOR (the width-1 mul_mv kernels sit at 1.03-1.07; 1.1-1.3 is NEAR: stream-side levers only): the kernel streams at
    the DRAM limit and NO per-instruction reading applies, whatever issue/stall says (the
