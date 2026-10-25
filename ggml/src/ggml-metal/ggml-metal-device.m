@@ -249,6 +249,21 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
 #if GGML_METAL_EMBED_LIBRARY
                 [prep setObject:@"1" forKey:@"GGML_METAL_EMBED_LIBRARY"];
 #endif
+                // exp/fa-decode-200k: GGML_METAL_PROBE=<n> defines a kernel-side probe macro at the runtime compile (deletion
+                // probes that produce garbage output and price one deletion; perf/fa-decode-200k.md). Unset = 0 = the real kernels.
+                {
+                    const char * env = getenv("GGML_METAL_PROBE");
+                    if (env && env[0] != '\0') {
+                        [prep setObject:[NSString stringWithUTF8String:env] forKey:@"GGML_METAL_PROBE"];
+                        GGML_LOG_WARN("%s: GGML_METAL_PROBE=%s - kernel deletion probe, GARBAGE OUTPUT\n", __func__, env);
+                    }
+                    // GGML_METAL_FORM=<n>: a real source form under test (byte-identical candidates), same mechanism
+                    const char * envf = getenv("GGML_METAL_FORM");
+                    if (envf && envf[0] != '\0') {
+                        [prep setObject:[NSString stringWithUTF8String:envf] forKey:@"GGML_METAL_FORM"];
+                        GGML_LOG_INFO("%s: GGML_METAL_FORM=%s\n", __func__, envf);
+                    }
+                }
 
                 MTLCompileOptions * options = [MTLCompileOptions new];
                 options.preprocessorMacros = prep;

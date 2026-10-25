@@ -38,7 +38,7 @@ def case_filter(r):
     if op == 'FLASH_ATTN_EXT':
         kv = s1[1]
         # the cache length differs per ubatch/round; snap to the nearest perf-case length (within 12%)
-        for case_kv in (512, 8448, 16384, 24576, 49152, 98304, 102400):
+        for case_kv in (512, 8448, 16384, 24576, 49152, 98304, 102400, 204800):  # 204800 = the 200K slot save's decode shape (2026-10-25)
             if abs(kv - case_kv) <= 0.12*case_kv:
                 kv = case_kv
                 break
