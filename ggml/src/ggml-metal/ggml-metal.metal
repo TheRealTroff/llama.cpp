@@ -13995,7 +13995,13 @@ void kernel_flash_attn_ext_impl(
     constexpr short NQT_ = Q/8;
     constexpr short NO_  = PV8/NSG;
     o8x8_t lor[OR ? NQT_*NO_ : 1];
-    threadgroup float * sms = (threadgroup float *) (shmem_f16 + Q*T + Q*TS + 1024); // [Q] ms per row, then [Q] S per row
+    // the 32-row tile (exp/fa-prefill-200k, perf/fa-prefill-200k.md): Q*(T + TS) is the whole 32 KB budget, so the per-row
+    // ms lives in the free tail of each row's score slot (floats [3C/2, 2C): the scores [0, C), the mask halves [C, 3C/2)),
+    // row stride SH; without a K scratch the table is the constant one (TRM 0/4)
+    constexpr bool  SMS_SS     = OR && Q == 32;
+    constexpr short SMS_STRIDE = SMS_SS ? SH : 1;
+    static_assert(!SMS_SS || TRM == 0 || TRM == 4, "32-row tile: no threadgroup memory for a staged table");
+    threadgroup float * sms = SMS_SS ? (threadgroup float *) (ss + 3*C/2) : (threadgroup float *) (shmem_f16 + Q*T + Q*TS + 1024); // [Q] ms per row
     if constexpr (OR) {
         FOR_UNROLL (short t = 0; t < NQT_*NO_; ++t) {
             lor[t] = make_filled_simdgroup_matrix<o_t, 8>((o_t) 0.0f);
@@ -14531,7 +14537,7 @@ void kernel_flash_attn_ext_impl(
                 if constexpr (OR) {
                     // the resident tiles are rescaled by row in the PV block, after the barrier
                     if (tiisg == 0) {
-                        sms[j] = ms;
+                        sms[j*SMS_STRIDE] = ms;
                     }
                 } else if (DV4 % NW == 0) {
                     FOR_UNROLL (short ii = 0; ii < DV4/NW; ++ii) {
@@ -14719,7 +14725,7 @@ void kernel_flash_attn_ext_impl(
                         // this chunk's online-softmax rescale, applied to the resident tiles by row (lane row map:
                         // perf/probe-thread-elements.*); the same float multiply the scratch form does per row
                         FOR_UNROLL (short qt = 0; qt < NQT; ++qt) {
-                            const float msr = sms[qt*8 + lr];
+                            const float msr = sms[(qt*8 + lr)*SMS_STRIDE];
                             FOR_UNROLL (short ii = 0; ii < NO; ++ii) {
                                 thread float2 & e = (thread float2 &) lor[qt*NO + ii].thread_elements();
                                 e *= msr;
@@ -14875,7 +14881,7 @@ void kernel_flash_attn_ext_impl(
 
                 if constexpr (OR) {
                     if (tiisg == 0) {
-                        sms[j] = ms;
+                        sms[j*SMS_STRIDE] = ms;
                     }
                 } else {
                     for (short i = tiisg; i < DV4; i += NW) {
@@ -14888,7 +14894,7 @@ void kernel_flash_attn_ext_impl(
                 threadgroup_barrier(mem_flags::mem_threadgroup);
                 const short lr = ((tiisg >> 1) & 3) + 4*(tiisg >> 4);
                 FOR_UNROLL (short qt = 0; qt < NQT_; ++qt) {
-                    const float msr = sms[qt*8 + lr];
+                    const float msr = sms[(qt*8 + lr)*SMS_STRIDE];
                     FOR_UNROLL (short ii = 0; ii < NO_; ++ii) {
                         thread float2 & e = (thread float2 &) lor[qt*NO_ + ii].thread_elements();
                         e *= msr;
@@ -15081,14 +15087,19 @@ kernel void kernel_flash_attn_ext(
             }
             break;
         case 4:
-            switch (FC_flash_attn_ext_gqa_heads) {
-                case 4: kernel_flash_attn_ext_impl<FWD_TMPL, 4, 4, QT, TRM, VU, LD, OR>(FWD_ARGS); break;
-                case 6: kernel_flash_attn_ext_impl<FWD_TMPL, 6, 4, QT, TRM, VU, LD, OR>(FWD_ARGS); break;
-                default: kernel_flash_attn_ext_impl<FWD_TMPL, 1, 4, QT, TRM, VU, LD, OR>(FWD_ARGS); break;
+            if constexpr (Q != 32) { // the 32-row tile runs at nsg 8 only (32 O tiles per simdgroup at nsg 4)
+                switch (FC_flash_attn_ext_gqa_heads) {
+                    case 4: kernel_flash_attn_ext_impl<FWD_TMPL, 4, 4, QT, TRM, VU, LD, OR>(FWD_ARGS); break;
+                    case 6: kernel_flash_attn_ext_impl<FWD_TMPL, 6, 4, QT, TRM, VU, LD, OR>(FWD_ARGS); break;
+                    default: kernel_flash_attn_ext_impl<FWD_TMPL, 1, 4, QT, TRM, VU, LD, OR>(FWD_ARGS); break;
+                }
             }
             break;
         case 8:
-            if constexpr (QT && is_same<kd4x4_t, block_turbo4_0>::value) {
+            if constexpr (Q == 32) {
+                // the 32-row prefill tile (exp/fa-prefill-200k): gqah 1, nsg 8
+                kernel_flash_attn_ext_impl<FWD_TMPL, 1, 8, QT, TRM, VU, LD, OR>(FWD_ARGS);
+            } else if constexpr (QT && is_same<kd4x4_t, block_turbo4_0>::value) {
                 // the Turbo4 TR form runs its 16-row tile at decode too (GGML_FA_Q16_DEC, perf/ud-model.md step 16 B):
                 // two 16-row threadgroups over the GQA-packed rows instead of three 8-row ones
                 switch (FC_flash_attn_ext_gqa_heads) {
@@ -15326,6 +15337,13 @@ template [[host_name("kernel_flash_attn_ext_qtl4w16o_turbo4_dk256_dv256")]] kern
 template [[host_name("kernel_flash_attn_ext_qtnw16o_turbo4_dk256_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo4_0, 8, dequantize_turbo4_0, block_turbo4_0, 8, dequantize_turbo4_0, 256, 256, 16, OP_FLASH_ATTN_EXT_NCPSG, true, 3, 4, 1, true>;
 template [[host_name("kernel_flash_attn_ext_qtnw16_turbo4_dk256_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo4_0, 8, dequantize_turbo4_0, block_turbo4_0, 8, dequantize_turbo4_0, 256, 256, 16, OP_FLASH_ATTN_EXT_NCPSG, true, 4, 2, 1>;
 template [[host_name("kernel_flash_attn_ext_qt16w_turbo4_dk256_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo4_0, 8, dequantize_turbo4_0, block_turbo4_0, 8, dequantize_turbo4_0, 256, 256, 16, OP_FLASH_ATTN_EXT_NCPSG, true, 0, 2, 1>;
+// qt16w with the O accumulator register-resident (OR): the prefill 16-row tile without the per-chunk O scratch round trip (GGML_FA_Q16_OR=1, exp/fa-prefill-200k)
+template [[host_name("kernel_flash_attn_ext_qt16wo_turbo4_dk256_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo4_0, 8, dequantize_turbo4_0, block_turbo4_0, 8, dequantize_turbo4_0, 256, 256, 16, OP_FLASH_ATTN_EXT_NCPSG, true, 0, 2, 1, true>;
+// the 32-row prefill tile (GGML_FA_Q32, exp/fa-prefill-200k): the O-resident tile at Q = 32 - each dequantized K/V tile feeds four
+// query tiles, 16 accumulators per simdgroup at nsg 8, ms per row in the score slot's tail (the layout is the whole 32 KB: constant
+// table only). qt32wo = the TR 9 class (ud line), qtn32o = the TRN class (TR 7, the q4 line; qtnw16's constant half table)
+template [[host_name("kernel_flash_attn_ext_qt32wo_turbo4_dk256_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo4_0, 8, dequantize_turbo4_0, block_turbo4_0, 8, dequantize_turbo4_0, 256, 256, 32, OP_FLASH_ATTN_EXT_NCPSG, true, 0, 2, 1, true>;
+template [[host_name("kernel_flash_attn_ext_qtn32o_turbo4_dk256_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo4_0, 8, dequantize_turbo4_0, block_turbo4_0, 8, dequantize_turbo4_0, 256, 256, 32, OP_FLASH_ATTN_EXT_NCPSG, true, 4, 2, 1, true>;
 template [[host_name("kernel_flash_attn_ext_qtn16_turbo4_dk256_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo4_0, 8, dequantize_turbo4_0, block_turbo4_0, 8, dequantize_turbo4_0, 256, 256, 16, OP_FLASH_ATTN_EXT_NCPSG, true, 4, 2>;
 template [[host_name("kernel_flash_attn_ext_qt16_turbo4_dk256_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo4_0, 8, dequantize_turbo4_0, block_turbo4_0, 8, dequantize_turbo4_0, 256, 256, 16, OP_FLASH_ATTN_EXT_NCPSG, true, 0, 2>;
 template [[host_name("kernel_flash_attn_ext_qth16_turbo4_dk256_dv256")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, block_turbo4_0, 8, dequantize_turbo4_0, block_turbo4_0, 8, dequantize_turbo4_0, 256, 256, 16, OP_FLASH_ATTN_EXT_NCPSG, true, 2, 2>;

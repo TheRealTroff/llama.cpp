@@ -10151,6 +10151,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {6, 1}, 8448, nb, true, false, 0, 0,
                                                             GGML_PREC_F32, type_KV, type_KV));
         }
+        // prefill-shaped (2026-10-25, exp/fa-prefill-200k): a full 512-row ubatch and a 107-row tail at the 8448 cache,
+        // the shapes the 8K pick gate runs through the 16/32-row query tiles - for the GGML_TEST_SEED + GGML_TEST_DUMP
+        // bitwise comparison of two tile routes at a real prefill shape (the kv 256 cases above cover partial tiles only)
+        for (int nb : { 107, 512 }) {
+            test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {6, 1}, 8448, nb, true, false, 0, 0,
+                                                            GGML_PREC_F32, type_KV, type_KV));
+        }
     }
 
     // Multi-stream server graphs hand the projections a [k, n_tok, n_stream] activation:
