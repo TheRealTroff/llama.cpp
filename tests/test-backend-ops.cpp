@@ -10723,11 +10723,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     for (int bs : {1, 2, 3, 4, 5, 6, 7, 8, 512}) {
         test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0_SOA, GGML_TYPE_F32, 17408, bs,  5120, {1, 1}, {1, 1}));
         test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0_SOA, GGML_TYPE_F32,  5120, bs, 17408, {1, 1}, {1, 1}));
-        if (bs <= 8) {
-            test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0_SOA, GGML_TYPE_F32,  5120, bs,  6144, {1, 1}, {1, 1}));
-            test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0_SOA, GGML_TYPE_F32, 10240, bs,  5120, {1, 1}, {1, 1}));
-            test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0_SOA, GGML_TYPE_F32,  6144, bs,  5120, {1, 1}, {1, 1}));
-            test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0_SOA, GGML_TYPE_F32, 12288, bs,  5120, {1, 1}, {1, 1}));
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0_SOA, GGML_TYPE_F32,  5120, bs,  6144, {1, 1}, {1, 1}));
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0_SOA, GGML_TYPE_F32, 10240, bs,  5120, {1, 1}, {1, 1}));
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0_SOA, GGML_TYPE_F32,  6144, bs,  5120, {1, 1}, {1, 1}));
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0_SOA, GGML_TYPE_F32, 12288, bs,  5120, {1, 1}, {1, 1}));
+        if (bs <= 8) {   // the prefill ubatch shapes above: 2026-10-24 census (q4 prefill rows); the head stays decode-only
             test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0_SOA, GGML_TYPE_F32, 248320, bs, 5120, {1, 1}, {1, 1}));
         }
     }
@@ -10741,9 +10741,22 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
             test_cases.emplace_back(new test_mul_mat(t, GGML_TYPE_F32,  5120, bs,  6144, {1, 1}, {1, 1}));
         }
     }
+    // the stored types at the attention projections the census ranks (attn_qkv 10240, attn_gate 6144, attn_q 12288 rows;
+    // 2026-10-24 census: NO PERF CASE on 9 ud rows worth 3-7 ms per round each), decode widths + the prefill ubatch
+    for (ggml_type t : {GGML_TYPE_IQ4_XS_SOA, GGML_TYPE_Q4_K_SOA, GGML_TYPE_Q5_K_SOA}) {
+        for (int bs : {1, 2, 3, 4, 5, 6, 7, 8, 512}) {
+            test_cases.emplace_back(new test_mul_mat(t, GGML_TYPE_F32, 10240, bs,  5120, {1, 1}, {1, 1}));
+            test_cases.emplace_back(new test_mul_mat(t, GGML_TYPE_F32,  6144, bs,  5120, {1, 1}, {1, 1}));
+            test_cases.emplace_back(new test_mul_mat(t, GGML_TYPE_F32, 12288, bs,  5120, {1, 1}, {1, 1}));
+        }
+    }
+    // the UD file stores the two GDN a/dt projections (5120 -> 48) in q8_0: 96 calls per round (2026-10-24 census)
+    for (int bs : {1, 2, 3, 4, 5, 6, 7, 8, 512}) {
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 48, bs, 5120, {1, 1}, {1, 1}));
+    }
 
     // small-ne01 verify shapes from the 27B round decomposition (GDN a/dt, conv, kv, q slices)
-    for (int bs : {1, 2, 3, 4, 5, 6, 7, 8}) {
+    for (int bs : {1, 2, 3, 4, 5, 6, 7, 8, 512}) {   // 512 = the prefill ubatch (2026-10-24 census: q4 pre rows)
         for (int m : {48, 256, 1024, 1280, 4096}) {
             test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, m, bs, 5120, {1, 1}, {1, 1}));
         }
@@ -10984,7 +10997,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     // ubatch (512) and verify (4) widths, so the census can time/capture every top row of a profile
     test_cases.emplace_back(new test_ssm_conv(GGML_TYPE_F32, {515, 10240, 1, 1}, {4, 10240, 1, 1}));
     test_cases.emplace_back(new test_ssm_conv(GGML_TYPE_F32, {7, 10240, 1, 1}, {4, 10240, 1, 1}));
-    for (int64_t nt : {512, 4}) {
+    for (int64_t nt : {512, 4, 8}) {   // 8 = verify width 8 (2026-10-24 census)
         test_cases.emplace_back(new test_rms_norm(GGML_TYPE_F32, {5120, nt, 1, 1}, false, 1e-6f));
         test_cases.emplace_back(new test_bin_bcast(ggml_add, GGML_TYPE_F32, {5120, nt, 1, 1}, {1, 1, 1, 1}));
         test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 16, 128, nt, 1));
@@ -10994,6 +11007,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
         test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 16, 128, nt, 1, 3, false, false, 1, 0, 4));
     }
     test_cases.emplace_back(new test_glu(GGML_GLU_OP_SWIGLU, GGML_TYPE_F32, { 2*17408, 4, 1, 1 }, 0, false));
+    test_cases.emplace_back(new test_glu(GGML_GLU_OP_SWIGLU, GGML_TYPE_F32, { 2*17408, 8, 1, 1 }, 0, false));
+    test_cases.emplace_back(new test_rms_norm(GGML_TYPE_F32, {128, 48, 1, 1}, false, 1e-6f));   // the per-head q/k norm at the prefill ubatch (2026-10-24 census)
     test_cases.emplace_back(new test_ssm_conv(GGML_TYPE_F32, {937, 8192, 1, 1}, {4, 8192, 1, 1})); // prefill
     test_cases.emplace_back(new test_ssm_conv(GGML_TYPE_F32, {4,   3328, 1, 1}, {4, 3328, 1, 1})); // generate
     test_cases.emplace_back(new test_ssm_conv_bias_silu(GGML_TYPE_F32, {515, 3328, 1, 1}, {4, 3328, 1, 1}, true));  // prefill

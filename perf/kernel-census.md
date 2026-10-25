@@ -14,9 +14,36 @@ the license). ~~2026-09-18 morning: the replay half was DOWN under macOS 27 (ins
 resolved but streamed no APS counters, and `/usr/bin/gpudebug` v1.0 under Xcode 26.6 showed empty performance leaves.~~ The
 headless wrapper now drives `gpudebug -t <trace> -c 'profile run --exec serial --embed'` and moves the embedded
 `emb_stream_0.gpuprofiler_raw/` bundle (streamData + the 20 Counters/Timeline/Profiling files) to `<id>.replay/raw` - the same
-contract as before, so nothing in this script changed; per-row replay 8-30 s. Still down under Xcode 27: the machine-IR join
+contract as before, so nothing in this script changed; per-row replay 8-30 s. ~~Still down under Xcode 27: the machine-IR join
 (`agx-nt-opt.py mir`: the re-signed debug translator says "cannot emit pipeline") - rows print "no join" and the per-instruction
-reading falls back to encoding sizes (14 B = loads). The translator metallib compile needs `-mmacosx-version-min=26.0` now
+reading falls back to encoding sizes (14 B = loads).~~ **2026-10-24: the machine-IR join is BACK** (Xcode 27.1 + Metal Toolchain
+27A266a): two things were wrong, neither a toolchain regression. (1) The debug translator copy (`agx-nt-debug.sh`) linked only
+`lib/*.dylib`; the 27.x toolchain keeps the backend's runtime metallibs in `lib/applegpu25-nt/` (+ `clang/`, `metalfe/`), so the
+copy translated nothing - that was the "cannot emit pipeline". The script now links every `lib/` entry it lacks. ~~(2) The 27.x
+toolchain split the AGX backend per GPU generation (`libapplegpu{23,24,25,G9G12}-nt.dylib`); g16s is compiled by
+`libapplegpu25-nt`, and an option written into `libapplegpu-nt`'s registry is found but never read (watch mode: 0 vs 177
+accesses). `agx-nt-opt.py` now defaults `--module` to `libapplegpu25-nt` when the toolchain has it.~~ (2) CORRECTED the same
+night: the backend dylib is selected by the TARGET OS VERSION (`lib/air-nt/config.yaml`: macOS 13-14 libapplegpu23-nt, 15 -> 24,
+26 -> libapplegpu25-nt, 27+ -> libapplegpu-nt), not by GPU generation. Both translators had `-platform_version macos 26.0`
+hardcoded since Sep 9 (the OS was 26 then); on macOS 27 that selects the macOS-26 backend, so the flag written into
+libapplegpu-nt was never read, AND the translated bodies were 1-3 instructions (8-16 B) longer than the hardware's on the
+q5_K/q3_K skinny tiles and the FA kernel ("profile does not match this binary"), while iq4_xs/q4_K/q6_K happened to agree.
+`agx-nt-opt.py` and `agx-spill-probe.py` now target the running OS (`sw_vers`) and take the module from config.yaml
+(`AGX_PLATFORM_VERSION`, `AGX_NT_MODULE` override). With that, `-mmacosx-version-min=26.0` is NOT needed: an AIR 2.9 metallib
+translates at platform 27 (the "incompatible module" was the 26.0 target). Two more census fixes the Oct 24 run forced:
+`agx-cost-dataset.py` FAMILIES learnt the skinny levers (iq4lut +9, q5k +10, kq2 +11 = also the iq4_xs header fold, q6k +12)
+and the three FA bools the runtime always sets but names only when true (kvl/kvo/t4p +5/6/7, default 0); `agx-nt-opt.py`
+deletes a stale gpubin before translating (the packager fallback keyed on the file's absence and 16 rows joined against the
+previous attempt's binary). Every traced decode kernel of the Oct 24 ud width-8 census joins 1:1 with the hardware profile
+(iq4_xs 507, q4_K 512, q5_K 727, q3_K 652, q6_K 684, FA 992 instructions). Proven on
+`kernel_silu_back_f32` from `build-air/ggml.metallib`: 19 MIR instructions, aligned to the native body by `agx-mir-align.py`.
+Re-joining the Sep 18 ud width-8 rows against today's metallib: the iq4_xs rows join (skinny 534/534, n64 481/481 instructions =
+the Sep 18 live counts; kernels unchanged since), every q4_K/q5_K/FA row is REFUSED by `agx-mir-align.py` ("profile does not
+match this binary at N offsets") because those kernels changed - the guard works, and a per-instruction reading of the current
+pick needs a fresh census run, not a re-join. The lldb Python module is Apple's (`_lldb.cpython-39`): the script re-execs under `/usr/bin/python3` when a conda/brew python3
+cannot import it (the census already calls it through `xcrun python3`). Also: after ANY Xcode update the Metal Toolchain
+component is gone again - re-download, and rebuild `build-air/ggml.metallib` by hand (this script only rebuilds it on a source
+change). The translator metallib compile needs `-mmacosx-version-min=26.0` now
 (Xcode 27's `metal` emits AIR 2.9; `applegpu-nt` targets 2.8). `PHASE=decode|prefill` limits the plan to one phase - the 8K
 benchprompt otherwise fills a top-N with prefill rows. A stuck `gpudebug` session (`gpudebug -l`, `--terminate all`) is the first
 thing to check when a row's `*.instr.txt` comes back empty.
@@ -137,3 +164,80 @@ prefill row recaptured because its pipeline name changed - the driver's stalenes
 Ranking after this run: decode FA nwg=8 width 4 (2.18x class-best instructions; the GQA f16 route is
 in the pick env now), prefill FA (2.15x), GDN prefill (8.3x floor, ~1.0 s), q5_K mul_mm (1.33x), SSM_CONV
 (1.8x floor). The mul_mm plane still reads 0.99-1.07x the roof.
+
+
+## 2026-10-24/25 - the full census of the current pick (owner: "let's start by getting a full census")
+
+Harness `perf/run-census-full.sh` (new): one profiled run per line x verify depth through `run-w8-decomp.sh STEPS=metalprof`
+(manifest env, Turbo4 KV, fixed depth, 8K chat-templated benchprompt, 300 tokens), then `kernel-census.sh` per log: a decode
+census per width (`PHASE=decode TOP=16`) and a prefill census per line (`PHASE=prefill TOP=12`), diffed against the Sep 18
+width-8 snapshots. prod `d48e73306`, binary 2026-10-02, Xcode 27.1 / Metal Toolchain 27A266a, serving server stopped first.
+Profiled runs (under `GGML_METAL_PROFILE=1`): ud w8 24.3 t/s round 174.6 ms, ud w4 27.0 / 110.2, q4 w8 26.6 / 137.7, q4 w4
+28.5 / 98.2 (shas ud `ce826d8a3cbd`, q4 `86213d038a29` on every arm). Output: `kvquant-experiments/census/census-1024-{ud,q4}-
+{w8-dec,w4-dec,pre}/` (`census.rejoin.log` = the report with every join, `snapshot.json`), driver log `census-1024.driver.log`,
+traces moved to `/Volumes/offload/play-archive/census-1024-traces/` (7.2 GB, incompressible: the captured weight buffer).
+
+**The instrument, fully live for the first time since Sep 16**: 68 of 68 traced rows carry the per-instruction machine-IR join
+(ud w8 11/11, ud w4 12/12, ud pre 12/12, q4 w8 12/12, q4 w4 15/15, q4 pre 6/6) after the five fixes recorded in "How to run"
+(toolchain re-download, platform-version/backend selection, constants table incl. `gate` +5 and `bs` for ssm_conv, stale gpubin,
+preamble-execution check downgraded to a warning when sizes and the 64-byte boundary agree - a q4 FA replay attributed executions
+to its preamble). Coverage gap = NO PERF CASE rows (no `test-backend-ops` perf case for the shape; extend `case_filter` + the perf
+case table): ud: q4_K_soa/q5_K_soa m=10240/6144 at n=4/8/512, iq4_xs_soa m=12288 n=512, **q8_0 5120x48 n=4/8** (see below),
+gated_delta_net n_seq_tokens=8, rms_norm 128x48; q4: q4_0_soa m=10240/6144/12288 and 6144x5120 at n=512, 5120x17408 n=103,
+q4_0 5120x1024 and 5120x48 at n=512, add/swiglu/turbo_wht small shapes. q4 prefill traced only 6 of 15 rows for that reason.
+
+Readings (the table says; nothing below is priced or built):
+- **The two 5120x48 GDN projections** (`MUL_MAT q4_0|q8_0 s0=[5120,48] s1=[5120,w]`, 2 per GDN layer x 48 = 96 calls per round)
+  cost 70.7 us/call on q4 (`mul_mm_skinny_q4_0_f32`, **54x the byte floor, 80% stall**) and 84.7 us on ud (q8_0, untraced) at
+  width 8 = 6.8 / 8.1 ms per round = **~5% of the serialized decode GPU time on both lines**; at width 4 36 us
+  (`mul_mv_ext_q4_0_f32_r1_4`, 28x floor, 76% stall) = 3.5 / 4.0 ms per round. A 147 KB weight x 8 columns is a ~3 us dispatch
+  at the floor; the kernels run one or two threadgroups. Candidate: a tiny-ne01 route (split-K or row-per-simdgroup) or the two
+  projections concatenated offline into one 5120x96 matmul. The same shape at n=512 costs 207 us x 1536 = 0.32 s of prefill (0.5%).
+- `MUL_MAT q4_0 5120x1024 n=8` (q4, 32 calls/round): 74 us, 5.5x floor, 65% stall = 2.4 ms/round (1.7%); 2.7x at width 4.
+- Width-8 skinny tiles (ud, cache-resident in the perf loop so the x-floor column is NOT a DRAM reading there - the CACHE flag):
+  iq4_xs 403 us / q4_K 359 / q5_K 426-505 / q3_K 415 / q6_K head 5.7 ms per call, issue 70-91%, 65-69 regs, 0 spill; -6..-8% per
+  call vs the Sep 18 census (the merged levers). q4 w8 `mul_mm_skinny_q4_0_soa_f32` 54 regs, issue 82-96%. Width 4: every SoA
+  mul_mv at 0.29-0.44x of the (cache-resident) floor, issue 84-96%.
+- Prefill: the n64 tiles sit at the MMA roof (0.97-1.03x, issue 98-99%) on ud; q4's acch n64 at 0.93-0.94x. The only mma-class
+  outlier is the prefill FA kernel `flash_attn_ext_qt_f16_dk256_dv256` at 1.19x roof with **2.28x the instructions and 2.5x the
+  loads per GFLOP of the class best, 16 B spill** - 0.35 s of the 8K prefill (negligible here, the long-context inventory's item).
+- Decode FA (width 8, 8.4-8.7K cells): 357-369 us per call, 1.47-1.52x roof, issue 88-89%, 96 regs, 2.6-3.2 ms per round per
+  shape; width 4: 196-204 us, 1.71-1.81x roof, 16 B spill.
+- GDN decode scan (width 4, traced): 56 us, 1.29-1.40x floor, 90% issue - near floor; the prefill scan `nr4` 1.28 ms x 780.
+
+**FA rows and the cache type (found 2026-10-25, fixed in the gap run):** `case_filter` matches a FLASH_ATTN_EXT row to a perf case
+of the type `CENSUS_KV` names, default f16 - and only the Sep 15 96K census ever set `CENSUS_KV=turbo4`. Every other census of a
+Turbo4 pick (Sep 18 included) timed and traced `flash_attn_ext_qt_f16_*`, a route the pick never runs; the pick's kernels are
+the `_turbo4` forms (`qtl4w`/GQA tile at decode, `qt16w` above 32K). `run-census-full.sh` now exports `CENSUS_KV=turbo4` and
+the Oct 24 FA rows were re-run (below). Treat the FA lines of the Sep 18 snapshots as f16-route numbers.
+
+Traps this run added: a `gpudebug` replay hung 20 min on one ssm_conv trace (`gpudebug -l` showed no session) - kill it, the
+census marks "replay FAILED" and continues; re-replay from the archived trace. Each census dir is ~1.5-2 GB in `.gputrace`
+bundles (50 MB per row) and each live replay holds ~1.7 GB under `/tmp/com.apple.gputools.profiling`: the six-census night filled
+the disk to 100% (Bash itself could not start) - archive the traces to offload right after a census, the profiles (`instr.json`,
+`capture.log`) are what the join needs. A post-pass that re-joins all rows of a census: run `kernel-census.py metrics` per
+`row*.json`, then `report --diff <prev> --snapshot` (the pattern in `census-postpass.sh`, kept in the Oct 24 scratch; the join
+alone is ~15 s per row under lldb).
+
+**Gap fill 2026-10-25 01:12-01:57 (`SKIP_DONE=1` re-runs of the six censuses after the perf-case additions, FA rows re-matched
+with `CENSUS_KV=turbo4`):** 92 of 97 rows traced and every traced row joined (ud w8 16/16, ud pre 17/18, ud w4 16/16, q4 w8
+15/16, q4 pre 13/15, q4 w4 15/16). Still untraced: `turbo_wht` (fork op, no perf case), the 103-token tail ubatch, and the GDN
+prefill rows (timed, no per-instruction bundle). Perf cases added in `tests/test-backend-ops.cpp`: the stored SoA types at
+10240/6144/12288 rows (decode widths + 512), q8_0 48x5120 at every width, Q4_0_SOA projection shapes at 512, q4_0 small-ne01 at
+512, GDN/rms_norm/add at width 8, swiglu at 8, rms_norm 128x48. Translator constants learnt the same night: `soa` (+6) and
+`ne13` (+3) are set by the runtime on every mul_mm pipeline but named only when true - undefined offline they left q4_0's code
+unchanged and halved q8_0's (222 vs the hardware's 443 instructions); defaults must not override a constant the name already
+carries (`_soa` is a bare flag). What the filled rows say:
+- **The GDN a/dt projections, now traced on both lines at both widths:** ud q8_0 `mul_mm_skinny_q8_0_f32` 85 us (39x floor,
+  79% stall, 443 instr) at width 8 and `mul_mv_ext_q8_0_f32_r1_4` 41 us (18.5x, 75% stall) at width 4; q4 q4_0 71 us (54x,
+  80%) / 36 us (28x, 76%). At the prefill ubatch the q4 case runs `mul_mm_acch_q4_0_f16` at 207 us = 4.66x the floor, 50% stall
+  (0.32 s of the 8K prefill). Same reading as before, now with the ud side measured: ~5% of decode GPU time at width 8.
+- **FA rows re-measured on the pick's Turbo4 kernels** (the f16 numbers above were a route the pick never ran): decode width 8
+  `flash_attn_ext_qtl4w24_turbo4` (ud) 360-369 us, 1.43-1.47x roof, 86% issue, 96 regs, **48 B spill**; q4's `qtnw24_turbo4`
+  357-366 us, 1.41-1.45x roof, 48 B spill; width 4: 196-204 us, 1.42-1.49x roof, 48 B (ud) / **64 B (q4)** spill. Prefill:
+  ud `qtl4w_turbo4` 21.7 ms per 512-row call at **1.47x roof, 2.72x the instructions and 2.5x the loads per GFLOP of the class
+  best** (the f16 form measured 1.19x / 2.28x); q4 `qtnw_turbo4` 19.7 ms, 1.35x roof, 1.95x instr. The Turbo4 prefill FA kernel
+  is further from the roof than its f16 twin - the long-context lever (longctx-inventory-sep15.md item 2) is a Turbo4 question.
+- q4 `q4_0 5120x1024` at the ubatch: `mul_mm_acch_q4_0_f16` 826 us, 1.09x roof, 2.09x instr best, 2.4x loads best (0.42 s).
+- ud n64 tiles at the attention shapes (10240/6144 rows): 0.99-1.03x roof like the FFN shapes, but 1.6-1.9x the instructions
+  of the class best (q4_K 1.61x, q5_K 1.93x) - the K-quant dequant tax on a narrower tile, paid at the roof.

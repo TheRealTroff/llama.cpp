@@ -1,7 +1,8 @@
 #!/bin/bash
 # Kernel census driver (perf/kernel-census.md): profile log -> plan -> per kernel: uncaptured timing
 # (2 reps), capture, headless replay, per-instruction decode -> metrics -> report + snapshot.
-#   perf/kernel-census.sh <profiled server.log> [TAG]     env: B, ENVS (routing env of the pick), TOP, MIN_MS, PREV (snapshot to diff)
+#   perf/kernel-census.sh <profiled server.log> [TAG]     env: B, ENVS (routing env of the pick), TOP, MIN_MS, PREV (snapshot to diff),
+#        CENSUS_KV=turbo4|f16 (the cache type the FA rows are matched to - the pick's!), PHASE=decode|prefill, SKIP_DONE=1 (gap fill)
 # Run it with the SAME routing env the profiled run used, or the captures measure other kernels.
 set -u
 if [ -z "${CAFFEINATED:-}" ]; then exec env CAFFEINATED=1 caffeinate -dimsu "$0" "$@"; fi
@@ -16,12 +17,15 @@ PY=${PY:-/Users/troff/play/.venv-convert/bin/python3}
 STATS=/Users/troff/.claude/skills/metal-gpu-profile/references/gpuprofiler-stats.py
 HEADLESS=/Users/troff/.claude/skills/metal-gpu-profile/references/metal-profile-headless.py
 mkdir -p "$OUT"; exec > >(tee "$OUT/census.log") 2>&1
-# the translator metallib for the per-row machine-IR join (perf/agx-nt-opt.py): same source and macros
+# the translator metallib for the per-row machine-IR join (perf/agx-nt-opt.py): same source and macros; NO -mmacosx-version-min
+# since 2026-10-24: the runtime compiles for the running OS and the translators target it (config.yaml picks the backend dylib by
+# target version; a 26.0 target translated bodies 1-3 instructions longer than the hardware's). Rebuild build-air by hand after a
+# toolchain change - this only rebuilds on a SOURCE change.
 # as the embedded library the binary runs (perf/agx-backend-access.md); rebuilt when the source is newer
 export CENSUS_METALLIB=${CENSUS_METALLIB:-$B/build-air/ggml.metallib}
 if [ ! -f "$CENSUS_METALLIB" ] || [ "$B/ggml/src/ggml-metal/ggml-metal.metal" -nt "$CENSUS_METALLIB" ]; then
     mkdir -p "$(dirname "$CENSUS_METALLIB")"
-    (cd "$B" && xcrun metal -mmacosx-version-min=26.0 -fmodules-cache-path=/tmp/air-module-cache -DGGML_METAL_HAS_BF16=1 -DTURBO_USE_4MAG=1 -DTURBO_USE_PAIR_LUT=1 \
+    (cd "$B" && xcrun metal -fmodules-cache-path=/tmp/air-module-cache -DGGML_METAL_HAS_BF16=1 -DTURBO_USE_4MAG=1 -DTURBO_USE_PAIR_LUT=1 \
         -c ggml/src/ggml-metal/ggml-metal.metal -Iggml/src/ggml-metal -Iggml/src -o "${CENSUS_METALLIB%.metallib}.air" > "${CENSUS_METALLIB%.metallib}.log" 2>&1 \
         && xcrun metallib "${CENSUS_METALLIB%.metallib}.air" -o "$CENSUS_METALLIB") || echo "translator metallib build FAILED (see ${CENSUS_METALLIB%.metallib}.log); rows get no join"
 fi
@@ -31,6 +35,7 @@ n=$(python3 -c "import json;print(len(json.load(open('$OUT/plan.json'))))"); ech
 for i in $(seq 0 $((n-1))); do
     python3 -c "import json;print(json.dumps(json.load(open('$OUT/plan.json'))[$i]))" > "$OUT/row$i.json"
     id=$(python3 -c "import json;print(json.load(open('$OUT/row$i.json'))['id'])"); filt=$(python3 -c "import json;print(json.load(open('$OUT/row$i.json'))['filter'] or '')"); op=$(python3 -c "import json;print(json.load(open('$OUT/row$i.json'))['op'])")
+    if [ -n "${SKIP_DONE:-}" ] && [ -f "$OUT/$id.instr.json" ]; then echo "$id: done (SKIP_DONE)"; python3 "$B/perf/kernel-census.py" metrics "$OUT" "$OUT/row$i.json"; continue; fi   # 2026-10-25: fill a census's gaps after adding perf cases
     if [ -z "$filt" ]; then echo "$id: no filter for op $op (extend case_filter)"; python3 "$B/perf/kernel-census.py" metrics "$OUT" "$OUT/row$i.json"; continue; fi
     : > "$OUT/$id.timing.txt"
     for rep in 1 2; do (cd "$B" && env GGML_MV_REPACK=2 $ENVS "$BIN" perf -o "$op" -b MTL0 -p "$filt" 2>&1) | grep -E 'us/run|loaded kernel_' >> "$OUT/$id.timing.txt"; done
