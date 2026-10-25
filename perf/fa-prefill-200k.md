@@ -1,4 +1,4 @@
-# Prefill FA at a 200K cache, measured from the slot save (2026-10-25, OPEN)
+# Prefill FA at a 200K cache, measured from the slot save (2026-10-25, PROPOSED: two levers, BI class, both lines)
 
 Owner, on the census's prefill FA row being "negligible at 8K, the long-context inventory's item": "I believe this kind of work
 is why we created the 200k slot saves? ... 200>96 but that should just make it all the clearer." It does.
@@ -150,13 +150,103 @@ On q4 the 16-row scratch tile the pick runs above 32K is SLOWER than the 8-row f
 never re-timed per class); the OR form fixes that and wins at both lengths. The folded-norm class is cheaper than ud's at every
 form (247 vs 278 ms 8-row).
 
-## Where it stands (2026-10-25 10:15)
+### Lever 2 built: the 32-row tile (`GGML_FA_Q32`, owner: "we won't know until we try")
 
-- **Proposed for both lines, BI class: `GGML_FA_Q16_OR=2 GGML_FA_Q16_KVMIN=0`** (manifest entries + the pick harness; the branch
-  build carries the route and the `qt16wo` instantiation). Per prefill FA call: ud -9..-11%, q4 -4..-9%; 200K ubatch -4.8..-6.8%
-  (ud, e2e x3); canonical shas hold on both lines at 8K; 45/45 per class. Adoption + mint = owner.
-- Open on this branch: the 32-row tile (Q=32 OR: 16 accumulators per simdgroup at nsg=8, the Q^T register head shortened -
-  prescreen the registers first; the f16 8->16-row step was -19%, so a 16->32 step is worth a probe), and the dequant form (9%
-  ceiling). The decode FA at 200K (67 ms of the 185 ms serialized width-4 round in `fa200k-oct25-metalprof`) is the inventory's
-  item 1 and untouched here.
+The O-resident tile at Q = 32: each dequantized K/V tile feeds four query tiles, 16 O accumulators per simdgroup at nsg 8.
+Two instantiations, one per numerics class: `kernel_flash_attn_ext_qt32wo_turbo4_dk256_dv256` (TR 9 = qt16wo at Q 32: constant
+table, V unroll 2, 8-byte loads, OR) and `qtn32o` (TR 7, the q4 line: qtnw16's constant half table + OR). Route:
+`GGML_FA_Q32=1` above `GGML_FA_Q32_KVMIN` (default 32768), prefill-sized batches (ne01 >= 32, gqah 1), needs the Q16 route on
+(`ggml_metal_flash_attn_ext_q32`); the host sizes the threadgroup memory without O scratch (`is_q32` in `FATTN_SMEM`), nsg 8.
+
+**Threadgroup memory**: Q x (DK + 4C) halves = 32 x 512 x 2 B = exactly the 32 KB budget, so there is no room for the 24-row
+form's `sms` strip (the per-row softmax factors behind the staged table) nor for a staged table at all. The per-row `ms` lives
+instead in the free tail of each row's score slot: a row's SH = 2C floats hold the C scores at [0, C), the C mask halves at
+[C, 3C/2) and nothing at [3C/2, 2C) - `sms` = `ss + 3C/2`, row stride SH (`SMS_SS`/`SMS_STRIDE` in the kernel, identity at
+Q != 32: the 16/24-row OR kernels are unchanged code). A staged table (`qtl4w` numerics) cannot exist at Q 32; the constant table
+IS the TR 9 class's numerics (qt16wo proved that byte-identical), so nothing is lost.
+
+**Prescreen** (`agx-spill-probe.py`, the census metallib flags, mask on, nsg 8, nwg 1, gqah 1), bytes spilled per thread:
+
+| form | qr 0 (the > 64K route) | qr 8 (<= 64K) | text |
+|---|--:|--:|--:|
+| `qt32wo` (32-row, TR 9) | **48** | 160 | 13.6 KB |
+| `qtn32o` (32-row, TR 7) | **32** | 176 | 14.9 KB |
+| `qt16wo` / `qtl4w16o` / `qtnw16o` (16-row OR) | 0 / 0 / 0 | 0 / 16 / 16 | 9.3 / 10.3 / 11.4 KB |
+| `qt16w` / `qtnw16` (16-row scratch, the pick) | 0 / 0 | 16 / 0 | 9.9 / 10.7 KB |
+
+The 32-row tile spills at every specialization - 12 registers short at qr 0, 40 at qr 8. Timed anyway (the owner's call: "we
+haven't had great success with really wide kernels, but let's see"); 45/45 CPU-reference cases in both classes with the gates
+forced to 0.
+
+**Isolated** (`run-fa-prefill-tile-ab.sh ARMS=q32 LINE=ud|q4`, this branch's build 12:32, 2 reps x 2 interleaved, us per call):
+
+| line / class | kv | 16-row OR (`qtl4w16o` / `qtnw16o`) | **32-row OR** | delta |
+|---|--:|--:|--:|--:|
+| ud / TR 9 | 98304 | 241.3 / 240.9 ms | **224.3 / 224.6 ms** | **-7.0%** (5.52 TFLOPS) |
+| ud / TR 9 | 8448 | 20.37 / 20.35 ms | **19.21 / 19.27 ms** | **-5.6%** |
+| q4 / TR 7 | 98304 | 230.1 / 230.5 ms | **220.2 / 220.3 ms** | **-4.3%** (5.62 TFLOPS) |
+| q4 / TR 7 | 8448 | 19.87 / 19.90 ms | **19.08 / 19.08 ms** | **-4.0%** |
+
+The spill is cheap: at 8448 the 32-row tile with the register head off (`GGML_FA_QR_KVMAX=0`, 48 B spill) is 19.27 ms vs
+19.22 with it on (160 B spill) - the head is inert here as it was on the 8-row decode route, and the spill traffic is lost in the
+K/V stream. So the register budget is NOT what bounds the wide tile; the route keeps the general qr rule.
+
+**E2E at 200K** (`fa200k-oct25-q32` / `-q32ctl`, this branch's build 12:32, restore + 4035 appended tokens, kv 202-206K;
+`GGML_FA_Q16_OR=2 GGML_FA_Q16_KVMIN=0` on both arms, + `GGML_FA_Q32=1 GGML_FA_Q32_KVMIN=0` on the q32 arms):
+
+| arm | prefill 4035 tok | t/s at 200K | FA per call at kv 206336 (profiled) | sha |
+|---|--:|--:|--:|---|
+| 16-row OR2, same session control | 92.9 s | 43.4 | (490.7 ms this morning) | `74184525cc6a` |
+| 16-row OR2, this morning x3 | 92.1 / 92.1 / 91.7 s | 43.8-44.0 | 490.7 ms | `74184525cc6a` |
+| **32-row (anchor / profiled)** | **88.0 / 87.9 s** | **45.9** | **464.3 ms (-5.4%)** | **`74184525cc6a` x2** |
+
+**-5.3% of the 200K prefill ubatch on top of lever 1 (-10.2% vs the prod pick's 98.6 s), byte-identical.** The FA call now runs at
+5.6 TFLOPS = 1.25x the n64 mul_mm roof (was 1.47x at the start of the day); FA is 7.43 of the ~10.4 s ubatch. Decode untouched
+(13.6 / 13.75 t/s, the Q32 route needs ne01 >= 32).
+
+**8K pick gate, first pass** (`faq32-oct25-{ud,q4}`, the flagged arms on this build; controls = the morning's
+`faor-oct25-*-control`, same kernels outside the flags - the `sms` stride change is identity at Q != 32):
+
+| line | arm | 600 t/s | sha 600 | 300 t/s | sha 300 | 8K prompt eval |
+|---|---|--:|---|--:|---|--:|
+| ud | control (morning) | 29.57 | `abc0c5af7300` | 31.85 | `d180ae89f168` | 64.4 s = 128.8 t/s |
+| ud | OR2 + Q32 | 30.42 | **`fff0c4979d71`** (acc 67.6 vs 65.5%) | 32.34 | `d180ae89f168` | 63.2 s = 131.2 t/s |
+| q4 | control (morning) | 34.09 | `801cb0758d4e` | 34.30 | `f07b0f8c58e6` | |
+| q4 | OR2 + Q32 | 34.51 | `801cb0758d4e` | 34.78 | `f07b0f8c58e6` | |
+
+q4 holds; the ud 600 sha moved. The 300 arm (same prompt, same prefill) held, so whatever moved did so after token 300 in a
+decode where no 32-row kernel can run (`ne01 >= 32`, gqah 1, Turbo4 only). The `turbo4-n3-*` arms run the LLAMA_SPEC_EV
+controller (block cap 7), and `mint-controller-arm-is-statistical` says what that means: the forked run's pick histogram differs
+from the control's (k hist `[1:1 2:1 3:153 7:23]` vs `[2:1 3:150 7:27]`, block hist 7: 92 vs 86 - the picks differed FIRST,
+the owner's race-evidence bar). Resolved three ways:
+
+1. **Reproduction** (`faq32r-oct25-ud-{q32a,control,q32b}`, 600 tokens, same binary, hot GPU after 1.5 h of runs): Q32 arm
+   `abc0c5af7300` x2 (= the canonical sha); the CONTROL arm (no Q32) forked to a third sha `b7a8d2229ec4` (acc 69.4%). The
+   controller forks on its own under this ambient; the kernel is not the variable.
+2. **Bitwise** (`GGML_TEST_SEED=7 GGML_TEST_DUMP`, every Turbo4 FA eval case, Metal output of the two routes compared with
+   `cmp`): **47/47 files identical in both classes** (`qtl4w16o` vs `qt32wo` under the ud pick env, `qtnw16o` vs `qtn32o` under
+   q4's), including the two prefill-shaped cases added to `test-backend-ops` for this (kv 8448, nb 512 and nb 107: a full ubatch
+   and a partial last tile; the stock cases covered partial tiles only at kv 256). Without the seed every file differs (random
+   inputs per process) - the first pass of this comparison said 45/45 DIFF for that reason alone.
+3. **Deterministic controller gate** (`run-specev-replay-gate.sh`, `faq32rg-oct25-{ud,q4}`: the pick sequence recorded under
+   OR2 alone, replayed x3 under OR2 + Q32, 1013 / 870 tokens): ud `d5a2d2a996ff` x4 (record + 3 replays), 346 picks, 0 desync,
+   0 past-trace; q4 `e3cb684c753a` x4, 307 picks, 0 desync, 0 past-trace. PASS both lines.
+
+**Verdict: byte-identical class, both lines.** The first-pass ud 600 sha is a controller fork and the canonical sha pair is
+not a gate for controller arms (the replay gate is; `kernel-census.md` and the mint note already say so - this is the second
+time this session it cost an hour).
+
+## Where it stands (2026-10-25 13:30)
+
+- **Proposed for both lines, BI class: `GGML_FA_Q16_OR=2 GGML_FA_Q16_KVMIN=0 GGML_FA_Q32=1 GGML_FA_Q32_KVMIN=0`** (manifest
+  entries + the pick harness; the branch build carries both routes and the `qt16wo` / `qt32wo` / `qtn32o` instantiations). The two
+  levers stack: per prefill FA call at 98K ud -7% x -9% (278 -> 224 ms vs the pick's qt16w 264), q4 -4% x -9%; 200K prefill
+  ubatch -10.2% vs the prod pick (98.6 -> 88.0 s for the 4035 appended tokens), 8K prompt eval -1.8%; bitwise identical 47/47 per
+  class, replay gate PASS both lines (ud x4, q4 x4, 0 desync); canonical shas hold where the arm is not a controller fork. Adoption + mint =
+  owner. The 32-row tile alone (lever 2) is worth -5.3% of the 200K ubatch on top of lever 1.
+- Lever 1 alone remains a valid smaller step (`GGML_FA_Q16_OR=2 GGML_FA_Q16_KVMIN=0`: 200K ubatch -4.8..-6.8%, 8K gate PASS this
+  morning).
+- Open on this branch: the dequant form (9% ceiling); a 48-row or 64-row tile does not fit (Q x (DK + 4C) halves is 32 KB at
+  Q 32 already; C 32 would halve the chunk and needs the nsg 4 forms - 32 O tiles per simdgroup). The decode FA at 200K (67 ms of
+  the 185 ms serialized width-4 round in `fa200k-oct25-metalprof`) is the inventory's item 1 and untouched here.
 - Worktree `llama.cpp-fa200k` left in place for the owner's decision (its build is the gate binary); park = remove it, keep the branch.
