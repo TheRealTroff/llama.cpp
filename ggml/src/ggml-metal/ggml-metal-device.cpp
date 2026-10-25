@@ -2142,11 +2142,12 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext(
         }
         // GGML_FA_Q16_OR (exp/fa-prefill-200k, perf/fa-prefill-200k.md): the prefill 16-row tile with the O accumulator
         // register-resident instead of the per-chunk O scratch round trip. 1 = qt16wo (qt16w + OR: constant table, V unroll 2,
-        // the pure OR delta), 2 = qtl4w16o (the decode probe's staged-table form, V unroll 4). TR 9 class (byte-identical
-        // numerics) and prefill-sized query batches only; "=0" off
+        // the pure OR delta), 2 = qtl4w16o (the decode probe's staged-table form, V unroll 4) - TR 9 class; on TR 7 (q4 line)
+        // either value takes qtnw16o, that class's O-resident tile. Prefill-sized query batches only; "=0" off
         static const int fa_q16_or = getenv("GGML_FA_Q16_OR") != nullptr ? atoi(getenv("GGML_FA_Q16_OR")) : 0;
-        if (fa_q16_or > 0 && fa_tr == 9 && op->src[0]->ne[1] >= 32 && ggml_metal_flash_attn_ext_q16(op, gqa_heads)) {
-            form = fa_q16_or == 2 ? "qtl4w16o" : "qt16wo";
+        if (fa_q16_or > 0 && (fa_tr == 9 || fa_tr == 7) && op->src[0]->ne[1] >= 32 && ggml_metal_flash_attn_ext_q16(op, gqa_heads)) {
+            // TR 7 (the q4 line's folded-norm class): the decode probe's qtnw16o is that class's O-resident 16-row tile
+            form = fa_tr == 7 ? "qtnw16o" : fa_q16_or == 2 ? "qtl4w16o" : "qt16wo";
         }
         const int q24 = (nqptg == 24 || nqptg == 16) ? ggml_metal_flash_attn_ext_q24(op, gqa_heads) : 0;
         if (q24 > 0 && nqptg == 24) {

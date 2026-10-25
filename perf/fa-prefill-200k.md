@@ -85,3 +85,44 @@ compile-time facts stand, shares at best qualitative (two inner loops 38% + 32%,
      OR form could - 16 accumulators per simdgroup at nsg=8 plus a shorter Q^T register head; register budget question,
      prescreen first.
   3. The dequant form itself: 9% ceiling, last.
+
+### Lever 1 built: the O-resident 16-row prefill form (`GGML_FA_Q16_OR`, commit 0054746ce)
+
+`GGML_FA_Q16_OR=1` routes the prefill 16-row tile (TR 9 class, ne01 >= 32, above the Q16 gate) to a new instantiation
+`qt16wo` = qt16w + OR (constant table, V unroll 2: the pure OR delta); `=2` to the decode probe's `qtl4w16o` (staged float
+table, V unroll 4, OR). Isolated at the 98304 case (`run-fa-prefill-tile-ab.sh ARMS=or`, this branch's build):
+
+| form | per call | vs pick |
+|---|--:|--:|
+| qt16w (pick) | 262.8 / 263.2 ms | - |
+| qt16wo (OR1) | 249.4 ms | **-5.1%** |
+| qtl4w16o (OR2) | **240.0 ms** | **-8.7%** (= the f16 scratch tile's 242) |
+
+Correctness: `test-backend-ops test -o FLASH_ATTN_EXT -p type_K=turbo4` with `GGML_FA_Q16_KVMIN=0` (so the test cases take the
+route): 45/45 for OR=1 and OR=2. The gate re-timed with the 16-row route forced at every length (`KVMIN=0`):
+
+| kv | 8-row qtl4w (pick below 32K) | 16-row qt16w | 16-row OR2 |
+|---|--:|--:|--:|
+| 8448 | 22.4 ms | 22.0 | **20.4 (-9%)** |
+| 24576 | 66.2 ms | 64.4 | **59.0 (-11%)** |
+| 98304 | 278.0 ms | 263.2 | **240.0 (-9%)** |
+
+The 16-row scratch form is no longer slower than the 8-row at 8K on Turbo4 (the +7% that set the 32K gate was the f16 kernel,
+Sep 6); the OR2 form wins at every length, so with it the gate can drop (`GGML_FA_Q16_KVMIN=0`) and the 8K prefill takes the
+same -9% per FA call (0.35 s of the 60 s 8K prefill = ~0.5%; the long end is where it pays: -9% of 71% = ~-6.4% of the 200K
+ubatch). E2E gate below: the 200K restore arm with OR=2 vs a same-binary control, sha must stay `74184525cc6a`.
+
+### E2E at 200K (`fa200k-oct25-or2` / `-ctl` / `-or2b`, this branch's build, restore + 4035 appended tokens)
+
+| arm | prefill of the 4035 tokens | t/s at the 200K end | FA per call (profiled) | sha |
+|---|--:|--:|--:|---|
+| control, prod binary (morning) | 98.6 / 98.3 s | 40.9 / 41.0 | 550.6 ms | `74184525cc6a` |
+| control, this binary | 96.3 s | 41.9 | - | `74184525cc6a` |
+| **GGML_FA_Q16_OR=2** | **92.1 / 92.1 / 91.7 s** | **43.8 / 43.8 / 44.0** | **490.7 ms (-10.9%)** | **`74184525cc6a` x3** |
+
+-4.8% (vs the adjacent same-binary control) to -6.8% (vs the morning pair) of the 200K prefill ubatch, byte-identical. The per-call
+FA delta in the real graph (-10.9%) is a little better than the isolated -8.7%. Decode untouched (13.5 t/s both).
+
+**Status:** 8K pick gate on both lines (`faor-oct25-{ud,q4}-{control,or2}`, `GGML_FA_Q16_OR=2 GGML_FA_Q16_KVMIN=0` = the OR tile at
+every prefill length; TR 7 -> `qtnw16o` on q4) running; adoption = owner (manifest: BI class, both lines; a lineage check is the
+canonical sha pair per line).
