@@ -1,4 +1,4 @@
-# The decode FA at 200K - PRICED, adoption = owner (2026-10-25 afternoon, owner: "let's adopt what we have right now and we can look at the decode FA at 200k separately" -> "Go ahead!")
+# The decode FA at 200K - ADOPTED 2026-10-25 evening (form 1 merged to prod as the source default, the probe/form hook NOT merged) (2026-10-25 afternoon, owner: "let's adopt what we have right now and we can look at the decode FA at 200k separately" -> "Go ahead!")
 
 Branch `exp/fa-decode-200k`, worktree `~/play/llama.cpp-fa-dec200k` (own `build/` + `build-probe/`), off prod `0b191ee50` (the prefill
 FA levers adopted). Inventory item 1 (`longctx-inventory-sep15.md`): the width-4 decode FA at long context. Park = commit + remove the
@@ -146,7 +146,16 @@ each, 47/47 eval passes (the width 6-8 failures were the token-row count; fixed)
 which byte identity keeps), the second chunk matches form 1 at 200K and loses 5% at 8K. Forms 2-4 REFUTED; their code stays on
 the branch behind `GGML_METAL_FORM` for the record.
 
-## Where it stands (2026-10-25 evening) - built, gated, priced; adoption = owner
+## Where it stands (2026-10-25 evening) - ADOPTED: form 1 merged, the probe hook stays on the branch
+
+Owner 2026-10-25 evening: "I'll take it, but don't merge the probe." Merged to prod as the source default: the one pragma on the
+Turbo4 TR QK chunk loop (`#pragma unroll 1` -> `#pragma clang loop unroll(full)`), `kernel-census.py`'s 204800 snap and this note.
+NOT merged: the `GGML_METAL_PROBE` / `GGML_METAL_FORM` runtime macro hook (`ggml-metal-device.m` + the `.metal` macro sites) and
+forms 2/4 - they live on branch `exp/fa-decode-200k` at commits `490071dbb` / `6e53f9d07` (check out `6e53f9d07` to re-run a probe;
+the branch tip carries prod's kernel sources + the pragma). No manifest entry (no numerics change); the prod pick block is unchanged.
+Worktree `llama.cpp-fa-dec200k` removed (park), branch kept. The merge-time gates on the prod build are in the section after the
+8K sha gate below. The paragraph that follows is the pre-decision text, kept as written.
+
 
 **Merge candidate: form 1 as the source default** for the TR tiles (one pragma: `#pragma clang loop unroll(full)` on the 64-dim
 chunk loop of the Turbo4 TR QK block; the q4 line's TRN class already ran per-block and is unchanged). Byte-identical in both

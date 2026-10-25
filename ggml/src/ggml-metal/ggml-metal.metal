@@ -25,20 +25,6 @@ using namespace metal;
 
 #define FOR_UNROLL(x) _Pragma("clang loop unroll(full)") for (x)
 
-// exp/fa-decode-200k deletion probes (perf/fa-decode-200k.md): GGML_METAL_PROBE=<n> in the environment defines this macro at
-// the runtime compile; every value but 0 produces GARBAGE output and prices one deletion in the 24-row decode tile:
-// 1 = no Q^T tile loads in QK (filled tiles), 2 = no online softmax (P = raw scores), 3 = no chunk barriers,
-// 4 = no table lookup in the dequant (bytes and norms still loaded), 5 = no mask staging/add on the GQA route
-#ifndef GGML_METAL_PROBE
-#define GGML_METAL_PROBE 0
-#endif
-// GGML_METAL_FORM=<n>: the same hook for REAL (byte-identical) source forms under test on this branch; 0 = the pick's code,
-// 1 = the QK chunk loop unrolled, 2 = two chunks per iteration on the 24-row GQA tile, 3 = both, 4 = 1 + the token-row mask
-// staging of 2 without the second chunk
-#ifndef GGML_METAL_FORM
-#define GGML_METAL_FORM 0
-#endif
-
 #define N_SIMDWIDTH 32 // assuming SIMD group size is 32
 
 // ref: https://developer.apple.com/metal/Metal-Shading-Language-Specification.pdf
@@ -14041,57 +14027,10 @@ void kernel_flash_attn_ext_impl(
 
         // loop over the KV cache
         // each simdgroup handles blocks of Q rows and C columns
-        // exp/fa-decode-200k form 2 (GGML_METAL_FORM=2, perf/fa-decode-200k.md): two chunks per iteration on the 24-row GQA OR
-        // tile - chunk A = ic0, chunk B = ic0 + NWG (this threadgroup's next chunk of the split). Every Q^T tile fetched in QK
-        // feeds both chunks' MMAs (two key tiles per simdgroup), B's scores live in the second C floats of each score row (the
-        // mask's old slot: the mask is staged per TOKEN row into the table scratch instead), the softmax runs A then B with the
-        // same per-row M/S sequence as two iterations, the PV walks A's then B's key tiles: byte-identical, three barriers per
-        // 128 keys instead of six. The mask is taken as broadcast over heads (args.ne32 == 1).
-        constexpr bool  CI2  = (GGML_METAL_FORM == 2 || GGML_METAL_FORM == 3) && OR && GQAH > 1 && Q == 24 && TRM == 1 && NSG == 8 && !SMS_SS;
-        constexpr bool  TKM  = CI2 || (GGML_METAL_FORM == 4 && OR && GQAH > 1 && Q == 24 && TRM == 1 && NSG == 8 && !SMS_SS); // token-row mask staging
-        constexpr short NTOK = 8;                                        // distinct token rows a 24-row GQA tile can hold (verify widths <= 8; one simdgroup stages each)
-        const bool tkm = TKM && FC_flash_attn_ext_has_mask && args.ne01 <= NTOK;   // else the per-row staging below
-        const bool ci2 = CI2 && tkm;
-        threadgroup half2 * smk2 = (threadgroup half2 *) (sms + 2*Q);   // [2][NTOK][NW] the staged token mask rows (sms[Q..2Q) = chunk B's factors)
-        device const char * const k0    = k;
-        device const char * const v0    = v;
-        device const char * const mask0 = mask;
-        short itj[NQ];
-        bool  rvj[NQ];
-        FOR_UNROLL (short jj = 0; jj < NQ; ++jj) {
-            const short j = jj*NSG + sgitg;
-            if constexpr (GQAH > 1) {
-                const uint ir = iqr0 + j;
-                itj[jj] = (short) (ir % args.ne01);
-                rvj[jj] = ir < GQAH*args.ne01 && (iqh0 + ir / args.ne01) < args.ne02;
-            } else {
-                itj[jj] = 0;
-                rvj[jj] = true;
-            }
-        }
-
-        for (int ic0 = iwg; ; ic0 += (CI2 ? 2 : 1)*NWG) {
+        for (int ic0 = iwg; ; ic0 += NWG) {
             int ic = ic0*C;
             if (ic >= ne11_s) {
                 break;
-            }
-
-            // form 2: chunk B of this iteration, with its own pointers (the kvpad path below redirects chunk A's)
-            const bool padA  = FC_flash_attn_ext_has_kvpad && ic + C > args.ne11;
-            const bool has_b = ci2 && !padA && (ic0 + NWG)*C < ne11_s;
-            int icB = (ic0 + NWG)*C;
-            device const char * kB = k0;
-            device const char * vB = v0;
-            device const char * mB = mask0;
-            bool padB = false;
-            if (has_b && FC_flash_attn_ext_has_kvpad && icB + C > args.ne11) {
-                padB = true;
-                const short ikv2 = (GQAH == 1 ? iq2 : iqh0)/(args.ne02/args.ne_12_2);
-                const short ikv3 = iq3/(args.ne03/args.ne_12_3);
-                kB  = pad + (ikv2 + ikv3*args.ne_12_2)*args.nb11*C;
-                vB  = pad + args.nb11*C*args.ne_12_2*args.ne_12_3 + (ikv2 + ikv3*args.ne_12_2)*args.nb21*C;
-                mB  = pad + args.nb11*C*args.ne_12_2*args.ne_12_3 + args.nb21*C*args.ne_12_2*args.ne_12_3;
-                icB = 0;
             }
 
             // the last partial chunk uses the pad buffer as source
@@ -14143,9 +14082,6 @@ void kernel_flash_attn_ext_impl(
             }
 
             char blk_cur = 1;
-#if GGML_METAL_PROBE == 5
-            if constexpr (GQAH != 1) { blk_cur = 2; }
-#endif
 
             // read the mask into shared mem
             if (FC_flash_attn_ext_has_mask) {
@@ -14161,21 +14097,6 @@ void kernel_flash_attn_ext_impl(
                     continue;
                 }
 
-                if (tkm) {
-                    // one simdgroup per token row stages chunk A's (and B's) mask row; a token row past ne31 gets -MAXHALF
-                    if (sgitg < NTOK && sgitg < args.ne01) {
-                        const short it = sgitg;
-                        const bool  tv = it < args.ne31;
-                        device const half2 * pa = padA ? (device const half2 *) ((device const half *) mask + it*C + (iq3%args.ne33)*(C*args.ne31*args.ne32))
-                                                       : (device const half2 *) ((device const char *) mask0 + it*args.nb31 + (iq3%args.ne33)*args.nb33) + ic/2;
-                        smk2[(0*NTOK + it)*NW + tiisg] = tv ? pa[tiisg] : half2(-MAXHALF, -MAXHALF);
-                        if (has_b) {
-                            device const half2 * pb = padB ? (device const half2 *) ((device const half *) mB + it*C + (iq3%args.ne33)*(C*args.ne31*args.ne32))
-                                                           : (device const half2 *) ((device const char *) mB + it*args.nb31 + (iq3%args.ne33)*args.nb33) + icB/2;
-                            smk2[(1*NTOK + it)*NW + tiisg] = tv ? pb[tiisg] : half2(-MAXHALF, -MAXHALF);
-                        }
-                    }
-                } else
                 if (blk_cur == 1) {
                     FOR_UNROLL (short jj = 0; jj < NQ; ++jj) {
                         const short j = jj*NSG + sgitg;
@@ -14395,7 +14316,7 @@ void kernel_flash_attn_ext_impl(
                 // staging after. With NQT query tiles (the 16-row tile) each K tile feeds NQT MMAs. Per score
                 // tile the products accumulate in the same k order as the scratch branch below: byte-identical.
                 static_assert(DK % 64 == 0, "TR form: 64-dim chunks");
-                constexpr short NC  = CI2 ? 2 : (C/8)/NSG;             // form 2: key tile ccc = chunk ccc's tile of this simdgroup
+                constexpr short NC  = (C/8)/NSG;
                 constexpr short NQT = Q/8;
                 const short lr = ((tiisg >> 1) & 3) + 4*(tiisg >> 4);  // this lane's row (key) of an 8x8 tile
                 const short lc = 2*(tiisg & 1) + 4*((tiisg >> 3) & 1); // its first column (dim); it holds lc, lc+1
@@ -14417,11 +14338,7 @@ void kernel_flash_attn_ext_impl(
 #define TR_BYTES(row, d0, b) { if (LD == 1) { if (FC_flash_attn_ext_t4probe) turbo4p_chunk_bytes_w(row, d0, lc, b); else turbo4_chunk_bytes_w(row, d0, lc, b); } else turbo4_chunk_bytes_s(row, d0, lc, tiisg, b); }
 // exp/turbo4-plane probe: the block norm from the row's norm plane (t4p_nrm = plane offset from this head's nibble base)
 #define TR_NORM(row, d) (FC_flash_attn_ext_t4probe ? turbo4p_norm_at(row, d, t4p_nrm) : turbo4_norm_at(row, d))
-#if GGML_METAL_PROBE == 4
-#define TR_PAIR_B(byte, nrm) (half2((half) (byte)*(half) (nrm), (half) (byte)))
-#else
 #define TR_PAIR_B(byte, nrm) (TRM == 3 ? sluth[byte] : TRM == 4 ? turbo_pairs_4bit_h[byte] : TRM == 1 ? half2(slut[byte]*(nrm)) : half2(turbo_pairs_4bit[byte]*(nrm)))
-#endif
 
                 // TRN: one accumulator per 128-dim block (its own norm), scaled and summed per key tile
                 constexpr short NB = TRM >= 3 ? DK/QK_TURBO : 1;
@@ -14436,25 +14353,20 @@ void kernel_flash_attn_ext_impl(
                     FOR_UNROLL (short qt = 0; qt < NQT*NB; ++qt) {
                         mqk[ccc*NQT*NB + qt] = make_filled_simdgroup_matrix<qk_t, 8>((qk_t) 0.0f);
                     }
-                    pkr[ccc] = CI2 ? (ccc ? kB : k) + ((ccc ? icB : ic) + 8*sgitg + lr)*args.nb11 : k + (ic + 8*(ccc*NSG + sgitg) + lr)*args.nb11;
+                    pkr[ccc] = k + (ic + 8*(ccc*NSG + sgitg) + lr)*args.nb11;
                 }
 
                 // dims [0, 64): the register head holds the first qr Q^T tiles (qr <= 8 on this path)
                 uchar kb[NC][8];
                 float kn[NC];
                 if constexpr (LD > 0) {
-                    FOR_UNROLL (short ccc = 0; ccc < NC; ++ccc) { if (!CI2 || ccc == 0 || has_b) { TR_BYTES(pkr[ccc], 0, kb[ccc]); kn[ccc] = TRM <= 1 ? TR_NORM(pkr[ccc], 0) : 1.0f; } }
+                    FOR_UNROLL (short ccc = 0; ccc < NC; ++ccc) { TR_BYTES(pkr[ccc], 0, kb[ccc]); kn[ccc] = TRM <= 1 ? TR_NORM(pkr[ccc], 0) : 1.0f; }
                 }
                 FOR_UNROLL (short tt = 0; tt < 4; ++tt) {
                     q8x8_t mq[2*NQT];
                     FOR_UNROLL (short qt = 0; qt < NQT; ++qt) {
-#if GGML_METAL_PROBE == 1
-                        mq[0*NQT + qt] = make_filled_simdgroup_matrix<q_t, 8>((q_t) (1 + tt));
-                        mq[1*NQT + qt] = make_filled_simdgroup_matrix<q_t, 8>((q_t) (2 + tt));
-#else
                         if (2*tt + 0 < FC_flash_attn_ext_qr) { mq[0*NQT + qt] = mqr[(2*tt + 0)*NQT + qt]; } else { simdgroup_load(mq[0*NQT + qt], sq + (16*tt + 0)*Q + 8*qt, Q); }
                         if (2*tt + 1 < FC_flash_attn_ext_qr) { mq[1*NQT + qt] = mqr[(2*tt + 1)*NQT + qt]; } else { simdgroup_load(mq[1*NQT + qt], sq + (16*tt + 8)*Q + 8*qt, Q); }
-#endif
                     }
                     FOR_UNROLL (short ccc = 0; ccc < NC; ++ccc) {
                         k8x8_t mk[2];
@@ -14475,26 +14387,18 @@ void kernel_flash_attn_ext_impl(
                 // block accumulator index is a constant (a dynamic register-array index would spill)
                 constexpr short CPB = TRM >= 3 ? QK_TURBO/64 : DK/64; // chunks per accumulator
                 FOR_UNROLL (short bi = 0; bi < NB; ++bi) {
-#if GGML_METAL_FORM == 1 || GGML_METAL_FORM == 3 || GGML_METAL_FORM == 4
-                // exp/fa-decode-200k form 1: the 64-dim chunk loop fully unrolled (every Q^T staging address a constant); 3 = 1 + 2
+                // the 64-dim chunk loop fully unrolled (every Q^T staging address a constant): -3.9% per decode FA call at
+                // 200K, -2.8% at 8K, bitwise identical in both numerics classes, no spill change (perf/fa-decode-200k.md form 1)
                 #pragma clang loop unroll(full)
-#else
-                #pragma unroll 1
-#endif
                 for (short ch = (bi == 0 ? 1 : bi*CPB); ch < (bi + 1)*CPB; ++ch) {
                     if constexpr (LD > 0) {
-                        FOR_UNROLL (short ccc = 0; ccc < NC; ++ccc) { if (!CI2 || ccc == 0 || has_b) { TR_BYTES(pkr[ccc], 64*ch, kb[ccc]); kn[ccc] = TRM <= 1 ? TR_NORM(pkr[ccc], 64*ch) : 1.0f; } }
+                        FOR_UNROLL (short ccc = 0; ccc < NC; ++ccc) { TR_BYTES(pkr[ccc], 64*ch, kb[ccc]); kn[ccc] = TRM <= 1 ? TR_NORM(pkr[ccc], 64*ch) : 1.0f; }
                     }
                     FOR_UNROLL (short tt = 0; tt < 4; ++tt) {
                         q8x8_t mq[2*NQT];
                         FOR_UNROLL (short qt = 0; qt < NQT; ++qt) {
-#if GGML_METAL_PROBE == 1
-                            mq[0*NQT + qt] = make_filled_simdgroup_matrix<q_t, 8>((q_t) (1 + tt + ch));
-                            mq[1*NQT + qt] = make_filled_simdgroup_matrix<q_t, 8>((q_t) (2 + tt + ch));
-#else
                             simdgroup_load(mq[0*NQT + qt], sq + (64*ch + 16*tt + 0)*Q + 8*qt, Q);
                             simdgroup_load(mq[1*NQT + qt], sq + (64*ch + 16*tt + 8)*Q + 8*qt, Q);
-#endif
                         }
                         FOR_UNROLL (short ccc = 0; ccc < NC; ++ccc) {
                             k8x8_t mk[2];
@@ -14526,11 +14430,11 @@ void kernel_flash_attn_ext_impl(
                                 thread float2 & eb = (thread float2 &) mqk[ccc*NQT*NB + qt*NB + bi].thread_elements();
                                 e0 += nb_[bi]*eb;
                             }
-                            simdgroup_store(mqk[ccc*NQT*NB + qt*NB + 0], ss + qt*8*SH + (CI2 ? ccc*C + 8*sgitg : 8*(ccc*NSG + sgitg)), SH, 0, true);
+                            simdgroup_store(mqk[ccc*NQT*NB + qt*NB + 0], ss + qt*8*SH + 8*(ccc*NSG + sgitg), SH, 0, true);
                         }
                     } else {
                         FOR_UNROLL (short qt = 0; qt < NQT; ++qt) {
-                            simdgroup_store(mqk[ccc*NQT + qt], ss + qt*8*SH + (CI2 ? ccc*C + 8*sgitg : 8*(ccc*NSG + sgitg)), SH, 0, true); // S^T tile, transposed store
+                            simdgroup_store(mqk[ccc*NQT + qt], ss + qt*8*SH + 8*(ccc*NSG + sgitg), SH, 0, true); // S^T tile, transposed store
                         }
                     }
                 }
@@ -14597,13 +14501,9 @@ void kernel_flash_attn_ext_impl(
                 }
             }
 
-#if GGML_METAL_PROBE != 3
             threadgroup_barrier(mem_flags::mem_threadgroup);
-#endif
 
             // online softmax
-#if GGML_METAL_PROBE != 2
-            for (short b = 0; b < (has_b ? 2 : 1); ++b) {   // form 2: chunk A then chunk B, each exactly one iteration's math
             FOR_UNROLL (short jj = 0; jj < NQ; ++jj) {
                 const short j = jj*NSG + sgitg;
 
@@ -14611,7 +14511,7 @@ void kernel_flash_attn_ext_impl(
 
                 // scale and apply the logitcap / mask. the math stays float (running max/sum
                 // are scalar); s2_t is only the threadgroup storage type
-                float2 s2 = float2(ss2[j*SH/2 + (CI2 ? b*(C/2) : 0) + tiisg])*args.scale;
+                float2 s2 = float2(ss2[j*SH/2 + tiisg])*args.scale;
 
                 if (FC_flash_attn_ext_has_scap) {
                     s2 = args.logit_softcap*precise::tanh(s2);
@@ -14619,11 +14519,10 @@ void kernel_flash_attn_ext_impl(
 
                 // mqk = mqk + slope*mask
                 if (blk_cur != 2) {
-                    const half2 mk2 = tkm ? (rvj[jj] ? smk2[(b*NTOK + itj[jj])*NW + tiisg] : half2(-MAXHALF, -MAXHALF)) : sm2[j*SH + tiisg];
                     if (FC_flash_attn_ext_has_bias) {
-                        s2 += float2(mk2)*slope;
+                        s2 += float2(sm2[j*SH + tiisg])*slope;
                     } else {
-                        s2 += float2(mk2);
+                        s2 += float2(sm2[j*SH + tiisg]);
                     }
                 }
 
@@ -14635,12 +14534,12 @@ void kernel_flash_attn_ext_impl(
                 S[jj] = S[jj]*ms + simd_sum(vs2[0] + vs2[1]);
 
                 // the P matrix from the paper (Q rows, C columns)
-                ss2[j*SH/2 + (CI2 ? b*(C/2) : 0) + tiisg] = s2_t(vs2);
+                ss2[j*SH/2 + tiisg] = s2_t(vs2);
 
                 if constexpr (OR) {
                     // the resident tiles are rescaled by row in the PV block, after the barrier
                     if (tiisg == 0) {
-                        sms[(CI2 ? b*Q : 0) + j*SMS_STRIDE] = ms;
+                        sms[j*SMS_STRIDE] = ms;
                     }
                 } else if (DV4 % NW == 0) {
                     FOR_UNROLL (short ii = 0; ii < DV4/NW; ++ii) {
@@ -14654,13 +14553,8 @@ void kernel_flash_attn_ext_impl(
                     }
                 }
             }
-            }
 
-#endif // GGML_METAL_PROBE != 2
-
-#if GGML_METAL_PROBE != 3
             threadgroup_barrier(mem_flags::mem_threadgroup);
-#endif
 
             // O = O + (Q*K^T)*V
             {
@@ -14829,12 +14723,11 @@ void kernel_flash_attn_ext_impl(
                     threadgroup const half2  * sluth = (threadgroup const half2  *) (shmem_f16 + Q*T + Q*TS);
                     static_assert(TRM < 3 || (8*NO) % QK_TURBO == 0 || QK_TURBO % (8*NO) == 0, "TRN form: a simdgroup's dims lie in one block");
 
-                    for (short b = 0; b < (has_b ? 2 : 1); ++b) {   // form 2: chunk A's key tiles, then chunk B's
                     if constexpr (OR) {
                         // this chunk's online-softmax rescale, applied to the resident tiles by row (lane row map:
                         // perf/probe-thread-elements.*); the same float multiply the scratch form does per row
                         FOR_UNROLL (short qt = 0; qt < NQT; ++qt) {
-                            const float msr = sms[(CI2 ? b*Q : 0) + (qt*8 + lr)*SMS_STRIDE];
+                            const float msr = sms[(qt*8 + lr)*SMS_STRIDE];
                             FOR_UNROLL (short ii = 0; ii < NO; ++ii) {
                                 thread float2 & e = (thread float2 &) lor[qt*NO + ii].thread_elements();
                                 e *= msr;
@@ -14852,10 +14745,10 @@ void kernel_flash_attn_ext_impl(
                     for (short cc = 0; cc < C/8; ++cc) {
                         s8x8_t vs[NQT];
                         FOR_UNROLL (short qt = 0; qt < NQT; ++qt) {
-                            simdgroup_load(vs[qt], ss + (CI2 ? b*C : 0) + qt*8*SH + 8*cc, SH, 0, false);
+                            simdgroup_load(vs[qt], ss + qt*8*SH + 8*cc, SH, 0, false);
                         }
 
-                        device const char * pvr = (CI2 && b ? vB : v) + ((CI2 && b ? icB : ic) + 8*cc + lr)*args.nb21;
+                        device const char * pvr = v + (ic + 8*cc + lr)*args.nb21;
 
                         if constexpr (TRM >= 3) {
                             // this lane's two P elements are keys lc, lc+1 of the tile: scale by those rows' norms
@@ -14892,8 +14785,6 @@ void kernel_flash_attn_ext_impl(
                                 simdgroup_multiply_accumulate(LO(qt*NO + ii), vs[qt], mv, LO(qt*NO + ii));
                             }
                         }
-                    }
-
                     }
 
                     if constexpr (!OR) {
@@ -14972,9 +14863,7 @@ void kernel_flash_attn_ext_impl(
                 }
             }
 
-#if GGML_METAL_PROBE != 3
             threadgroup_barrier(mem_flags::mem_threadgroup);
-#endif
         }
 
         // the sink contributes once per row, not once per workgroup
