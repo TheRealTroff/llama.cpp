@@ -1734,6 +1734,15 @@ Refuted - do not reopen without new information:
   gate pass "moved" a ud sha: a controller fork (the control arm forked on its own next) - `turbo4-n3-*` arms are controller arms,
   their gate is the replay gate, not the canonical pair. PROPOSED both lines: `GGML_FA_Q16_OR=2 GGML_FA_Q16_KVMIN=0 GGML_FA_Q32=1
   GGML_FA_Q32_KVMIN=0` - ADOPTED the same afternoon (owner: 'let's adopt what we have right now'). Also from that day: the 96K census pass undercounted (UNDERCOUNT flag in `kernel-census.py`).
+- **`fa-decode-200k.md` (branch `exp/fa-decode-200k`, merged `b3e9df499`) - ADOPTED 2026-10-25 evening (one pragma, no manifest entry;
+  owner: "I'll take it, but don't merge the probe"), the width-4 decode FA at 200K measured from the ud slot save:** the 24-row O-resident
+  tile is 65 of the 184 ms serialized width-4 round at 200K (3920 us per call, 5.2 TFLOPS = 74% of the mul_mm roof, within 8% of the best
+  prefill tile); the free knobs give nothing byte-identical; deletion probes (`GGML_METAL_PROBE` runtime macro hook, branch commit
+  `6e53f9d07` only) price Q^T loads 7%, barriers 6%, softmax 3.5%, mask 2.4%, table 0.9%. The lever: the QK 64-dim chunk loop
+  `#pragma clang loop unroll(full)` = -3.9% per call at 200K, -3.6% at 96K, -2.8% at 8K, bitwise 47/47 both classes, 200K decode
+  19.18 -> 19.47 t/s (+1.5%, same sha), the 32-row prefill tile shares the loop (-0.9% of the 200K ubatch); 8K Turbo4 shas = records
+  both lines. Two-chunk-per-iteration and token-row-mask forms REFUTED (spill 48 -> 144 B; at 96 registers the tile pays for every live
+  value). Item 1 of the long-context inventory closes at ~-4% per call unless the tile shape changes.
 - `mv-nc-cliff-probe.md` - the NC>=3 cliff is a fixed ~112 us penalty; fixing it yields
   parity, not a win.
 - `omlx-target-recheck.md` - why the old "17 -> 35" framing was wrong.

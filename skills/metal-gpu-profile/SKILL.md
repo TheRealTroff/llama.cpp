@@ -166,7 +166,7 @@ kernel win):
 
 - **Price the fixed costs with deletion probes BEFORE building a form (2026-10-25, `perf/fa-decode-200k.md`).** On the fork a
   runtime hook (`GGML_METAL_PROBE=<n>` / `GGML_METAL_FORM=<n>` -> preprocessor macros at the library compile, branch
-  `exp/fa-decode-200k`) lets ONE binary run every `#if`-guarded deletion (garbage output) and every candidate source form; each
+  `exp/fa-decode-200k` at commit `6e53f9d07` - NOT in prod, the owner merged the pragma without the hook) lets ONE binary run every `#if`-guarded deletion (garbage output) and every candidate source form; each
   probe's time is an upper bound on what removing that thing can buy. The 24-row decode FA tile read: Q^T loads 7%, barriers 6%,
   softmax 3.5%, mask round trip 2.4%, table lookup 0.9% - and the two forms that attacked them returned less than the register
   state they added (spill 48 -> 144 B), while a one-pragma loop unroll took 3.9%. Probes are not additive and price the

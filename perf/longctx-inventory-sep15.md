@@ -86,7 +86,11 @@ serialization artifact (`small-ne01-routing.md`: hidden under neighbors unprofil
    call at 96K, -6.8% per round at 96K, -0.8% at 8K, a lineage move, proposed; the owner's call.
 1'. The 24-row tile after the split: -5..-6% of the 96K round (re-sized from the nwg-20 profile, item 1 below).
 
-1. **Turbo4 decode FA kernel at long context** - 31% of the round at 96K (15% at 25K, ~3% at 8K), 45% of the
+1. **Turbo4 decode FA kernel at long context** - ADOPTED 2026-10-25 evening as far as it goes (`fa-decode-200k.md`, merge
+   `b3e9df499`, no manifest entry: the Turbo4 TR QK chunk loop fully unrolled, -3.9% per decode FA call at 200K / -2.8% at 8K,
+   200K decode +1.5% on the same sha, bitwise identical both classes; the 24-row tile sits at 74% of the mm roof = 35% of the
+   200K width-4 round, the deletion probes put every remaining fixed cost at 1-7% and the two structural forms that attacked
+   them lost to register pressure - the item closes at ~-4% per call unless the tile shape changes). Original sizing: 31% of the round at 96K (15% at 25K, ~3% at 8K), 45% of the
    roof, 7.4x byte floor, issue-bound. Where the per-tile work goes (dequant vs MMA vs softmax vs the
    split-K reduce) is exactly what the running census's per-instruction decode answers. Kernel-only,
    byte-identical by construction if the k order is kept. Realistic: half the ceiling = -8% round at 96K.

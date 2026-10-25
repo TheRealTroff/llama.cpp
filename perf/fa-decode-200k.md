@@ -206,3 +206,20 @@ cover the 512-row cases) and a small bonus, not measured in isolation.
 Every sha = its Oct 25 mint record (the t/s are 1.5-3% under the mint's: a hot afternoon GPU after the sweeps; FA is 3% of the 8K
 round and this lever is 0.1% of it). With the bitwise dumps this is the whole byte-identity case; the replay gate adds nothing a
 dump does not here (the kernel's output bytes are the same).
+
+### Merge-time gates on the prod build (`b3e9df499`, 2026-10-25 evening, owner: "I'll take it, but don't merge the probe")
+
+| gate | result |
+|---|---|
+| bitwise, prod `test-backend-ops` seeded Turbo4 FA dumps vs the pre-merge form-0 reference (`fadec-merge-gate.sh`) | ud 47/47 identical, q4 47/47 identical |
+| isolated timing, prod build, kv 204800 / 98304 / 8448 nb 4 | 3779 / 3782 us, 1829-1852 us, 184.1-184.8 us = form 1's numbers (form 0 was 3923 / 1897-1931 / 189.0-189.6) |
+| 8K Turbo4 controller arms ud (`fadec-merge-oct25-ud`) | 300: 31.88 t/s acc 72.4% `d180ae89f168` = record; 600: 29.67 t/s acc 65.5% `abc0c5af7300` = record |
+| 8K Turbo4 controller arms q4 (`fadec-merge-oct25-q4`) | 300: 33.90 t/s acc 66.9% `86213d038a29`; 600: 34.30 t/s acc 63.7% `9e49b3d13b31` - NOT the records (`f07b0f8c58e6` / `801cb0758d4e`) |
+| replay gate q4 (`fadec-merge-rg-oct25`: picks recorded on the old-kernel build = the branch's 16:57 binary with the hook unset, replayed x3 on prod, 960 tokens) | `91090ee9be13` x4 (record + 3 replays), 327 picks, 0 desync, 0 past trace - **PASS** |
+
+The q4 move is the controller fork this note's prefill sibling already met this afternoon: the two q4 runs' width histograms differ
+(300: `3:81 7:9` -> `3:80 7:10`; 600: `3:152 7:28` -> `3:141 7:34` plus one width-2 pick) with a different cost EMA in the first
+slot (89.1 vs 84.9 ms), i.e. the controller verified a different width on a marginal round - under the same picks the merged kernel
+reproduces the old kernel's bytes to the sha (and the q4 class's kernel, `qtnw24`, was bitwise identical on 47/47 dumps before
+the arms ran). `turbo4-n3-*` arms are controller arms; the replay gate is their gate. ud's canonical pair held outright. No mint
+run (owner's call: no numerics change, the pick block is unchanged; the t/s reference stays `prodpick-oct25-fa200k`).
