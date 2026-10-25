@@ -223,3 +223,15 @@ slot (89.1 vs 84.9 ms), i.e. the controller verified a different width on a marg
 reproduces the old kernel's bytes to the sha (and the q4 class's kernel, `qtnw24`, was bitwise identical on 47/47 dumps before
 the arms ran). `turbo4-n3-*` arms are controller arms; the replay gate is their gate. ud's canonical pair held outright. No mint
 run (owner's call: no numerics change, the pick block is unchanged; the t/s reference stays `prodpick-oct25-fa200k`).
+
+### Partial record after the merge (owner: "I don't need a full mint rn ... t4 600 for both lines"; `prodpick-oct25-fadec-t4600-{q4,ud}`, prod `53ea6f8ab`, 19:00)
+
+| line | turbo4-n3-600 | turbo4-n3-600-r2 | sha | the afternoon mint (`prodpick-oct25-fa200k`) |
+|---|--:|--:|---|--:|
+| q4 | 34.04 t/s acc 64.1% | 34.12 | `801cb0758d4e` = record | 34.50 / 34.57 |
+| ud | 29.55 t/s acc 65.5% | 29.64 | `abc0c5af7300` = record | 30.05 / 30.07 |
+
+Every sha = its record (the q4 controller fork of the 18:45 gate did not recur). The t/s are 1.3-1.7% under the afternoon's mint on
+both lines - the same offset the 16:45 gate on the unmerged tree showed against that mint; FA is ~3% of the 8K round and this lever
+~0.1% of it, so this is the warm box after a day of sweeps, not the kernel (`mint-controller-arm-is-statistical`: hot ambient = a
+sha mint). The t/s reference stays `prodpick-oct25-fa200k`; the full mint for this state is not run.
