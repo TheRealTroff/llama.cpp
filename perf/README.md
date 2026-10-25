@@ -1757,6 +1757,11 @@ Refuted - do not reopen without new information:
   ud 8.5 -> [0.03, 0.95] (~0), q4 k/v 2.5 -> [0.03, 1.45] (1.07), ud k/v 3.3 -> [0, 2.0] (~0: loose where small ops share a big
   neighbour's group - lo 0 = skip-arm candidate). The only decode group with real overlap is the GDN input block (S/W 1.6-1.7);
   prefill has none. `run-census-full.sh` runs both modes; open: the two columns inside `kernel-census.py`'s own table.
+- `kv-splitk.md` (branch `exp/kv-splitk` only, NOT merged; parked 2026-10-25 night, owner: "the knowledge was the prize") - the split-K
+  q4_0 skinny tile for the q4 k/v + 48-row rows, the first kernel priced against the concurrency-group wall: per call -40..-64%,
+  serialized round -6 ms, group walls -0.4..-0.7 ms/round (0.4-0.6%), nearly all from the 48-row projections; the k/v rows'
+  exposure is contention with attn_q, not a chain tail; a numerics lineage. Route trap: rows under 16M take the `_di` side copy in
+  the graph (the isolated perf case does not).
 - `mv-nc-cliff-probe.md` - the NC>=3 cliff is a fixed ~112 us penalty; fixing it yields
   parity, not a win.
 - `omlx-target-recheck.md` - why the old "17 -> 35" framing was wrong.
