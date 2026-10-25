@@ -1,4 +1,4 @@
-# From profile to wall: the concurrency-group profile (GGML_METAL_PROFILE=2) and per-op exposed-time bounds - 2026-10-25
+# From profile to wall: the concurrency-group profile (GGML_METAL_PROFILE=2) and per-op exposed-time bounds - BUILT + CALIBRATED 2026-10-25 evening, merge = owner
 
 Owner (after the decode FA at 200K landed): "What is really going on with the 'shadowing'? Can we do better in our predictions
 going from profiling to real perf?" -> "Let's see what it gives us." Branch `exp/census-groups`, worktree `llama.cpp-censusgroups`,
@@ -48,4 +48,64 @@ Pinned width 8 (depth 7), Turbo4, chat benchprompt, 300 tokens, both lines, `cgr
 per line). Expected from `gdn-proj-shadow.md`: 5120x48 GDN projections 0.5-1.3 ms exposed of 6.8 ms charged on q4, ~0 of 8.1 on
 ud; 5120x1024 k/v 1.07 ms of 2.4 on q4, ~0 on ud.
 
-(results below)
+### Runs (`cgroups-oct25-{q4,ud}-d7-{anchor,metalprof,metalgroups}`, 20:50-21:10)
+
+| line | anchor round (dec_syn_tg + draft) | mode 1 round | mode 2 round | sha (all three) |
+|---|--:|--:|--:|---|
+| q4 | 121.6 (106.9 + 14.7) | 143.7 (1.18x) | 129.1 | `86213d038a29` |
+| ud | 155.3 (138.1 + 17.2) | 179.1 (1.15x) | 157.5 | `ce826d8a3cbd` |
+
+Mode 2 runs the real schedule: the sha is the anchor's and its round is 1.5-6% over the anchor (1068 / 1116 timed groups per
+decode round, ~2-7 us of encoder start/end each - the same per-encoder cost every mode-1 op time carries). Mode 1 inflates the
+round 15-18%.
+
+### The join (decode phase, ms per round)
+
+| | q4 | ud |
+|---|--:|--:|
+| serialized sum of parts (mode 1 over the groups) | 139.5 | 178.4 |
+| sum of group walls (mode 2) | 125.9 | 160.9 |
+| hiding factor as printed / after the encoder overhead | 1.11x / ~1.18x | 1.11x / ~1.15x |
+
+After the split overhead (mode 2 round minus anchor) comes off the group walls, the hiding factor equals the anchor-vs-mode-1
+ratio on both lines - the group walls add up to the GPU round.
+
+**Where the hiding is.** Almost nowhere in the big rows: the ffn pairs (gate+up in one group, `S/W` 1.09-1.10), every single-op
+group (`down`, `o_proj`, the heads, the FA calls, the GDN kernel: `S/W` 1.00). The one group with real overlap is the GDN input
+block: `in_proj` 5120x10240 + the two 5120x48 projections (+ their q8 twins on ud), `S/W` 1.61 (q4) / 1.69 (ud) - the shadow
+row. **Prefill: no hiding at all** - every large group is one stream-bound 512-wide matmul (`S/W` 1.00 across the board on both
+lines); for prefill the per-op profile already is the wall, which is why the prefill levers of this month translated 1:1.
+
+### Calibration against the deletion probes
+
+| row (width 8) | charged (serialized ms/rd) | bound [lo, hi] | deletion probe (`gdn-proj-shadow.md`) |
+|---|--:|--:|--:|
+| q4 `5120x48` GDN projections (q4_0, 8 groups) | 7.04 | **[0.07, 1.91]** | 0.5-1.3 ms |
+| ud `5120x48` GDN projections (q8_0, 10 groups) | 8.45 | **[0.03, 0.95]** | ~0 (-0.2 / +0.4) |
+| q4 `5120x1024` attn_k/v (q4_0, 6 groups) | 2.48 | **[0.03, 1.45]** | 1.07 ms |
+| ud `5120x1024` attn_k/v (q5_K+q6_K+q8_0, 3 rows) | 3.31 | [0, 2.03] | ~0 (+0.2) |
+
+Every measurement falls inside its bound, and the bound orders the rows the way the probes did (q4 projections above ud,
+q4 k/v the most exposed). What it would have said before anyone built: the Aug 22 and Oct 24 #1 census row is worth at most
+1.9 ms (q4) / 1.0 ms (ud) of its 7-8 ms charge - not a 5% lever. The bound is loose where several small ops share a group
+whose wall is set by a big neighbour (ud k/v: hi 2.0 ms against a measured 0): `lo = 0` means "possibly fully hidden"; such a
+row is a skip-arm candidate, never a lever, until the arm says otherwise. The exact instrument for a surviving row stays the
+deletion probe.
+
+### What it gives us
+
+- A **measured** per-group wall next to the serialized per-op time, from one extra profiled run of the same configuration
+  (~2 min per line), with the real schedule (sha = anchor) and the GPU round reproduced to the encoder overhead.
+- Two columns the census was missing: `exposed_lo` / `exposed_hi` per row. Reading rule: rank levers by `exposed_hi`, not by the
+  serialized charge; a row with `hi/ser` under ~0.3 is a shadow row; prefill rows need no correction.
+- The group table itself names the neighbour that hides a row (the heaviest member of its group), which is the thing a
+  replacement kernel or a fusion would have to beat.
+- Not captured: cross-group interaction through the cache/DRAM, CPU-exposed gaps between command buffers (the submit profiler's
+  job), and the drafter/target split (both are in the decode phase here, keyed `m1`/`m2`).
+
+### Next (owner)
+
+1. Merge `GGML_METAL_PROFILE=2` + `census-groups.py` to prod (inert unless set; the mode-1 path is untouched) and add the two
+   columns to `kernel-census.py` (the census already parses the mode-1 log; it would take the mode-2 log of the same run as a second
+   input, `run-census-full.sh` STEPS="anchor metalprof metalgroups").
+2. Keep the skip arm for rows whose `hi` is still worth building for.

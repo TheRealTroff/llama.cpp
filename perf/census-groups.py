@@ -70,9 +70,12 @@ def parse_mode2(path):
             continue
         m = GMEMBER.search(ln)
         if m:
-            k = norm(m.group(2))
-            if k:
-                members[m.group(1)].append(k)
+            # the dump is printed once per freed context: take a group's members from its first printing only
+            gid = m.group(1)
+            if gid in groups and len(members[gid]) < groups[gid]['n']:
+                k = norm(m.group(2))
+                if k:
+                    members[gid].append(k)
             continue
         m = SPECPROF.search(ln)
         if m:
@@ -143,16 +146,16 @@ def main():
         tot_S += S*n_rd/1e3; tot_W += W*n_rd/1e3
         srt = sorted(ts, reverse=True)
         for k, t in zip(ks, ts):
-            m_other = srt[1] if (srt and t == srt[0]) else srt[0]
-            if len(ts) == 1:
-                m_other = 0.0
+            m_other = 0.0 if len(srt) == 1 else (srt[1] if t == srt[0] else srt[0])
             hi = min(t, max(0.0, W - m_other))
             lo = max(0.0, W - (S - t)); lo = min(lo, hi)
             op_ser[k] += t*n_rd/1e3; op_lo[k] += lo*n_rd/1e3; op_hi[k] += hi*n_rd/1e3; op_groups[k] += 1
         top = ks[ts.index(max(ts))]
         group_rows.append((W*n_rd/1e3, S*n_rd/1e3, W, S, len(ks), n_rd, top, gid))
 
-    print(f'\n{a.phase}: serialized sum of parts {tot_S:.2f} ms/round (mode 1, over the mode-2 groups) vs sum of group walls {tot_W:.2f} ms/round (mode 2) = {tot_S/tot_W if tot_W else 0:.2f}x hiding')
+    n_groups_rd = sum(r[5] for r in group_rows)
+    print(f'\n{a.phase}: serialized sum of parts {tot_S:.2f} ms/round (mode 1, over the mode-2 groups) vs sum of group walls {tot_W:.2f} ms/round (mode 2) = {tot_S/tot_W if tot_W else 0:.2f}x hiding; '
+          f'{n_groups_rd:.0f} timed groups per round (each W carries one encoder start/end, as each mode-1 op does)')
     if missing:
         print(f'  {sum(missing.values())} member references with no mode-1 row (counted as 0 us): ' + '; '.join(k for k, _ in missing.most_common(3)))
 
