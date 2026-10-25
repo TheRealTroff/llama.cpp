@@ -60,6 +60,12 @@ Read the census row in this order (2026-09-09, `perf/agx-backend-access.md`):
    with its K walk truncated to one slice (garbage output, same threadgroups and slots) = the cap for a faster kernel of the same
    footprint, and (a)-(b) = the contention share; (c) fewer threadgroups/threads = the cap for a smaller footprint. Read each
    against its own group's wall over >= 3 controls (the untouched groups drift 0.5-2 ms/round with the machine's state).
+   **Byte floor per group (2026-10-25 night, same note):** `census-groups.py` also prints each group's analytic floor F = its
+   members' bytes / 252 GB/s, `F/W` and the aggregate GB/s, and per op `own` (bytes / t_i alone) vs `grp` GB/s. At the census
+   width (8) NO decode matmul group is at the floor (q4 0.51-0.79, ud 0.28-0.74; the width-2 ffn row 0.79): the groups sit on
+   the instruction side, so a lever that only adds parallelism to one member (split-K) pays nothing in a group with S/W ~ 1,
+   and a byte reduction prices at the group's measured GB/s, not at 252. `own` << `grp` is a latency chain; it pays only when
+   the group has slack (S/W >> 1, the 48-row projections), not when it is saturated (S/W ~ 1, the k/v rows).
 1. **`x floor@252`** first. It is time over bytes at the measured practical peak (252 GB/s, a 37 MB
    CPY; 273 is the LPDDR5X nominal). Under 1.1 the row is flagged FLOOR (the width-1 mul_mv kernels sit at 1.03-1.07; 1.1-1.3 is NEAR: stream-side levers only): the kernel streams at
    the DRAM limit and NO per-instruction reading applies, whatever issue/stall says (the

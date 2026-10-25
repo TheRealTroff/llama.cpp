@@ -250,9 +250,10 @@ def report(args):
     if args.snapshot:
         json.dump(snap, open(args.snapshot, 'w'), indent=1)
 
-ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-sp = ap.add_subparsers(dest='cmd', required=True)
-p = sp.add_parser('plan'); p.add_argument('log'); p.add_argument('--top', type=int, default=16); p.add_argument('--min-ms', type=float, default=0.0); p.add_argument('--phase', choices=['decode', 'prefill'], default=None); p.set_defaults(f=plan)
-p = sp.add_parser('metrics'); p.add_argument('dir'); p.add_argument('row'); p.set_defaults(f=metrics)
-p = sp.add_parser('report'); p.add_argument('dir'); p.add_argument('--diff'); p.add_argument('--md'); p.add_argument('--snapshot'); p.set_defaults(f=report)
-a = ap.parse_args(); a.f(a)
+if __name__ == '__main__':  # guarded so census-groups.py can import work() / PRACTICAL_GBS
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sp = ap.add_subparsers(dest='cmd', required=True)
+    p = sp.add_parser('plan'); p.add_argument('log'); p.add_argument('--top', type=int, default=16); p.add_argument('--min-ms', type=float, default=0.0); p.add_argument('--phase', choices=['decode', 'prefill'], default=None); p.set_defaults(f=plan)
+    p = sp.add_parser('metrics'); p.add_argument('dir'); p.add_argument('row'); p.set_defaults(f=metrics)
+    p = sp.add_parser('report'); p.add_argument('dir'); p.add_argument('--diff'); p.add_argument('--md'); p.add_argument('--snapshot'); p.set_defaults(f=report)
+    a = ap.parse_args(); a.f(a)

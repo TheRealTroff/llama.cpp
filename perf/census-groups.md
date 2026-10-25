@@ -138,3 +138,71 @@ skinny route that sets the kernel's ne00 to one K-slice) is the next tooling ite
 | q4 | 32.92 t/s acc 63.5% `d2953fccfb41` = record | 34.94 t/s acc 67.8% `f07b0f8c58e6` = record |
 
 The unprofiled encode path is unchanged by construction (`prof_group` false takes the old branches); the shas say the same.
+
+### The byte floor per group (2026-10-25 night, owner: "the other resources are just as shared within each group. Even so, let's start with bytes")
+
+The owner's three points: (a) designs should be planned against ops running concurrently, (b) the memory traffic is exactly
+predictable, (c) it feels wrong that a faster kernel does not at least leave room for the others. (b) gives the first analytic
+column: every member's bytes per call follow from its shape (weights at the stored format's bpw, `kernel-census.work`; the FA rows
+= the K and V cache slices at the run's KV bpw x 4 KV heads + q/o), so a group has a floor F = bytes / 252 GB/s that no kernel of
+the same bytes can beat. `census-groups.py` now prints per group `floor us`, `F/W` (byte utilization) and the aggregate `GB/s`, per
+op its `MB/rd`, `floor`, `own` GB/s (bytes / t_i alone) and `grp` GB/s (its group's aggregate). `kernel-census.py`'s command dispatch
+went under a main guard so the group script imports its byte model (`python3 perf/kernel-census.py plan|metrics|report` unchanged).
+Formats named `*_soa` read the stored format's bytes. Both lines are Turbo4 KV (4.125 bits/elem; `--kv f16|q8_0` for other runs).
+
+Same logs as the join above (pinned width 8, depth 7, `cgroups-oct25-*`):
+
+| line | GB moved / round | byte floor ms/rd | sum of group walls | F/W | aggregate GB/s |
+|---|---|---|---|---|---|
+| q4 | 18.75 | 74.4 | 125.9 | 0.59 | 149 |
+| ud | 20.85 | 82.7 | 160.9 | 0.51 | 130 |
+
+Per group (W = wall, F/W = byte utilization, GB/s = aggregate through the group):
+
+| group (width 8) | q4 F/W | q4 GB/s | S/W | ud F/W | ud GB/s |
+|---|---|---|---|---|---|
+| ffn gate+up (2 ops) | 0.71 | 180 | 1.09 | 0.51-0.62 (iq4_xs / q5_K) | 129-157 |
+| ffn_down | 0.55 | 140 | 1.00 | 0.42-0.48 (iq4_xs / q5_K), iq3_s 0.28 | 71-122 |
+| attn q+k+v (3 ops) | 0.57 | 145 | 1.02 | 0.47 (q4_K) | 119 |
+| attn_out | 0.51 | 128 | 1.00 | 0.45 (q5_K) | 114 |
+| GDN in_proj + 2x48 (3 ops) | 0.59 | 147 | 1.61 | 0.50 (q4_K) | 127 |
+| lm_head | 0.74 | 187 | 1.00 | 0.74 (q6_K) | 186 |
+| ffn gate+up at WIDTH 2 | 0.79 | 200 | 1.03 | - | - |
+| GATED_DELTA_NET | 0.27 | 68 | 1.01 | 0.28 | 69 |
+| FLASH_ATTN_EXT (8.5K cache) | 0.10 | 25 | 1.00 | 0.10 | 26 |
+| ADD 5120x8 | 0.17 | 43 | 1.04 | - | - |
+
+**What the column says.**
+
+1. **No width-8 decode matmul group is at the byte floor.** Utilization is 0.51-0.79 on q4 and 0.28-0.74 on ud; the rest of the
+   wall is not DRAM. The same ffn weights run at 200 GB/s at width 2 and 180 at width 8 (q4), and the width-1 mul_mv sits at
+   1.1-1.2x the floor (`agx-backend-access.md`): the per-byte cost grows with width, which a DRAM limit cannot do. This is the
+   width-4 memory/issue crossover (`ud-w4-ceiling`) seen from the other side: at the census width the groups are on the
+   instruction side. FA (0.10) and GDN (0.27) are compute-class as known; the elementwise rows are launch-bound (ADD at 11 us).
+2. **The attention group is saturated on something that is not bytes.** Three independent ops (q, k, v) with S/W 1.02 - they do
+   not overlap at all - while 43% of the byte budget is unused. That is the measurement behind (c): split-K k/v was not a
+   kernel that consumed less of the shared resource, it was the same instruction stream spread over more threadgroups (plus the
+   partial sums), so it had nothing to give back. A kernel leaves room only by consuming less of whatever the group is saturated
+   on; at width 8 that is not DRAM, and the candidate is the instruction stream (the census has instructions per MB for every
+   traced kernel - the next column, see below).
+3. **`own` vs `grp` GB/s is the chain signature, S/W says whether it matters.** The 48-row projections run alone at 4-5 GB/s
+   inside a group that moves 67-99 GB/s, and that group has S/W 1.6-1.7 (slack): a latency chain the wall can see, and it paid
+   when shortened (-14..-17 us/layer). The k/v rows run alone at 41 GB/s inside a group at 114-171 GB/s, but that group has S/W
+   1.02 (no slack): dragged at the group's rate, they gave back 3-7 us. Same per-op signature, opposite outcome, separated by the
+   group's S/W.
+
+**The prediction rule this gives (bytes version).** For a lever on an op in group G with wall W, bytes B, serialized S:
+- F/W >= ~0.9: G is at the floor; only fewer bytes pay, priced at 252 GB/s (bytes removed / 252).
+- F/W < 0.9 and S/W ~ 1: G is saturated on a non-byte resource. More parallelism for one member pays nothing (split-K). Fewer
+  bytes still pay, but at the GROUP's measured rate (bytes removed x W/B), because for a mul_mv the instructions go with the
+  bytes; a kernel that cuts instructions per byte is the lever, and its cap is the short-chain probe (b) of the ladder above.
+- S/W >> 1: G has slack; a member with `own` << `grp` is a chain; shortening it pays up to its `exposed_hi`.
+
+**Caveats.** Pinned width 8 is the census width; the picks run widths 3-7, where utilization is higher (the width-2 row). The FA
+bytes take K and V both at 4.125 bits and 4 KV heads (right for both lines; the drafter's FA, 0.3 ms/round, uses the same
+assumption). 252 GB/s is the CPY stream figure; ~230 is what a mul_mv has reached, so an F/W of 0.9 is "at the floor".
+
+**Next column (not built): instructions.** The owner's premise is that the other resources are shared the same way. The
+census's per-kernel instruction counts give each group an instruction total; against an aggregate issue rate that is a second
+floor, I/W, and a group below both floors is the one whose wall is set by occupancy, dispatch order or a latency chain - exactly
+where the short-chain probe (b) is worth running first. Bytes were the first column because they need no trace.
