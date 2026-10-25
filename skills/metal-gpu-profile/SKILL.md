@@ -164,6 +164,15 @@ Reading recipes that carried the width-4 parity investigation (`perf/m4-width4-r
 the fullest worked example - a cross-framework per-instruction diff that found a 21%
 kernel win):
 
+- **Price the fixed costs with deletion probes BEFORE building a form (2026-10-25, `perf/fa-decode-200k.md`).** On the fork a
+  runtime hook (`GGML_METAL_PROBE=<n>` / `GGML_METAL_FORM=<n>` -> preprocessor macros at the library compile, branch
+  `exp/fa-decode-200k`) lets ONE binary run every `#if`-guarded deletion (garbage output) and every candidate source form; each
+  probe's time is an upper bound on what removing that thing can buy. The 24-row decode FA tile read: Q^T loads 7%, barriers 6%,
+  softmax 3.5%, mask round trip 2.4%, table lookup 0.9% - and the two forms that attacked them returned less than the register
+  state they added (spill 48 -> 144 B), while a one-pragma loop unroll took 3.9%. Probes are not additive and price the
+  deletion, not the replacement; a form's prescreen spill delta is the first thing to read against its probe. Put the macro
+  `#ifndef` defaults at the TOP of the source: after their first use the unset (runtime) compile fails and test-backend-ops
+  aborts with no useful message.
 - **Normalize per dispatch** (`executed_total / dispatches`) before comparing captures;
   captures repeat ops a shape-dependent number of times. **And per OP INSTANCE across arms of one shape**
   (2026-09-18, `perf/w8-decomp-sep18.md` levers 3+4): `test-backend-ops perf` fills the captured graph with a
