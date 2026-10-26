@@ -264,3 +264,12 @@ UNDERCOUNT check applies to mma rows only. The clock in the 120 K/us figure is n
 **Next.** The two predictions above are each one arm: (a) is a kernel-form experiment the prescreen skill ranks offline; (b) is
 probe (c) of the ladder (fewer threadgroups / lower register budget via `-fmax-register`-style limits or a smaller tile) read
 against the K-quant groups' walls. A width-4 pair of the census + group profile would show the pick's own regime.
+
+**Needed vs streamed (owner 2026-10-26, on the FA row's F/W of 0.10):** the floor F counts the bytes the problem NEEDS - each K and V
+element once - and that is the right definition: it is the optimality bound no implementation can beat, and the width-8 FA call's
+0.10 is a true statement about how far that kernel is from it. What the kernel STREAMS (two 24-row tiles per KV head = two K/V
+passes, the per-row mask fetches) is the implementation's choice, so it is a separate measured column: `str/F` in the `--census`
+table = issued device+constant load bytes from the joins over F. FA 8.7K streams ~5x its need (2x from the two passes), the q4_0
+SoA skinny kernels 1.5-2.1x (the activation panel re-read per 32-row tile), the K-quant SoA kernels 0.9-1.4x, iq4_xs 5-6x (the
+LUT reads from constant memory, cache hits). A first version of this section folded the FA pass count into F - reverted: that hid
+the lever inside the floor.

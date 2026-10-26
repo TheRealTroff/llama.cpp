@@ -42,6 +42,11 @@ def load_census_mix(census_dir, classes_json):
     loads, stores and stop carry 0)."""
     import glob
     cj = json.load(open(classes_json)); ops = cj['opcodes']; CL = cj['classes']
+    MEMT = re.compile(r':: \((?:[a-z]+ )*?(load|store) \(([^)]*)\)'); ADDR = re.compile(r'addrspace (\d+)')
+    def lane_bytes(t):
+        m = re.match(r'<(\d+) x s(\d+)>', t)
+        if m: return int(m.group(1))*int(m.group(2))//8
+        m = re.match(r's(\d+)', t); return int(m.group(1))//8 if m else 0
     mix = {}
     for mf in sorted(glob.glob(os.path.join(census_dir, '*.metrics.json'))):
         md = json.load(open(mf)); rid = md['id']; jf = os.path.join(census_dir, rid + '.join.json')
@@ -54,15 +59,20 @@ def load_census_mix(census_dir, classes_json):
                 ratio.setdefault(i['op'], []).append(i['cost']/i['executed'])
         kmin = min((sum(v)/len(v) for v in ratio.values()), default=1.0)
         w_of = {op: min((1, 2, 4, 6, 8, 16), key=lambda c: abs(c - (sum(v)/len(v))/kmin)) for op, v in ratio.items()}
-        by_cls = collections.Counter(); units = 0.0; tot = 0
+        by_cls = collections.Counter(); units = 0.0; tot = 0; dev_ld = 0.0
         for i in ins:
             c = ops.get(str(i['op']), {}).get('cls', 'NONE'); by_cls[c] += i['executed']; tot += i['executed']
             units += i['executed']*w_of.get(i['op'], 0)
+            m = MEMT.search(i['text'])
+            if m and m.group(1) == 'load' and '%stack' not in i['text']:
+                a = ADDR.search(i['text'].split(' :: ')[1]); a = int(a.group(1)) if a else 1
+                if a != 3:
+                    dev_ld += i['executed']*32*lane_bytes(m.group(2))   # device + constant address space: what the kernel STREAMS
         if not tot:
             continue
         epd = md['exec_per_disp']
         key = f"m1 {md['op']} {md['typ']} {','.join(map(str, md['s0']))} {','.join(map(str, md['s1']))} {','.join(map(str, md['dst']))}"
-        mix[key] = dict(cls={c: epd*by_cls[c]/tot for c in CL}, units=epd*units/tot, exec=epd, rid=rid)
+        mix[key] = dict(cls={c: epd*by_cls[c]/tot for c in CL}, units=epd*units/tot, exec=epd, rid=rid, streamed=epd*dev_ld/tot)
     return mix, CL
 
 
@@ -71,6 +81,9 @@ def op_bytes(row, kv_bpw, n_head_kv):
     q in and o out (f32); the census's own FA bytes are KV-type-blind (its FA rows are mma class)."""
     if row['op'] == 'FLASH_ATTN_EXT':
         nq, kv, dk, nh = row['s0'][1], row['s1'][1], row['s0'][0], row['s0'][2]
+        # the bytes NEEDED: each K and V element once. The width-8 call streams them twice (two 24-row tiles per KV head,
+        # fa-w8-gqa-tile.md) - that is the implementation's choice and belongs in the streamed-bytes column, not in the floor
+        # (owner 2026-10-26: the floor captures optimality; streamed bytes are a measurement of the kernel)
         return 2*kv*dk*n_head_kv*kv_bpw + 2*nq*dk*nh*4
     if row['typ'].endswith('_soa'):   # the SoA repack reads the same bytes as the stored format
         row = dict(row, typ=row['typ'][:-4])
@@ -253,28 +266,31 @@ def main():
         mix, CL = load_census_mix(a.census, a.classes)
         short = [c for c in CL if c != 'NONE']
         print(f'\nper group ({a.phase}, >= 1 ms/round): executed instructions per us of GROUP WALL by class, in thousands (K/us); '
-              f'units = the profiler issue-weighted rate (w per opcode, loads/stores 0); cover = share of S whose members have a census join')
-        print(f'{"W us":>6s} {"S/W":>4s} {"ms/rd":>5s} {"cover":>5s} |' + ''.join(f'{c:>6s}' for c in short) + f' | {"all":>5s} {"units":>6s}  heaviest member')
+              f'units = the profiler issue-weighted rate (w per opcode, loads/stores 0); cover = share of S whose members have a census join;\n'
+              f'  str/F = bytes the kernels STREAM (issued device+constant loads, from the joins) over the bytes NEEDED (the floor F): the floor is the '
+              f'optimality bound, the ratio is the implementation')
+        print(f'{"W us":>6s} {"S/W":>4s} {"ms/rd":>5s} {"cover":>5s} {"str/F":>5s} |' + ''.join(f'{c:>6s}' for c in short) + f' | {"all":>5s} {"units":>6s}  heaviest member')
         mx = collections.Counter(); printed = 0
         for W_rd, S_rd, W, S, n, n_rd, top, gid, F, ggbs in sorted(group_rows, reverse=True):
             if W_rd < 1.0:
                 continue
             ks, ts = group_members[gid]
             cov = sum(t for k, t in zip(ks, ts) if k in mix)/S if S else 0.0
-            tot = collections.Counter(); units = 0.0
+            tot = collections.Counter(); units = 0.0; streamed = 0.0
             for k in ks:
                 if k in mix:
                     for c in CL: tot[c] += mix[k]['cls'][c]
-                    units += mix[k]['units']
+                    units += mix[k]['units']; streamed += mix[k]['streamed']
             rates = {c: tot[c]/1e3/W for c in CL}
             if cov >= 0.9:
                 for c in CL: mx[c] = max(mx[c], rates[c])
-            print(f'{W:6.0f} {S/W if W else 0:4.2f} {W_rd:5.2f} {100*cov:4.0f}% |' + ''.join(f'{rates[c]:6.1f}' for c in short)
+            sf = streamed/(F*1e-6*gbs) if F > 0 and cov >= 0.9 else 0.0
+            print(f'{W:6.0f} {S/W if W else 0:4.2f} {W_rd:5.2f} {100*cov:4.0f}% {sf:5.1f} |' + ''.join(f'{rates[c]:6.1f}' for c in short)
                   + f' | {sum(rates.values()):5.1f} {units/1e3/W:6.1f}  {top.replace("m1 MUL_MAT ", "")[:48]}')
             printed += 1
             if printed >= a.groups + 8:
                 break
-        print(f'{"max":>6s} {"":4s} {"":5s} {"":5s} |' + ''.join(f'{mx[c]:6.1f}' for c in short) + '   (over groups with cover >= 90%)')
+        print(f'{"max":>6s} {"":4s} {"":5s} {"":5s} {"":5s} |' + ''.join(f'{mx[c]:6.1f}' for c in short) + '   (over groups with cover >= 90%)')
 
 
 if __name__ == '__main__':
