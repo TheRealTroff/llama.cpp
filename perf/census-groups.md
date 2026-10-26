@@ -245,9 +245,14 @@ type, not by the count. Built on the same branch:
    most (FP16 and OALU by the q4_0 SoA kernel, INT32 by q6_K, device loads by iq4_xs's LUT reads at 16% of its stream). With
    Xcode's taxonomy alone the walls do not line up on one unit, so "which unit" is not answered by counting per type - the
    per-type table is a necessary input, not the answer.
-2. **Apple's issue weights separate the two kernel families by 2x.** The q4_0 SoA groups run at 99-117 K weighted units/us;
+2. ~~**Apple's issue weights separate the two kernel families by 2x.** The q4_0 SoA groups run at 99-117 K weighted units/us;
    20 cores x 4 issue/clock x ~1.5 GHz is ~120 K/us, so under Apple's apportioning model those groups are at 85-95% of a single
-   issue port per SIMD - issue-bound, which is also what their 4-18% stall says. The K-quant groups sit at 48-62 (q6_K head 86) with
+   issue port per SIMD - issue-bound, which is also what their 4-18% stall says.~~ **TESTED 2026-10-26 and REFUTED
+   (`exp/issue-probes`, `perf/issue-probes.md`):** halving the executed instructions of the q4_0 SoA tile (no dequant, same bytes)
+   changed its time +2..+6%; removing its DRAM weight stream (same instructions) gave -10..-15%; halving the resident threadgroups
+   doubled it (q5_K: 2.4x). Both tiles are LATENCY-bound (occupancy / prefetch distance), the issue port is not the limiter and
+   Apple's weights do not describe it. The weighted rate stays in the table as a measurement; it is not a floor. The rest of this
+   point, as written at the time: The K-quant groups sit at 48-62 (q6_K head 86) with
    15-30% stall and 65-69 registers against q4's 54: neither the byte floor (F/W 0.42-0.62) nor the issue port binds them. In the
    q4_0 SoA stream the weighted budget is 42% simdgroup-matrix ops (w16), 39% w4 dequant shifts/extracts, 11% f16 arithmetic: the
    dequant integer work costs as much issue as the matrix multiply itself. The weight table is Apple's apportioning model, not a
@@ -261,7 +266,9 @@ type, not by the count. Built on the same branch:
 move the table. Drafter (m2) rows have no census join (0% cover). The absolute executed counts are the profiler's; the census's own
 UNDERCOUNT check applies to mma rows only. The clock in the 120 K/us figure is nominal.
 
-**Next.** The two predictions above are each one arm: (a) is a kernel-form experiment the prescreen skill ranks offline; (b) is
+**Tested (2026-10-26).** Both arms ran the same night, `perf/issue-probes.md` on `exp/issue-probes`: (a) refuted on both halves,
+(b) half right - q5_K is the more occupancy-sensitive tile but q4_0 SoA degrades from the first pad step too. The lever both
+name is latency hiding per core. ~~**Next.** The two predictions above are each one arm:~~ (a) is a kernel-form experiment the prescreen skill ranks offline; (b) is
 probe (c) of the ladder (fewer threadgroups / lower register budget via `-fmax-register`-style limits or a smaller tile) read
 against the K-quant groups' walls. A width-4 pair of the census + group profile would show the pick's own regime.
 
