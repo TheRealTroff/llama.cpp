@@ -18498,6 +18498,10 @@ constant short FC_mul_mm_iq4lut_v   = FC_mul_mm_iq4lut_set ? FC_mul_mm_iq4lut : 
 // one 16-bit load for the two hbits bytes. Byte-identical: the same integer e = v + 16*bit reaches the same
 // fl(dl' * e) - ml (power-of-two scales commute with the rounding). Unset (the prefill bodies) = the select form.
 constant short FC_mul_mm_q5k [[function_constant(FC_MUL_MM + 10)]];
+// GGML_MM_SKINNY_PROBE (exp/issue-probes, 2026-10-26): 1 = no dequant (packed words reinterpreted as halves: same loads, same
+// MMA, the shift/mask/convert/scale ALU removed - garbage output); 2 = cached weights (every slice re-reads blocks 0/1 of its
+// row: same instructions, the weight stream leaves DRAM). Prices "fewer instructions" against "fewer bytes" on the q4_0 SoA tile.
+constant short FC_mul_mm_sk_probe [[function_constant(FC_MUL_MM + 13)]];
 constant bool  FC_mul_mm_q5k_set = is_function_constant_defined(FC_mul_mm_q5k);
 constant short FC_mul_mm_q5k_v   = FC_mul_mm_q5k_set ? FC_mul_mm_q5k : 0;
 // GGML_MM_SKINNY_KQ2=1 (lever 4 of the same note): the stored q4_K/q5_K tiles' superblock header (d, dmin, the 6-bit
@@ -19943,17 +19947,26 @@ kernel void kernel_mul_mm_skinny_q4_0_soa_f32(
     mc[1] = make_filled_simdgroup_matrix<float, 8>(0.f);
 
     // Prefetch slice 0: one scale and four already nibble-planar pack8 words.
-    half dh = *(device const half *)(row0 + 2*ib);
-    uint q0 = packs[4*ib + 0];
-    uint q1 = packs[4*ib + 1];
-    uint q2 = packs[4*ib + 2];
-    uint q3 = packs[4*ib + 3];
+    uint ibx = (FC_mul_mm_sk_probe == 2) ? (ib & 1u) : ib;
+    half dh = *(device const half *)(row0 + 2*ibx);
+    uint q0 = packs[4*ibx + 0];
+    uint q1 = packs[4*ibx + 1];
+    uint q2 = packs[4*ibx + 2];
+    uint q3 = packs[4*ibx + 3];
     ib += NK/32;
 
     for (int loop_k = 0; loop_k < args.ne00; loop_k += NK) {
         // Expand each pack8 into two half4 vectors in sequential K order.
         half4x4 ta0;
         half4x4 ta1;
+        if (FC_mul_mm_sk_probe == 1) {
+            // probe 1: no dequant - reinterpret the packed words (the scale kept live by one move)
+            ta0[0] = as_type<half4>(uint2(q0, q1)); ta0[1] = as_type<half4>(uint2(q1, q2));
+            ta0[2] = as_type<half4>(uint2(q2, q3)); ta0[3] = as_type<half4>(uint2(q3, q0));
+            ta1[0] = as_type<half4>(uint2(q1, q0)); ta1[1] = as_type<half4>(uint2(q2, q1));
+            ta1[2] = as_type<half4>(uint2(q3, q2)); ta1[3] = as_type<half4>(uint2(q0, q3));
+            ta0[0][0] = dh;
+        } else {
         const uint4 shifts = uint4(0, 4, 8, 12);
         ta0[0] = (half4((uint4(q0)       >> shifts) & 0x0Fu) - 8.h)*dh;
         ta0[1] = (half4((uint4(q0 >> 16) >> shifts) & 0x0Fu) - 8.h)*dh;
@@ -19963,6 +19976,7 @@ kernel void kernel_mul_mm_skinny_q4_0_soa_f32(
         ta1[1] = (half4((uint4(q2 >> 16) >> shifts) & 0x0Fu) - 8.h)*dh;
         ta1[2] = (half4((uint4(q3)       >> shifts) & 0x0Fu) - 8.h)*dh;
         ta1[3] = (half4((uint4(q3 >> 16) >> shifts) & 0x0Fu) - 8.h)*dh;
+        }
 
         threadgroup_barrier(mem_flags::mem_threadgroup);
 
@@ -20000,11 +20014,12 @@ kernel void kernel_mul_mm_skinny_q4_0_soa_f32(
 
         // prefetch slice t+1 while the MACs run
         if (loop_k + NK < args.ne00) {
-            dh = *(device const half *)(row0 + 2*ib);
-            q0 = packs[4*ib + 0];
-            q1 = packs[4*ib + 1];
-            q2 = packs[4*ib + 2];
-            q3 = packs[4*ib + 3];
+            ibx = (FC_mul_mm_sk_probe == 2) ? (ib & 1u) : ib;
+            dh = *(device const half *)(row0 + 2*ibx);
+            q0 = packs[4*ibx + 0];
+            q1 = packs[4*ibx + 1];
+            q2 = packs[4*ibx + 2];
+            q3 = packs[4*ibx + 3];
             ib += NK/32;
         }
 

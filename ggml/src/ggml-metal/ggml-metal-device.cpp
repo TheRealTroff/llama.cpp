@@ -835,8 +835,11 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm_skinny_so
     // GGML_MM_SKINNY_BSPLIT=1|2: B stage over all 64 threads (2 = float4 loads); perf/skinny-tpr-bsplit.md
     static const int env_bsplit = getenv("GGML_MM_SKINNY_BSPLIT") ? atoi(getenv("GGML_MM_SKINNY_BSPLIT")) : 0;
 
+    // GGML_MM_SKINNY_PROBE=1|2: no-dequant | cached-weights probe forms of the q4_0 SoA tile (exp/issue-probes; garbage output)
+    static const int env_sk_probe = getenv("GGML_MM_SKINNY_PROBE") ? atoi(getenv("GGML_MM_SKINNY_PROBE")) : 0;
+
     snprintf(base, 256, "kernel_mul_mm_skinny_%s_soa_%s", src0_name, ggml_type_name(op->src[1]->type));
-    snprintf(name, 256, "%s_ne12=%d_r2=%d_r3=%d_bsp=%d", base, ne12, r2, r3, env_bsplit);
+    snprintf(name, 256, "%s_ne12=%d_r2=%d_r3=%d_bsp=%d_probe=%d", base, ne12, r2, r3, env_bsplit, env_sk_probe);
 
     ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
     if (!res.pipeline) {
@@ -847,6 +850,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm_skinny_so
         ggml_metal_cv_set_int16(cv, (int16_t) r2,   FC_MUL_MM + 4);
         ggml_metal_cv_set_int16(cv, (int16_t) r3,   FC_MUL_MM + 5);
         ggml_metal_cv_set_int16(cv, (int16_t) env_bsplit, FC_MUL_MM + 8);
+        ggml_metal_cv_set_int16(cv, (int16_t) env_sk_probe, FC_MUL_MM + 13);
 
         res = ggml_metal_library_compile_pipeline(lib, base, name, cv);
         ggml_metal_cv_free(cv);
