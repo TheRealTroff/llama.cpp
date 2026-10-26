@@ -1763,7 +1763,11 @@ Refuted - do not reopen without new information:
   opcode -> class map over every census binary (280/403 pinned, 94% of executed). Read at width 8: no decode matmul group is at the byte
   floor (q4 0.51-0.79, ud 0.28-0.74); ~~the q4_0 SoA groups are at 85-95% of the issue port under Apple's weights~~ REFUTED the same
   night (`exp/issue-probes`, `perf/issue-probes.md`): half the instructions +2..+6%, no DRAM stream -10..-15%, half the resident
-  threadgroups 2x - both width-8 tiles are latency-bound, the lever is latency hiding per core. Also fixed there: the census read `*_soa` rows at 2 B/weight
+  threadgroups 2x - both width-8 tiles are latency-bound, the lever is latency hiding per core. In-graph (3 controls): -7.5%
+  round with no DRAM weight stream, +27% with half the resident threadgroups, FA groups flat. Register ladder (`GGML_MM_REGPAD`,
+  `perf/issue-probes.md` on `exp/issue-probes`): the w4 kernel reaches 0.88-0.95 of the floor at width 4 with NO surplus (11 regs =
+  +6%), the skinny tile is smem-bound first and register-bound past ~90. Width-4 floor check held: ffn/head groups 0.84-0.95 of the
+  byte floor, attention-side small matrices 0.68-0.74 (`census-groups.md`, last section). Also fixed there: the census read `*_soa` rows at 2 B/weight
   (every SoA row was flagged CACHE in the Oct 24 reports; real x_floor 1.3-2.7). `census-groups.md`, the two last sections.
 - `kv-splitk.md` (branch `exp/kv-splitk` only, NOT merged; parked 2026-10-25 night, owner: "the knowledge was the prize") - the split-K
   q4_0 skinny tile for the q4 k/v + 48-row rows, the first kernel priced against the concurrency-group wall: per call -40..-64%,
