@@ -280,3 +280,28 @@ table = issued device+constant load bytes from the joins over F. FA 8.7K streams
 SoA skinny kernels 1.5-2.1x (the activation panel re-read per 32-row tile), the K-quant SoA kernels 0.9-1.4x, iq4_xs 5-6x (the
 LUT reads from constant memory, cache hits). A first version of this section folded the FA pass count into F - reverted: that hid
 the lever inside the floor.
+
+### The floor model at width 4 (2026-10-26, `fl4-oct26-{q4,ud}-d3-{metalprof,metalgroups}`, prod a0cefbd8c)
+
+Owner's question: would redoing this at width 4 teach something new? Prediction on record: the width-4 groups sit at the byte
+floor - F/W >= 0.85 and S/W ~ 1 - so the limiter there is bytes and the probe ladder has nothing to add. One pair of profiles per
+line at depth 3 (the picks' low width), joined with the Oct 24 width-4 census:
+
+| width 4 | q4 F/W | q4 GB/s | S/W | ud F/W | ud GB/s |
+|---|---|---|---|---|---|
+| round (sum of group walls) | 0.80 | 202 | 1.05 hiding | 0.75 | 190 |
+| ffn gate+up (2 ops) | 0.91 | 230 | 1.00 | 0.84 (iq4_xs) / 0.85 (q5_K) | 211-215 |
+| ffn_down | 0.88 | 221 | 0.99 | 0.80-0.81 | 201-204 |
+| lm_head | 0.95 | 239 | 1.00 | 0.93 (q6_K) | 233 |
+| attn_out | 0.70 | 177 | 1.00 | 0.70 (q5_K) | 176 |
+| attn q+k+v | 0.72 | 181 | 1.12 | 0.68-0.69 (q4_K) | 172-173 |
+| GDN in_proj + 2x48 | 0.74 | 186 | 1.28 | 0.68 (q4_K) | 171 |
+| FA decode 8.5K | 0.18 | 46 | 1.00 | - | - |
+
+**Reading.** The prediction holds where the bytes are: the ffn and head groups run at 0.84-0.95 of the floor, 200-240 GB/s, with
+no overlap (S/W 1.00) - byte-saturated, exactly the regime the floor model describes, and the complement of the width-8 picture
+(0.51-0.79 / 0.28-0.74). The smaller attention-side groups sit at 0.68-0.74: the 6144- and 1024-row matrices launch few
+threadgroups per core and pay the latency the big groups hide, so the width-4 round is one regime for 70% of its wall and the
+width-8 one for the rest. Decode is two regimes by width and by matrix size, not by line. Nothing in the per-type or probe
+tooling needs redoing at width 4; the one lever it names is the attention-side small matrices at low width (the k/v + q group,
+attn_out), which is the GQA-tile and split-K board already priced in `kv-splitk.md`.
