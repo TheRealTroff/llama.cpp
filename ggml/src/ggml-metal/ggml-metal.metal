@@ -5240,6 +5240,9 @@ constant short FC_mul_mv_ne12  [[function_constant(FC_MUL_MV + 2)]];
 constant short FC_mul_mv_r2    [[function_constant(FC_MUL_MV + 3)]];
 constant short FC_mul_mv_r3    [[function_constant(FC_MUL_MV + 4)]];
 constant short FC_mul_mv_nr0_v [[function_constant(FC_MUL_MV + 5)]];
+// GGML_MM_REGPAD=N (exp/issue-probes; declared here because the width-4 kernel precedes the mul_mm constants): N extra floats kept live across the K loop (loaded once before it, touched once per
+// 16 slices, folded into the output under a runtime zero) - the register-occupancy ladder; the kernel's work is unchanged.
+constant short FC_regpad [[function_constant(FC_MUL_MM + 14)]];
 constant short FC_mul_mv_nr0 = is_function_constant_defined(FC_mul_mv_nr0_v) ? FC_mul_mv_nr0_v : 1;
 
 template<typename block_q_type, short NR0, typename args_t>
@@ -7386,8 +7389,12 @@ kernel void kernel_mul_mv_q4_0_soa_w4_r4kp_v3(
     const device half8 * xv = (const device half8 *)src1;
     const int K8 = args.ne00/8;
 
+    float rp[64];
+    for (short i = 0; i < FC_regpad; ++i) { rp[i] = float(qp0[pend - 1 - i]); }   // register ladder, see FC_regpad
+
     for (int p = pstart + (int)tiisg; p < pend; p += 32) {
         const int block = p/4;
+        if (FC_regpad && ((p - (int)tiisg - pstart) & 1023) == 0) { for (short i = 0; i < FC_regpad; ++i) { rp[i] += float(block); } }
         const half8 v0 = xv[0*K8 + p];
         const half8 v1 = xv[1*K8 + p];
         const half8 v2 = xv[2*K8 + p];
@@ -7447,6 +7454,11 @@ kernel void kernel_mul_mv_q4_0_soa_w4_r4kp_v3(
         }
     }
 
+    if (FC_regpad) {
+        float rs = 0.0f;
+        for (short i = 0; i < FC_regpad; ++i) { rs += rp[i]; }
+        acc[0] += (args.ne00 == 0x7fffffff) ? rs : 0.0f;   // a runtime zero the compiler cannot prove
+    }
     for (int i = 0; i < 16; ++i) {
         acc[i] = simd_sum(acc[i]);
     }
@@ -19955,7 +19967,11 @@ kernel void kernel_mul_mm_skinny_q4_0_soa_f32(
     uint q3 = packs[4*ibx + 3];
     ib += NK/32;
 
+    float rp[64];
+    for (short i = 0; i < FC_regpad; ++i) { rp[i] = float(packs[4*nblk - 1 - i]); }   // register ladder, see FC_regpad
+
     for (int loop_k = 0; loop_k < args.ne00; loop_k += NK) {
+        if (FC_regpad && (loop_k & 1023) == 0) { for (short i = 0; i < FC_regpad; ++i) { rp[i] += float(q0); } }
         // Expand each pack8 into two half4 vectors in sequential K order.
         half4x4 ta0;
         half4x4 ta1;
@@ -20049,12 +20065,19 @@ kernel void kernel_mul_mm_skinny_q4_0_soa_f32(
 
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
+    float rz = 0.0f;
+    if (FC_regpad) {
+        float rs = 0.0f;
+        for (short i = 0; i < FC_regpad; ++i) { rs += rp[i]; }
+        rz = (args.ne00 == 0x7fffffff) ? rs : 0.0f;   // a runtime zero the compiler cannot prove
+    }
+
     if (sgitg == 0) {
         for (short j = tiitg; j < nr1; j += 32) {
             device float * D = (device float *) dst + r0 + (r1 + j)*args.ne0 + im*args.ne1*args.ne0;
 
             for (short i = 0; i < nr0; ++i) {
-                D[i] = temp_all[i*NR1 + j];
+                D[i] = temp_all[i*NR1 + j] + rz;
             }
         }
     }

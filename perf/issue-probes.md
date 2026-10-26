@@ -82,3 +82,39 @@ single-op groups pay MORE in the graph (+39..+49%) than isolated (+31%); removin
 drafter's groups. The FA groups, which have no skinny op, do not move under any arm (the control that says the machine state held).
 Two-op groups gain less from cached weights than single-op groups (gate+up -4.6% vs ffn_down -15.6%): in a latency-bound regime
 the second concurrent kernel already hides part of the first's latency, which is what S/W 1.09 vs 1.00 was saying.
+
+## Register ladder (owner: "I expect the w4 kernels to hide latency better. Would that be deducible?" - "Then run that")
+
+`GGML_MM_REGPAD=N` (`FC_MUL_MM + 14`, declared beside the mul_mv constants because the width-4 kernel precedes the mul_mm block -
+the first build compiled, the pipeline did not: a Metal error never fails the build): N extra floats loaded once before the K loop,
+touched once per 16 slices, folded into the output under a runtime zero. Isolated medians of 3 on 17408x5120; registers and
+spill from the capture of each step (`issue-probes-oct26/{skinny,w4}-rpN.stats.txt`):
+
+| regpad | skinny w8: regs / us | w4: regs / us |
+|---|---|---|
+| 0 | 54 / 310.1 | 63 / 220.3 |
+| 8 | 85 / 324.5 (+4.7%) | 74 / 234.4 (+6.4%) |
+| 16 | 94 / 336.9 (+8.6%) | 80 / 246.1 (+11.7%) |
+| 24 | 94 / 361.2 (+16.5%) | 93 / 263.5 (+19.6%) |
+| 32 | 87 / 336.3 (+8.5%; executed 9.4 M vs 13.1 M - codegen moved) | 96 / 237.0 (+7.6%) |
+| 48 | 96 + 32 B spill / 355.0 (+14.5%; executed 8.5 M) | 96 + 80 B spill / 252.8 (+14.8%) |
+
+The clean rungs are 0/8/16 (executed counts within 7% of the base); from 24 up the pad perturbs codegen (the skinny's executed
+count drops a third, the w4's 32-step is faster than its 24-step), so those rungs bound rather than measure.
+
+**Reading.**
+1. **Registers cost both kernels from the first rung, the w4 kernel more per register** (~0.7%/reg vs ~0.2%/reg over 0->16).
+   The w4 kernel has no threadgroup memory, so its occupancy is register-bound and every register is a resident simdgroup; the
+   skinny tile is smem-bound (the pad ladder: +20% for the first 4 KB) and registers only bind it past ~90.
+2. **The w4 kernel does hide latency better - it reaches 0.88-0.95 of the byte floor in-graph where the skinny tile reaches
+   0.55-0.71 - but with no surplus.** Eleven extra registers cost it 6%. It sits at the knee of its latency curve, exactly the
+   "memory/issue crossover, nothing added, nothing removed pays" the width-4 ceiling probe found a month ago, now with the mechanism
+   named: just enough bytes in flight, through structure (no barriers, lanes walking K in parallel, no smem), not through spare
+   occupancy. The deduction in the preceding discussion ("at the floor at any plausible register-bound occupancy") was too
+   generous by exactly this margin: Little's law with the pad ladder's ~1.1 us gives the right regime and the wrong slack.
+3. **For the skinny tile the two ladders rank its levers:** resident threadgroups (smem) first, registers second. A form that
+   halves the 5 KB per threadgroup (a 32-K slice, or the B stage out of smem) buys occupancy on the steep axis; a form that adds
+   registers for a deeper prefetch pays on the shallow one. That trade is now priceable before the form exists.
+
+Caveat: the capture's per-dispatch executed count for the w4 rows read 0.09 M (the profiler's "main" role matched an auxiliary
+pipeline in those traces); the register counts come from the stats section matched by kernel name and are right.

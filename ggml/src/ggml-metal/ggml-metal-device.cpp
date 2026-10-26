@@ -839,7 +839,8 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm_skinny_so
     static const int env_sk_probe = getenv("GGML_MM_SKINNY_PROBE") ? atoi(getenv("GGML_MM_SKINNY_PROBE")) : 0;
 
     snprintf(base, 256, "kernel_mul_mm_skinny_%s_soa_%s", src0_name, ggml_type_name(op->src[1]->type));
-    snprintf(name, 256, "%s_ne12=%d_r2=%d_r3=%d_bsp=%d_probe=%d", base, ne12, r2, r3, env_bsplit, env_sk_probe);
+    static const int env_regpad = getenv("GGML_MM_REGPAD") ? atoi(getenv("GGML_MM_REGPAD")) : 0;   // register ladder (exp/issue-probes)
+    snprintf(name, 256, "%s_ne12=%d_r2=%d_r3=%d_bsp=%d_probe=%d_rp=%d", base, ne12, r2, r3, env_bsplit, env_sk_probe, env_regpad);
 
     ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
     if (!res.pipeline) {
@@ -851,6 +852,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm_skinny_so
         ggml_metal_cv_set_int16(cv, (int16_t) r3,   FC_MUL_MM + 5);
         ggml_metal_cv_set_int16(cv, (int16_t) env_bsplit, FC_MUL_MM + 8);
         ggml_metal_cv_set_int16(cv, (int16_t) env_sk_probe, FC_MUL_MM + 13);
+        ggml_metal_cv_set_int16(cv, (int16_t) env_regpad, FC_MUL_MM + 14);
 
         res = ggml_metal_library_compile_pipeline(lib, base, name, cv);
         ggml_metal_cv_free(cv);
@@ -1031,8 +1033,17 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_
                         variant == 3 ? "kernel_mul_mv_q4_0_soa_w4_r4kp_v3" :
                         variant == 2 ? "kernel_mul_mv_q4_0_soa_w4_r4kp_v2" :
                                        "kernel_mul_mv_q4_0_soa_w4_r4kp";
-    auto res = ggml_metal_library_get_pipeline(lib, name);
-    return res.pipeline ? res : ggml_metal_library_compile_pipeline(lib, name, name, nullptr);
+    // GGML_MM_REGPAD=N: the register ladder on the width-4 kernel (FC_MUL_MM + 14, exp/issue-probes); every w4 pipeline sets it
+    static const int env_regpad = getenv("GGML_MM_REGPAD") ? atoi(getenv("GGML_MM_REGPAD")) : 0;
+    char pname[256]; snprintf(pname, 256, "%s_rp=%d", name, env_regpad);
+    auto res = ggml_metal_library_get_pipeline(lib, pname);
+    if (!res.pipeline) {
+        ggml_metal_cv_t cv = ggml_metal_cv_init();
+        ggml_metal_cv_set_int16(cv, (int16_t) env_regpad, FC_MUL_MM + 14);
+        res = ggml_metal_library_compile_pipeline(lib, name, pname, cv);
+        ggml_metal_cv_free(cv);
+    }
+    return res;
 }
 
 ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_q4_0_soa_w3_r4kp(ggml_metal_library_t lib) {
