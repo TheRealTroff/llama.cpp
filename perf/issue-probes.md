@@ -57,3 +57,28 @@ and the pad as EXTRA env).
 
 Files: `perf/run-issue-probes.sh`, `perf/run-issue-probes-capture.sh`; results `kvquant-experiments/results/issue-probes-oct26.txt`,
 captures `kvquant-experiments/census/issue-probes-oct26/`. The probe knobs are inert unset; garbage output under PROBE=1|2.
+
+## In-graph (owner: "Run it") - the same knobs under the group profile, q4 line, pinned width 8, 2026-10-26
+
+`run-w8-decomp.sh STEPS="metalprof metalgroups"` on this tree, port 8097, three controls interleaved with the arms (`ip-ctl{1,2,3}`,
+`ip-probe2`, `ip-pad8k`, `ip-probe1`); per-group W us/call from `census-groups.py`, controls' spread in brackets. The probe arms
+output garbage (acceptance 0.1%; pinned depth keeps every verify at width 8, so the per-call walls compare). PROBE=1 produced NaN
+logits and the target emitted no tokens, so only the drafter's (m2) skinny groups carry that arm.
+
+| group (W us/call) | controls | cached weights | pad 8 KB | no dequant (m2 only) |
+|---|---|---|---|---|
+| ffn gate+up (2 ops, S/W 1.09) | 560 (±1.4%) | 534 (-4.6%) | 715 (+27.6%) | m2: 600 (+8.9%) |
+| ffn_down | 359 (±2.8%) | 303 (-15.6%) | 534 (+48.9%) | m2: 387 (+6.8%) |
+| attn_out | 140 (±1.6%) | 116 (-17.5%) | 195 (+38.8%) | - |
+| attn q+k+v (3 ops) | 125 (±0.2%) | 118 (-6.0%) | 149 (+19.2%) | - |
+| GDN in_proj + 2x48 (S/W 1.61) | 205 (±1.0%) | 195 (-5.2%) | 235 (+14.4%) | - |
+| lm_head | 3809 (±2.2%) | 3625 (-4.8%) | 5489 (+44.1%) | - |
+| FA decode (control group, no skinny op) | 374 (±0.2%) | 374 (+0.2%) | 375 (+0.4%) | - |
+| round (dec_syn_tg ms) | 110.3-111.6 | 102.9 (-7.5%) | 141.1 (+27%) | - |
+
+The isolated reading holds in the concurrent graph: removing the DRAM weight stream pays 5-18% per skinny group (-7.5% of the
+round); halving the resident threadgroups costs 14-49% per group (+27% of the round) and the ffn_down / attn_out / lm_head
+single-op groups pay MORE in the graph (+39..+49%) than isolated (+31%); removing half the instructions costs +7..+9% on the
+drafter's groups. The FA groups, which have no skinny op, do not move under any arm (the control that says the machine state held).
+Two-op groups gain less from cached weights than single-op groups (gate+up -4.6% vs ffn_down -15.6%): in a latency-bound regime
+the second concurrent kernel already hides part of the first's latency, which is what S/W 1.09 vs 1.00 was saying.
