@@ -32,6 +32,17 @@ one level down, and it bit the `GGML_MV_EXT_V2` work on 2026-08-22.
 
 ## The prod pick
 
+**2026-10-26 evening (owner: "Might as well mint"): mint `prodpick-oct26-probes-{q4,ud}` (prod `d4b3ab5f8`, binary 10-26 02:17 -
+the first mint carrying the Oct 26 merges: the census byte-floor / instructions-per-type columns `c4fa0869d` and the skinny-route
+probe knobs `d4b3ab5f8` (`issue-probes.md`), both inert unset; no pick change, no manifest change).** q4 f16 32.75 / 32.83 at 300
+(`d2953fccfb41`), 34.51 / 33.93 at 600 (`441120c66064`), partial 21.92 (`95fb10b8e7da`), MTP 24.27, b1 14.71; Turbo4 34.66 at 300
+(`f07b0f8c58e6`), 34.20 / 34.47 at 600 (`801cb0758d4e` x2), turbo4-b1 14.62 (`7c5254d01b12`). ud f16 31.87 / 31.94 at 300
+(`9c53aaade052`), 31.89 / 31.83 at 600 (`86b6e9b02cf0`), partial 14.79, MTP 19.86, b1 13.42 (`9c53aaade052`); Turbo4 32.30 at 300
+(`d180ae89f168`), 29.98 / 30.08 at 600 (`abc0c5af7300` x2), turbo4-b1 13.20 (`d180ae89f168`). **Every sha = the Oct 25 mint's on
+both lines, the controller arms included; multi-slot split + classes PASS (short + long extents), vision one-slot + multi-slot
+PASS, both lines.** t/s within 1% of the Oct 25 mint on every arm but two (q4 f16 600-r2 -1.6%, ud b1 +2.8%: machine state, not
+measured). Logs `kvquant-experiments/results/prodpick-oct26-probes-{q4,ud}.log`.
+
 **2026-10-25 afternoon (owner: "let's adopt what we have right now and we can look at the decode FA at 200k separately"): the
 prefill FA levers from the 200K slot save are in the pick on both lines - `GGML_FA_Q16_OR=2 GGML_FA_Q16_KVMIN=0 GGML_FA_Q32=1
 GGML_FA_Q32_KVMIN=0` (BI class; merge `1e7f2aa75`, manifest `034f420f3`; `fa-prefill-200k.md`).** The 16-row Turbo4 prefill FA
