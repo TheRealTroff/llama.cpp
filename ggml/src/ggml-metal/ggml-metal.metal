@@ -5240,6 +5240,9 @@ constant short FC_mul_mv_ne12  [[function_constant(FC_MUL_MV + 2)]];
 constant short FC_mul_mv_r2    [[function_constant(FC_MUL_MV + 3)]];
 constant short FC_mul_mv_r3    [[function_constant(FC_MUL_MV + 4)]];
 constant short FC_mul_mv_nr0_v [[function_constant(FC_MUL_MV + 5)]];
+// GGML_MM_REGPAD=N (exp/issue-probes; declared here because the width-4 kernel precedes the mul_mm constants): N extra floats kept live across the K loop (loaded once before it, touched once per
+// 16 slices, folded into the output under a runtime zero) - the register-occupancy ladder; the kernel's work is unchanged.
+constant short FC_regpad [[function_constant(FC_MUL_MM + 14)]];
 constant short FC_mul_mv_nr0 = is_function_constant_defined(FC_mul_mv_nr0_v) ? FC_mul_mv_nr0_v : 1;
 
 template<typename block_q_type, short NR0, typename args_t>
@@ -7386,8 +7389,12 @@ kernel void kernel_mul_mv_q4_0_soa_w4_r4kp_v3(
     const device half8 * xv = (const device half8 *)src1;
     const int K8 = args.ne00/8;
 
+    float rp[64];
+    for (short i = 0; i < FC_regpad; ++i) { rp[i] = float(qp0[pend - 1 - i]); }   // register ladder, see FC_regpad
+
     for (int p = pstart + (int)tiisg; p < pend; p += 32) {
         const int block = p/4;
+        if (FC_regpad && ((p - (int)tiisg - pstart) & 1023) == 0) { for (short i = 0; i < FC_regpad; ++i) { rp[i] += float(block); } }
         const half8 v0 = xv[0*K8 + p];
         const half8 v1 = xv[1*K8 + p];
         const half8 v2 = xv[2*K8 + p];
@@ -7447,6 +7454,11 @@ kernel void kernel_mul_mv_q4_0_soa_w4_r4kp_v3(
         }
     }
 
+    if (FC_regpad) {
+        float rs = 0.0f;
+        for (short i = 0; i < FC_regpad; ++i) { rs += rp[i]; }
+        acc[0] += (args.ne00 == 0x7fffffff) ? rs : 0.0f;   // a runtime zero the compiler cannot prove
+    }
     for (int i = 0; i < 16; ++i) {
         acc[i] = simd_sum(acc[i]);
     }
@@ -18498,6 +18510,10 @@ constant short FC_mul_mm_iq4lut_v   = FC_mul_mm_iq4lut_set ? FC_mul_mm_iq4lut : 
 // one 16-bit load for the two hbits bytes. Byte-identical: the same integer e = v + 16*bit reaches the same
 // fl(dl' * e) - ml (power-of-two scales commute with the rounding). Unset (the prefill bodies) = the select form.
 constant short FC_mul_mm_q5k [[function_constant(FC_MUL_MM + 10)]];
+// GGML_MM_SKINNY_PROBE (exp/issue-probes, 2026-10-26): 1 = no dequant (packed words reinterpreted as halves: same loads, same
+// MMA, the shift/mask/convert/scale ALU removed - garbage output); 2 = cached weights (every slice re-reads blocks 0/1 of its
+// row: same instructions, the weight stream leaves DRAM). Prices "fewer instructions" against "fewer bytes" on the q4_0 SoA tile.
+constant short FC_mul_mm_sk_probe [[function_constant(FC_MUL_MM + 13)]];
 constant bool  FC_mul_mm_q5k_set = is_function_constant_defined(FC_mul_mm_q5k);
 constant short FC_mul_mm_q5k_v   = FC_mul_mm_q5k_set ? FC_mul_mm_q5k : 0;
 // GGML_MM_SKINNY_KQ2=1 (lever 4 of the same note): the stored q4_K/q5_K tiles' superblock header (d, dmin, the 6-bit
@@ -19943,17 +19959,30 @@ kernel void kernel_mul_mm_skinny_q4_0_soa_f32(
     mc[1] = make_filled_simdgroup_matrix<float, 8>(0.f);
 
     // Prefetch slice 0: one scale and four already nibble-planar pack8 words.
-    half dh = *(device const half *)(row0 + 2*ib);
-    uint q0 = packs[4*ib + 0];
-    uint q1 = packs[4*ib + 1];
-    uint q2 = packs[4*ib + 2];
-    uint q3 = packs[4*ib + 3];
+    uint ibx = (FC_mul_mm_sk_probe == 2) ? (ib & 1u) : ib;
+    half dh = *(device const half *)(row0 + 2*ibx);
+    uint q0 = packs[4*ibx + 0];
+    uint q1 = packs[4*ibx + 1];
+    uint q2 = packs[4*ibx + 2];
+    uint q3 = packs[4*ibx + 3];
     ib += NK/32;
 
+    float rp[64];
+    for (short i = 0; i < FC_regpad; ++i) { rp[i] = float(packs[4*nblk - 1 - i]); }   // register ladder, see FC_regpad
+
     for (int loop_k = 0; loop_k < args.ne00; loop_k += NK) {
+        if (FC_regpad && (loop_k & 1023) == 0) { for (short i = 0; i < FC_regpad; ++i) { rp[i] += float(q0); } }
         // Expand each pack8 into two half4 vectors in sequential K order.
         half4x4 ta0;
         half4x4 ta1;
+        if (FC_mul_mm_sk_probe == 1) {
+            // probe 1: no dequant - reinterpret the packed words (the scale kept live by one move)
+            ta0[0] = as_type<half4>(uint2(q0, q1)); ta0[1] = as_type<half4>(uint2(q1, q2));
+            ta0[2] = as_type<half4>(uint2(q2, q3)); ta0[3] = as_type<half4>(uint2(q3, q0));
+            ta1[0] = as_type<half4>(uint2(q1, q0)); ta1[1] = as_type<half4>(uint2(q2, q1));
+            ta1[2] = as_type<half4>(uint2(q3, q2)); ta1[3] = as_type<half4>(uint2(q0, q3));
+            ta0[0][0] = dh;
+        } else {
         const uint4 shifts = uint4(0, 4, 8, 12);
         ta0[0] = (half4((uint4(q0)       >> shifts) & 0x0Fu) - 8.h)*dh;
         ta0[1] = (half4((uint4(q0 >> 16) >> shifts) & 0x0Fu) - 8.h)*dh;
@@ -19963,6 +19992,7 @@ kernel void kernel_mul_mm_skinny_q4_0_soa_f32(
         ta1[1] = (half4((uint4(q2 >> 16) >> shifts) & 0x0Fu) - 8.h)*dh;
         ta1[2] = (half4((uint4(q3)       >> shifts) & 0x0Fu) - 8.h)*dh;
         ta1[3] = (half4((uint4(q3 >> 16) >> shifts) & 0x0Fu) - 8.h)*dh;
+        }
 
         threadgroup_barrier(mem_flags::mem_threadgroup);
 
@@ -20000,11 +20030,12 @@ kernel void kernel_mul_mm_skinny_q4_0_soa_f32(
 
         // prefetch slice t+1 while the MACs run
         if (loop_k + NK < args.ne00) {
-            dh = *(device const half *)(row0 + 2*ib);
-            q0 = packs[4*ib + 0];
-            q1 = packs[4*ib + 1];
-            q2 = packs[4*ib + 2];
-            q3 = packs[4*ib + 3];
+            ibx = (FC_mul_mm_sk_probe == 2) ? (ib & 1u) : ib;
+            dh = *(device const half *)(row0 + 2*ibx);
+            q0 = packs[4*ibx + 0];
+            q1 = packs[4*ibx + 1];
+            q2 = packs[4*ibx + 2];
+            q3 = packs[4*ibx + 3];
             ib += NK/32;
         }
 
@@ -20034,12 +20065,19 @@ kernel void kernel_mul_mm_skinny_q4_0_soa_f32(
 
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
+    float rz = 0.0f;
+    if (FC_regpad) {
+        float rs = 0.0f;
+        for (short i = 0; i < FC_regpad; ++i) { rs += rp[i]; }
+        rz = (args.ne00 == 0x7fffffff) ? rs : 0.0f;   // a runtime zero the compiler cannot prove
+    }
+
     if (sgitg == 0) {
         for (short j = tiitg; j < nr1; j += 32) {
             device float * D = (device float *) dst + r0 + (r1 + j)*args.ne0 + im*args.ne1*args.ne0;
 
             for (short i = 0; i < nr0; ++i) {
-                D[i] = temp_all[i*NR1 + j];
+                D[i] = temp_all[i*NR1 + j] + rz;
             }
         }
     }

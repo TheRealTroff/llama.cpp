@@ -4178,7 +4178,10 @@ static int ggml_metal_op_mul_mat_impl(ggml_metal_op_t ctx, int idx, ggml_tensor 
         ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[1]), 2);
         ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         3);
 
-        ggml_metal_encoder_set_threadgroup_memory_size(enc, pipeline.smem, 0);
+        // GGML_MM_SKINNY_SMEM_PAD=<bytes>: extra threadgroup memory the skinny tile does not touch - lowers the resident
+        // threadgroups per core without changing the kernel (the occupancy probe, exp/issue-probes 2026-10-26)
+        static const int env_sk_pad = getenv("GGML_MM_SKINNY_SMEM_PAD") ? atoi(getenv("GGML_MM_SKINNY_SMEM_PAD")) : 0;
+        ggml_metal_encoder_set_threadgroup_memory_size(enc, pipeline.smem + env_sk_pad, 0);
 
         ggml_metal_encoder_dispatch_threadgroups(enc, ((ne11 + pipeline.nr1 - 1)/pipeline.nr1), ((ne01 + 31)/32), ne12*ne13, 32, 2, 1);
 
