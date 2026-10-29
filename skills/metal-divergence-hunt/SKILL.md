@@ -163,3 +163,18 @@ Gate the configurations that showed each symptom (unequal prompts, equal prompts
 that hung, the full pick with the controller and top-k on, and one slot as the unchanged
 control), write the resolution at the TOP of the perf note with the evidence table and strike
 the stale status, add the arm to the mint, and update this skill.
+
+## NaN from a value-range overflow, not a race or an address (2026-10-05, antares-1b)
+
+A deterministic NaN at `-ub > 8` that is clean at `-ub 1` and on CPU (BLAS) is a range overflow in a prefill tile, not a
+layout defect - skip Steps 1-3. Recipe that named it in four runs: `llama-eval-callback` (prints every node; the first
+`sum = nan` / `inf` row is the victim, e.g. `ffn_out-4` row 0 = BOS), then `LLAMA_MM_DUMP=<dir> LLAMA_MM_DUMP_TYPE=f16
+LLAMA_MM_DUMP_NT=<prompt tokens> LLAMA_MM_DUMP_N=<index+1>` for the full a/b/dst, max |b| per node, and a float64
+recompute of the failing row with b exact and with b rounded to half. Here b held -150129 (a massive activation)
+and `kernel_mul_mm` stages b as `S1 = half` for f16/q8_0 (bfloat for bf16, which is why bf16 survives). Fix and
+numbers: `exp/mm-token-scale`. Two traps: test-backend-ops cannot judge an f16-weight overflow case, because the CPU
+reference casts the activations to half as well and overflows itself (use q8_0 cases, whose CPU path quantizes per
+block); and the decode-side mv_ext f16y path (widths 2-8) casts the same way, but only for weights at or above its
+size gate (`ne00*ne01 >= 16M` elements for q8_0 and the other `is_t4` types, 8M otherwise): antares-1b's 8.4M layer
+matrices stay f32 and decode clean, a 4096x4096 q8_0 amax case fails at widths 2/4/8. Check the gate before calling a
+width safe or unsafe.

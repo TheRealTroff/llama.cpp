@@ -212,7 +212,10 @@ kernel win):
 - **Hot loop = rows with `executed >= 0.9 * max(executed)`.** Sum their `cost` (issue)
   and `cost2` (stall) for the loop's share; histogram their `size` field for the
   codegen fingerprint (6 B ~ f32 FMA short forms, 10 B ~ compact wide-operand
-  arithmetic, 14 B ~ device loads, 12 B ~ load-consumers/MMA lowering on g16s).
+  arithmetic, 14 B ~ device loads, 12 B ~ load-consumers/MMA lowering on g16s). The
+  families locate a changed region; they are not opcode identities (`perf/omlx-verify-m4-decode.md`;
+  the 14 B count ranked the iq4_xs table arms wrong, `perf/w8-decomp-sep18.md`) - the MIR join
+  below says what an instruction is.
 - **The per-instruction `cost` (issue) column is NOT a measurement (2026-09-09,
   `perf/agx-backend-access.md`).** Joined against the final machine IR for 10,612 instructions
   across 34 profiles, `cost = executed x w(opcode) x k`: `w` is a fixed per-opcode weight

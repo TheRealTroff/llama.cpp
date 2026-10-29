@@ -139,13 +139,17 @@ lever (K-split, unroll, threadgroup packing) had measured +/-3%. The loop:
    (the probe's own `translate()` shows the invocation) and run the fork's
    `perf/agx-disasm.py --json` on it: exact per-instruction offsets, sizes and
    register pressure - no GPU, no mnemonics needed.
-4. Compare **encoding-size histograms**, not just counts. On g16s the families are
-   a fingerprint: ~6 B = f32 FMA short forms, ~10 B = compact wide-operand
-   arithmetic, ~14 B tracks device loads, ~12 B load-consumers/MMA lowering. A hot
-   loop flooded with 4/6 B helper ops next to a competitor dominated by 10 B forms
-   means fat address/convert codegen, not more intrinsic work.
-5. Transplant only the winning form in-tree and benchmark. Static text does NOT
-   predict dynamic cost (see below) - the probe RANKS forms; the benchmark decides.
+4. Compare **encoding-size histograms**, not just counts, to locate the changed region.
+   On g16s the families (~6 B f32 FMA short forms, ~10 B compact wide-operand
+   arithmetic, ~14 B device loads, ~12 B load-consumers/MMA lowering) are a search
+   hint, not opcode identities (`perf/omlx-verify-m4-decode.md`; the iq4_xs table arms
+   below, where the 14 B count ranked the forms wrong). For a mechanism claim join the
+   final machine IR to the native boundaries and read memory operands, dependencies and
+   control flow - `metal-gpu-profile` describes the join.
+5. Transplant the winning form in-tree, check that the compiled structure survived
+   (text identity to the standalone probe is the cheap check), then benchmark. Static
+   text does NOT predict dynamic cost (see below) - the probe RANKS forms; the benchmark
+   decides.
 
 Forms measured to matter on AGX/g16s (each worth re-trying on any slow inner loop):
 
@@ -269,7 +273,7 @@ comparison (respect any no-copying boundary - probe the FORM, not their code).
 
 ## What this does not tell you
 
-- **Not speed.** It is a compile-time register fact. A kernel that stops spilling can
+- **Not a speed result by itself.** A spill count is a compile-time register fact. A kernel that stops spilling can
   still benchmark flat, especially if it is memory bound. Always confirm with a real
   benchmark. When it was validated on mul_mv nc the prediction held precisely - no
   measurable change at the shape where neither version spilled, +17.7% at the shape where
@@ -280,8 +284,10 @@ comparison (respect any no-copying boundary - probe the FORM, not their code).
   offsets, sizes and register pressure (step 5 uses this) - but still no mnemonics:
   `metal-objdump --disassemble` registers the agx targets but ships no instruction
   printer, the translator plugin refuses `AIRNTEmitAssembly`, and the printer inside
-  `libapplegpu-nt.dylib` exports no `LLVM*` symbols. Size-family histograms are the
-  working substitute for a mnemonic census.
+  `libapplegpu-nt.dylib` exports no `LLVM*` symbols. The final machine IR (the lldb
+  join, `metal-gpu-profile`) exposes operands and dependencies behind the numeric
+  opcodes; use it for semantic claims. Size-family histograms locate a change; alone
+  they do not say what the instructions are.
 - **Offline instruction counts are not replay counts.** The host translator and the
   driver's runtime compiler are different builds. Measured 2026-09-02 on identical
   specializations: skinny SoA mul_mm decodes to 438 instructions offline vs 421 in the
@@ -300,9 +306,12 @@ comparison (respect any no-copying boundary - probe the FORM, not their code).
   shortening the software-pipelining distance for next-iteration loads, and diffuse
   load-consumer stall went 10.5% -> 22.1%. Single-simdgroup scalar kernels hide
   latency only with register-bounded intra-thread ILP (~3 simdgroups/core inflight is
-  a fleet constant), so every added live load stream spends the same slack twice.
-  The offline probe CANNOT see this; when live vector streams grow, benchmark and
-  check the issue/stall pair before trusting any static ranking.
+  a fleet constant - APS counter reads, `perf/aps-counters.md`, `perf/m4-width4-ilp.md`),
+  so every added live load stream spends the same slack twice. The spill probe CANNOT
+  see this; the final machine IR can (2026-10-29: a moved prefetch load's placement and
+  the register copies it cost were read off the MIR before timing, section below). When
+  live vector streams grow, read the compiled load placement, then benchmark and check
+  the issue/stall pair before trusting any static ranking.
 - **Not GPR counts or occupancy.** The plugin contains an AGX3 static performance model
   that reports `AvgGPRDynPressure` and `MeanOccupancyRequirement` into the (empty)
   `__GPU_STATS_MD` segment, but its options are unreachable: `-mllvm` only reaches the
@@ -557,3 +566,29 @@ instantiations) it folds at AIR time - but only once the setup code was back in 
 - Every spelling of the lever's live state costs registers in the HOT loop even when the code that uses it is rare:
   rebuilding x/y in a redo pass kept the setup values live through the K loop; rewinding the pointers by the known
   per-step advance (y -= nsteps*NK, x -= nsteps*((2 + nl - 1)/nl) for nl <= 2) keeps them dead.
+
+## Prefetch on the skinny q4_0 SoA tile lost a third time, with the forecast frozen first (2026-10-29, `exp/m4-skinny-prefetch` + `exp/m4-skinny-pingpong`)
+
+Width-8 FFN gate/up (M=17408, K=5120, N=8, 2 simdgroups) as a standalone metallib, uncaptured GPU elapsed time in a
+paired fresh-process harness with A/A and B/B controls (`exp/m4-measurement-harness`). Both forms probed 0 spill.
+
+- **Two-slice prefetch** (a second pack/scale bank held across iterations): 54 -> 59 registers, +16 hot-loop
+  instructions per K step, **+3.8% per call**, reproduced. **Earlier single-slice prefetch** (the next slice's fetch
+  moved before the current slice's first barrier): 55 registers, +9 instructions, **+0.4..0.5%**, reproduced. The MIR
+  showed the compiler kept the moved load early and paid with register copies - moving a load in the source is not a
+  free schedule change. Same rule as the GDN scan's prefetch loss and the direct tile's explicit prefetch.
+- A `#pragma unroll 2` hint compiled byte-identical to the unhinted kernel on both variants - a native no-op, not timed.
+- The forecasts sealed before the first GPU run both lost: "half the footprint excess hidden" (-3.6%) rejected, and
+  scaling the two-slice loss by 9/16 instructions (-2.1%) overpredicted the 0.4% loss. Neither a register count nor a
+  hot-loop instruction count is a cost law on this tile.
+- Same compiled code under a runtime address mask (tiny repeated window vs full weights): earlier prefetch costs 3.3%
+  at the tiny window and 0.6..0.9% at full weights, two valid cohorts. Directional evidence that it hides something
+  footprint-dependent which its copies then cancel; it does not name latency or a resource. Two-slice showed no such
+  interaction. Explicit paired K steps removed the copies offline but raised the MIR register span 54 -> 86..91 (not timed).
+- Measurement: the first calibration cohort failed its controls in four of five comparisons and one later cohort
+  failed its null/order checks; both were kept and left unscored. A passing session qualification does not qualify
+  every later comparison - keep the A/A and B/B arms contemporaneous.
+- Evidence: `kvquant-experiments/results/m4-prefetch-*oct29/`; write-ups `perf/skinny-prefetch-results.md`
+  (`exp/m4-skinny-prefetch` a338a2b23) and `perf/prefetch-window-results.md` (`exp/m4-skinny-pingpong` 542d1dfd6);
+  the timing host `perf/metal-measurement.md` (`exp/m4-measurement-harness` 41d5ffa8b). Worktrees may be parked;
+  the branches hold the files.
