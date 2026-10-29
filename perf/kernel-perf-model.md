@@ -138,6 +138,32 @@ tables. For the skinny class the static census features are the wrong inputs - w
   the saturated rate is ~2250 SIMD-instr/us/core, yet halving the instructions did not move the time, and caching the stream
   moved it only 10-15%.
 
+**The ladder's calibration transfers (`smem-pad/tstep-fit.txt`, `transfer-q4soa-shapes.txt`).** Fitting t_step(R) on the six pad
+points: linear 65 + 49 R ns (max error 9.7%), Little's-law (R + 1.48) x 46 ns (7.0%), hard max(95 ns, R/12.6) (11.6%), and
+**smooth-max sqrt(91 ns^2 + (R / 15.9 k-steps/us/core)^2): 2.8%**. Taking that one calibration (one shape, one ladder) and
+T = ceil(simdgroups / 20 cores / R) x k-steps x t_step(R) at the measured R = 3.12, with NO refit:
+
+| q4_0 SoA skinny row | waves (ceil) | predicted us | isolated us/run | ratio |
+|---|---|---|---|---|
+| 5120x6144 | 6.16 -> 7 | 121.1 | 123.3 | 0.98 |
+| 6144x5120 | 5.13 -> 6 | 124.6 | 123.5 | 1.01 |
+| 5120x10240 | 10.26 -> 11 | 190.3 | 190.1 | 1.00 |
+| 5120x12288 | 12.31 -> 13 | 224.9 | 225.7 | 1.00 |
+| 5120x17408 (the calibration shape) | 17.44 -> 18 | 311.4 | 310.5 | 1.00 |
+| 17408x5120 | 5.13 -> 6 | 352.9 | 356.5 | 0.99 |
+| 5120x248320 (lm_head) | 248.8 -> 249 | 4307.6 | 3724.6 | 1.16 |
+
+Five shapes never seen by the fit within 2%, with the wave count quantized (the continuous wave count misses by 6-15% on the
+small grids: the last partial wave costs a full one). The lm_head miss (+16%) is the open row: at 7760 threadgroups the core
+either keeps more resident or runs the k-step faster - its own counter reading (census replay) decides. The ud skinny kernels
+(same tile geometry, 65-69 registers) run 1.24-1.72x what the q4 calibration gives: their own t0 / X, i.e. their chain and
+ceiling, not the geometry - and the shape-to-shape spread of that ratio (q4_K 1.24 / 1.43 / 1.48) says their R is not 3.12.
+
+**Register pad on the w4 kernel is an instruction cost law at constant residency**: executed instructions 7.68 -> 8.22 -> 8.70
+-> 9.18 M per dispatch (+7 / +13 / +20%) for time +6.4 / +11.7 / +19.6%, R flat at 3.11-3.13 - at 1.1-1.2x the byte floor the
+w4 kernel pays one-for-one for an added instruction. The skinny tile does not (+0.5% instr -> +4.7% time at rp8, -28% -> +8.5%
+at rp32): registers cost it through the chain, not the count.
+
 What this leaves: (1) residency is a measurable per-kernel feature now (counter from a replay, 8 s per trace) - the census
 rows are being replayed from offload for it; (2) a residency-aware latency model needs the per-kernel tile geometry (waves
 and k-steps from the shapes) and a per-kernel t_step(R) - the hot loop's uncontended latency plus the contention curve;
