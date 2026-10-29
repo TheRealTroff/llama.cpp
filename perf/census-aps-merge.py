@@ -29,3 +29,14 @@ for r in sorted(recs, key=lambda r: (r['family'], r['line'], r['id'])):
 print()
 for f, v in sorted(by.items()):
     v = sorted(v); print(f"{f:7s} n={len(v):2d} R median {v[len(v)//2]:.2f} min {v[0]:.2f} max {v[-1]:.2f}")
+
+# ---- the skinny family at its measured residency: implied per-core throughput and per-k-step latency ---------------
+import math
+sk = [r for r in recs if r['family'] == 'skinny' and r['inflight'] and r['typ'].endswith('_soa') and r['s0'][1] % 32 == 0]
+if sk:
+    print(f"\nskinny tiles (32x8x64, 2 simdgroups per threadgroup) at their measured residency; k-step = one 64-wide K slice per simdgroup")
+    print(f"{'row':44s} {'R':>5s} {'sg-ksteps':>9s} {'waves':>6s} {'t_step ns':>9s} {'ksteps/us/core':>14s} {'instr/kstep':>11s} {'instr/us/core':>13s} {'us_call':>8s}")
+    for r in sorted(sk, key=lambda r: (r['line'], r['typ'], r['us_call'])):
+        K, M = r['s0']; sg = math.ceil(M/32)*2; ks = K/64; R = r['inflight']
+        waves = math.ceil(sg/20/R); t = r['us_call']/waves/ks*1e3
+        print(f"{r['id'][:44]:44s} {R:5.2f} {sg*ks:9.0f} {waves:6d} {t:9.1f} {sg*ks/r['us_call']/20:14.2f} {r['exec_per_disp']/(sg*ks):11.1f} {r['exec_per_disp']/r['us_call']/20:13.0f} {r['us_call']:8.1f}")

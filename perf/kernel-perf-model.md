@@ -130,12 +130,13 @@ tables. For the skinny class the static census features are the wrong inputs - w
 | 16384 | 595.9 / 598.2 | 0.755 | 72.1 | 103 ns | 7.3 |
 | 24576 | 863.3 / 837.3 | 0.507 | 107.3 | 99 ns | 5.1 |
 
-  (k-step = one 64-wide K slice of the 32x8 tile, 80 per threadgroup here, 544 threadgroups x 2 simdgroups.) Residency falls
-  6x, time rises 2.75x: T is NOT proportional to 1/R. Per-core throughput saturates (5 -> 14 k-steps/us) as R rises to ~3, and
-  the uncontended k-step (R = 0.5) is ~99 ns - about the hot loop's 161 instructions at one issue per clock plus a partly
-  hidden load. **This is the model shape for the latency-bound class: T = waves x k-steps x t_step(R), with t_step rising from
+  (k-step = one 64-wide K slice of the 32x8 tile per simdgroup: 80 per simdgroup, 544 threadgroups x 2 simdgroups = 87,040
+  simdgroup-k-steps, 127 executed instructions each - 11.08 M per dispatch; the 161-instruction hot block is the dequant +
+  stage half, run once per threadgroup-k-step.) Residency falls 6x, time rises 2.75x: T is NOT proportional to 1/R. Per-core
+  throughput saturates (5 -> 14 k-steps/us) as R rises to ~3, and the uncontended k-step (R = 0.5) is ~99 ns - about 127
+  instructions at one issue per clock plus a partly hidden load. **This is the model shape for the latency-bound class: T = waves x k-steps x t_step(R), with t_step rising from
   the chain's own latency toward a shared per-core ceiling as residency grows.** Which resource sets the ceiling is still open:
-  the saturated rate is ~2250 SIMD-instr/us/core, yet halving the instructions did not move the time, and caching the stream
+  the saturated rate is ~2000 SIMD-instr/us/core (15.9 k-steps/us x 127; ~1.35 per clock at 1.5 GHz), yet halving the instructions did not move the time, and caching the stream
   moved it only 10-15%.
 
 **The ladder's calibration transfers (`smem-pad/tstep-fit.txt`, `transfer-q4soa-shapes.txt`).** Fitting t_step(R) on the six pad
