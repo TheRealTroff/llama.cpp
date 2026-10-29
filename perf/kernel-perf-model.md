@@ -71,8 +71,82 @@ that they may already be the best work in this area, and the ceiling probes agre
 - A failed control invalidates the measurement, not the model; a passing fit on seen rows is calibration, not prediction.
 - A deleted or added claim about the hardware needs a measurement in this file next to it.
 
+## First fit (2026-10-30 night, `exp/kernel-perf-model`, tool `perf/kernel-perf-model.py`, data `kvquant-experiments/results/perfmodel-oct30/`)
+
+Dataset: the six `census-1024-*` snapshots, 92 joined rows (`dataset.json`; bytes recomputed with the post-Oct-26 `work()`,
+the Oct 24 snapshots still carried the SoA 2-byte bug). Target `us_call` (in-graph, one encoder per op). Repeatability: the
+one row present twice (n=2 mv) agrees to 0.1%; the f32 ops shared by both lines agree to 1-3%. Model error is model error.
+
+**Where each family sits (corrected floors):** mm prefill tiles at 0.93-1.03x the MMA roof (bytes irrelevant, 27-38x the
+byte floor); mv decode at 1.04-1.4x the byte floor; skinny width-8 at 1.3-2.7x; FA decode 1.4-2.6x; FA prefill at the roof/1.35;
+gdn 2-3.5x; small ops 1.1-10x with a ~10 us in-graph floor per op (add/swiglu at width 4-8 measure 4-6 us isolated, 10-11 in-graph).
+
+**Candidate models, scored leave-one-kernel-out (|log(pred/actual)|, share of rows within 30%):**
+
+| model | mm | mv | fa | skinny | gdn | small | all |
+|---|---|---|---|---|---|---|---|
+| M0b resource floor max(bytes/252 GB/s, gflop/6.96 TFLOPS) | 95% (med 3%) | 71% (med -20%) | 10% | 5% | 0% | 33% | 46% |
+| M1 roofline c + max(floor, exec/K), K fitted | 95% | 83% (med 7%) | 70% | 18% | 50% | 50% | 63% |
+| M2 class rates c + max(floor, sum exec_cls p_cls), NNLS | 95% | 62% | 60% | 64% | 50% | 33% | 65% |
+| M4 M1 + chain floor L x trips x depth | 95% | 96% | 50% | 45% | 50% | 33% | 68% |
+| M5 additive floor + sum exec_cls p_cls (no overlap) | 95% | 50% | 60% | 68% | 0% | 33% | 61% |
+| M3 per-family log-linear (the table control) | 90% | 46% | 100% | 27% | 0% | 25% | 52% |
+
+Fit on ud, score q4 (and the reverse): M1's K comes out 0.044 M SIMD-instr/us from q4 and 0.026 from ud - the "issue rate" is
+the saturated rate of whichever kernels are in the fit (the census-groups table: q4 skinny groups 39-44 K/us, K-quant groups
+22-35), not a chip constant; skinny scored cross-line falls to 0-5% within 30%. M3 fits fa/gdn perfectly in-sample and
+collapses held out: a table, as predicted.
+
+**The intervention scorecard (`intervention-scorecard.txt`) is the result.** Every model that fits the static rows mispredicts
+the measured interventions on the q4_0 SoA skinny tile (issue-probes, 2026-10-26, isolated):
+
+| intervention (m=17408,k=5120 / m=5120,k=17408) | measured | M1 roofline | M2 class rates | M5 additive |
+|---|---|---|---|---|
+| half the instructions, same bytes | +2% / +6% | -16% / -36% | -14% / -34% | -2% / -2% |
+| same instructions, no DRAM weight stream | -10% / -15% | 0 / 0 | 0 / 0 | -47% / -47% |
+| threadgroup-memory pad 8 KB | +31% (in-graph +28..+49%) | no term | no term | no term |
+| register pad 16 (+40 regs) | +9% | no term | no term | no term |
+
+A model with 68% of rows within 30% predicts the wrong sign or the wrong size of every lever actually pulled on this tile,
+and has no variable for the two levers that moved it most. The floors are mechanism (mm, mv); the instruction terms are
+tables. For the skinny class the static census features are the wrong inputs - which is what the stub predicted.
+
+**Residency measured (APS `Compute SIMD Groups Inflight per Core`, read from headless replays; the census pipeline had deleted
+`replay/raw`, so this needed the traces):**
+
+- Oct 26 probe arms: base 3.11 simdgroups/core, half-instructions 3.28, no-stream 3.10. **Register pad ladder: skinny 3.12 ->
+  2.75-2.79 from the first pad step and flat after (time +4.7 -> +16.5%); w4 kernel 3.11-3.13 FLAT across regpad 0..48 (time
+  +6..+20%).** The regpad cost is not residency: time rises with the register count at constant occupancy, so the pad lengthens
+  the chain (or perturbs codegen, as the record noted at rp32/48). The "~3 inflight" fleet reading holds on every arm.
+- **Threadgroup-memory pad ladder with the counter (`run-smem-pad-aps.sh`, prod binary of Oct 26, m=17408 k=5120 n=8, two
+  mirrored timing passes):**
+
+| pad B | us/run (2 reps) | resident sg/core | waves (1088 sg / 20 / R) | t per k-step per sg | core throughput (k-steps/us) |
+|---|---|---|---|---|---|
+| 0 | 308.3 / 310.7 | 3.119 | 17.4 | 222 ns | 14.1 |
+| 4096 | 361.9 / 353.8 | 1.813 | 30.0 | 149 ns | 12.2 |
+| 8192 | 386.2 / 392.5 | 1.412 | 38.5 | 126 ns | 11.2 |
+| 12288 | 460.2 / 480.3 | 0.991 | 54.9 | 107 ns | 9.3 |
+| 16384 | 595.9 / 598.2 | 0.755 | 72.1 | 103 ns | 7.3 |
+| 24576 | 863.3 / 837.3 | 0.507 | 107.3 | 99 ns | 5.1 |
+
+  (k-step = one 64-wide K slice of the 32x8 tile, 80 per threadgroup here, 544 threadgroups x 2 simdgroups.) Residency falls
+  6x, time rises 2.75x: T is NOT proportional to 1/R. Per-core throughput saturates (5 -> 14 k-steps/us) as R rises to ~3, and
+  the uncontended k-step (R = 0.5) is ~99 ns - about the hot loop's 161 instructions at one issue per clock plus a partly
+  hidden load. **This is the model shape for the latency-bound class: T = waves x k-steps x t_step(R), with t_step rising from
+  the chain's own latency toward a shared per-core ceiling as residency grows.** Which resource sets the ceiling is still open:
+  the saturated rate is ~2250 SIMD-instr/us/core, yet halving the instructions did not move the time, and caching the stream
+  moved it only 10-15%.
+
+What this leaves: (1) residency is a measurable per-kernel feature now (counter from a replay, 8 s per trace) - the census
+rows are being replayed from offload for it; (2) a residency-aware latency model needs the per-kernel tile geometry (waves
+and k-steps from the shapes) and a per-kernel t_step(R) - the hot loop's uncontended latency plus the contention curve;
+(3) the first held-out test of that model is the ud skinny kernels (same tile family, 65-69 registers, different chains), then
+the regpad ladder (R flat: the whole effect must come from t_step).
+
 ## Log
 
 - 2026-10-29: stub opened after the Oct 27-29 prediction campaign (six `exp/m4-*` branches, one commit each; prefetch on the
   skinny tile refuted a third time; no model transferred to llama.cpp). Its timing host (`exp/m4-measurement-harness`
   41d5ffa8b) is a qualified ISOLATED timer; useful for calibration pairs, not for the target.
+- 2026-10-30 night: first fit + intervention scorecard + residency ladder, section above. Branch exp/kernel-perf-model.
