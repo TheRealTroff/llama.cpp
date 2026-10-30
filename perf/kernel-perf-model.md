@@ -699,7 +699,95 @@ vs 764, iq4_xs 1062 vs 713); barriers account for ~7 of those points. The ud til
 extra dequant instructions and in dequantizing the NEXT k-step into registers before the MMA loop (a long live range); the
 mechanism that turns that into 20% more contention than the pipes, the convert unit, the memory unit and the barriers together
 is the open item. It is not a per-port issue rate, fetch, registers, selects, gathers, strided loads or the barriers - each of
-those now has a number.
+those now has a number. ~~Next: the per-instruction profiler on a real tile at three per port.~~ DONE below (evening): the
+profiler says the simdgroups wait on operands 15% of the time at the ceiling and are ready-not-issued 85%; a deletion ladder
+says no single part of the k-step is the bottleneck there (the whole dequant deleted = +6%).
+
+*The per-instruction profiler on the real tiles at four residencies, then a deletion ladder (evening of 10-31; owner: "why not
+build the next instrument then?"; tools `perf/run-profile-pads.sh`, `perf/stall-sites.py`, `perf/stall-diff.py`,
+`nstream-sim.py` wait split; results `profile-pads-{q3_K_soa,q4_0_soa}/`, `stall-sites-pads.txt`, `stall-diff.txt`,
+`q3k-select-ab/`, `del-ladder-q3_K/`, `del-ladder-q3_K-mir.txt`, `op-costs-q3chain.txt`).*
+
+**The instrument.** `run-profile-pads.sh` runs the census row pipeline (capture, headless replay, per-instruction profile,
+machine-IR join) on one skinny tile at chosen `GGML_MM_SKINNY_SMEM_PAD` values; the join needed the probe/regpad function
+constants added to the translator map (`agx-cost-dataset.py`, the pipeline names carry `_probe=N_rp=N` since Oct 26, and the
+offline instantiation without them was a different binary: "profile does not match this binary at 347 offsets").
+`stall-sites.py` charges each hot-loop instruction's measured stall (`cost2`) to its pipe and to the pipe of the instruction
+that produced its operands; `stall-diff.py` aligns two joins of the same binary by offset and prints what moved. The
+simulator now prints, per stream iteration, the time waiting on operands, on its own unit spacing, blocked by a busy port or
+pipe, and issuing. Both tiles were profiled at pads 24576 / 12288 / 4096 / 0 (the ladder's four points; the inflight counter
+reads 0.49 / 0.98 / 1.81 / 2.85 active simdgroups per core for q3_K and the same within 10% for every skinny kernel, so a pad
+is the same residency on every tile).
+
+**What the profiler's split is.** The stall column is the only measured one (`cost` is a static table); at the lone-simdgroup
+point the non-stall remainder equals the instruction count times one clock (q3_K 217 ns for 322 instructions = 0.67 ns each;
+q4_0 173 ns for 228 = 0.76 = the simulator's issue interval), so stall = the simdgroup waiting on operands, non-stall = ready
+or issuing. The split by pad:
+
+| per-sg k-step (ns, the ladder's scaling) | q3_K stall % -> ns | q3_K non-stall ns | q4_0 SoA stall % -> ns | q4_0 non-stall ns |
+|---|---|---|---|---|
+| pad 24576: 614 / 396 | 64.6% -> 397 | 217 | 56.4% -> 223 | 173 |
+| pad 12288: 771 / 596 | 41.6% -> 321 | 450 | 30.8% -> 184 | 412 |
+| pad 4096: 1106 / 887 | 21.0% -> 232 | 874 | 12.6% -> 112 | 775 |
+| pad 0: 1250 / 1003 | 14.9% -> 186 | 1064 | 8.7% -> 87 | 916 |
+
+The operand wait SHRINKS with residency (397 -> 186 ns: a neighbour's issue hides the latency) while the ready-not-issued time
+grows five-fold. The simulator at the lone point matches the split (q3_K operand wait 404 + own-unit 25 vs 397 measured; q4_0
+271 + 24 vs 223 - its latencies are ~20% long on q4_0) and at pad 0 it has the stream blocked by a port or pipe for only 212
+ns against the ~850 the profiler shows: the real port refuses a ready simdgroup four times more than the modelled pipes do.
+The sites that still stall at pad 0 are the load consumers (the f32->half round three instructions after the activation
+load, the `and` 44 instructions after a weight gather), the first MMA after the tile loads, and the loop-end branch (1.5%;
+10% when alone - the barrier pair); nothing new.
+
+**Opcode 12288 refuted, and a second count-is-free result.** The q3_K hot loop has 32 instructions no probe had priced: the
+dequant's bit-test select `(hi >> i) & 1 ? 0 : 4` compiled to opcode 12288 with a uniform-register operand (10 B); the other
+three gap tiles have 34-47 uniform-operand instructions per k-step where q4_0 SoA, q6_K and q8_0 have 3-5 (an `and` with a
+uniform mask on q4_K, the LUT gather's uniform base on iq4_xs). Standalone probes of the select compile to shifts and adds, not
+to 12288 (`op_bsel`, `op_q3chain` in `kernels.metal`: bodies checked, 1.0-1.2 clocks per instruction, uninformative). The
+real kernel A/B: the same integer by arithmetic (`+ (bit << 2) - 4`) removes all 32 selects and adds 60 instructions to the
+250-instruction dequant block (12591/11079/17165/442; translator-verified); the pad ladder is flat at every point (pad 0 443.8
+vs 441.8 us, pad 24576 1466 vs 1468; q3_K mul_mv at widths 1 and 4 within 1.5%). So the select costs nothing special, and
+**24% more instructions per k-step cost nothing at the ceiling**: the port is not what saturates (the same reading as the Oct 26
+halved-instruction probe).
+
+**The deletion ladder (`GGML_MM_SKINNY_PROBE=4..8` on the generic tile, function-constant arms, wrong results, valid timing;
+static deltas translator-verified in `del-ladder-q3_K-mir.txt`).** Arms: 4 no MMA (the loaded tiles consumed by one f16 add
+per element: -16 MMA +48 FP16); 5 no tile loads (the first slice's tiles kept in registers; NOT clean: +114 static
+instructions of re-materialisation around the branch); 6 no dequant (raw bytes as the half tiles from one 16-B load per
+thread per slice pair: -399 instructions, all 70 converts, 61 shifts, 178 int, 70 f32, 12 of 16 device loads; the byte stream
+stays ~1 KB per threadgroup k-step vs the real 880 B); 7 no A staging stores (first form dropped 3/4 of the dequant with
+them - the compiler only kept what one consumed element needed; fixed form consumes all 32 elements, +32 f16 adds); 8 no B
+staging (-8 stores, -2 loads, -8 rounds, -33 int). q3_K at 17408x5120 n=8, 2 interleaved reps:
+
+| arm | pad 0 (ceiling) | pad 4096 | pad 24576 (lone) |
+|---|---|---|---|
+| full | 412 us | 461 us | 1362 us |
+| cached weights (2) | -4.2% | -10.1% | -21.7% |
+| no barriers (3) | -5.2% | -7.7% | -13.0% |
+| no MMA (4) | -12.1% | -9.3% | -11.5% |
+| no tile loads (5) | -5.8% | -2.2% | +4.4% |
+| no dequant (6) | **+6.3%** | -5.2% | -36.2% |
+| no A stores, dequant kept (7) | **+4.4%** | +2.3% | +2.4% |
+| no B staging (8) | -8.2% | -10.0% | -23.4% |
+| no A stores + 3/4 of the dequant gone (first 7) | -14.3% | -10.6% | -12.2% |
+
+Reading. At the lone point the ladder is a chain: the dequant is 36% of it, the weight stream 22%, B staging 23%, barriers
+13%, MMA 11%. At the ceiling nothing is: deleting the whole dequant (60% of the instructions, every convert, most of the
+loads) makes the tile 6% SLOWER; deleting the A stores 4% slower; deleting both at once 14% faster; the MMA, the B staging,
+the tile loads, the barriers and the DRAM stream each buy 4-12% and do not add (sum 35%). The skeleton that remains in arm 6
+(16 MMAs, 24 tile loads, 12 stores, 2 barriers, the B staging) runs at the same ~1300 ns per simdgroup k-step as the full tile,
+40% slower than the whole q4_0 SoA tile with the same skeleton and a similar byte stream (309 us) - and that q4_0 point is the
+one the model calls DRAM-bound. Together with the profiler's split (ready-not-issued 85% at the ceiling) and the free +24%
+instructions, the ceiling of the generic tile is set by neither a unit's occupancy nor the chain nor the port's count rate;
+it behaves like a scheduling limit on how the port serves its ready simdgroups when their k-steps are long and alike (phase
+effects: the lockstep pair under the barriers, every simdgroup wanting the same unit at the same time once the dequant no
+longer staggers them). The simulator's missing rule is that service rule, not a cost.
+
+The next instrument is the skeleton itself in the probe harness: a kernel of 16 MMAs + 24 tile loads + 8 half4 stores + 8
+scalar stores + the two barriers per iteration in 2-simdgroup threadgroups at 1-8 threadgroups per core, checked by
+`mir-check.py`, against arm 6's 1300 ns and the q4_0 tile's 1003; then remove one thing at a time until it moves. The
+deletion arms stay in the source for the other ud tiles (q4_K/q5_K/iq4_xs run the same loop; arm 6 is q3_K-shaped only in
+its byte count).
 
 What this leaves: (1) **the contention curve from the simulator** - run N simdgroup streams against four shared issue
 ports and the load path and compare with the pad ladders (R 0.5 -> 3.1) and the grid curve; if it reproduces them, the whole
@@ -722,6 +810,15 @@ check - fa decode first.
   skinny tile refuted a third time; no model transferred to llama.cpp). Its timing host (`exp/m4-measurement-harness`
   41d5ffa8b) is a qualified ISOLATED timer; useful for calibration pairs, not for the target.
 - 2026-10-30 night: first fit + intervention scorecard + residency ladder, section above. Branch exp/kernel-perf-model.
+- 2026-10-31 evening: the per-instruction profiler at four residencies on q3_K and q4_0 SoA (`run-profile-pads.sh`,
+  `stall-sites.py`, `stall-diff.py`): operand waits shrink from 65%/56% alone to 15%/9% at the ceiling while ready-not-issued
+  time grows 5x; the simulator matches the lone split and has the port refusing ready streams 4x too rarely at the ceiling.
+  Opcode 12288 (q3_K's uniform-operand bit-select, 32 per k-step) refuted by an in-kernel A/B: flat ladder with +24%
+  instructions (the port's count rate is not the ceiling, second time). Deletion ladder (PROBE=4..8, MIR-verified): at the
+  ceiling deleting the whole dequant is +6%, the A stores +4%, MMA -12%, B staging -8%, tile loads -6%, barriers -5%, DRAM -4%
+  - not additive, no unit binding; the remaining skeleton runs at the full tile's 1300 ns per sg k-step, 40% slower than the
+  q4_0 SoA tile with the same skeleton. Open = the port's service rule for ready simdgroups; next = the skeleton in the probe
+  harness.
 - 2026-10-31 later: both candidate mechanisms probed. Skinny-pattern tg memory: strided tile loads +18%, A staging stores 2x the
   mul_mm pattern, the unit is core-wide, ~60% busy at the ceiling - not binding (sim with it: 883 vs 1250). Barriers (PROBE=3 arm,
   branch only): 5.5-8.5% of the k-step at every residency - real, not the gap. Remaining: ud tiles 23-33% slower at 3 sg/port than

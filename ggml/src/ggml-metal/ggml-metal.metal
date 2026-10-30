@@ -19588,7 +19588,8 @@ kernel void kernel_mul_mm_skinny_t(
     else if (FC_mul_mm_soa) { dequantize_soa_mm((device const block_q *) nullptr, xrowc, args.ne00, SKP2((KX)/(16*nl)), (short) (((KX)/16)%nl + (OFF)), REG); } \
     else               { dequantize_func(xrow + SKP2((KX)/(16*nl)), ((KX)/16)%nl + (OFF), REG); }
 #define SKINNY_DEQ2(KX, REGA, REGB) \
-    if (FC_mul_mm_q6k_v == 1 && FC_mul_mm_soa)  { dequantize_soa_pair((device const block_q *) nullptr, xrowc, args.ne00, SKP2((KX)/(16*nl)), (short) (((KX)/16)%nl), REGA, REGB); } \
+    if (FC_mul_mm_sk_probe == 6) { const uint4 raw_ = *(device const uint4 *)(xrowc + ((KX)/16)*16); REGA[0] = a4_t(as_type<half4>(raw_.xy)); REGA[1] = a4_t(as_type<half4>(raw_.zw)); REGA[2] = REGA[0]; REGA[3] = REGA[1]; REGB = REGA; } \
+    else if (FC_mul_mm_q6k_v == 1 && FC_mul_mm_soa)  { dequantize_soa_pair((device const block_q *) nullptr, xrowc, args.ne00, SKP2((KX)/(16*nl)), (short) (((KX)/16)%nl), REGA, REGB); } \
     else if (FC_mul_mm_q6k_v == 1)              { dequantize_block_pair(xrow + SKP2((KX)/(16*nl)), (short) (((KX)/16)%nl), REGA, REGB); } \
     else if (FC_mul_mm_soa && FC_mul_mm_kq2_v == 1) { dequantize_soa_mm_pair((device const block_q *) nullptr, xrowc, args.ne00, SKP2((KX)/(16*nl)), (short) (((KX)/16)%nl), REGA, REGB); } \
     else { SKINNY_DEQ(KX, 0, REGA); SKINNY_DEQ(KX, 1, REGB); }
@@ -19612,6 +19613,10 @@ kernel void kernel_mul_mm_skinny_t(
     simdgroup_float8x8 mc[2];
     mc[0] = make_filled_simdgroup_matrix<float, 8>(0.f);
     mc[1] = make_filled_simdgroup_matrix<float, 8>(0.f);
+    // deletion arms of the k-step (perf/kernel-perf-model.md 2026-10-31, timing only, wrong results): 4 = no MMA (the loaded tiles
+    // are consumed by one add per element), 5 = no tile loads (the MMAs run on the first slice's tiles kept in registers),
+    // 6 = no dequant (raw bytes as the half tiles, one 16-B load), 7 = no A staging stores, 8 = no B staging (loads, rounds, stores)
+    a_t probe_acc = (a_t) 0;
 
     // prefetch slice 0
     a4x4_t ta0;
@@ -19623,6 +19628,11 @@ kernel void kernel_mul_mm_skinny_t(
         if (FC_mul_mm_sk_probe != 3) { threadgroup_barrier(mem_flags::mem_threadgroup); }   // PROBE=3: no per-k-step barriers (timing arm, wrong results; perf/kernel-perf-model.md 2026-10-31)
 
         threadgroup a4_t * pa = (threadgroup a4_t *)(sa + ar*NK + 32*il0);
+        if (FC_mul_mm_sk_probe == 7) {
+            // every element consumed, or the compiler drops three quarters of the dequant with the stores (seen 2026-10-31)
+            const a4_t s_ = ta0[0] + ta0[1] + ta0[2] + ta0[3] + ta1[0] + ta1[1] + ta1[2] + ta1[3];
+            probe_acc += s_[0] + s_[1] + s_[2] + s_[3];
+        } else {
         pa[0] = ta0[0];
         pa[1] = ta0[1];
         pa[2] = ta0[2];
@@ -19631,9 +19641,11 @@ kernel void kernel_mul_mm_skinny_t(
         pa[5] = ta1[1];
         pa[6] = ta1[2];
         pa[7] = ta1[3];
+        }
 
         // the activations rounded through half in every form (f16y)
-        if (FC_mul_mm_sk_bsp == 2) {
+        if (FC_mul_mm_sk_probe == 8) {
+        } else if (FC_mul_mm_sk_bsp == 2) {
             // split B stage, two float4 loads per thread (BVL = 8)
             device const float4 * y4 = (device const float4 *) y;
             const float4 v0 = y4[0];
@@ -19668,16 +19680,23 @@ kernel void kernel_mul_mm_skinny_t(
         FOR_UNROLL (short ik = 0; ik < NK/8; ik++) {
             simdgroup_barrier(mem_flags::mem_none);
 
+            if (FC_mul_mm_sk_probe != 5 || loop_k == 0) {
             simdgroup_load(ma[0], lsma + 8*ik,        NK,  0, false);
             simdgroup_load(ma[1], lsma + 8*NK + 8*ik, NK,  0, false);
             simdgroup_load(mb,    sb + 8*ik*NR1,      NR1, 0, false);
+            }
 
             simdgroup_barrier(mem_flags::mem_none);
 
+            if (FC_mul_mm_sk_probe == 4) {
+                probe_acc += ma[0].thread_elements()[0] + ma[0].thread_elements()[1] + ma[1].thread_elements()[0] + ma[1].thread_elements()[1] + mb.thread_elements()[0] + mb.thread_elements()[1];
+            } else {
             simdgroup_multiply_accumulate(mc[0], ma[0], mb, mc[0]);
             simdgroup_multiply_accumulate(mc[1], ma[1], mb, mc[1]);
+            }
         }
     }
+    if (FC_mul_mm_sk_probe == 4 || FC_mul_mm_sk_probe == 7) { mc[0].thread_elements()[0] += (float) probe_acc; }
 
     threadgroup_barrier(mem_flags::mem_threadgroup);
 

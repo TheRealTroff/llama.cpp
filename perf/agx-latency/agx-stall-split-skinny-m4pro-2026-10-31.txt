@@ -1,0 +1,46 @@
+== q3_K 1 -> 4 per port (pads 24576 -> 0)
+pad24576.join.json -> pad0.join.json: 649/649 instructions, hot loop 319/319, 319 sites aligned by offset
+per-sg k-step 614 -> 1250 ns (+636); profiler stall share 64.6% -> 14.9% = 397 -> 186 ns per k-step (+-210); issue 35.4% -> 85.1% = 217 -> 1064 ns (+846)
+hot-loop stall 62.0% -> 13.3% = 381 -> 166 ns
+added stall ns per k-step by the stalling pipe: TST2    +2 (12)  BFE    -0 (6)  CVT    -8 (36)  SHF    -9 (35)  TLD    -9 (24)  DLD   -11 (12)  FP32   -23 (44)  MMA   -35 (16)  NONE   -43 (9)  INT   -78 (125)
+added stall ns per k-step by the producer's pipe: BFE    -1  FP32    -3  NONE    -9  CVT    -9  TLD   -12  SHF   -15  MMA   -24  -   -43  INT   -48  DLD   -51
+
+top 10 sites by added stall (offset, op, pipe, stall ns lo -> hi, delta, producer, text):
+    2626   1038 FP32    0.0 ->   0.9 ( +0.9) <- DLD/13588    renamable $r45h = 1038 536870912, $r45, 16, 128
+    2664  14245 TST2    0.5 ->   1.2 ( +0.7) <- FP32/3328    14245 renamable $r9_r10_r11_r12, 0, 536873202, renamable $r37l, 0, renamable $r17h, 0, 16, 2 :: (sto
+    3780  12104 CVT     0.1 ->   0.6 ( +0.5) <- INT/11082    renamable $r1 = 12104 32, 5, 0, killed $r0, 16
+    3792  12288 INT     0.1 ->   0.6 ( +0.5) <- INT/445      renamable $r8 = 12288 32, 15, killed $r8, 16, 32, 0, target-flags(agx3-f32) target-index(agx3-addrsp
+    3146  12287 INT     0.1 ->   0.5 ( +0.4) <- INT/12289    renamable $r3 = 12287 32, 13, renamable $r2, 32, 0, 1, 0
+    2900  17165 BFE     0.6 ->   1.0 ( +0.4) <- INT/12289    renamable $r2 = 17165 32, 0, killed $r0, 16, 24, 32
+    3808  11082 INT     0.1 ->   0.5 ( +0.4) <- INT/12288    renamable $r3 = 11082 32, killed $r8, 16, killed $r3, 16
+    5660   2884 MMA     0.1 ->   0.5 ( +0.4) <- MMA/2884     renamable $r25_r26 = 2884 33554432, killed $r43, 16, renamable $r42, 32, killed $r25_r26, 16
+    2650  14245 TST2    0.2 ->   0.5 ( +0.4) <- FP32/3328    14245 renamable $r0_r1_r2_r3, 0, 536873202, renamable $r37l, 0, renamable $r17h, 0, 0, 2 :: (store (
+    2684   1038 FP32    0.4 ->   0.7 ( +0.3) <- DLD/13588    renamable $r34h = 1038 0, $r42, 16, 128
+
+== q4_0 SoA 1 -> 4 per port
+pad24576.join.json -> pad0.join.json: 373/373 instructions, hot loop 228/228, 228 sites aligned by offset
+per-sg k-step 396 -> 1003 ns (+607); profiler stall share 56.4% -> 8.7% = 223 -> 87 ns per k-step (+-136); issue 43.6% -> 91.3% = 173 -> 916 ns (+743)
+hot-loop stall 53.6% -> 7.9% = 212 -> 79 ns
+added stall ns per k-step by the stalling pipe: BFE    +1 (24)  SHF    -0 (12)  TST2    -0 (12)  FP16    -5 (64)  CVT    -8 (32)  NONE    -8 (8)  TLD    -8 (24)  FP32   -11 (8)  INT   -22 (24)  DLD   -25 (4)  MMA   -46 (16)
+added stall ns per k-step by the producer's pipe: FP32    -0  BFE    -1  CVT    -3  FP16    -3  SHF    -7  -    -9  DLD   -10  TLD   -20  NONE   -25  MMA   -26  INT   -31
+
+top 10 sites by added stall (offset, op, pipe, stall ns lo -> hi, delta, producer, text):
+     894  17165 BFE     0.1 ->   1.0 ( +1.0) <- DLD/13582    renamable $r28 = 17165 32, 0, renamable $r0, 32, 12, 4
+     936  12107 CVT     0.2 ->   0.7 ( +0.5) <- BFE/17165    renamable $r21h = 12107 32, 4, 0, killed $r29, 16
+     984  17165 BFE     0.0 ->   0.5 ( +0.5) <- DLD/13582    renamable $r34 = 17165 32, 0, renamable $r0, 32, 24, 4
+     996    610 INT     0.1 ->   0.5 ( +0.4) <- DLD/13582    $r28l = 610 32, $r0h, 32
+     906  17165 BFE     0.0 ->   0.5 ( +0.4) <- DLD/13582    renamable $r29 = 17165 32, 0, renamable $r0, 32, 4, 4
+     974  11079 INT     0.1 ->   0.5 ( +0.4) <- INT/11080    renamable $r32 = nuw nsw 11079 0, 0, killed $r28, 1040
+     944  12107 CVT     0.2 ->   0.5 ( +0.4) <- BFE/17165    renamable $r19h = 12107 32, 4, 0, killed $r28, 16
+     952  11080 INT     0.2 ->   0.5 ( +0.3) <- -            renamable $r28 = nuw nsw 11080 32, 0, renamable $r22l, 256
+     918    442 SHF     0.1 ->   0.3 ( +0.3) <- DLD/13582    renamable $r30 = 442 32, renamable $r0, 32, 15
+    2210    445 INT     0.5 ->   0.7 ( +0.3) <- INT/14977    renamable $r30 = 445 32, killed $r16h, 16, 1
+
+pad24576.join.json: 649 instructions, hot loop 319; profiler shares: issue 35.4% stall 64.6% (hot loop issue 35.0% stall 62.0%)
+pad12288.join.json: 649 instructions, hot loop 319; profiler shares: issue 58.4% stall 41.6% (hot loop issue 57.8% stall 39.8%)
+pad4096.join.json: 649 instructions, hot loop 319; profiler shares: issue 79.0% stall 21.0% (hot loop issue 78.1% stall 19.7%)
+pad0.join.json: 649 instructions, hot loop 319; profiler shares: issue 85.1% stall 14.9% (hot loop issue 84.1% stall 13.3%)
+pad24576.join.json: 373 instructions, hot loop 228; profiler shares: issue 43.6% stall 56.4% (hot loop issue 43.3% stall 53.6%)
+pad12288.join.json: 373 instructions, hot loop 228; profiler shares: issue 69.2% stall 30.8% (hot loop issue 68.7% stall 29.5%)
+pad4096.join.json: 373 instructions, hot loop 228; profiler shares: issue 87.4% stall 12.6% (hot loop issue 86.9% stall 11.7%)
+pad0.join.json: 373 instructions, hot loop 228; profiler shares: issue 91.3% stall 8.7% (hot loop issue 90.7% stall 7.9%)

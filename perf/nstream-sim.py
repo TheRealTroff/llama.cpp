@@ -13,7 +13,8 @@ pipe free (per-port pipes FP32 / FP16+MMA / INT / tile load / tg store, occupanc
 convert-and-bitfield unit free (ONE per core, 0.67 ns per op - the single-opcode probes slow from 1 to 4 simdgroups when each sits
 on its own port, every other class does not); the port's issue slot. N streams run on each of the four ports, staggered.
 Output per N: per-simdgroup iteration time (compare: pad-ladder t_step x resident threadgroups), iterations/us per core (compare:
-the ceiling X at N = 4), and resource busy shares."""
+the ceiling X at N = 4), resource busy shares, and the stream's time split per iteration: waiting on operands (compare: the
+profiler's stall share x the measured k-step), waiting on its own unit spacing, blocked by a busy port or pipe, and issuing."""
 import argparse, json, os, re, sys
 from collections import Counter, defaultdict
 HERE = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, HERE)
@@ -53,7 +54,7 @@ for i in body:
     P.append(dict(d=d, u=u, sub=sub, pipe=pipe, cost=cost, lat=lat, act=act, op=i['op']))
 def run(N):
     pipe_free = defaultdict(float); port_free = defaultdict(float); xu_free = 0.0; tgm_free = 0.0
-    st = [dict(port=k % a.ports, pc=0, it=0, last=-a.issue + (k * 131.0) % 400, ready={}, tst=[], wload=False, own=defaultdict(float), iter_end=[]) for k in range(N * a.ports)]
+    st = [dict(port=k % a.ports, pc=0, it=0, last=-a.issue + (k * 131.0) % 400, ready={}, tst=[], wload=False, own=defaultdict(float), iter_end=[], w_op=0.0, w_res=0.0, w_own=0.0) for k in range(N * a.ports)]
     busy = Counter(); total = len(st) * a.iters; done = 0
     while done < total:
         best = None
@@ -79,6 +80,9 @@ def run(N):
         elif p['cost'] > 0:
             key = (port, p['pipe']); start = max(start, pipe_free[key]); pipe_free[key] = start + p['cost']; busy[p['pipe']] += p['cost']; done_t = start + lat
         else: done_t = start + lat
+        ready_ops = max([s['ready'].get(c, 0.0) for c in p['u']] + [0.0])
+        if p['sub'] == 'TLD' and s['tst']: ready_ops = max(ready_ops, max(s['tst']))
+        s['w_op'] += max(0.0, ready_ops - (s['last'] + a.issue)); s['w_res'] += start - max(t, s['last'] + a.issue); s['w_own'] += max(0.0, t - max(ready_ops, s['last'] + a.issue))
         port_free[port] = start + a.port_slot; s['last'] = start
         if p['sub'] in OWN and OWN[p['sub']] > 0: s['own'][p['sub']] = start + OWN[p['sub']]
         for c in p['d']: s['ready'][c] = done_t
@@ -90,11 +94,13 @@ def run(N):
     for s in st:
         e = s['iter_end']; h = len(e) // 2; per.append((e[-1] - e[h - 1]) / (len(e) - h))
     t_sg = sum(per) / len(per)
+    nit = sum(s['it'] for s in st); waits = {k: sum(s[k] for s in st) / nit for k in ('w_op', 'w_res', 'w_own')}
     span = max(s['iter_end'][-1] for s in st); n_ports = a.ports
     util = {k: (busy[k] / span) / (n_ports if not k.endswith('(core)') else 1) for k in busy}
-    return t_sg, util
+    return t_sg, util, waits
 print(f"{os.path.basename(a.join)}: {len(P)} instructions per iteration; loads {a.loads}; issue {a.issue}; port slot {a.port_slot}; MMA queue {a.mma_queue}; {a.ports} ports; convert unit {a.xu} ns core-wide")
 print(f"{'sg/port':>7s} {'sgs/core':>8s} {'ns per sg-iter':>14s} {'iter/us/core':>12s}   busy share (per-port pipes averaged; XU = the core's convert/bfe unit)")
 for N in [int(x) for x in a.sgs.split(',')]:
-    t_sg, util = run(N)
-    print(f"{N:7d} {N * a.ports:8d} {t_sg:14.0f} {N * a.ports / t_sg * 1e3:12.1f}   " + ' '.join(f"{k} {v:4.2f}" for k, v in sorted(util.items(), key=lambda x: -x[1]) if v > 0.02))
+    t_sg, util, w = run(N)
+    print(f"{N:7d} {N * a.ports:8d} {t_sg:14.0f} {N * a.ports / t_sg * 1e3:12.1f}   " + ' '.join(f"{k} {v:4.2f}" for k, v in sorted(util.items(), key=lambda x: -x[1]) if v > 0.02)
+          + f"   | per sg-iter: operand wait {w['w_op']:.0f} ns, own-unit wait {w['w_own']:.0f}, blocked by port/pipe {w['w_res']:.0f}, issuing {len(P) * a.issue:.0f}")
