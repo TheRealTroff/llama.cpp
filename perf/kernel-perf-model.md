@@ -975,6 +975,16 @@ twin writes, a twin written only for skinny consumers would carry the lever at n
 structure bit 1 changes, the lever waits for the twins' own fix. **Status: BUILT, byte-identical, not a win under the
 current pick; manifest `proposed` with the condition; owner decides with the mask.**
 
+**Where mask 63's 4.5% goes (`halfb/prof63.txt`, `halfb/groups-analysis.txt`).** Serialized per-op GPU time is identical under
+60 and 63 (every bucket within 0.1 ms; elementwise +0.3). The group-timed profile (`GGML_METAL_PROFILE=2`, `census-groups.py`):
+under mask 60 the skinny matmuls that share one input run two or three to a concurrency group (the q4_K 10240 group: 3 calls,
+S/W 1.70; the 5120x17408 ffn ops in pairs, S/W 1.10), summed group walls 161.7 ms/round, hiding 1.12x; under mask 63 **every
+skinny matmul runs alone** (S/W 1.00-1.01, 1181 groups per round vs 1116), summed walls 169.1 ms, hiding 1.07x: +7.4 ms of wall
+per round = the 4.5%. The twins' producer tail (the f16 range reserved after the norm/swiglu output, which the encode loop's
+hazard check treats as part of the producer's write range) serializes the consumers that previously overlapped. That is an
+allocation/hazard-tracking item on the fusion branch, not a kernel one; fixed, mask 63 + this lever would stand ~+2.5% over the
+pick (the lever's 4.5 ms serialized, with the groups' hiding restored). Until then: lever built, inert under the pick.
+
 What this leaves: (1) ~~**the contention curve from the simulator**~~ DONE 10-31 night: `nstream-sim.py --tgmem-core --mma-fp32 8
 --mma-fp32-h 6` reproduces the six skinny tiles' ladders within 7% mean at two and three per port (iq4_xs/q6_K -13..-15 the
 worst) and fifteen harness replicas within 7.6%; open there: the loaded-core latency of the constant gather (iq4_xs), the
@@ -1015,7 +1025,9 @@ check - fa decode first.
 - 2026-11-01: half-B BUILT (GGML_MM_SKINNY_HALFB, b6fecdc19 + twin path): per call -3.6..-5.1%, 12/12 dumps and every graph
   sha canonical; in-graph the cast form (=2, cast + reset per op) is -4.3% t/s (the reset breaks the concurrency groups), the
   twin form (=1) needs GGML_FUSE_SMALL mask 63, which itself costs -4.5% on the width-8 round (new finding), lever +3.5% over 63,
-  -1.2% net vs the pick. Not a win as the pick stands; where mask 63's 4.5% goes is the next question (prof63.txt).
+  -1.2% net vs the pick. Not a win as the pick stands. Mask 63's 4.5% located: the twin tail serializes the skinny matmuls that
+  shared a concurrency group under 60 (summed group walls 161.7 -> 169.1 ms/round, hiding 1.12 -> 1.07x; kernel time unchanged) -
+  a hazard-tracking item on the fusion branch; fixed, 63 + lever ~ +2.5% over the pick.
 - 2026-11-01 small hours: three levers priced as arms 9/10/11 (lever-probes.txt): half-B-copy staging -3.4% (byte-identical,
   buildable via the Y16 copy), half accumulators -4..-5% (numerics), bit-trick q3_K dequant 0 (refuted in the real kernel: the
   five-op chain is already minimal). The dequant's share is structural; the large lever is fewer elements per lane = a layout decision.
