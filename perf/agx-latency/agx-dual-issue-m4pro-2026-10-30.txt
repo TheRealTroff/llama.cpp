@@ -1,0 +1,39 @@
+ctl_f32x4_u32 tg=1 threads=32 bytes=4096: t(n=8192)=236.4 us t(n=32768)=937.2 us -> 28.52 ns per iteration
+ctl_f32x8_u64 tg=1 threads=32 bytes=4096: t(n=8192)=402.4 us t(n=32768)=1601.4 us -> 48.79 ns per iteration
+ctl_f16x8_u64 tg=1 threads=32 bytes=4096: t(n=8192)=402.4 us t(n=32768)=1601.4 us -> 48.79 ns per iteration
+ctl_intx8_u64 tg=1 threads=32 bytes=4096: t(n=8192)=2.3 us t(n=32768)=2.4 us -> 0.00 ns per iteration
+dual_f32x4_f16x4_u64 tg=1 threads=32 bytes=4096: t(n=8192)=407.6 us t(n=32768)=1622.4 us -> 49.43 ns per iteration
+dual_f32x4_intx4_u64 tg=1 threads=32 bytes=4096: t(n=8192)=236.4 us t(n=32768)=937.2 us -> 28.52 ns per iteration
+dual_f16x4_intx4_u64 tg=1 threads=32 bytes=4096: t(n=8192)=236.5 us t(n=32768)=937.2 us -> 28.51 ns per iteration
+mma4_u8 tg=1 threads=32 bytes=4096: t(n=8192)=869.0 us t(n=32768)=3470.0 us -> 105.83 ns per iteration
+ctl_f32x16_u8 tg=1 threads=32 bytes=4096: t(n=8192)=734.8 us t(n=32768)=2930.9 us -> 89.36 ns per iteration
+mma4_f32x16_u8 tg=1 threads=32 bytes=4096: t(n=8192)=1477.5 us t(n=32768)=5900.5 us -> 179.97 ns per iteration
+----PORTS
+fma_f32_indep4_u16 tg=1 threads=32 bytes=4096: t(n=16384)=469.7 us t(n=65536)=1871.3 us -> 28.52 ns per iteration
+fma_f32_indep4_u16 tg=1 threads=64 bytes=4096: t(n=16384)=469.5 us t(n=65536)=1871.0 us -> 28.52 ns per iteration
+fma_f32_indep4_u16 tg=1 threads=128 bytes=4096: t(n=16384)=469.6 us t(n=65536)=1871.3 us -> 28.52 ns per iteration
+fma_f32_indep4_u16 tg=1 threads=256 bytes=4096: t(n=16384)=781.0 us t(n=65536)=3117.1 us -> 47.53 ns per iteration
+fma_f32_indep4_u16 tg=1 threads=512 bytes=4096: t(n=16384)=1445.6 us t(n=65536)=5775.5 us -> 88.09 ns per iteration
+fma_f32_indep4_u16 tg=1 threads=1024 bytes=4096: t(n=16384)=2779.7 us t(n=65536)=11109.5 us -> 169.47 ns per iteration
+---- int controls (shift+xor = 2 ops per chain step)
+ctl_intx8_u64 tg=1 threads=32 bytes=4096: t(n=8192)=262.3 us t(n=32768)=1041.2 us -> 31.69 ns per iteration
+dual_f32x4_intx4_u64 tg=1 threads=32 bytes=4096: t(n=8192)=345.4 us t(n=32768)=1373.3 us -> 41.82 ns per iteration
+dual_f16x4_intx4_u64 tg=1 threads=32 bytes=4096: t(n=8192)=350.5 us t(n=32768)=1394.0 us -> 42.46 ns per iteration
+---- core scaling: MMA, mixed MMA+fma, f16, dual f32+f16 at 1..16 simdgroups per threadgroup
+mma4_u8 tg=1 threads=32 bytes=4096: t(n=4096)=435.8 us t(n=16384)=1736.1 us -> 105.82 ns per iteration
+mma4_u8 tg=1 threads=128 bytes=4096: t(n=4096)=435.8 us t(n=16384)=1736.1 us -> 105.82 ns per iteration
+mma4_u8 tg=1 threads=256 bytes=4096: t(n=4096)=745.0 us t(n=16384)=2970.2 us -> 181.08 ns per iteration
+mma4_u8 tg=1 threads=512 bytes=4096: t(n=4096)=1410.0 us t(n=16384)=5633.6 us -> 343.72 ns per iteration
+mma4_f32x16_u8 tg=1 threads=32 bytes=4096: t(n=4096)=740.3 us t(n=16384)=2951.6 us -> 179.96 ns per iteration
+mma4_f32x16_u8 tg=1 threads=128 bytes=4096: t(n=4096)=740.0 us t(n=16384)=2951.6 us -> 179.98 ns per iteration
+mma4_f32x16_u8 tg=1 threads=256 bytes=4096: t(n=4096)=1401.8 us t(n=16384)=5598.8 us -> 341.55 ns per iteration
+mma4_f32x16_u8 tg=1 threads=512 bytes=4096: t(n=4096)=2736.9 us t(n=16384)=10939.9 us -> 667.57 ns per iteration
+ctl_f16x8_u64 tg=1 threads=128 bytes=4096: t(n=8192)=402.2 us t(n=32768)=1601.4 us -> 48.79 ns per iteration
+ctl_f16x8_u64 tg=1 threads=256 bytes=4096: t(n=8192)=723.6 us t(n=32768)=2884.9 us -> 87.94 ns per iteration
+ctl_f16x8_u64 tg=1 threads=512 bytes=4096: t(n=8192)=1388.4 us t(n=32768)=5546.0 us -> 169.17 ns per iteration
+ctl_f32x8_u64 tg=1 threads=128 bytes=4096: t(n=8192)=402.2 us t(n=32768)=1601.4 us -> 48.79 ns per iteration
+ctl_f32x8_u64 tg=1 threads=256 bytes=4096: t(n=8192)=729.1 us t(n=32768)=2909.6 us -> 88.72 ns per iteration
+ctl_f32x8_u64 tg=1 threads=512 bytes=4096: t(n=8192)=1390.4 us t(n=32768)=5549.9 us -> 169.25 ns per iteration
+dual_f32x4_f16x4_u64 tg=1 threads=128 bytes=4096: t(n=8192)=407.6 us t(n=32768)=1622.3 us -> 49.42 ns per iteration
+dual_f32x4_f16x4_u64 tg=1 threads=256 bytes=4096: t(n=8192)=615.1 us t(n=32768)=2452.8 us -> 74.78 ns per iteration
+dual_f32x4_f16x4_u64 tg=1 threads=512 bytes=4096: t(n=8192)=1097.1 us t(n=32768)=4380.9 us -> 133.62 ns per iteration

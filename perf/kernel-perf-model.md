@@ -449,6 +449,52 @@ instructions did not move X because q4_0 sits on the load-path cap, not the issu
 the load path fills faster from L2. The four-port figure is inferred from the fit, not measured: a micro-kernel with 2, 4, 8
 simdgroups per threadgroup would measure it directly.
 
+*Dual issue and the core's ports (13:00, owner: "the dual issue question had some implications, so let's settle that";
+`agx-dual-issue.txt`, kernels `ctl_*`, `dual_*`, `mma4_*` in `perf/agx-latency/kernels.metal`).* Throughput-bound chains (4 or
+8 independent) of two classes interleaved in ONE simdgroup, against 8 chains of one class:
+
+| one simdgroup | ns per iteration | reading |
+|---|---|---|
+| 8 x f32 fma (64 ops) | 48.8 | 0.76 ns per instruction |
+| 8 x f16 fma (64) | 48.8 | same pipe rate |
+| 4 f32 + 4 f16 (32 + 32) | 49.4 | = the 64-op control: **no FP32+FP16 dual issue** |
+| 4 f32 + 4 int (32 + 64 int ops) | 41.8 | = 28.5 + 15.8 (each alone): **no FP32+INT dual issue** |
+| 4 f16 + 4 int | 42.5 | same |
+| 32 MMA + 128 f32 fma | 180.0 | vs 105.8 + 89.4 alone: **MMA and ALU do not overlap** (8%) |
+
+A simdgroup issues one instruction at a time whatever its class, MMA included: the simulator's in-order single-issue assumption
+is right. (The int chain, shift+xor, ran at 0.25 ns per op - half the FP rate - so either the pair fused or the integer pipe
+issues faster from one simdgroup; unresolved, and immaterial to the loops, whose int work is a minority.)
+
+Then the same kernels with 1, 2, 4, 8, 16, 32 simdgroups in one threadgroup (one core):
+
+| simdgroups per core | 1 | 2 | 4 | 8 | 16 | 32 |
+|---|---|---|---|---|---|---|
+| f32 fma, core throughput (sg-instr/ns) | 1.12 | 2.25 | 4.5 | 5.4 | 5.8 | 6.0 |
+| f16 fma | 1.3 | - | 5.2 | 5.8 | 6.05 | - |
+| f32 + f16 mixed streams | 1.3 | - | 5.2 | 6.85 | **7.7** | - |
+| MMA (8x8x8 half -> float), MMA/ns | 0.30 | - | 1.21 | 1.41 | 1.49 | - |
+| 32 MMA + 128 fma per iteration | - | - | - | - | 0.77 MMA/ns + 3.07 fma/ns | - |
+
+- **Four simdgroups run at full single-simdgroup speed; the core saturates at 6.0 scalar instructions/ns for one class.** At
+  1.5 GHz that is four instructions per clock = 128 lanes: the four ports the ceiling fit inferred are real, and a port issues
+  one instruction per clock while a single simdgroup manages one per ~1.2 clocks (0.76-0.89 ns). Two simdgroups per port
+  saturate it.
+- **FP32 and FP16 are separate pipes behind the ports.** Mixed streams from different simdgroups reach 7.7/ns against 6.0 for
+  either class alone: the 6.0 is a pipe limit, and the port/issue limit is above 7.7. Dequant-heavy loops that mix FP16
+  converts with FP32 accumulation get some of this at residency; the ceiling model does not yet account for it.
+- **MMA shares the ports and costs four slots.** 1.49 MMA/ns per core = one 8x8x8 per clock; the mixed stream's shares sum
+  to 103% (52% of MMA capacity + 51% of scalar), so the two compete for the same issue resource, one MMA = four scalar slots -
+  the 3.2 ns single-simdgroup MMA issue is the port's four clocks.
+- **The MMA pipe is far above what any tile reaches.** 1.49 MMA/ns/core x 1024 flop x 20 cores = 30 TFLOPS of half->float
+  matrix work, against the 7 TFLOPS the mul_mm prefill tiles sit at. The "MMA roof" the mm rows were scored against is the
+  best kernel, not the hardware: the prefill tiles are issue-, stage- and load-bound at a quarter of the matrix pipe. That
+  reopens the mm family (95% of a roof that is itself 25% of the pipe).
+
+For the ceiling model the refinement is: per k-step, slots per pipe (FP32-pipe instructions, FP16-pipe instructions, MMA at
+four slots, loads on the load path), ceiling = min over the binding pipe of 4 per clock, and the load path - instead of one
+undifferentiated issue sum. Not yet done; the one-sum version placed seven kernels within 15%.
+
 *What R was.* At pad 24576 the core holds exactly one threadgroup (two simdgroups) and the counter reads 0.51: the APS "inflight"
 value is about a quarter of the resident simdgroups, so the t0 = 91 ns and X of the earlier sections are the physical 390 ns
 per threadgroup k-step and 4 simdgroups per core seen through that proxy. Nothing above changes; the physical model is cleaner:
@@ -459,8 +505,10 @@ instruction streams against shared ports.
 What this leaves: (1) **the contention curve from the simulator** - run N simdgroup streams against four shared issue
 ports and the load path and compare with the pad ladders (R 0.5 -> 3.1) and the grid curve; if it reproduces them, the whole
 skinny family is predicted from code plus five chip constants (latency table, 200 ns stream, 4 ports, 9 KB/us/core, the
-resident count from smem/registers); (2) **measure the four ports** (2/4/8 simdgroups per threadgroup micro-kernel) and the
-load-path figure (a streaming micro-kernel at 1-6 resident threadgroups); (3) the simulator's misses: iq4_xs -13% (the lookup-table gathers: price them with a gather micro-kernel) and q8_0 -16%
+resident count from smem/registers); (2) **the four ports are measured** (6.0 sg-instr/ns/core, four simdgroups at full speed); still to measure: the
+load-path figure (a streaming micro-kernel at 1-6 resident threadgroups), and the per-pipe ceiling (FP32 / FP16 / MMA-at-4-slots)
+against the pad ladders; (2b) **the mm family is reopened**: the MMA pipe is ~30 TFLOPS and the prefill tiles reach 7 -
+the simulator on a mul_mm tile's loop body says where the other three quarters go; (3) the simulator's misses: iq4_xs -13% (the lookup-table gathers: price them with a gather micro-kernel) and q8_0 -16%
 (its join is the 5120x48 row - rejoin at 17408x5120); the loop-body rule and the activation-load heuristic are the fragile parts; (4) the small-grid under-fill (why four queued threadgroups leave a core at a quarter of
 the counter) is unchanged; (5) the other latency-bound families get the same treatment: a join, the simulator, a ladder to
 check - fa decode first.
@@ -471,6 +519,9 @@ check - fa decode first.
   skinny tile refuted a third time; no model transferred to llama.cpp). Its timing host (`exp/m4-measurement-harness`
   41d5ffa8b) is a qualified ISOLATED timer; useful for calibration pairs, not for the target.
 - 2026-10-30 night: first fit + intervention scorecard + residency ladder, section above. Branch exp/kernel-perf-model.
+- 2026-10-30 13:00: dual issue settled - one simdgroup never dual-issues (FP32/FP16/INT/MMA all serial), the core has four ports
+  at one instruction per clock with separate FP32 and FP16 pipes (mixed 7.7/ns vs 6.0), MMA = four slots; the MMA pipe is ~4x
+  what the mul_mm tiles reach - the mm 'roof' was the best kernel, not the hardware.
 - 2026-10-30 12:40: six cached points - no bits trend, repeats to 0.1%; misses are iq4_xs (LUT gathers) and q8_0 (wrong-shape join).
 - 2026-10-30 12:10: THE T0 FORMULA: latency table from micro-kernels (perf/agx-latency), in-order k-step simulator over the
   MIR join (perf/kstep-sim.py); cached chain within 10% on four kernels with nothing fitted, stream within 14% on seven with one
