@@ -845,10 +845,58 @@ only from the stored-plane ushort read, so the probe must load a ushort from dev
 remaining -21% has its own suspect (the 32 uniform-base LUT gathers, 13555). Both are opcode prices, not rules: the
 simulator's structure now reproduces every harness variant to within 18% and the K-quant tiles to within 15%.
 
-What this leaves: (1) **the contention curve from the simulator** - run N simdgroup streams against four shared issue
-ports and the load path and compare with the pad ladders (R 0.5 -> 3.1) and the grid curve; if it reproduces them, the whole
-skinny family is predicted from code plus five chip constants (latency table, 200 ns stream, 4 ports, 9 KB/us/core, the
-resident count from smem/registers); (2) **the four ports are measured** (6.0 sg-instr/ns/core, four simdgroups at full speed); ~~still to measure: the
+*Two prices and a classification (later that night; owner: "probe like an alien"; `op_cgather`, `op_x16a/b/c`, `op_bfe16` in
+`kernels.metal`; `agx-pipes.py` BFEI/CLD; `nstream-sim.py --mma-fp32 --mma-fp32-h`; results `op-costs-q3chain.txt`,
+`mma-fp32-scan2.txt`, `mma-fp32-grid.txt`, `pipe-ceiling2.txt`).*
+
+- **17168, the 16-bit immediate extract (33 per q3_K k-step), costs ~1 clock.** A ushort loaded from device memory and extracted
+  at immediate offsets compiles to a mix of 17168 (12 of 32), 17195 and 454; the 32 extracts add 25 ns per port per iteration at
+  four per port (op_x16a 178 vs 78.5 ns control at 16 simdgroups) - 0.8-1.0 ns each, so 17168 cannot be above ~1.5. q3_K's chain
+  is now fully priced: 12288, 3328, 17168 all at table price. The remaining q3_K miss was not an opcode.
+- **17165, the 32-bit immediate extract, was mispriced at 2.33.** That figure is the REGISTER-offset form 17166 (op_bfe). The
+  immediate form measures 0.85-0.9 (op_bfe16: 190 vs 95 ns at 16 simdgroups for 24-32 extracts). The harness replica's dequant
+  carried 57 of them, so its earlier "fit" at --mma-fp32 5-6 was two errors cancelling.
+- **13555, the constant-table float gather (32 per iq4_xs k-step), is one issue slot at the port and ~25 ns of latency.** 32 gathers +
+  24 extracts + 32 f32 adds run 217 ns per iteration at 16 simdgroups where the same body with the nibble converted instead runs 340
+  (the i2f is the expensive one); alone, 8 chains of 4 gather+add take 109 ns = ~25 ns per gather. The simulator had classed it as
+  a 1-clock, 1.8-ns-latency integer op: its text reads `(invariant load ... addrspace 2)` and the memory regex wanted `(load`. Now
+  class CLD: cost 0.667 on the load pipe, latency 25.
+
+**With those three in the table, the MMA rule re-fits sharper, and the gap on the ud tiles closes.** Grid over (the 2884 MMA holds
+the FP32 pipe X ns, the 860 MMA holds Y ns), scored on the fifteen harness variants at pad 0 and the six real tiles at two and
+three per port (`mma-fp32-grid.txt`):
+
+| X / Y (ns) | harness mean err | real 3/port | real 2/port | per tile at 3/port: q4_0 q4_K q5_K q3_K iq4_xs q6_K |
+|---|---|---|---|---|
+| 6 / 0 | 12.2% | 14.9% | 7.3% | -10 -10 -7 -22 -22 -19 |
+| **8 / 6** | **7.6%** | **7.0%** | **6.9%** | **+5 -4 -2 -3 -15 -13** |
+| 10.6 / 6 | 9.6% | 7.0% | 6.0% | -5 +6 +3 +6 -17 -4 |
+
+**The half->float-accumulate MMA holds the port's FP32 pipe for ~8 of its 10.6 ns; the half-accumulate form for ~6** (the
+half-accumulator harness variant pins Y: +43% without it, +2% at 6). Where the night started with the simulator 23-33% fast on
+every ud tile at three per port, it is now within 5% on q4_0, q4_K, q5_K and q3_K and 13-15% fast on iq4_xs and q6_K; mean
+7% at both residencies. What is left: iq4_xs (the gather latency under load is probably above the lone 25 ns; a loaded-core
+gather probe would say) and q6_K (its 48 extracts are the register form at 2.33 - the one price that came from a single probe
+family). The variants without MMA still run 11-16% faster than the simulator (its tile-load and tg-memory costs are high when the
+FP16 pipe is idle) and the bit-trick dequant 18% faster (16-bit integer ops below 0.72): both are table items, not rules.
+`pipe-ceiling.py` (static max over pipes) cannot carry the MMA hold and keeps its q3_K +35% / iq4_xs +20%; the simulator is the
+model from here.
+
+On the owner's question - whether this has to be done by coaxing the compiler from source. Two routes exist below source
+(`metal-air-layout-control` skill): the AIR (LLVM IR) round trip through `air-opt -S` / `air-as`, and exact native code through
+`metal-tt` into an `MTLBinaryArchive` selected with fail-on-miss. The IR route controls unrolling, block shape and register
+budget but not instruction selection - the AGX translator is statically linked and owns it, so an IR probe would still get the
+translator's choice of 17165 vs 17168. The archive route gives exact bytes (one could patch a probe's native stream with the
+real kernel's encodings and run it uncaptured), at the price of no replay profile of what ran. Tonight neither was needed:
+every opcode of the q3_K chain was reached from source within three forms once the source types matched the kernel's (a device
+ushort for 17168, a `constant` table indexed by a register for 13555), and the one that could not be reached (12288) was priced
+by the in-kernel A/B instead. The archive route is the tool to keep for an opcode none of those three ways produces.
+
+What this leaves: (1) ~~**the contention curve from the simulator**~~ DONE 10-31 night: `nstream-sim.py --tgmem-core --mma-fp32 8
+--mma-fp32-h 6` reproduces the six skinny tiles' ladders within 7% mean at two and three per port (iq4_xs/q6_K -13..-15 the
+worst) and fifteen harness replicas within 7.6%; open there: the loaded-core latency of the constant gather (iq4_xs), the
+register-form extract's 2.33 (q6_K), 16-bit int op costs, tile-load costs when the FP16 pipe is idle, and the 4-per-port DRAM
+share (chip term, not in the sim); (2) **the four ports are measured** (6.0 sg-instr/ns/core, four simdgroups at full speed); ~~still to measure: the
 load-path figure (a streaming micro-kernel at 1-6 resident threadgroups), and the per-pipe ceiling (FP32 / FP16 / MMA at
 sixteen slots) against the pad ladders~~ MEASURED (night): the per-core load path is 37 KB/us from DRAM (the 9 is a chip share),
 the per-pipe ceiling with measured per-opcode port costs places 5 of 7 skinny kernels within 6%; open: q3_K +30% and iq4_xs
@@ -877,7 +925,10 @@ check - fa decode first.
   harness. NIGHT: arm 6 was DRAM-bound (fixed: dequant = 39-49% at every pad); the harness skeleton reproduces the real tile
   within 5-10% with and without the dequant; the simulator's miss is dequant x MMA; rule found: the 2884 MMA holds the FP32
   pipe ~5-6 ns (--mma-fp32) - harness error 16 -> 8%, K-quant tiles at 3/port -23..-31 -> -6..-15, q3_K/iq4_xs -22/-21 left;
-  the q3_K remainder is one unpriced opcode among 17168 / 3328 (in-kernel A/Bs, `q3k-forms/`).
+  the q3_K remainder is one unpriced opcode among 17168 / 3328 (in-kernel A/Bs, `q3k-forms/`). LATER: 17168 ~1 clock, 3328 at table
+  price (A/B flat), 17165 immediate-bfe 2.33 -> 0.9 (was the register form's price), 13555 constant gather = one slot + 25 ns (was
+  classed as an int op); rule re-fit: 2884 holds FP32 8 ns, 860 6 ns -> sim within 5% on q4_0/q4_K/q5_K/q3_K at 3/port, iq4_xs/q6_K
+  -13..-15, mean 7% at 2 and 3 per port, harness 7.6%. Below-source routes answered (AIR cannot pick opcodes; binary archive can).
 - 2026-10-31 later: both candidate mechanisms probed. Skinny-pattern tg memory: strided tile loads +18%, A staging stores 2x the
   mul_mm pattern, the unit is core-wide, ~60% busy at the ceiling - not binding (sim with it: 883 vs 1250). Barriers (PROBE=3 arm,
   branch only): 5.5-8.5% of the k-step at every residency - real, not the gap. Remaining: ud tiles 23-33% slower at 3 sg/port than

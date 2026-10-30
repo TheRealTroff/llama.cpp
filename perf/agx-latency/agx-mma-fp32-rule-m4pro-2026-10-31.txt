@@ -1,0 +1,53 @@
+# MMA holds the FP32 pipe: scans and grid, 2026-10-31 night (perf/kernel-perf-model.md)
+AFTER the price fixes (bfe-immediate 17165 = 0.9, constant gather 13555 = one slot + 25 ns): harness variants at pad 0 (sim N=3), error per --mma-fp32 value
+variant                  meas |   fp32=0   fp32=4   fp32=5   fp32=6   fp32=8
+skel_full                18.1 |     +14%      +3%      +0%      -5%      -2% 
+skel_nostream            18.5 |     +11%      +2%      +1%      -1%      -5% 
+skel_nomma               22.6 |     -11%     -11%     -11%     -11%     -11% 
+skel_nobar               18.8 |     +10%      +1%     -10%      -3%      -5% 
+skel_noast               19.4 |     -13%     -13%     -11%     -13%     -12% 
+skel_nobst               21.0 |      +5%      +5%      +5%      +5%      +5% 
+skel_mmaonly             22.1 |     -13%     -13%     -13%     -13%     -13% 
+skel_nomma_nobar         23.5 |     -16%     -16%     -16%     -16%     -16% 
+skel_deq                 11.6 |     +60%     +22%     +19%     +13%      +2% 
+skel_deq_nostream        13.3 |     +58%     +33%     +12%      +9%      +0% 
+skel_deq_nomma           13.7 |     +18%     +18%     +18%     +18%     +18% 
+skel_deq_nobar           11.7 |     +60%     +27%     +20%     +12%      +2% 
+skel_deq_hacc            12.9 |     +43%     +43%     +43%     +43%     +43% 
+skel_deq_nocvt           15.2 |     -18%     -18%     -18%     -18%     -18% 
+skel_deq_nocvt_nomma     18.5 |      +2%      +2%      +2%      +2%      +2% 
+mean |err|                    |    23.4%     15.1%     13.3%     12.2%     10.4% 
+
+real tiles, per-sg k-step ns at 1 / 3 per port (ladder) vs sim --loads 200, error per --mma-fp32 value at 3 per port
+kernel      ladder 1/3 |         fp32=0         fp32=4         fp32=5         fp32=6         fp32=8
+q4_0 SoA    396/  887 |   474/  912   +3%   474/  802  -10%   474/  802  -10%   474/  800  -10%   474/  929   +5% 
+q4_K        633/ 1000 |   724/  751  -25%   724/  846  -15%   724/  865  -14%   724/  896  -10%   724/  965   -4% 
+q5_K        712/ 1126 |   813/  865  -23%   813/  968  -14%   813/ 1007  -11%   813/ 1052   -7%   813/ 1101   -2% 
+q3_K        614/ 1106 |   692/  762  -31%   692/  850  -23%   692/  860  -22%   692/  860  -22%   692/ 1075   -3% 
+iq4_xs      643/ 1062 |   643/  704  -34%   643/  771  -27%   643/  799  -25%   643/  832  -22%   643/  898  -15% 
+q6_K        670/ 1204 |   713/  779  -35%   713/  904  -25%   713/  902  -25%   713/  980  -19%   713/ 1043  -13% 
+
+grid over (2884 holds FP32 X ns, 860 holds Y ns): mean |err| over 15 harness variants at pad 0 (N=3), over 6 real tiles at 3 per port and at 2 per port (--loads 200)
+X / Y     harness  real 3/p  real 2/p   real per-tile err at 3/p: q4_0 q4_K q5_K q3_K iq4_xs q6_K | hacc err
+   6 /  0    12.2%     14.9%      7.3%     -10   -10    -7   -22   -22   -19 |  +43%
+   6 /  4     9.9%     14.9%      7.3%     -10   -10    -7   -22   -22   -19 |   +9%
+   6 /  6     9.4%     14.9%      7.3%     -10   -10    -7   -22   -22   -19 |   +2%
+   6 /  8     9.8%     14.9%      7.3%     -10   -10    -7   -22   -22   -19 |   -9%
+   8 /  0    10.4%      7.0%      6.9%      +5    -4    -2    -3   -15   -13 |  +43%
+   8 /  4     8.1%      7.0%      6.9%      +5    -4    -2    -3   -15   -13 |   +9%
+   8 /  6     7.6%      7.0%      6.9%      +5    -4    -2    -3   -15   -13 |   +2%
+   8 /  8     8.1%      7.0%      6.9%      +5    -4    -2    -3   -15   -13 |   -9%
+10.6 /  0    12.4%      7.0%      6.0%      -5    +6    +3    +6   -17    -4 |  +43%
+10.6 /  4    10.2%      7.0%      6.0%      -5    +6    +3    +6   -17    -4 |   +9%
+10.6 /  6     9.6%      7.0%      6.0%      -5    +6    +3    +6   -17    -4 |   +2%
+10.6 /  8    10.1%      7.0%      6.0%      -5    +6    +3    +6   -17    -4 |   -9%
+
+per-pipe port time per loop iteration of one simdgroup, ns (ALU one clock; int 0.78; int<->float converts 2.5; bfe 2.33; tile load 2.6; tg store 2.8 / 5.0; MMA 10.6); pipes: FP32 | FP16+MMA | INT+CVT+BFE | tg load | tg store; X = iterations/us/core
+q4_0 SoA    228 instr | FP32   5.3 FP16 212.3 INT 134.5 TLD  62.4 TST  33.6 DLD   2.7 (INT = 24 int x0.72 + 12 shift x1.3 + 32 cvt x2.5 + 0 bfe x2.33) | binding FP16 -> X pipe  18.8  X stream  15.6  X pred  15.6  X meas 15.95  err   -2%
+q4_K        241 instr | FP32  32.7 FP16 169.6 INT 155.1 TLD  62.4 TST  33.6 DLD   6.7 (INT = 66 int x0.72 + 16 shift x1.3 + 34 cvt x2.5 + 0 bfe x2.33) | binding FP16 -> X pipe  23.6  X stream  15.6  X pred  15.6  X meas 15.35  err   +2%
+q5_K        350 instr | FP32  32.0 FP16 169.6 INT 236.7 TLD  62.4 TST  33.6 DLD   7.3 (INT = 162 int x0.72 + 18 shift x1.3 + 34 cvt x2.5 + 0 bfe x2.33) | binding INT -> X pipe  16.9  X stream  12.8  X pred  12.8  X meas 13.10  err   -2%
+q3_K        322 instr | FP32  29.3 FP16 169.6 INT 231.6 TLD  62.4 TST  33.6 DLD   9.3 (INT = 126 int x0.72 + 35 shift x1.3 + 36 cvt x2.5 + 0 bfe x2.33) | binding INT -> X pipe  17.3  X stream  20.5  X pred  17.3  X meas 12.80  err  +35%
+iq4_xs      239 instr | FP32  27.3 FP16 169.6 INT  88.5 TLD  62.4 TST  33.6 DLD  26.0 (INT = 53 int x0.72 + 17 shift x1.3 + 1 cvt x2.5 + 1 bfe x2.33) | binding FP16 -> X pipe  23.6  X stream  16.5  X pred  16.5  X meas 13.75  err  +20%
+q6_K        318 instr | FP32  28.0 FP16 169.6 INT 232.1 TLD  62.4 TST  33.6 DLD   4.0 (INT = 101 int x0.72 + 24 shift x1.3 + 34 cvt x2.5 + 0 bfe x2.33) | binding INT -> X pipe  17.2  X stream  10.7  X pred  10.7  X meas 11.35  err   -6%
+q8_0        201 instr | FP32  26.7 FP16 169.6 INT 133.6 TLD  62.4 TST  33.6 DLD   7.3 (INT = 34 int x0.72 + 21 shift x1.3 + 32 cvt x2.5 + 0 bfe x2.33) | binding FP16 -> X pipe  23.6  X stream   8.3  X pred   8.3  X meas  7.45  err  +11%
+(bytes per simdgroup k-step = 32 rows x 64 k x bits / 8 / 2 simdgroups; the stream term 9 KB/us/core is the fleet's measured share, tstep-fit X)

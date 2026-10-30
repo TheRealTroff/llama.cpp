@@ -17,21 +17,21 @@ import argparse, json, os, re, sys
 from collections import Counter
 HERE = os.path.dirname(os.path.abspath(__file__))
 CLS = {int(k): v['cls'] for k, v in json.load(open(os.path.join(HERE, 'agx-opcode-classes.json')))['opcodes'].items()}
-MEMRE = re.compile(r':: \((load|store) [^)]*\)[^\n]*?addrspace (\d)')
+MEMRE = re.compile(r':: \((?:invariant )?(load|store) [^)]*\)[^\n]*?addrspace (\d)')
 # opcode -> pipe for the classes the class table does not separate (OALU/UNPINNED/SPL); the rest by class
 PIPE_OP = {12104: 'CVT', 12105: 'CVT', 12107: 'CVT', 12108: 'CVT', 10225: 'CVT', 10226: 'CVT',   # int <-> half/float converts (quarter rate)
            3329: 'FP32', 3320: 'FP32',                                                        # f32 -> half convert, f32 mul (full rate, FP32 pipe)
            1037: 'FP32', 1038: 'FP32', 1028: 'FP32', 1020: 'FP32', 1021: 'FP32',             # f32 mul / round-to-half / fma forms
            820: 'FP16', 821: 'FP16', 796: 'FP16', 798: 'FP16', 884: 'FP16',                 # f16 fma / mul
            2884: 'MMA', 860: 'MMA',
-           17165: 'BFE', 17166: 'BFE', 17168: 'SHF', 17195: 'SHF', 442: 'SHF', 443: 'INT', 444: 'INT', 445: 'INT', 447: 'INT', 454: 'INT', 17880: 'INT', 15311: 'INT', 15230: 'INT', 15320: 'INT', 14468: 'INT', 12288: 'INT', 12289: 'INT', 12290: 'INT', 12591: 'INT', 12594: 'INT', 16957: 'INT',
+           17165: 'BFEI', 17166: 'BFE', 17168: 'SHF', 17195: 'SHF', 442: 'SHF', 443: 'INT', 444: 'INT', 445: 'INT', 447: 'INT', 454: 'INT', 17880: 'INT', 15311: 'INT', 15230: 'INT', 15320: 'INT', 14468: 'INT', 12288: 'INT', 12289: 'INT', 12290: 'INT', 12591: 'INT', 12594: 'INT', 16957: 'INT',
            610: 'INT', 606: 'NONE', 466: 'NONE', 574: 'NONE', 597: 'NONE', 598: 'NONE', 599: 'NONE', 602: 'NONE', 479: 'NONE', 483: 'NONE', 14977: 'INT', 14980: 'INT', 14981: 'INT'}
 PIPE_CLS = {'FP32': 'FP32', 'FP16': 'FP16', 'INT32': 'INT', 'INT16': 'INT', 'OALU': 'INT', 'UNPINNED': 'INT', 'SPL': 'INT', 'BR': 'NONE', 'NONE': 'NONE'}
 # port cost per instruction, ns (class-mix matrix + single-opcode probes, 2026-10-30 night): plain ALU one clock (0.67; int add/xor 0.78);
 # int<->float/half converts 2.4-2.6 (quarter rate: 12104/12105/12107/12108/10225/10226); bitfield extract 2.33 (17165/17166); shifts ~1.3 (442/17168/17195,
 # inferred from the 96-op int class at 0.9 average with add/and/xor at 0.72); float<->half
 # round/convert 0.67 (1037/1038/3329); tile load 2.6; 2-byte tg store 2.8; 16-byte tg store 5.0; MMA 10.6; device load one slot
-COST = {'FP32': 0.667, 'FP16': 0.667, 'INT': 0.72, 'SHF': 1.3, 'CVT': 2.5, 'BFE': 2.33, 'MMA': 10.6, 'TLD': 2.6, 'TST2': 2.8, 'TST16': 5.0, 'DLD': 0.667, 'DST': 0.667, 'NONE': 0.0}
+COST = {'FP32': 0.667, 'FP16': 0.667, 'INT': 0.72, 'SHF': 1.3, 'CVT': 2.5, 'BFE': 2.33, 'BFEI': 0.9, 'CLD': 0.667, 'MMA': 10.6, 'TLD': 2.6, 'TST2': 2.8, 'TST16': 5.0, 'DLD': 0.667, 'DST': 0.667, 'NONE': 0.0}
 def pipes_of(join, ksteps=1.0):
     ins = json.load(open(join))['instructions']
     per = Counter(); cnt = Counter()
@@ -42,7 +42,7 @@ def pipes_of(join, ksteps=1.0):
         m = MEMRE.search(i['text'])
         if m:
             kind, space = m.group(1), m.group(2)
-            if kind == 'load': p = 'DLD' if space == '1' else 'TLD'
+            if kind == 'load': p = 'DLD' if space == '1' else 'CLD' if space == '2' else 'TLD'
             elif space == '1': p = 'DST'
             else: p = 'TST16' if '<4 x s32>' in i['text'] or '<2 x s32>' in i['text'] else 'TST2'
         else:
@@ -50,7 +50,7 @@ def pipes_of(join, ksteps=1.0):
         n[p] += 1; t[p] += COST[p]
     # pipes that share a port resource: FP16 and MMA are one pipe; TST2/TST16 one store pipe
     merged = Counter()
-    for p, v in t.items(): merged[{'MMA': 'FP16', 'TST2': 'TST', 'TST16': 'TST', 'CVT': 'INT', 'BFE': 'INT', 'SHF': 'INT'}.get(p, p)] += v
+    for p, v in t.items(): merged[{'MMA': 'FP16', 'TST2': 'TST', 'TST16': 'TST', 'CVT': 'INT', 'BFE': 'INT', 'BFEI': 'INT', 'SHF': 'INT', 'CLD': 'DLD'}.get(p, p)] += v
     for p in merged: merged[p] /= ksteps
     return merged, n, len(body)
 def report(name, join, ksteps, bytes_per, xmeas=None):

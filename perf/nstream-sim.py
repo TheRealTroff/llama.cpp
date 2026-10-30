@@ -33,11 +33,12 @@ ap.add_argument('--iters', type=int, default=24); ap.add_argument('--issue', typ
 ap.add_argument('--mma-queue', type=int, default=64); ap.add_argument('--ports', type=int, default=4); ap.add_argument('--xu', type=float, default=0.67, help='core-wide convert/bfe unit, ns per op')
 ap.add_argument('--table', default=os.path.join(HERE, 'agx-latency', 'latency.json'))
 ap.add_argument('--mma-fp32', type=float, default=0.0, help='candidate rule: each MMA also occupies its port FP32 pipe for this many ns (the half->float accumulate on the f32 adder)')
+ap.add_argument('--mma-fp32-h', type=float, default=0.0, help='the same for the half-accumulate MMA (op 860)')
 ap.add_argument('--mma-xu', type=float, default=0.0, help='candidate rule: each MMA also occupies the core-wide convert unit for this many ns')
 ap.add_argument('--tgmem-core', action='store_true', help='threadgroup memory as ONE core-wide unit: tile load 0.9 ns, 16-byte store 3.9, 2-byte store 1.2 (tldS/tstA/tstB probes at 16 simdgroups) instead of per-port pipes')
 a = ap.parse_args()
 T = json.load(open(a.table)); LAT_OP = {int(k): v for k, v in T['opcodes'].items()}; MEM = T['memory']
-DEFAULT_LAT = {'FP32': 1.7, 'FP16': 1.6, 'INT': 1.8, 'CVT': 2.5, 'BFE': 2.0, 'SHF': 2.0, 'MMA': 11.7, 'TLD': MEM['tg_load'], 'TST2': MEM['tg_store_to_load'] - MEM['tg_load'], 'TST16': MEM['tg_store_to_load'] - MEM['tg_load'], 'DST': 1.0, 'DLD': MEM['device_l1'], 'NONE': 1.0}
+DEFAULT_LAT = {'FP32': 1.7, 'FP16': 1.6, 'INT': 1.8, 'CVT': 2.5, 'BFE': 2.0, 'SHF': 2.0, 'MMA': 11.7, 'BFEI': 2.0, 'CLD': 25.0, 'TLD': MEM['tg_load'], 'TST2': MEM['tg_store_to_load'] - MEM['tg_load'], 'TST16': MEM['tg_store_to_load'] - MEM['tg_load'], 'DST': 1.0, 'DLD': MEM['device_l1'], 'NONE': 1.0}
 OWN = {'TST2': 3.3, 'TST16': 11.7, 'CVT': 1.4, 'BFE': 1.3, 'MMA': 11.7 if a.mma_queue == 0 else 0.0}   # one simdgroup's own spacing per kind
 XU = {'CVT', 'BFE'}   # the core-wide unit
 TGM = {'TLD': 0.9, 'TST16': 3.9, 'TST2': 1.2}   # core-wide threadgroup-memory costs when --tgmem-core
@@ -50,7 +51,7 @@ for i in body:
     for r in regs(lhs): d |= comps(r)
     for r in regs(rhs): u |= comps(r)
     sub, pipe, cost = pipes.classify(i)
-    lat = LAT_OP.get(i['op'], DEFAULT_LAT.get(sub, 2.0)) if sub not in ('DLD', 'TLD', 'TST2', 'TST16') else DEFAULT_LAT[sub]
+    lat = LAT_OP.get(i['op'], DEFAULT_LAT.get(sub, 2.0)) if sub not in ('DLD', 'CLD', 'TLD', 'TST2', 'TST16') else DEFAULT_LAT[sub]
     base = regs(rhs) if sub == 'DLD' else None
     act = sub == 'DLD' and '<4 x s32>' in t and base and len(base) == 1 and '_' in REG.search(rhs).group(1)
     P.append(dict(d=d, u=u, sub=sub, pipe=pipe, cost=cost, lat=lat, act=act, op=i['op']))
@@ -78,7 +79,8 @@ def run(N):
             start = max(start, tgm_free); tgm_free = start + TGM[p['sub']]; busy['TGMEM(core)'] += TGM[p['sub']]; done_t = start + lat
         elif p['sub'] == 'MMA' and a.mma_queue > 0:
             key = (port, p['pipe']); pipe_start = max(pipe_free[key], start)
-            if a.mma_fp32 > 0 and p['op'] == 2884: pipe_start = max(pipe_start, pipe_free[(port, 'FP32')]); pipe_free[(port, 'FP32')] = pipe_start + a.mma_fp32; busy['FP32'] += a.mma_fp32
+            hold = a.mma_fp32 if p['op'] == 2884 else a.mma_fp32_h
+            if hold > 0: pipe_start = max(pipe_start, pipe_free[(port, 'FP32')]); pipe_free[(port, 'FP32')] = pipe_start + hold; busy['FP32'] += hold
             if a.mma_xu > 0: pipe_start = max(pipe_start, xu_free); xu_free = pipe_start + a.mma_xu; busy['XU(core)'] += a.mma_xu
             pipe_free[key] = pipe_start + p['cost']; busy[p['pipe']] += p['cost']
             done_t = pipe_start + lat
