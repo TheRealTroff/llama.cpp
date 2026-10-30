@@ -352,9 +352,34 @@ The (t0, X) table, nine kernels of the one tile geometry (m=17408 k=5120 n=8, pa
   (requests, not bytes: q3_K issues 12 device loads per hot block, iq3_s similar) is the candidate; a ladder on a format with
   the same bytes and a different load count would separate requests from bytes.
 
-What this leaves: (1) **t0 is predicted in kind** - 70 ns of chain plus the exposed DRAM latency, set by the load-use
-distance - but not yet in number: PROBE=2 on a generic-tile kernel (port the knob) gives the cached chain of that tile and the
-DRAM share directly, and makes t0 a two-term formula; (2) **X is a load-path ceiling at ~9 KB/us/core of weight stream with
+**The no-stream probe on the generic tile (2026-10-30 10:54-11:05; `GGML_MM_SKINNY_PROBE=2` ported to `kernel_mul_mm_skinny_t`
+on the branch, f866c721e; ladders `smem-pad-{q4_K,q5_K,q3_K}_soa-probe2/`, same-binary control `smem-pad-q4_K_soa-branchbase/`
+t0 154 X 15.6 vs the prod-binary 150 / 15.4).** The experiment that was to decide what t0 is a function of:
+
+| kernel | t0 with the DRAM stream | t0 cached (PROBE=2) | exposed DRAM latency | uncontended k-step R=0.5, stream / cached | X stream / cached | pad-0 time |
+|---|---|---|---|---|---|---|
+| q4_0 SoA | 91 ns | 69 ns | 22 ns | 99 / 78 ns (-21%) | 15.95 / 17.15 | -8% |
+| q4_K generic | 150-154 | 112 | 38-42 | 158 / 121 (-24%) | 15.4 / 15.1 | -7% |
+| q5_K generic | 170 | 130 | 40 | 178 / 140 (-21%) | 13.1 / 13.6 | -10% |
+| q3_K generic | 142 | 110 | 32 | 153 / 121 (-21%) | 12.8 / 12.8 | -6% |
+
+**Outcome two.** The generic tile's cached chain is 110-130 ns, not 70: of the 50-80 ns between the SoA tile and the generic
+tiles, 40-60 ns is the chain through the caches and only 10-20 ns is extra exposed DRAM latency. The dequant and staging
+sequence of the generic tile is on the critical path. So t0 is NOT predicted by the load-use distance plus a shared chain; it
+needs the critical-path latency of the k-step from the machine code, which means per-instruction latencies this tree does not
+have (the profiler's stall column is where they would come from). Two facts the probe did settle: the exposed DRAM share is
+a fifth of the uncontended k-step on all four kernels (21-24%, 22-42 ns), and the ceiling X does not move when the stream
+leaves DRAM on any of them (now four kernels, two tiles). Within the generic cluster the cached chain spreads 110-130 ns and
+no static feature in `dataset.json` orders it (q3_K: deepest dependency chain, most loads, fastest).
+
+What this makes the model, honestly: **per kernel (t0, X) is a 2.5-minute ladder, not a formula.** t0 = 1.25 x the cached
+chain, the cached chain is a property of the tile and format (69 ns SoA q4_0; 110-130 ns generic), and the ceiling is the
+weight-stream load path. For a NEW kernel of a known tile the table gives t0 within +-10% before any measurement; for a new
+tile one ladder calibrates it. That is where the first milestone ends.
+
+What this leaves: (1) **t0 is a per-tile table, not a formula** (measured: the generic tile's cached chain is 110-130 ns,
+the DRAM share a fifth); a formula needs per-instruction latencies, i.e. the critical path of the k-step read off the
+profiler's stall column - a tooling build, to be weighed against "one 2.5-minute ladder per new kernel"; (2) **X is a load-path ceiling at ~9 KB/us/core of weight stream with
 a per-format penalty for the 3-bit formats** - requests vs bytes is the open split (a same-bytes, different-load-count pair
 decides it); (3) **R from the grid is measured** (R(n), 17 points, 9%); unexplained is why a core with four threadgroups
 queued holds under one in flight (per-core timeline needed); (4) t_step at a given R depends on how the R arose
@@ -368,6 +393,8 @@ treatment; fa decode is the long-context wall and the next family.
   skinny tile refuted a third time; no model transferred to llama.cpp). Its timing host (`exp/m4-measurement-harness`
   41d5ffa8b) is a qualified ISOLATED timer; useful for calibration pairs, not for the target.
 - 2026-10-30 night: first fit + intervention scorecard + residency ladder, section above. Branch exp/kernel-perf-model.
+- 2026-10-30 11:05: PROBE=2 ported to the generic tile; its cached chain is 110-130 ns (not 70): t0 is a per-tile table,
+  the exposed DRAM share a fifth of the k-step on all four kernels, X unmoved by the stream on all four. First milestone ends here.
 - 2026-10-30 10:30: probe-arm ladders (half instructions: t0 +25%, X unchanged; no stream: t0 -24%, X +7%; regpad:
   residency only) and five more kernels: t0 is 91 ns (SoA tile) vs 142-170 ns (generic tile) = exposed DRAM latency; X tracks
   the weight stream (~9 KB/us/core), not any instruction class. Nine-kernel table above.
