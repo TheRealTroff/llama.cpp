@@ -299,16 +299,68 @@ What the design answered:
   kernel's time lives, and the small-grid rows (projections at 5120 x 1024 and 5120 x 48, the drafter) are exactly the
   census rows no model has placed.
 
-What this leaves: (1) **R from the grid is measured** (R(n) above, 17 points, 9%); what is NOT explained is why a core with
-four threadgroups queued holds under one in flight - the dispatch policy on small grids, to be read off a per-core timeline
-(the counter's samples are 33k ticks apart; a finer sample or the threadgroup start/end timestamps would show whether
-threadgroups are launched one at a time per core); (2) **t0 from the MIR** - the load-use distance
-is the candidate (4 points); the regpad ladder on q4_0 (R flat 2.76, time +5..+17%) is the direct test of what moves t0 at
-fixed geometry; (3) **the ceiling X** - 13-16 k-steps/us/core, not instructions, not DRAM (183 GB/s of weight bytes at the q4_0
-ceiling); the MMA pipe and the threadgroup-memory path are the candidates, and the Oct 26 no-stream arm (-10..-15%, R
-unchanged at 3.10) is the one existing measurement that bears on it; (4) the other latency-bound families (fa at R 1.9-2.0,
-gdn, mv at 1.04-1.4x the floor) have not been given this treatment: fa decode is the obvious next ladder since every shape
-sits at the same R.
+**Probe arms and five more kernels, each on its own pad ladder (2026-10-30 10:10-10:30, owner: "doing 1 and 2 first seems
+obvious"; `smem-pad-q4_0_soa-{probe1,probe2,regpad16}/`, `smem-pad-{q6_K,q3_K,iq4_nl,iq3_s}_soa/`, `smem-pad-q8_0/`; the
+probe arms on the prod binary like the baseline ladder, the five kernels on the branch binary via the shape hook).**
+
+The probe arms on the q4_0 SoA tile, against its baseline ladder (t0 91 ns, X 15.95; times per pad step 0 / 4096 / 8192 /
+12288 / 16384 / 24576 B):
+
+| arm | pad-0 R | pad-0 time | time vs baseline at the five padded steps (R identical, 1.81 .. 0.51) | t0 | X |
+|---|---|---|---|---|---|
+| baseline | 3.12 | 309 us | - | 91 ns | 15.95 |
+| PROBE=1 half the instructions (no dequant; same loads, same MMA) | 3.27 | 316 (+2%) | +9 / +11 / +21 / +22 / +24% | 114 ns (+25%) | 16.3 (+2%) |
+| PROBE=2 no DRAM stream (same instructions, weights re-read from cache) | 3.10 | 283 (-8%) | -19 / -18 / -17 / -21 / -21% | 69 ns (-24%) | 17.15 (+7%) |
+| REGPAD=16 (+16 live registers) | 2.75 | 338 (+9%) | -2 / 0 / -2 / -2 / -4% | 85 ns | 14.65 (fit compromise, see below) |
+
+- **Halving the instructions lengthens the uncontended k-step by a quarter and leaves the ceiling where it was.** With the
+  dequant ALU work removed, the same loads feed the same MMA 24% slower when nothing else is resident: the ALU instructions
+  were filling the load-to-MMA latency, not costing time. At full residency the arm costs +2%: the ceiling (16.3 vs 15.95) does
+  not see instruction count. Instruction issue is out as the ceiling, now by a ladder and not a single point.
+- **The DRAM stream is 22 ns of the 91 ns chain and 7% of the ceiling.** Cached weights give t0 = 69 ns (the load-to-MMA chain
+  through L1/L2) and X = 17.15. At production residency the arm is worth 8%, at low residency 21%: DRAM latency is mostly
+  hidden by residency on this tile, and the ceiling is not DRAM.
+- **REGPAD at equal residency is not slower - it is 0-4% faster at every padded step.** Its +9% at pad 0 is all residency
+  (2.75 vs 3.12). But at R 2.75 it runs a 213 ns k-step where the baseline law gives 195 ns: the same R reached by registers
+  instead of threadgroup memory is 9% slower per k-step. The fitted X = 14.65 is the compromise between the padded points (on
+  the baseline curve) and that one. Same lesson as the grid: **t_step at a given R depends on how the R arose.**
+
+The (t0, X) table, nine kernels of the one tile geometry (m=17408 k=5120 n=8, pad ladders, smooth-max within 1.6-4.7%):
+
+| kernel | tile | regs | pad-0 R | t0 | X k-steps/us/core | executed instr / sg-k-step | X in instr/us/core | weight B / sg-k-step | X in KB/us/core | MIR load-use min |
+|---|---|---|---|---|---|---|---|---|---|---|
+| q4_0 SoA | SoA skinny | 54 | 3.12 | 91 | 15.95 | 127 | 2030 | 576 | 9.2 | 138 |
+| q4_K SoA | generic | 65 | 2.91 | 150 | 15.35 | 95 | 1464 | 576 | 8.8 | 3 |
+| iq4_nl SoA | generic | - | 2.83 | 146 | 13.80 | - | - | 576 | 8.0 | - |
+| iq4_xs SoA | generic | 65 | 2.84 | 150 | 13.75 | 121 | 1663 | 544 | 7.5 | 8 |
+| q5_K SoA | generic | 69 | 2.81 | 170 | 13.10 | 122 | 1594 | 704 | 9.2 | 6 |
+| q3_K SoA | generic | 67 | 2.85 | 142 | 12.80 | 146 | 1871 | 440 | 5.6 | 44 |
+| iq3_s SoA | generic | - | 2.78 | 166 | 11.95 | - | - | 440 | 5.3 | - |
+| q6_K SoA (lm_head) | generic | 69 | 2.84 | 158 | 11.35 | 161 | 1822 | 840 | 9.5 | 4 |
+| q8_0 | generic | 63 | 3.03 | 149 | 7.45 | ~204 (from the 5120x48 row, prologue included) | ~1517 | 1088 | 8.1 | 14 |
+
+- **t0 is two values: 91 ns for the SoA tile, 142-170 ns for every generic-tile kernel**, whatever its instruction count (95-204),
+  dependency depth (7-23) or ILP. With PROBE=2 saying the cached chain is 69 ns and DRAM adds 22 ns when the loads are
+  consumed 138 instructions after issue, the generic tile's extra 50-80 ns is the DRAM latency it does not hide (load-use
+  distance 3-44). **The t0 predictor is: ~70 ns of load-to-MMA chain, plus the fraction of DRAM latency the hot loop exposes,
+  which the load-use distance sets.** The direct test is PROBE=2 on a generic-tile kernel (the knob is q4_0-only today).
+- **X is not any instruction class.** No class count times X is constant across the seven kernels with MIR (threadgroup
+  loads 111-212, other ALU 381-681, device loads 34-268 per us per core). Weight bytes times X is the tightest: 7.5-9.5 KB/us/core
+  for seven kernels, but the two 3-bit formats sit at 5.3-5.6 and q8_0's generic tile reaches only 7.45 k-steps/us (its
+  2x bytes per k-step, 8.1 KB/us). The ceiling scales with the weight stream through the core's load path at roughly 9 KB/us/core
+  (180 GB/s chip-wide at full residency, cached or not), with the 3-bit formats paying more per byte. The load path
+  (requests, not bytes: q3_K issues 12 device loads per hot block, iq3_s similar) is the candidate; a ladder on a format with
+  the same bytes and a different load count would separate requests from bytes.
+
+What this leaves: (1) **t0 is predicted in kind** - 70 ns of chain plus the exposed DRAM latency, set by the load-use
+distance - but not yet in number: PROBE=2 on a generic-tile kernel (port the knob) gives the cached chain of that tile and the
+DRAM share directly, and makes t0 a two-term formula; (2) **X is a load-path ceiling at ~9 KB/us/core of weight stream with
+a per-format penalty for the 3-bit formats** - requests vs bytes is the open split (a same-bytes, different-load-count pair
+decides it); (3) **R from the grid is measured** (R(n), 17 points, 9%); unexplained is why a core with four threadgroups
+queued holds under one in flight (per-core timeline needed); (4) t_step at a given R depends on how the R arose
+(grid, pad, registers: up to 9%), which caps the model at +-8% until the residency variable is replaced by what it proxies;
+(5) the other latency-bound families (fa at R 1.9-2.0 on every shape, gdn, mv at 1.04-1.4x the floor) have not had this
+treatment; fa decode is the long-context wall and the next family.
 
 ## Log
 
@@ -316,6 +368,9 @@ sits at the same R.
   skinny tile refuted a third time; no model transferred to llama.cpp). Its timing host (`exp/m4-measurement-harness`
   41d5ffa8b) is a qualified ISOLATED timer; useful for calibration pairs, not for the target.
 - 2026-10-30 night: first fit + intervention scorecard + residency ladder, section above. Branch exp/kernel-perf-model.
+- 2026-10-30 10:30: probe-arm ladders (half instructions: t0 +25%, X unchanged; no stream: t0 -24%, X +7%; regpad:
+  residency only) and five more kernels: t0 is 91 ns (SoA tile) vs 142-170 ns (generic tile) = exposed DRAM latency; X tracks
+  the weight stream (~9 KB/us/core), not any instruction class. Nine-kernel table above.
 - 2026-10-30 09:12: residency-vs-grid design run (23 shapes): no staircase, R = f(grid) not lifetime, R(n) fitted, model
   +-8% at 8-64 TG/core, small grids over-predicted, the counter's small-grid reading is the open mechanism. Section above.
 - 2026-10-30 02:15: fleet residency on all 92 rows (census traces replayed), the ud skinny ladders (own t0/X each), held-out
