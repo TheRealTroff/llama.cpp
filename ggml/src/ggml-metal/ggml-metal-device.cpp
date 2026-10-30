@@ -734,7 +734,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_solve_tri(ggml_m
     return res;
 }
 
-ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm_skinny(ggml_metal_library_t lib, const ggml_tensor * op, bool di) {
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm_skinny(ggml_metal_library_t lib, const ggml_tensor * op, bool di, bool halfb) {
     char base[256];
     char name[256];
 
@@ -783,7 +783,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm_skinny(gg
     // 2026-10-30, garbage output). PROBE=1 is q4_0-SoA-only; the constant is always set (the kernel reads it).
     static const int env_gen_probe = getenv("GGML_MM_SKINNY_PROBE") ? atoi(getenv("GGML_MM_SKINNY_PROBE")) : 0;
     const int gen_probe = (env_gen_probe >= 2 && env_gen_probe <= 11) ? env_gen_probe : 0;   // 9-11 = lever probes (half B copy / half accumulators / bit-trick q3_K dequant)   // 2 = cached weights, 3 = no per-k-step barriers, 4-8 = deletion arms (no MMA / no tile loads / no dequant / no A stores / no B staging)
-    snprintf(name, 256, "%s%s%s_ne12=%d_r2=%d_r3=%d_bsp=%d%s%s%s_probe=%d", base, soa ? "_soa" : "", soa && gen_exact ? "_ex" : "", ne12, r2, r3, env_bsplit, iq4lut == 1 ? "_iq4lut=1" : iq4lut == 2 ? "_iq4lut=2" : iq4lut == 3 ? "_iq4lut=3" : iq4lut == 4 ? "_iq4lut=4" : iq4lut == 5 ? "_iq4lut=5" : iq4lut == 6 ? "_iq4lut=6" : q5k == 1 ? "_q5k=1" : "", kq2 == 1 ? "_kq2=1" : "", q6k == 1 ? "_q6k=1" : "", gen_probe);
+    snprintf(name, 256, "%s%s%s_ne12=%d_r2=%d_r3=%d_bsp=%d%s%s%s_probe=%d%s", base, soa ? "_soa" : "", soa && gen_exact ? "_ex" : "", ne12, r2, r3, env_bsplit, iq4lut == 1 ? "_iq4lut=1" : iq4lut == 2 ? "_iq4lut=2" : iq4lut == 3 ? "_iq4lut=3" : iq4lut == 4 ? "_iq4lut=4" : iq4lut == 5 ? "_iq4lut=5" : iq4lut == 6 ? "_iq4lut=6" : q5k == 1 ? "_q5k=1" : "", kq2 == 1 ? "_kq2=1" : "", q6k == 1 ? "_q6k=1" : "", gen_probe, halfb ? "_hb=1" : "");
 
     ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
     if (!res.pipeline) {
@@ -791,6 +791,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm_skinny(gg
 
         ggml_metal_cv_set_bool (cv, soa, FC_MUL_MM + 6);
         ggml_metal_cv_set_int16(cv, (int16_t) gen_probe, FC_MUL_MM + 13);
+        ggml_metal_cv_set_bool (cv, halfb, FC_MUL_MM + 15);   // GGML_MM_SKINNY_HALFB: B from the half activation copy
         if (soa && gen_exact) {
             ggml_metal_cv_set_bool(cv, true, FC_MUL_MM + 7);
         }

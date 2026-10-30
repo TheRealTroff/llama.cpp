@@ -44,7 +44,7 @@ FAMILIES = [
     # the iq4_xs header fold GGML_MM_SKINNY_IQ4XS_HDR share the slot), q6k (+12) - w8-decomp-sep18.md / skinny-iq4xs-hdr.md
     ('kernel_mul_mm', 700, {'bci': ('b', 0), 'bco': ('b', 1), 'ne12': ('s', 2), 'ne13': ('s', 3), 'r2': ('s', 4), 'r3': ('s', 5), 'soa': ('b', 6),
                              'exact': ('b', 7), 'bsp': ('s', 8), 'iq4lut': ('s', 9), 'q5k': ('s', 10), 'kq2': ('s', 11), 'q6k': ('s', 12),
-                             'probe': ('s', 13), 'rp': ('s', 14)},   # probe (+13) / regpad (+14): the issue-probe knobs, named always since 2026-10-26 (_probe=0_rp=0)
+                             'probe': ('s', 13), 'rp': ('s', 14), 'hb': ('b', 15)},   # probe (+13) / regpad (+14): the issue-probe knobs, named always since 2026-10-26 (_probe=0_rp=0)
                             # always set by the runtime, named only when true/relevant: soa (+6, bool) and ne13 (+3 = 1 on every
                             # 2-D projection). Undefined offline they left q4_0's code unchanged but q8_0's skinny tile came out
                             # at half the hardware's 443 instructions (2026-10-25, the 5120x48 GDN projection row).

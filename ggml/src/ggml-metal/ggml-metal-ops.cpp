@@ -3622,7 +3622,44 @@ static bool ggml_metal_mul_mat_use_f16_src1_mm(const ggml_tensor * op) {
     }
 }
 
+// GGML_MM_SKINNY_HALFB=1 (perf/kernel-perf-model.md 2026-11-01): the generic skinny tile (widths 6..8 of the stored ud formats) reads
+// its activations from a half copy made by kernel_cvt_f32_f16_cont into the scratch after dst - the mul_mv f16y copy's mechanism.
+// Evaluated at ALLOCATION time (the scratch) and at ENCODE time (the route) and must agree: it is deliberately a superset of the
+// encode-time route (device props and the width cap are not checked here; a reserved-but-unused scratch is harmless, an unreserved
+// one overwrites the next tensor - the 2026-09-04 trap).
+static bool ggml_metal_mul_mat_skinny_halfb(const ggml_tensor * op) {
+    static const int env_halfb = getenv("GGML_MM_SKINNY_HALFB") ? atoi(getenv("GGML_MM_SKINNY_HALFB")) : 0;
+    if (!env_halfb || op->src[1]->type != GGML_TYPE_F32) {
+        return false;
+    }
+    static const int env_mm_skinny_gen = getenv("GGML_MM_SKINNY_GEN") ? atoi(getenv("GGML_MM_SKINNY_GEN")) : 0;
+    static const char * env_gen_types = getenv("GGML_MM_SKINNY_GEN_TYPES");
+    const bool gen_kq_only = env_gen_types && strcmp(env_gen_types, "kq") == 0;
+    const int64_t ne00 = op->src[0]->ne[0];
+    const int64_t ne11 = ggml_metal_mul_mat_eff_ne11(op);
+    const ggml_type t0base = ggml_metal_soa_base_type(op->src[0]->type);
+    const bool generic_skinny = env_mm_skinny_gen > 0 && ne11 >= std::max(2, env_mm_skinny_gen) && ne11 <= 8 &&
+                                ne00 % 64 == 0 && ne00 % ggml_blck_size(op->src[0]->type) == 0 &&
+                                (t0base == GGML_TYPE_Q4_K  || t0base == GGML_TYPE_Q5_K  || t0base == GGML_TYPE_IQ4_XS ||
+                                 (!gen_kq_only &&
+                                  (t0base == GGML_TYPE_Q8_0  || t0base == GGML_TYPE_Q3_K  ||
+                                   t0base == GGML_TYPE_Q6_K  || t0base == GGML_TYPE_IQ3_S ||
+                                   t0base == GGML_TYPE_IQ4_NL)));
+    if (!generic_skinny) {
+        return false;
+    }
+    // the contiguous cast's conditions (the f16y copy's cvt_cont)
+    const ggml_tensor * s1 = op->src[1];
+    const int64_t ny = s1->ne[0]*s1->ne[1]*s1->ne[2]*s1->ne[3];
+    return s1->nb[0] == sizeof(float) && s1->nb[1] == (size_t) s1->ne[0]*sizeof(float) &&
+           s1->nb[2] == (size_t) s1->ne[0]*s1->ne[1]*sizeof(float) && s1->nb[3] == (size_t) s1->ne[0]*s1->ne[1]*s1->ne[2]*sizeof(float) &&
+           ny % 4 == 0;
+}
+
 size_t ggml_metal_op_mul_mat_extra_src1f16(const ggml_tensor * op) {
+    if (ggml_metal_mul_mat_skinny_halfb(op)) {
+        return GGML_PAD(ggml_nelements(op->src[1])*sizeof(ggml_fp16_t), 32);
+    }
     if (ggml_metal_mul_mat_use_f16_src1_mm(op)) {
         return GGML_PAD(ggml_nelements(op->src[1])*sizeof(ggml_fp16_t), 32);
     }
@@ -4151,9 +4188,33 @@ static int ggml_metal_op_mul_mat_impl(ggml_metal_op_t ctx, int idx, ggml_tensor 
             ggml_metal_op_mul_mat_try_repack_q4_0(ctx, op, bid_src0, nb01_eff, &repack_soa);
 
         const bool use_n16 = env_skinny_n16 && repack_soa && ne11 > 8 && ne11 <= 16;
+        // GGML_MM_SKINNY_HALFB=1: the generic tile reads the half activation copy (see ggml_metal_mul_mat_skinny_halfb)
+        const bool halfb = generic_skinny && !repack_soa && ggml_metal_mul_mat_skinny_halfb(op);
         auto pipeline = use_n16    ? ggml_metal_library_get_pipeline_mul_mm_skinny_soa_n16(lib, op) :
                         repack_soa ? ggml_metal_library_get_pipeline_mul_mm_skinny_soa(lib, op) :
-                                     ggml_metal_library_get_pipeline_mul_mm_skinny(lib, op, use_di);
+                                     ggml_metal_library_get_pipeline_mul_mm_skinny(lib, op, use_di, halfb);
+
+        ggml_metal_buffer_id bid_src1 = ggml_metal_get_buffer_id(op->src[1]);
+        if (halfb) {
+            assert(ggml_metal_op_mul_mat_extra_src1f16(op) != 0);
+            ggml_metal_buffer_id bid_y16 = ggml_metal_get_buffer_id(op);
+            bid_y16.offs += ggml_nbytes(op);
+
+            auto pipeline_cvt = ggml_metal_library_get_pipeline_cvt_f32_f16_cont(lib);
+            const int64_t ny = ne10*ne11*ne12*ne13;
+            ggml_metal_kargs_cvt_cont cargs = { /*.n =*/ ny };
+            const int64_t nthr = ny/8;
+
+            ggml_metal_encoder_set_pipeline(enc, pipeline_cvt);
+            ggml_metal_encoder_set_bytes   (enc, &cargs, sizeof(cargs), 0);
+            ggml_metal_encoder_set_buffer  (enc, bid_src1, 1);
+            ggml_metal_encoder_set_buffer  (enc, bid_y16,  2);
+            ggml_metal_encoder_dispatch_threadgroups(enc, (nthr + 255)/256, 1, 1, 256, 1, 1);
+
+            ggml_metal_op_concurrency_reset(ctx);
+
+            bid_src1 = bid_y16;
+        }
 
         ggml_metal_kargs_mul_mm args = {
             /*.ne00 =*/ ne00,
@@ -4162,10 +4223,10 @@ static int ggml_metal_op_mul_mat_impl(ggml_metal_op_t ctx, int idx, ggml_tensor 
             /*.nb02 =*/ nb02,
             /*.nb03 =*/ nb03,
             /*.ne12 =*/ ne12,
-            /*.nb10 =*/ nb10,
-            /*.nb11 =*/ nb11,
-            /*.nb12 =*/ nb12,
-            /*.nb13 =*/ nb13,
+            /*.nb10 =*/ halfb ? sizeof(ggml_fp16_t)                : nb10,
+            /*.nb11 =*/ halfb ? sizeof(ggml_fp16_t)*ne10           : nb11,
+            /*.nb12 =*/ halfb ? sizeof(ggml_fp16_t)*ne10*ne11      : nb12,
+            /*.nb13 =*/ halfb ? sizeof(ggml_fp16_t)*ne10*ne11*ne12 : nb13,
             /*.ne0  =*/ ne0,
             /*.ne1  =*/ ne1,
             /*.r2   =*/ r2,
@@ -4175,7 +4236,7 @@ static int ggml_metal_op_mul_mat_impl(ggml_metal_op_t ctx, int idx, ggml_tensor 
         ggml_metal_encoder_set_pipeline(enc, pipeline);
         ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);
         ggml_metal_encoder_set_buffer  (enc, bid_src0,                              1);
-        ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[1]), 2);
+        ggml_metal_encoder_set_buffer  (enc, bid_src1,                              2);
         ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         3);
 
         // GGML_MM_SKINNY_SMEM_PAD=<bytes>: extra threadgroup memory the skinny tile does not touch - lowers the resident

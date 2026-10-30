@@ -18514,6 +18514,10 @@ constant short FC_mul_mm_q5k [[function_constant(FC_MUL_MM + 10)]];
 // MMA, the shift/mask/convert/scale ALU removed - garbage output); 2 = cached weights (every slice re-reads blocks 0/1 of its
 // row: same instructions, the weight stream leaves DRAM). Prices "fewer instructions" against "fewer bytes" on the q4_0 SoA tile.
 constant short FC_mul_mm_sk_probe [[function_constant(FC_MUL_MM + 13)]];
+// GGML_MM_SKINNY_HALFB=1 (perf/kernel-perf-model.md 2026-11-01): the B activations arrive as the half copy the decode f16y path
+// already makes (kernel_cvt_f32_f16_cont into the scratch after dst) - the host passes half strides; the eight f32->half rounds
+// per lane per k-step leave the FP32 pipe the MMA holds, and the B bytes halve. Byte-identical: every form rounds y through half.
+constant bool FC_mul_mm_sk_halfb [[function_constant(FC_MUL_MM + 15)]];
 constant bool  FC_mul_mm_q5k_set = is_function_constant_defined(FC_mul_mm_q5k);
 constant short FC_mul_mm_q5k_v   = FC_mul_mm_q5k_set ? FC_mul_mm_q5k : 0;
 // GGML_MM_SKINNY_KQ2=1 (lever 4 of the same note): the stored q4_K/q5_K tiles' superblock header (d, dmin, the 6-bit
@@ -19621,11 +19625,12 @@ kernel void kernel_mul_mm_skinny_t(
     const short bcol = (short)(tiitg/BPC) < nr1 ? (short)(tiitg/BPC) : nr1 - 1;
     const short bsx  = tiitg%BPC;
 
-    device const float * y = (device const float *)(src1
+    // byte pointer: f32 activations (nb10 = 4) or, with FC_mul_mm_sk_halfb, the half copy (the host passes nb10 = 2)
+    device const char * y = src1
         + args.nb13*i13
         + args.nb12*i12
         + args.nb11*(r1 + bcol)
-        + args.nb10*(BVL*bsx));
+        + args.nb10*(BVL*bsx);
 
     a8x8_t ma[2];
     a8x8_t mb;
@@ -19670,7 +19675,8 @@ kernel void kernel_mul_mm_skinny_t(
 
         // the activations rounded through half in every form (f16y)
         if (FC_mul_mm_sk_probe == 8) {
-        } else if (FC_mul_mm_sk_probe == 9) {
+        } else if (FC_mul_mm_sk_halfb || FC_mul_mm_sk_probe == 9) {
+            // the half copy (or, PROBE=9, the f32 buffer read as half: the lever's instruction mix on garbage values)
             device const half4 * y4h = (device const half4 *) y;
             const half4 v0 = y4h[0];
             const half4 v1 = y4h[1];
@@ -19687,15 +19693,15 @@ kernel void kernel_mul_mm_skinny_t(
             sbp[4*NR1] = (a_t) (half) v1.x; sbp[5*NR1] = (a_t) (half) v1.y; sbp[6*NR1] = (a_t) (half) v1.z; sbp[7*NR1] = (a_t) (half) v1.w;
         } else if (FC_mul_mm_sk_bsp == 1) {
             FOR_UNROLL (short j = 0; j < 8; ++j) {
-                sb[(8*bsx + j)*NR1 + tiitg/8] = (a_t) (half) y[j];
+                sb[(8*bsx + j)*NR1 + tiitg/8] = (a_t) (half) ((device const float *) y)[j];
             }
         } else if (tiitg < 4*NR1) {
             FOR_UNROLL (short j = 0; j < 16; ++j) {
-                sb[(16*bsx + j)*NR1 + tiitg/4] = (a_t) (half) y[j];
+                sb[(16*bsx + j)*NR1 + tiitg/4] = (a_t) (half) ((device const float *) y)[j];
             }
         }
 
-        y += NK;
+        y += NK*args.nb10;
 
         if (FC_mul_mm_sk_probe != 3) { threadgroup_barrier(mem_flags::mem_threadgroup); }   // PROBE=3: no per-k-step barriers (timing arm, wrong results; perf/kernel-perf-model.md 2026-10-31)
 
