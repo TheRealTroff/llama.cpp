@@ -779,13 +779,18 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm_skinny(gg
     static const int env_q6k = getenv("GGML_MM_SKINNY_Q6K") ? atoi(getenv("GGML_MM_SKINNY_Q6K")) : 0;
     const int q6k = (ggml_metal_soa_base_type(op->src[0]->type) == GGML_TYPE_Q6_K) ? env_q6k : 0;
     snprintf(base, 256, "kernel_mul_mm_skinny_%s%s_%s%s", ggml_type_name(ggml_metal_soa_base_type(op->src[0]->type)), di ? "_di" : "", ggml_type_name(op->src[1]->type), fp ? "_fp" : "");
-    snprintf(name, 256, "%s%s%s_ne12=%d_r2=%d_r3=%d_bsp=%d%s%s%s", base, soa ? "_soa" : "", soa && gen_exact ? "_ex" : "", ne12, r2, r3, env_bsplit, iq4lut == 1 ? "_iq4lut=1" : iq4lut == 2 ? "_iq4lut=2" : iq4lut == 3 ? "_iq4lut=3" : iq4lut == 4 ? "_iq4lut=4" : iq4lut == 5 ? "_iq4lut=5" : iq4lut == 6 ? "_iq4lut=6" : q5k == 1 ? "_q5k=1" : "", kq2 == 1 ? "_kq2=1" : "", q6k == 1 ? "_q6k=1" : "");
+    // GGML_MM_SKINNY_PROBE=2 on the generic tile: cached weights (every slice re-reads blocks 0/1; perf/kernel-perf-model.md
+    // 2026-10-30, garbage output). PROBE=1 is q4_0-SoA-only; the constant is always set (the kernel reads it).
+    static const int env_gen_probe = getenv("GGML_MM_SKINNY_PROBE") ? atoi(getenv("GGML_MM_SKINNY_PROBE")) : 0;
+    const int gen_probe = env_gen_probe == 2 ? 2 : 0;
+    snprintf(name, 256, "%s%s%s_ne12=%d_r2=%d_r3=%d_bsp=%d%s%s%s_probe=%d", base, soa ? "_soa" : "", soa && gen_exact ? "_ex" : "", ne12, r2, r3, env_bsplit, iq4lut == 1 ? "_iq4lut=1" : iq4lut == 2 ? "_iq4lut=2" : iq4lut == 3 ? "_iq4lut=3" : iq4lut == 4 ? "_iq4lut=4" : iq4lut == 5 ? "_iq4lut=5" : iq4lut == 6 ? "_iq4lut=6" : q5k == 1 ? "_q5k=1" : "", kq2 == 1 ? "_kq2=1" : "", q6k == 1 ? "_q6k=1" : "", gen_probe);
 
     ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
     if (!res.pipeline) {
         ggml_metal_cv_t cv = ggml_metal_cv_init();
 
         ggml_metal_cv_set_bool (cv, soa, FC_MUL_MM + 6);
+        ggml_metal_cv_set_int16(cv, (int16_t) gen_probe, FC_MUL_MM + 13);
         if (soa && gen_exact) {
             ggml_metal_cv_set_bool(cv, true, FC_MUL_MM + 7);
         }

@@ -19580,14 +19580,17 @@ kernel void kernel_mul_mm_skinny_t(
         sl2[128 + tiitg] = kvalues_iq4nl_pair_f[128 + tiitg]; sl2[192 + tiitg] = kvalues_iq4nl_pair_f[192 + tiitg];
         threadgroup_barrier(mem_flags::mem_threadgroup);
     }
+// GGML_MM_SKINNY_PROBE=2 on the generic tile (perf/kernel-perf-model.md, 2026-10-30): every slice re-reads blocks 0/1 of
+// its row - same instructions, the weight stream leaves DRAM (garbage output). The q4_0 SoA tile has the same arm.
+#define SKP2(IB) ((FC_mul_mm_sk_probe == 2) ? ((IB) & 1) : (IB))
 #define SKINNY_DEQ(KX, OFF, REG) \
-    if (FC_mul_mm_soa && (FC_mul_mm_iq4lut_v == 1 || FC_mul_mm_iq4lut_v == 4)) { dequantize_soa_mm_lut((device const block_q *) nullptr, xrowc, args.ne00, (KX)/(16*nl), (short) (((KX)/16)%nl + (OFF)), REG, (threadgroup const char *) slut); } \
-    else if (FC_mul_mm_soa) { dequantize_soa_mm((device const block_q *) nullptr, xrowc, args.ne00, (KX)/(16*nl), (short) (((KX)/16)%nl + (OFF)), REG); } \
-    else               { dequantize_func(xrow + (KX)/(16*nl), ((KX)/16)%nl + (OFF), REG); }
+    if (FC_mul_mm_soa && (FC_mul_mm_iq4lut_v == 1 || FC_mul_mm_iq4lut_v == 4)) { dequantize_soa_mm_lut((device const block_q *) nullptr, xrowc, args.ne00, SKP2((KX)/(16*nl)), (short) (((KX)/16)%nl + (OFF)), REG, (threadgroup const char *) slut); } \
+    else if (FC_mul_mm_soa) { dequantize_soa_mm((device const block_q *) nullptr, xrowc, args.ne00, SKP2((KX)/(16*nl)), (short) (((KX)/16)%nl + (OFF)), REG); } \
+    else               { dequantize_func(xrow + SKP2((KX)/(16*nl)), ((KX)/16)%nl + (OFF), REG); }
 #define SKINNY_DEQ2(KX, REGA, REGB) \
-    if (FC_mul_mm_q6k_v == 1 && FC_mul_mm_soa)  { dequantize_soa_pair((device const block_q *) nullptr, xrowc, args.ne00, (KX)/(16*nl), (short) (((KX)/16)%nl), REGA, REGB); } \
-    else if (FC_mul_mm_q6k_v == 1)              { dequantize_block_pair(xrow + (KX)/(16*nl), (short) (((KX)/16)%nl), REGA, REGB); } \
-    else if (FC_mul_mm_soa && FC_mul_mm_kq2_v == 1) { dequantize_soa_mm_pair((device const block_q *) nullptr, xrowc, args.ne00, (KX)/(16*nl), (short) (((KX)/16)%nl), REGA, REGB); } \
+    if (FC_mul_mm_q6k_v == 1 && FC_mul_mm_soa)  { dequantize_soa_pair((device const block_q *) nullptr, xrowc, args.ne00, SKP2((KX)/(16*nl)), (short) (((KX)/16)%nl), REGA, REGB); } \
+    else if (FC_mul_mm_q6k_v == 1)              { dequantize_block_pair(xrow + SKP2((KX)/(16*nl)), (short) (((KX)/16)%nl), REGA, REGB); } \
+    else if (FC_mul_mm_soa && FC_mul_mm_kq2_v == 1) { dequantize_soa_mm_pair((device const block_q *) nullptr, xrowc, args.ne00, SKP2((KX)/(16*nl)), (short) (((KX)/16)%nl), REGA, REGB); } \
     else { SKINNY_DEQ(KX, 0, REGA); SKINNY_DEQ(KX, 1, REGB); }
 
     // B stage: BPC threads per column, BVL = NK/BPC activations each (GGML_MM_SKINNY_BSPLIT, the q4_0 SoA
