@@ -58,3 +58,46 @@ op_shl tg=1 threads=32 bytes=65536: t(n=4096)=163.1 us t(n=16384)=643.9 us -> 39
 op_shl tg=1 threads=128 bytes=65536: t(n=4096)=153.7 us t(n=16384)=607.3 us -> 36.92 ns per iteration
 op_shl tg=1 threads=256 bytes=65536: t(n=4096)=262.8 us t(n=16384)=1042.9 us -> 63.48 ns per iteration
 op_shl tg=1 threads=512 bytes=65536: t(n=4096)=501.0 us t(n=16384)=2001.8 us -> 122.13 ns per iteration
+pure_f32u tg=1 threads=32 bytes=65536: t(n=4096)=202.6 us t(n=16384)=802.3 us -> 48.80 ns per iteration
+pure_f32u tg=1 threads=128 bytes=65536: t(n=4096)=202.6 us t(n=16384)=802.2 us -> 48.80 ns per iteration
+pure_f32u tg=1 threads=256 bytes=65536: t(n=4096)=366.7 us t(n=16384)=1457.5 us -> 88.77 ns per iteration
+pure_f32u tg=1 threads=512 bytes=65536: t(n=4096)=699.8 us t(n=16384)=2779.8 us -> 169.26 ns per iteration
+pure_f32r tg=1 threads=32 bytes=65536: t(n=4096)=205.0 us t(n=16384)=812.6 us -> 49.45 ns per iteration
+pure_f32r tg=1 threads=128 bytes=65536: t(n=4096)=206.8 us t(n=16384)=819.3 us -> 49.84 ns per iteration
+pure_f32r tg=1 threads=256 bytes=65536: t(n=4096)=369.6 us t(n=16384)=1474.3 us -> 89.90 ns per iteration
+pure_f32r tg=1 threads=512 bytes=65536: t(n=4096)=738.7 us t(n=16384)=2953.2 us -> 180.21 ns per iteration
+op_fmulh tg=1 threads=32 bytes=65536: t(n=4096)=202.4 us t(n=16384)=802.0 us -> 48.79 ns per iteration
+op_fmulh tg=1 threads=128 bytes=65536: t(n=4096)=212.4 us t(n=16384)=836.9 us -> 50.82 ns per iteration
+op_fmulh tg=1 threads=256 bytes=65536: t(n=4096)=320.3 us t(n=16384)=1265.4 us -> 76.91 ns per iteration
+op_fmulh tg=1 threads=512 bytes=65536: t(n=4096)=579.2 us t(n=16384)=2309.1 us -> 140.78 ns per iteration
+op_shlmask tg=1 threads=32 bytes=65536: t(n=4096)=2.4 us t(n=16384)=2.6 us -> 0.02 ns per iteration
+op_shlmask tg=1 threads=128 bytes=65536: t(n=4096)=2.4 us t(n=16384)=2.5 us -> 0.01 ns per iteration
+op_shlmask tg=1 threads=256 bytes=65536: t(n=4096)=2.5 us t(n=16384)=2.6 us -> 0.01 ns per iteration
+op_shlmask tg=1 threads=512 bytes=65536: t(n=4096)=2.3 us t(n=16384)=2.4 us -> 0.01 ns per iteration
+pure_f32x24 tg=1 threads=32 bytes=65536: t(n=4096)=118.8 us t(n=16384)=465.1 us -> 28.19 ns per iteration
+pure_f32x24 tg=1 threads=128 bytes=65536: t(n=4096)=117.7 us t(n=16384)=462.9 us -> 28.09 ns per iteration
+pure_f32x24 tg=1 threads=512 bytes=65536: t(n=4096)=319.8 us t(n=16384)=1241.4 us -> 75.00 ns per iteration
+pure_f32x48 tg=1 threads=32 bytes=65536: t(n=4096)=161.1 us t(n=16384)=636.2 us -> 38.66 ns per iteration
+pure_f32x48 tg=1 threads=128 bytes=65536: t(n=4096)=161.3 us t(n=16384)=636.4 us -> 38.67 ns per iteration
+pure_f32x48 tg=1 threads=512 bytes=65536: t(n=4096)=557.2 us t(n=16384)=2219.6 us -> 135.28 ns per iteration
+pure_f32x96 tg=1 threads=32 bytes=65536: t(n=4096)=697.3 us t(n=16384)=2776.4 us -> 169.20 ns per iteration
+pure_f32x96 tg=1 threads=128 bytes=65536: t(n=4096)=697.1 us t(n=16384)=2796.4 us -> 170.84 ns per iteration
+pure_f32x96 tg=1 threads=512 bytes=65536: t(n=4096)=1656.8 us t(n=16384)=6610.3 us -> 403.12 ns per iteration
+pure_f32x24 gprs=1  1sg=29.93  16sg=74.97
+pure_f32x32 gprs=1  1sg=32.95  16sg=94.87
+pure_f32x40 gprs=1  1sg=33.58  16sg=112.68
+pure_f32x48 gprs=1  1sg=38.66  16sg=135.00
+pure_f32x56 gprs=1  1sg=43.73  16sg=153.47
+pure_f32x64 gprs=1  1sg=49.43  16sg=174.52
+pure_f32x72 gprs=1  1sg=53.87  16sg=195.74
+pure_f32x80 gprs=1  1sg=58.95  16sg=214.64
+pure_f32x96 gprs=1  1sg=169.20  16sg=404.20
+pure_f32x112 gprs=1  1sg=674.91  16sg=803.85
+mixdep_u128 tg=1 threads=32 bytes=65536: t(n=4096)=384.5 us t(n=16384)=1529.2 us -> 93.16 ns per iteration
+mixdep_u128 tg=1 threads=128 bytes=65536: t(n=4096)=396.2 us t(n=16384)=1577.9 us -> 96.17 ns per iteration
+mixdep_u128 tg=1 threads=256 bytes=65536: t(n=4096)=667.1 us t(n=16384)=2657.2 us -> 161.95 ns per iteration
+mixdep_u128 tg=1 threads=512 bytes=65536: t(n=4096)=1258.7 us t(n=16384)=5020.3 us -> 306.12 ns per iteration
+mixind_u128 tg=1 threads=32 bytes=65536: t(n=4096)=377.4 us t(n=16384)=1498.5 us -> 91.24 ns per iteration
+mixind_u128 tg=1 threads=128 bytes=65536: t(n=4096)=387.6 us t(n=16384)=1540.2 us -> 93.80 ns per iteration
+mixind_u128 tg=1 threads=256 bytes=65536: t(n=4096)=654.2 us t(n=16384)=2607.9 us -> 158.99 ns per iteration
+mixind_u128 tg=1 threads=512 bytes=65536: t(n=4096)=1226.0 us t(n=16384)=4923.9 us -> 300.94 ns per iteration

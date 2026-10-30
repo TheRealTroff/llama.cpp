@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Per-pipe ceiling of a kernel's hot loop from its census MIR join (perf/kernel-perf-model.md, 2026-10-30 night).
+"""Per-pipe ceiling of a kernel's hot loop from its census MIR join (perf/kernel-perf-model.md, 2026-10-30 night; the pipe/cost
+maps are duplicated in agx-pipes.py for nstream-sim.py - keep them in step).
 
     pipe-ceiling.py <row.join.json> [--ksteps 1] [--bytes B]       one kernel: per-pipe port time per loop iteration
     pipe-ceiling.py --skinny                                       the seven skinny kernels of kstep-validate.py against their measured X

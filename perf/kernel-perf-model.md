@@ -646,6 +646,42 @@ sum of all pipes (q3_K: pipes 240/170/62/34/29, measured 312 ns of port time per
 (q3_K's 33 standalone shifts are the inferred 1.3; its 32 selects measured one clock, so not those). That is the open item of
 this section, and the N-stream simulator with per-pipe occupancy is the tool that would show which.
 
+*The contention curve, first attempt (small hours of 10-31; owner: "do that, since that has direct bearing on our model";
+`nstream-sim.txt`, tools `perf/nstream-sim.py`, `perf/agx-pipes.py`).* The pad ladders already hold the target: t_step on the ladder
+is a throughput per threadgroup, so t_step x resident threadgroups (4R/2) is each simdgroup's own k-step at 1, 2, 3, 4
+simdgroups per port (pad 24576 -> 12288 -> 4096 -> 0 and the ceiling 4000/X):
+
+| per-simdgroup k-step, ns | 1 per port | 2 | 3 | 4 (= ceiling) | binding at 4 |
+|---|---|---|---|---|---|
+| q4_0 SoA | 396 | 596 | 887 | 1003 | DRAM share |
+| q4_K | 633 | 747 | 1000 | 1042 | DRAM share |
+| q5_K | 712 | 855 | 1126 | 1221 | DRAM share (INT pipe 15.7 just above) |
+| q3_K | 614 | 771 | 1106 | 1250 | **neither: pipes allow 16.7** |
+| iq4_xs | 643 | 782 | 1062 | 1164 | **neither: pipes allow 16.5** |
+| q6_K | 670 | 880 | 1204 | 1410 | DRAM share |
+
+A lone simdgroup is unaffected by one neighbour on another port; two per port cost 15-50%; four per port cost 1.6-2.1x.
+`nstream-sim.py` runs N in-order streams per port on four ports against the per-port pipes, a core-wide convert unit and the
+latency table (shape: event-driven, earliest-ready-first, ~150 lines). Base settings reproduce N = 1 within +3..+25% (too slow:
+a lone stream should not pay the port's pipe occupancies) and N = 2 within 10%, and for the DRAM-bound kernels the measured
+N = 3, 4 points are the stream term, which the simulator does not contain. For q3_K and iq4_xs it predicts 18 and 22
+k-steps/us against 12.8 and 13.75: **the real core overlaps about 1.7 pipes where the simulator overlaps 2.4.** One knob
+reproduces q3_K's whole curve (a port issue slot of 0.9 ns = one instruction per 1.35 clocks: 734/764/973/1249), but the same
+knob breaks q4_0 and the direct probe refutes it: a single stream alternating FP32 and three integer pipes with back-to-back
+dependencies (`mixdep_u128`) issues at 1.1 instructions per clock per port at four simdgroups, INT-pipe-bound exactly as the
+costs say. Also ruled out along the way, each by a probe: instruction fetch (8-byte FMAs issue at one per clock like 6-byte ones),
+register count (FMA streams are flat from 24 to 80 live registers; the compiler spills at 96, and a spilled loop is 2.4x slower
+per instruction - the skinny tiles sit at 54-69 registers, no spill), selects (one clock), the lookup gather (one clock at the
+port). Two findings that stay: **the convert/bitfield unit is one per core** (the single-opcode probes slow from one simdgroup to
+four when each has its own port, no other class does), and the per-port pipe view and the core-wide view give the same
+ceiling (4 x 1/2.5 = 1/0.63 ns), so `pipe-ceiling.py` stands.
+
+What is left as the mechanism for q3_K/iq4_xs: the two things the simulator does not model and the probes have not isolated -
+threadgroup memory under load (24 tile loads + 12 staging stores per k-step per simdgroup, 16 simdgroups, the load unit's
+core capacity measured at 1.23 tile loads/ns with latency growing from 37 to ~130 ns under 16 streams; the stores' bank pattern
+on the skinny tile is not the mul_mm one that was probed) and the two per-k-step barriers between a threadgroup's two
+simdgroups, which sit on different ports and so wait on each other's port load. Both are probe-able; both are tomorrow's.
+
 What this leaves: (1) **the contention curve from the simulator** - run N simdgroup streams against four shared issue
 ports and the load path and compare with the pad ladders (R 0.5 -> 3.1) and the grid curve; if it reproduces them, the whole
 skinny family is predicted from code plus five chip constants (latency table, 200 ns stream, 4 ports, 9 KB/us/core, the
@@ -667,6 +703,12 @@ check - fa decode first.
   skinny tile refuted a third time; no model transferred to llama.cpp). Its timing host (`exp/m4-measurement-harness`
   41d5ffa8b) is a qualified ISOLATED timer; useful for calibration pairs, not for the target.
 - 2026-10-30 night: first fit + intervention scorecard + residency ladder, section above. Branch exp/kernel-perf-model.
+- 2026-10-31 small hours: contention curve from the pad ladders (t_step x resident TGs = per-sg k-step at 1-4 sg/port: lone sg
+  unaffected, 4/port = 1.6-2.1x); nstream-sim.py (N streams x 4 ports, per-port pipes, core-wide convert unit) matches N=1-2 and the
+  DRAM-bound kernels, over-predicts q3_K/iq4_xs by 40-60% (real core overlaps ~1.7 pipes, sim 2.4). Refuted as the cause by probes:
+  port issue rate (mixed dependent stream issues 1.1/clock), fetch (8-B FMAs at 1/clock), registers (flat to 80; spill cliff at 96:
+  2.4x per instruction), selects, gathers. Found: convert/bfe unit is one per core. Open: tg memory under load + the per-k-step
+  barrier between a TG's two simdgroups on different ports.
 - 2026-10-30 night: the class matrix (owner: "you have the machine"). Port = f(simdgroup index), even/odd splits collide; three
   probe bodies were not what they claimed (folded int chain, 2-byte loads for tile loads, round for convert) -> mir-check.py
   checks every loop body against the backend MIR before timing. Pipes behind a port: FP32, FP16+MMA, INT+converts+bfe, tile

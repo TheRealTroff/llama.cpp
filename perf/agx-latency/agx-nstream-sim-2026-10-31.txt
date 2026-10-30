@@ -1,0 +1,61 @@
+# nstream-sim.py, base settings (issue 0.76, port slot 0.333, MMA queued, convert unit core-wide 0.67), stream loads 200 ns; ladder-derived per-sg k-step at 1/2/3/4 sg per port in the header of each block
+== q4_0 ladder: 396,596,887,1003 (X 15.95)
+      1        4            496          8.1   FP16 0.41 XU(core) 0.29 TLD 0.12 TST 0.07 INT 0.06
+      2        8            585         13.7   FP16 0.70 XU(core) 0.50 TLD 0.21 TST 0.11 INT 0.11
+      3       12            886         13.5   FP16 0.67 XU(core) 0.47 TLD 0.20 TST 0.11 INT 0.10
+      4       16           1187         13.5   FP16 0.66 XU(core) 0.46 TLD 0.19 TST 0.10 INT 0.10
+-- with --port-slot 0.9
+      1        4            500          8.0   FP16 0.41 XU(core) 0.29 TLD 0.12 TST 0.07 INT 0.06
+      2        8            709         11.3   FP16 0.59 XU(core) 0.41 TLD 0.17 TST 0.09 INT 0.09
+      3       12           1074         11.2   FP16 0.57 XU(core) 0.40 TLD 0.17 TST 0.09 INT 0.09
+      4       16           1509         10.6   FP16 0.54 XU(core) 0.38 TLD 0.16 TST 0.09 INT 0.08
+== q4_K ladder: 633,747,1000,1042 (X 15.35)
+      1        4            745          5.4   FP16 0.22 XU(core) 0.13 INT 0.09 TLD 0.08 TST 0.04 FP32 0.04
+      2        8            763         10.5   FP16 0.43 XU(core) 0.25 INT 0.17 TLD 0.16 TST 0.09 FP32 0.08
+      3       12            793         15.1   FP16 0.62 XU(core) 0.35 INT 0.25 TLD 0.23 TST 0.12 FP32 0.12 DLD 0.02
+      4       16            800         20.0   FP16 0.80 XU(core) 0.45 INT 0.32 TLD 0.29 TST 0.16 FP32 0.15 DLD 0.03
+-- with --port-slot 0.9
+      1        4            760          5.3   FP16 0.22 XU(core) 0.12 INT 0.09 TLD 0.08 TST 0.04 FP32 0.04
+      2        8            796         10.0   FP16 0.41 XU(core) 0.23 INT 0.16 TLD 0.15 TST 0.08 FP32 0.08
+      3       12            884         13.6   FP16 0.56 XU(core) 0.32 INT 0.22 TLD 0.21 TST 0.11 FP32 0.11 DLD 0.02
+      4       16            989         16.2   FP16 0.63 XU(core) 0.36 INT 0.25 TLD 0.23 TST 0.12 FP32 0.12 DLD 0.02
+== q5_K ladder: 712,855,1126,1221 (X 13.10)
+      1        4            833          4.8   FP16 0.20 INT 0.16 XU(core) 0.15 TLD 0.07 TST 0.04 FP32 0.04
+      2        8            862          9.3   FP16 0.38 INT 0.32 XU(core) 0.28 TLD 0.14 TST 0.08 FP32 0.07
+      3       12            891         13.5   FP16 0.55 INT 0.45 XU(core) 0.41 TLD 0.20 TST 0.11 FP32 0.10 DLD 0.02
+      4       16            986         16.2   FP16 0.65 INT 0.53 XU(core) 0.48 TLD 0.24 TST 0.13 FP32 0.12 DLD 0.03
+-- with --port-slot 0.9
+      1        4            857          4.7   FP16 0.19 INT 0.16 XU(core) 0.14 TLD 0.07 TST 0.04 FP32 0.04
+      2        8            909          8.8   FP16 0.35 INT 0.29 XU(core) 0.26 TLD 0.13 TST 0.07 FP32 0.07
+      3       12           1064         11.3   FP16 0.45 INT 0.37 XU(core) 0.33 TLD 0.17 TST 0.09 FP32 0.08
+      4       16           1355         11.8   FP16 0.47 INT 0.39 XU(core) 0.35 TLD 0.17 TST 0.09 FP32 0.09 DLD 0.02
+== q3_K ladder: 614,771,1106,1250 (X 12.80)
+      1        4            712          5.6   FP16 0.23 INT 0.19 XU(core) 0.15 TLD 0.09 TST 0.05 FP32 0.04
+      2        8            718         11.1   FP16 0.45 INT 0.36 XU(core) 0.30 TLD 0.17 TST 0.09 FP32 0.08 DLD 0.02
+      3       12            791         15.2   FP16 0.62 INT 0.50 XU(core) 0.41 TLD 0.23 TST 0.12 FP32 0.11 DLD 0.03
+      4       16            888         18.0   FP16 0.72 INT 0.58 XU(core) 0.48 TLD 0.27 TST 0.14 FP32 0.13 DLD 0.04
+-- with --port-slot 0.9
+      1        4            734          5.5   FP16 0.23 INT 0.18 XU(core) 0.15 TLD 0.08 TST 0.04 FP32 0.04
+      2        8            764         10.5   FP16 0.42 INT 0.34 XU(core) 0.28 TLD 0.15 TST 0.08 FP32 0.07 DLD 0.02
+      3       12            973         12.3   FP16 0.50 INT 0.41 XU(core) 0.33 TLD 0.19 TST 0.10 FP32 0.09 DLD 0.03
+      4       16           1249         12.8   FP16 0.52 INT 0.41 XU(core) 0.34 TLD 0.19 TST 0.10 FP32 0.09 DLD 0.03
+== iq4_xs ladder: 643,782,1062,1164 (X 13.75)
+      1        4            662          6.0   FP16 0.25 INT 0.12 XU(core) 0.11 TLD 0.09 TST 0.05 FP32 0.04
+      2        8            665         12.0   FP16 0.49 INT 0.24 XU(core) 0.22 TLD 0.18 TST 0.10 FP32 0.08
+      3       12            711         16.9   FP16 0.69 INT 0.34 XU(core) 0.31 TLD 0.26 TST 0.14 FP32 0.11
+      4       16            737         21.7   FP16 0.85 INT 0.42 XU(core) 0.38 TLD 0.31 TST 0.17 FP32 0.14 DLD 0.02
+-- with --port-slot 0.9
+      1        4            681          5.9   FP16 0.24 INT 0.12 XU(core) 0.11 TLD 0.09 TST 0.05 FP32 0.04
+      2        8            730         11.0   FP16 0.45 INT 0.22 XU(core) 0.20 TLD 0.16 TST 0.09 FP32 0.07
+      3       12            796         15.1   FP16 0.60 INT 0.30 XU(core) 0.27 TLD 0.22 TST 0.12 FP32 0.10
+      4       16            947         16.9   FP16 0.66 INT 0.33 XU(core) 0.29 TLD 0.24 TST 0.13 FP32 0.11
+== q6_K ladder: 670,880,1204,1410 (X 11.35)
+      1        4            730          5.5   XU(core) 0.29 FP16 0.23 INT 0.14 TLD 0.08 TST 0.04 FP32 0.04
+      2        8            742         10.8   XU(core) 0.56 FP16 0.43 INT 0.27 TLD 0.16 TST 0.09 FP32 0.07
+      3       12            853         14.1   XU(core) 0.73 FP16 0.56 INT 0.35 TLD 0.21 TST 0.11 FP32 0.09
+      4       16           1030         15.5   XU(core) 0.78 FP16 0.60 INT 0.37 TLD 0.22 TST 0.12 FP32 0.10
+-- with --port-slot 0.9
+      1        4            753          5.3   XU(core) 0.29 FP16 0.22 INT 0.13 TLD 0.08 TST 0.04 FP32 0.04
+      2        8            808          9.9   XU(core) 0.50 FP16 0.39 INT 0.24 TLD 0.14 TST 0.08 FP32 0.06
+      3       12           1048         11.4   XU(core) 0.59 FP16 0.46 INT 0.28 TLD 0.17 TST 0.09 FP32 0.08
+      4       16           1402         11.4   XU(core) 0.60 FP16 0.46 INT 0.28 TLD 0.17 TST 0.09 FP32 0.08
