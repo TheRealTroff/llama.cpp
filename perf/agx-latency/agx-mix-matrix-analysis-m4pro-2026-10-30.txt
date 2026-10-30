@@ -1,0 +1,70 @@
+# class-mix matrix, checked bodies (mir-check.py): mix-matrix2.txt ((sg & 4) split) overridden by mix-matrix3.txt (int/deq/tld re-done)
+port probe port_mma_even: 673.5 ns per iteration at 16 simdgroups
+port probe port_mma_low: 346.6 ns per iteration at 16 simdgroups
+port probe port_mma_pair: 347.4 ns per iteration at 16 simdgroups
+pure classes: ns per iteration per simdgroup-set (work per simdgroup per iteration), and the core rate at 16 simdgroups
+  f32  64 f32 fma                 8 sg    88.9  16 sg   169.4  ->   42.3 ns per simdgroup-iteration per port at 4 per port; 16/8 ratio 1.91
+  f16  64 f16 fma                 8 sg    87.8  16 sg   169.2  ->   42.3 ns per simdgroup-iteration per port at 4 per port; 16/8 ratio 1.93
+  int  96 int (xor/shift/add)     8 sg   183.2  16 sg   345.9  ->   86.5 ns per simdgroup-iteration per port at 4 per port; 16/8 ratio 1.89
+  cvt  64 round-to-half + 16 add  8 sg    98.7  16 sg   190.2  ->   47.6 ns per simdgroup-iteration per port at 4 per port; 16/8 ratio 1.93
+  deq  32 x (i2h, hmul, h2i, and) 8 sg   345.3  16 sg   670.1  ->  167.5 ns per simdgroup-iteration per port at 4 per port; 16/8 ratio 1.94
+  tld  31 tile loads + 28 xor     8 sg   195.9  16 sg   425.7  ->  106.4 ns per simdgroup-iteration per port at 4 per port; 16/8 ratio 2.17
+  tst  16 x 2-byte stores         8 sg    88.7  16 sg   176.8  ->   44.2 ns per simdgroup-iteration per port at 4 per port; 16/8 ratio 1.99
+  mma  16 MMA                     8 sg   347.5  16 sg   674.9  ->  168.7 ns per simdgroup-iteration per port at 4 per port; 16/8 ratio 1.94
+  dld  1 x 16 B device load + xor 8 sg    60.6  16 sg    62.0  ->   15.5 ns per simdgroup-iteration per port at 4 per port; 16/8 ratio 1.02
+
+mixed, 4 + 4 simdgroups (one of each class per port): T_mix vs the pure runs at 4 simdgroups; hidden = (T_A + T_B - T_mix) / min(T_A, T_B)
+             f32     f16     int     cvt     deq     tld     tst     mma     dld
+  f32          -    0.98    0.80    0.18    0.95    0.78    0.97    0.57    1.00
+  f16       0.98       -    0.95    0.98    0.40    0.76    0.82    0.21    0.99
+  int       0.80    0.95       -    0.98    0.15    0.78    0.95    0.97    1.01
+  cvt       0.18    0.98    0.98       -    0.97    0.90    1.00    0.71    0.81
+  deq       0.95    0.40    0.15    0.97       -    0.68    0.99    0.90    1.00
+  tld       0.78    0.76    0.78    0.90    0.68       -    0.90    0.94    0.96
+  tst       0.97    0.82    0.95    1.00    0.99    0.90       -    0.97    0.94
+  mma       0.57    0.21    0.97    0.71    0.90    0.94    0.97       -    1.01
+  dld       1.00    0.99    1.01    0.81    1.00    0.96    0.94    1.01       -
+  (rows/cols = the two classes; each cell is the share of the SMALLER class's time that disappeared when the two ran on one core)
+  raw T_mix (ns per iteration), with T_A + T_B at 4 simdgroups in brackets:
+    f32+f16 50 [98]  f32+int 108 [147]  f32+cvt 94 [103]  f32+deq 182 [229]  f32+tld 160 [198]  f32+tst 56 [103]  f32+mma 208 [236]  f32+dld 61 [110]
+    f16+int 100 [147]  f16+cvt 55 [103]  f16+deq 209 [228]  f16+tld 161 [198]  f16+tst 63 [103]  f16+mma 225 [236]  f16+dld 62 [110]
+    int+cvt 99 [152]  int+deq 263 [277]  int+tld 170 [247]  int+tst 101 [152]  int+mma 190 [285]  int+dld 97 [159]
+    cvt+deq 181 [233]  cvt+tld 154 [203]  cvt+tst 54 [108]  cvt+mma 203 [241]  cvt+dld 71 [115]
+    deq+tld 227 [329]  deq+tst 180 [234]  deq+mma 205 [366]  deq+dld 179 [241]
+    tld+tst 154 [204]  tld+mma 196 [336]  tld+dld 151 [210]
+    tst+mma 189 [241]  tst+dld 64 [115]
+    mma+dld 186 [248]
+
+mixed, 8 + 8 simdgroups (two of each per port): T_mix vs the pure runs at 8 simdgroups; hidden = (T_A + T_B - T_mix) / min(T_A, T_B)
+             f32     f16     int     cvt     deq     tld     tst     mma     dld
+  f32          -    0.83    0.81    0.08    1.04    0.58    0.98    0.68    1.00
+  f16       0.83       -    0.94    0.86    0.67    0.73    0.87    0.08    0.98
+  int       0.81    0.94       -    1.00    0.11    0.56    1.06    0.91    1.07
+  cvt       0.08    0.86    1.00       -    0.99    0.55    0.96    0.80    0.95
+  deq       1.04    0.67    0.11    0.99       -    0.78    0.95    0.80    1.02
+  tld       0.58    0.73    0.56    0.55    0.78       -    0.72    0.92    0.71
+  tst       0.98    0.87    1.06    0.96    0.95    0.72       -    0.95    0.91
+  mma       0.68    0.08    0.91    0.80    0.80    0.92    0.95       -    0.99
+  dld       1.00    0.98    1.07    0.95    1.02    0.71    0.91    0.99       -
+  (rows/cols = the two classes; each cell is the share of the SMALLER class's time that disappeared when the two ran on one core)
+  raw T_mix (ns per iteration), with T_A + T_B at 8 simdgroups in brackets:
+    f32+f16 104 [177]  f32+int 201 [272]  f32+cvt 180 [188]  f32+deq 342 [434]  f32+tld 233 [285]  f32+tst 91 [178]  f32+mma 376 [436]  f32+dld 89 [150]
+    f16+int 188 [271]  f16+cvt 111 [187]  f16+deq 374 [433]  f16+tld 220 [284]  f16+tst 100 [176]  f16+mma 429 [435]  f16+dld 89 [148]
+    int+cvt 183 [282]  int+deq 509 [529]  int+tld 276 [379]  int+tst 178 [272]  int+mma 365 [531]  int+dld 179 [244]
+    cvt+deq 346 [444]  cvt+tld 241 [295]  cvt+tst 102 [187]  cvt+mma 367 [446]  cvt+dld 101 [159]
+    deq+tld 389 [541]  deq+tst 350 [434]  deq+mma 417 [693]  deq+dld 344 [406]
+    tld+tst 221 [285]  tld+mma 363 [543]  tld+dld 213 [257]
+    tst+mma 352 [436]  tst+dld 94 [149]
+    mma+dld 348 [408]
+
+device-load stream per core (16 B per lane per iteration): KB/us by data footprint and simdgroups
+  footprint          4       8      16   simdgroups
+        64 KB     33.6    67.6   132.0   KB/us
+
+# device-load stream (first run)
+device-load stream per core (16 B per lane per iteration): KB/us by data footprint and simdgroups
+  footprint          1       4       8      16      32   simdgroups
+        64 KB      8.4    33.5    67.5   132.1   217.2   KB/us
+      4096 KB      1.9    16.7    33.5    66.1    70.5   KB/us
+     65536 KB      1.9     7.4    13.8    26.3    37.7   KB/us
+    524288 KB      1.9     7.2    13.9    26.1    37.1   KB/us

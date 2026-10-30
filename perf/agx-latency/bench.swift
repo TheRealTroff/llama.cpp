@@ -42,6 +42,7 @@ func time(_ n: UInt32) -> Double {
         let cb = q.makeCommandBuffer()!; let enc = cb.makeComputeCommandEncoder()!
         enc.setComputePipelineState(pso); enc.setBuffer(data, offset: 0, index: 0); enc.setBuffer(out, offset: 0, index: 1)
         var nn = n; enc.setBytes(&nn, length: 4, index: 2)
+        var nb = UInt32(max(bytes, 4096)); enc.setBytes(&nb, length: 4, index: 3)   // the data buffer size, for streaming kernels
         enc.setThreadgroupMemoryLength(16384, index: 0)
         enc.dispatchThreadgroups(MTLSize(width: tgs, height: 1, depth: 1), threadsPerThreadgroup: MTLSize(width: threads, height: 1, depth: 1))
         enc.endEncoding(); cb.commit(); cb.waitUntilCompleted()

@@ -572,12 +572,88 @@ Independent chains must differ in their inputs or the compiler folds them; the d
 dual-issue probes (distinct initial values per chain) were not affected, every MMA throughput number from the morning was.
 The folded kernels stay in `kernels.metal` marked as such.
 
+*The class matrix: what runs beside what on a core (night; owner: "it is precisely the kind of mixed execution I was
+looking for" / "you have the machine"; `mix-matrix*.txt`, `op-costs*.txt`, `pipe-ceiling.txt`; tools `perf/agx-latency/mix-matrix.py`,
+`mir-check.py`, `perf/pipe-ceiling.py`).* Nine instruction classes, each as a loop body on its own simdgroups; pure runs with every
+simdgroup of one threadgroup on one class (4, 8, 16 per core), mixed runs with half the simdgroups on class A and half on B.
+Two things had to be fixed before the numbers meant anything, and both are now tooling:
+
+- **The port is picked by simdgroup index.** The first split (even simdgroups A, odd B) made every MMA pair come out at the
+  16-simdgroup pure-MMA time: 16 MMAs on the even half alone = 673 ns, on the (sg & 4) half = 347. Even/odd lands one class on
+  two of the four ports. The matrix uses (sg & 4).
+- **Three class bodies were not what their names said** (owner: "are you double checking the compiler output?"). The shift/xor
+  integer chain folded algebraically to 21 ops of 128 (the same fold made this morning's "int issues at 0.25 ns" anomaly);
+  consuming one half of a tile through `thread_elements()[0]` made the compiler replace the 128-byte tile load with a 2-byte
+  load (so the earlier "1.4 tile loads/ns" was a 2-byte-load figure; the MMA-fed tile loads were real); `float(half(v))` became
+  one round op, not the dequant's convert. `mir-check.py <kernels.metal> <kernel>...` now prints every loop body's opcode
+  histogram from the backend MIR, and every probe below was checked with it before it was timed.
+
+Pure costs (ns of port time per instruction at four simdgroups per port; the single-simdgroup issue interval in brackets):
+
+| class / opcode | port cost | clocks | note |
+|---|---|---|---|
+| f32 fma (2212), f16 fma (820), f16 mul (884), f32->half (1038) | 0.67 | 1 | |
+| int add / and / select (11082, 443, 12300) | 0.72-0.78 | ~1.1 | shl by an immediate folds into the add's operand shifter for free |
+| shift, standalone (442, 17168) | ~1.3 | ~2 | inferred from the 96-op int class (0.9 average); not probed alone - the compiler keeps absorbing it |
+| **int->float, int->half, half->int, float->int (12104/12107/12108/10226/10225)** | **2.4-2.6** | **3.5-4** | a quarter-rate path; one simdgroup alone issues them at 1.3-1.5 (2 clocks) |
+| **bitfield extract (17165/17166)** | **2.33** | **3.5** | same path |
+| MMA (860, 2884) | 10.6 | 16 | |
+| 8x8 half tile load from threadgroup memory (13201) | 2.6 | 4 | |
+| 2-byte threadgroup store (14161) / 16-byte (14245) | 2.8 / 5.0 | 4 / 7.5 | |
+| 1-byte table gather, 16-byte table (13519) | 0.8 at the port | 1.2 | 37 ns per step in the chain: iq4 lookups cost latency, not throughput |
+| 16-byte coalesced device load | latency-bound | | one core streams 37 KB/us from DRAM alone (26 at 16 simdgroups), 70 from L2, 130-220 from L1 |
+
+The last line relocates a constant: the skinny ceiling's 9 KB/us/core (180 GB/s over 20 cores, 66% of DRAM peak) is the
+chip's DRAM share, not a per-core path; a core alone pulls four times that.
+
+Mixed pairs, one simdgroup of each class per port (4 + 4; cell = share of the smaller class's time that disappeared):
+
+| | f32 | f16 | int | round | deq | tile ld | tg st | mma | dev ld |
+|---|---|---|---|---|---|---|---|---|---|
+| f32 | - | 0.98 | 0.80 | **0.18** | 0.95 | 0.78 | 0.97 | 0.57 | 1.00 |
+| f16 | | - | 0.95 | 0.98 | 0.40 | 0.76 | 0.82 | **0.21** | 0.99 |
+| int | | | - | 0.98 | **0.15** | 0.78 | 0.95 | 0.97 | 1.01 |
+| round-to-half | | | | - | 0.97 | 0.90 | 1.00 | 0.71 | 0.81 |
+| deq (cvt, hmul, cvt, and) | | | | | - | 0.68 | 0.99 | 0.90 | 1.00 |
+| tile load | | | | | | - | 0.90 | 0.94 | 0.96 |
+| tg store | | | | | | | - | 0.97 | 0.94 |
+| mma | | | | | | | | - | 1.01 |
+
+So the pipes behind a port are: **FP32** (f32 math and the float->half round), **FP16** (f16 math and the MMA), **INT** (integer
+ops, converts and bitfield extracts - deq hides only 15% against int and 95% against f32), tile loads, threadgroup stores, device
+loads; classes on different pipes hide 76-100% of each other, the leakage being the port's own issue (which exceeds one per
+clock: f32 + f16 from two simdgroups reach 1.75 per clock). f32 against MMA hides only 57%: the MMA takes something from the
+FP32 side too. The design rules this gives for a dequant-plus-MMA tile: converts and bit extracts are the expensive instructions
+(four clocks each, on the pipe that nothing else needs), FP16 math competes with the MMAs, FP32 and integer work does not.
+
+*Per-pipe ceiling* (`pipe-ceiling.py --skinny`: per simdgroup k-step, port time per pipe from the join with the costs above;
+X = min(4 ports / the longest pipe, 9 KB/us/core / weight bytes)):
+
+| kernel | FP32 | FP16+MMA | INT (int / shift / cvt / bfe) | tile ld | tg st | binding | X pred | X meas | err |
+|---|---|---|---|---|---|---|---|---|---|
+| q4_0 SoA | 5 | 212 | 169 (24 / 12 / 32 / 24) | 62 | 34 | stream | 15.6 | 15.95 | -2% |
+| q4_K | 33 | 170 | 158 (66 / 16 / 34 / 2) | 62 | 34 | stream | 15.6 | 15.35 | +2% |
+| q5_K | 32 | 170 | 255 (162 / 18 / 34 / 13) | 62 | 34 | stream (INT 15.7) | 12.8 | 13.10 | -2% |
+| q3_K | 29 | 170 | 240 (126 / 35 / 36 / 6) | 62 | 34 | INT | 16.7 | 12.80 | **+30%** |
+| iq4_xs | 27 | 170 | 149 (85 / 17 / 1 / 27) | 62 | 34 | stream | 16.5 | 13.75 | **+20%** |
+| q6_K | 28 | 170 | 301 (101 / 24 / 34 / 48) | 62 | 34 | stream (INT 13.3) | 10.7 | 11.35 | -6% |
+| q8_0 | 27 | 170 | 136 (34 / 21 / 32 / 2) | 62 | 34 | stream | 8.3 | 7.45 | +11% |
+
+Five of seven within 6%, with the converts and extracts now the second-largest pipe on every kernel and the binding one on
+q5_K/q6_K if the stream were not. The two misses are the kernels whose measured ceiling sits between the longest pipe and the
+sum of all pipes (q3_K: pipes 240/170/62/34/29, measured 312 ns of port time per k-step; iq4_xs: 170/149/62/34/27, measured
+291): some cross-pipe serialization the pair matrix (76-100% hidden) does not show at this scale, or an opcode still mispriced
+(q3_K's 33 standalone shifts are the inferred 1.3; its 32 selects measured one clock, so not those). That is the open item of
+this section, and the N-stream simulator with per-pipe occupancy is the tool that would show which.
+
 What this leaves: (1) **the contention curve from the simulator** - run N simdgroup streams against four shared issue
 ports and the load path and compare with the pad ladders (R 0.5 -> 3.1) and the grid curve; if it reproduces them, the whole
 skinny family is predicted from code plus five chip constants (latency table, 200 ns stream, 4 ports, 9 KB/us/core, the
-resident count from smem/registers); (2) **the four ports are measured** (6.0 sg-instr/ns/core, four simdgroups at full speed); still to measure: the
+resident count from smem/registers); (2) **the four ports are measured** (6.0 sg-instr/ns/core, four simdgroups at full speed); ~~still to measure: the
 load-path figure (a streaming micro-kernel at 1-6 resident threadgroups), and the per-pipe ceiling (FP32 / FP16 / MMA at
-sixteen slots) against the pad ladders; ~~(2b) **the mm family is reopened**: the MMA pipe is ~30 TFLOPS and the prefill tiles
+sixteen slots) against the pad ladders~~ MEASURED (night): the per-core load path is 37 KB/us from DRAM (the 9 is a chip share),
+the per-pipe ceiling with measured per-opcode port costs places 5 of 7 skinny kernels within 6%; open: q3_K +30% and iq4_xs
++20% sit between longest-pipe and sum-of-pipes; ~~(2b) **the mm family is reopened**: the MMA pipe is ~30 TFLOPS and the prefill tiles
 reach 7 - the simulator on a mul_mm tile's loop body says where the other three quarters go~~ (2b) RETRACTED: the MMA rate
 is 7.8 TFLOPS and the mm tiles sit at 97-99% of it (evening section); what remains open there is the single-simdgroup
 MMA/ALU overlap rule for the simulator; (3) the simulator's misses: iq4_xs -13% (the lookup-table gathers: price them with a gather micro-kernel) and q8_0 -16%
@@ -591,6 +667,12 @@ check - fa decode first.
   skinny tile refuted a third time; no model transferred to llama.cpp). Its timing host (`exp/m4-measurement-harness`
   41d5ffa8b) is a qualified ISOLATED timer; useful for calibration pairs, not for the target.
 - 2026-10-30 night: first fit + intervention scorecard + residency ladder, section above. Branch exp/kernel-perf-model.
+- 2026-10-30 night: the class matrix (owner: "you have the machine"). Port = f(simdgroup index), even/odd splits collide; three
+  probe bodies were not what they claimed (folded int chain, 2-byte loads for tile loads, round for convert) -> mir-check.py
+  checks every loop body against the backend MIR before timing. Pipes behind a port: FP32, FP16+MMA, INT+converts+bfe, tile
+  load, tg store, device load; different pipes hide 76-100% of each other. Converts and bitfield extracts cost 3.5-4 clocks of
+  port time (quarter-rate path), selects/adds/f16 mul/f32->half one, MMA 16, tile load 4, 2-byte tg store 4. Per-core load path
+  37 KB/us from DRAM (the 9 KB/us/core is the chip share). pipe-ceiling.py: 5 of 7 skinny X within 6%; q3_K +30%, iq4_xs +20% open.
 - 2026-10-30 evening: the mul_mm chase. The morning's MMA probes were folded by the compiler (8 MMAs where 32 were counted);
   clean probes: an MMA costs a port 16 clocks (10.5 ns), 0.38 MMA/ns/core = 7.8 TFLOPS = the FMA roof - no matrix unit on this
   GPU. The acch n64 tile is at 97-99% of it; the mm family stays closed. Unit costs for tile loads, staging stores and barriers

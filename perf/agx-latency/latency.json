@@ -1,10 +1,95 @@
-{"note": "AGX instruction latencies in ns, measured 2026-10-30 by perf/agx-latency/bench.swift on M4 Pro (one simdgroup, dependent chains, clocks warmed; perf/agx-latency.txt in results/perfmodel-oct30). Opcode numbers = the backend's MIR opcodes (agx-nt-opt.py mir of kernels.metal). issue = ns per instruction from one simdgroup (fma indep4: 0.89). MMA (2884 half->float, 860 half->half): latency 11.7, and one simdgroup starts back-to-back MMAs 11.7 ns apart (16 clocks; mma_interval_measured, mma16_regs). The simulator does NOT enforce that spacing (mma_pipe 0 = an MMA costs one issue slot): enforced in program order it over-predicts the skinny k-steps 16-27%, unenforced they land within 7% on 5 of 7 - the real tiles overlap their MMA groups with the following dequant in a way the in-order model cannot express (kernel-perf-model.md 2026-10-30 evening; the earlier 3.2 ns issue figure came from probes whose four identical accumulator chains the compiler folded into one).",
+{
+ "note": "AGX instruction latencies in ns, measured 2026-10-30 by perf/agx-latency/bench.swift on M4 Pro (one simdgroup, dependent chains, clocks warmed; perf/agx-latency.txt in results/perfmodel-oct30). Opcode numbers = the backend's MIR opcodes (agx-nt-opt.py mir of kernels.metal). issue = ns per instruction from one simdgroup (fma indep4: 0.89). MMA (2884 half->float, 860 half->half): latency 11.7, and one simdgroup starts back-to-back MMAs 11.7 ns apart (16 clocks; mma_interval_measured, mma16_regs). The simulator does NOT enforce that spacing (mma_pipe 0 = an MMA costs one issue slot): enforced in program order it over-predicts the skinny k-steps 16-27%, unenforced they land within 7% on 5 of 7 - the real tiles overlap their MMA groups with the following dequant in a way the in-order model cannot express (kernel-perf-model.md 2026-10-30 evening; the earlier 3.2 ns issue figure came from probes whose four identical accumulator chains the compiler folded into one).",
  "issue": 0.9,
- "opcodes": {"2212": 1.7, "3312": 1.6, "820": 1.6, "821": 1.6, "798": 1.6, "884": 1.6,
-             "11082": 1.65, "17880": 1.65, "11079": 1.65, "11080": 1.65, "11756": 3.5,
-             "17165": 2.0, "443": 2.0, "442": 2.0, "12107": 2.5, "10226": 2.5,
-             "610": 1.0, "14980": 1.0, "466": 1.0,
-             "2884": 11.7, "860": 11.7},
+ "opcodes": {
+  "2212": 1.7,
+  "3312": 1.6,
+  "820": 1.6,
+  "821": 1.6,
+  "798": 1.6,
+  "884": 1.6,
+  "11082": 1.65,
+  "17880": 1.65,
+  "11079": 1.65,
+  "11080": 1.65,
+  "11756": 3.5,
+  "17165": 2.0,
+  "443": 2.0,
+  "442": 2.0,
+  "12107": 2.5,
+  "10226": 2.5,
+  "610": 1.0,
+  "14980": 1.0,
+  "466": 1.0,
+  "2884": 11.7,
+  "860": 11.7
+ },
  "issue_opcodes": {},
- "mma_opcodes": ["2884", "860"], "mma_pipe": 0.0, "mma_interval_measured": 11.7,
- "memory": {"device_l1": 37.0, "device_l2": 85.0, "device_dram": 300.0, "tg_load": 37.0, "tg_store_to_load": 51.0}}
+ "mma_opcodes": [
+  "2884",
+  "860"
+ ],
+ "mma_pipe": 0.0,
+ "mma_interval_measured": 11.7,
+ "memory": {
+  "device_l1": 37.0,
+  "device_l2": 85.0,
+  "device_dram": 300.0,
+  "tg_load": 37.0,
+  "tg_store_to_load": 51.0
+ },
+ "port_cost_note": "ns of PORT time per 32-lane instruction at 4 simdgroups per port (class-mix matrix + single-opcode probes, 2026-10-30 night; agx-op-costs-analysis). Pipes behind a port run concurrently: FP32 (f32 fma/mul/add, f32->half), FP16 (f16 fma/mul, MMA at 16 slots), INT (int ops, converts, bitfield), tg load, tg store, device load. A core has 4 ports; the port picks by simdgroup index (an even/odd split lands on two ports).",
+ "port_cost": {
+  "fp32": 0.67,
+  "fp16": 0.67,
+  "int_add_and_xor_select": 0.72,
+  "shift_imm_standalone": 1.3,
+  "int_float_convert": 2.5,
+  "bfe": 2.33,
+  "f32_to_half": 0.67,
+  "mma": 10.6,
+  "tg_tile_load_128B": 2.6,
+  "tg_store_2B": 2.8,
+  "tg_store_16B": 5.0,
+  "device_gather_1B": 0.8
+ },
+ "port_cost_opcodes": {
+  "12104": 2.5,
+  "12105": 2.5,
+  "12107": 2.5,
+  "12108": 2.5,
+  "10225": 2.5,
+  "10226": 2.5,
+  "17165": 2.33,
+  "17166": 2.33,
+  "442": 1.3,
+  "17168": 1.3,
+  "2884": 10.6,
+  "860": 10.6
+ },
+ "pipe_overlap_note": "share of the smaller class hidden when two classes run on different simdgroups of one core (4+4): f32/f16 0.98, f32/int 0.80, f32/round 0.18 (same pipe), f16/mma 0.21 (same pipe), f32/mma 0.57, int/deq 0.15 (converts on the int pipe), deq/f32 0.95, tld vs ALU 0.76-0.90, tst vs anything 0.82-1.0, dld vs anything 0.81-1.0",
+ "load_stream_per_core_KB_us": {
+  "L1_64KB": {
+   "1sg": 8.4,
+   "4": 33.5,
+   "8": 67.5,
+   "16": 132.1,
+   "32": 217.2
+  },
+  "L2_4MB": {
+   "1sg": 1.9,
+   "4": 16.7,
+   "8": 33.5,
+   "16": 66.1,
+   "32": 70.5
+  },
+  "DRAM_64MB_plus": {
+   "1sg": 1.9,
+   "4": 7.2,
+   "8": 13.9,
+   "16": 26.1,
+   "32": 37.4
+  },
+  "note": "one threadgroup on one core, 16 B per lane per iteration; the fleet's skinny ceiling 9 KB/us/core (= 180 GB/s over 20 cores) is a chip-wide DRAM share, not the per-core path"
+ }
+}
