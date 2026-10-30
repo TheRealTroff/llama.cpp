@@ -8,7 +8,9 @@ dependencies from the MIR operands ($rN, $rN_rM pairs, $rNl/$rNh halves); loop-c
 iteration's definition. Memory: a threadgroup load depends on every earlier threadgroup store of the iteration (the tile
 reads what it staged). One simdgroup, in-order: an instruction issues at max(previous issue + issue interval, operands
 ready) and its result is ready one latency later. Latency per opcode from the table (ns, measured by perf/agx-latency),
-else the class default; device loads take the L1 or the DRAM latency per --loads. Prints the steady-state iteration time
+else the class default; device loads take the L1 or the DRAM latency per --loads. An MMA (2884 half->float, 860 half->half)
+costs one issue slot and 11.7 ns latency; --mma-pipe N also spaces consecutive MMAs N ns apart (the measured back-to-back
+interval is 11.7, but enforcing it over-predicts the skinny k-steps; default = the table's mma_pipe, 0). Prints the steady-state iteration time
 and the critical-path breakdown by class; --dump prints every instruction with its issue time."""
 import argparse, json, os, re, sys
 from collections import Counter, defaultdict
@@ -33,13 +35,14 @@ def comps(r):   # register name -> set of 16-bit components
     return {base + 'l', base + 'h'} if not suf else {r}
 
 ap = argparse.ArgumentParser(); ap.add_argument('join'); ap.add_argument('--table', default=os.path.join(HERE, 'agx-latency', 'latency.json'))
-ap.add_argument('--loads', default='cached', help='cached | l2 | dram | <ns>'); ap.add_argument('--ksteps', type=float, default=1.0, help='64-wide k-steps per loop iteration'); ap.add_argument('--all-miss', action='store_true', help='every device load pays the stream latency (default: the activation loads - <4 x s32> from a bare 64-bit base, shared by every threadgroup - hit L1; of the weight loads the first per iteration pays the stream latency and the rest, same block, hit L1)'); ap.add_argument('--iters', type=int, default=64); ap.add_argument('--dump', action='store_true')
+ap.add_argument('--loads', default='cached', help='cached | l2 | dram | <ns>'); ap.add_argument('--ksteps', type=float, default=1.0, help='64-wide k-steps per loop iteration'); ap.add_argument('--all-miss', action='store_true', help='every device load pays the stream latency (default: the activation loads - <4 x s32> from a bare 64-bit base, shared by every threadgroup - hit L1; of the weight loads the first per iteration pays the stream latency and the rest, same block, hit L1)'); ap.add_argument('--mma-pipe', type=float, default=None, help='override the matrix-pipe occupancy per MMA, ns (table mma_pipe 11.7; 0 = an MMA costs one issue slot)'); ap.add_argument('--iters', type=int, default=64); ap.add_argument('--dump', action='store_true')
 a = ap.parse_args()
 lat_table = json.load(open(a.table)) if os.path.exists(a.table) else {}
 lat_op = {int(k): v for k, v in lat_table.get('opcodes', {}).items()}
 issue_op = {int(k): v for k, v in lat_table.get('issue_opcodes', {}).items()}
 MEM = lat_table.get('memory', {'device_l1': 37.0, 'device_l2': 85.0, 'device_dram': 300.0, 'tg_load': 37.0, 'tg_store_to_load': 51.0})
 ISSUE = lat_table.get('issue', 0.9)
+MMA_OPS = {int(k) for k in lat_table.get('mma_opcodes', ['2884', '860'])}; MMA_PIPE = lat_table.get('mma_pipe', 11.7) if a.mma_pipe is None else a.mma_pipe   # 2026-10-30 evening: back-to-back MMAs are 11.7 ns apart (16 clocks, perf/agx-latency mma16_regs); the table sets mma_pipe 0 (not enforced) because enforcing it in program order over-predicts the measured skinny k-steps - see kernel-perf-model.md
 ins = json.load(open(a.join))['instructions']
 ex = Counter(); cnt_bb = Counter(); order = []
 for i in ins:
@@ -72,7 +75,7 @@ for i in body:
     act = cls == 'DLD' and '<4 x s32>' in t and len(base) == 1 and '_' in REG.search(rhs).group(1)   # activation (B) load
     parsed.append(dict(i=i, d=d, u=u, lat=lat, cls=cls, base=base, act=act))
 # simulate
-ready = {}; last_tst = []; t_issue = -ISSUE; iter_end = []; crit = Counter()
+ready = {}; last_tst = []; t_issue = -ISSUE; iter_end = []; crit = Counter(); mma_free = 0.0
 for it in range(a.iters):
     tst_times = []; touched = set()
     for p in parsed:
@@ -83,10 +86,13 @@ for it in range(a.iters):
             else: touched.add('w')
         if p['cls'] == 'TLD' and tst_times: dep = max(dep, max(tst_times))
         t0 = t_issue + issue_op.get(p['i']['op'], ISSUE)
+        is_mma = p['i']['op'] in MMA_OPS
+        if is_mma: dep = max(dep, mma_free)   # the matrix pipe takes one MMA per MMA_PIPE ns from a simdgroup; other instructions issue meanwhile
         start = max(t0, dep); stalled = start - t0
-        if stalled > 0 and it == a.iters - 1: crit[p['cls']] += stalled
+        if stalled > 0 and it == a.iters - 1: crit['MMA pipe' if is_mma and mma_free >= max([ready.get(c, 0.0) for c in p['u']] + [0.0]) else p['cls']] += stalled
         if it == a.iters - 1: crit['issue'] += issue_op.get(p['i']['op'], ISSUE)
         t_issue = start; done = start + lat
+        if is_mma: mma_free = start + MMA_PIPE
         for c in p['d']: ready[c] = done
         if p['cls'] == 'TST': tst_times.append(done)
         if a.dump and it == a.iters - 1: print(f"{start:8.1f} +{stalled:5.1f} {p['cls']:8s} op{p['i']['op']:<6d} lat {lat:5.1f}  {p['i']['text'][:110]}")

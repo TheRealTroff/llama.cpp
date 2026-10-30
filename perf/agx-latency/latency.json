@@ -1,9 +1,10 @@
-{"note": "AGX instruction latencies in ns, measured 2026-10-30 by perf/agx-latency/bench.swift on M4 Pro (one simdgroup, dependent chains, clocks warmed; perf/agx-latency.txt in results/perfmodel-oct30). Opcode numbers = the backend's MIR opcodes (agx-nt-opt.py mir of kernels.metal). issue = ns per instruction from one simdgroup (fma indep4: 0.89); mma issue 3.2.",
+{"note": "AGX instruction latencies in ns, measured 2026-10-30 by perf/agx-latency/bench.swift on M4 Pro (one simdgroup, dependent chains, clocks warmed; perf/agx-latency.txt in results/perfmodel-oct30). Opcode numbers = the backend's MIR opcodes (agx-nt-opt.py mir of kernels.metal). issue = ns per instruction from one simdgroup (fma indep4: 0.89). MMA (2884 half->float, 860 half->half): latency 11.7, and one simdgroup starts back-to-back MMAs 11.7 ns apart (16 clocks; mma_interval_measured, mma16_regs). The simulator does NOT enforce that spacing (mma_pipe 0 = an MMA costs one issue slot): enforced in program order it over-predicts the skinny k-steps 16-27%, unenforced they land within 7% on 5 of 7 - the real tiles overlap their MMA groups with the following dequant in a way the in-order model cannot express (kernel-perf-model.md 2026-10-30 evening; the earlier 3.2 ns issue figure came from probes whose four identical accumulator chains the compiler folded into one).",
  "issue": 0.9,
  "opcodes": {"2212": 1.7, "3312": 1.6, "820": 1.6, "821": 1.6, "798": 1.6, "884": 1.6,
              "11082": 1.65, "17880": 1.65, "11079": 1.65, "11080": 1.65, "11756": 3.5,
              "17165": 2.0, "443": 2.0, "442": 2.0, "12107": 2.5, "10226": 2.5,
              "610": 1.0, "14980": 1.0, "466": 1.0,
-             "2884": 11.7},
- "issue_opcodes": {"2884": 3.2},
+             "2884": 11.7, "860": 11.7},
+ "issue_opcodes": {},
+ "mma_opcodes": ["2884", "860"], "mma_pipe": 0.0, "mma_interval_measured": 11.7,
  "memory": {"device_l1": 37.0, "device_l2": 85.0, "device_dram": 300.0, "tg_load": 37.0, "tg_store_to_load": 51.0}}

@@ -403,19 +403,24 @@ them per core in sequence, 80 k-steps; `kstep-validate.py`):
 
 | kernel | sim cached | measured cached (PROBE=2) | err | sim stream (L = 200 ns) | measured stream | err | pure issue per k-step |
 |---|---|---|---|---|---|---|---|
-| q4_0 SoA | 337 | 307 | +10% | 410 | 390 | +5% | 242 ns |
-| q4_K | 504 | 482 | +5% | 667 | 636 | +5% | 254 |
-| q5_K | 599 | 560 | +7% | 762 | 710 | +7% | 352 |
-| q3_K | 469 | 492 | -5% | 632 | 626 | +1% | 327 |
-| iq4_xs | 423 | - | | 586 | 650 | -10% | 252 |
-| q6_K | 490 | - | | 653 | 661 | -1% | 323 |
-| q8_0 (join from the 5120x48 row) | 374 | - | | 537 | 627 | -14% | 218 |
+| q4_0 SoA | ~~337~~ 325 | 307 | ~~+10%~~ +6% | ~~410~~ 398 | 390 | ~~+5%~~ +2% | ~~242~~ 205 ns |
+| q4_K | ~~504~~ 493 | 482 | ~~+5%~~ +2% | ~~667~~ 656 | 636 | ~~+5%~~ +3% | ~~254~~ 217 |
+| q5_K | ~~599~~ 587 | 560 | ~~+7%~~ +5% | ~~762~~ 750 | 710 | ~~+7%~~ +6% | ~~352~~ 315 |
+| q3_K | ~~469~~ 458 | 492 | ~~-5%~~ -7% | ~~632~~ 620 | 626 | ~~+1%~~ -1% | ~~327~~ 290 |
+| iq4_xs | ~~423~~ 412 | (485, 12:40) | -15% | ~~586~~ 575 | 650 | ~~-10%~~ -12% | ~~252~~ 215 |
+| q6_K | ~~490~~ 478 | (510) | -6% | ~~653~~ 641 | 661 | ~~-1%~~ -3% | ~~323~~ 286 |
+| q8_0 (join from the 5120x48 row) | ~~374~~ 362 | (443) | -18% | ~~537~~ 525 | 627 | ~~-14%~~ -16% | ~~218~~ 181 |
+
+(Struck values: the 12:10 table, which priced an MMA at 3.2 ns of issue. The evening's clean MMA probes put the back-to-back MMA
+interval at 11.7 ns and showed the 3.2 came from a folded probe; the re-score prices an MMA at one issue slot, which is what
+the measured k-steps support - see "Where the mul_mm tile's three quarters went" below, and `kstep-validate.txt` for both rules.)
 
 **The cached chain is predicted from the machine code within 10% on all four probed kernels with nothing fitted**: table
 latencies, in-order issue, the dependency graph. The weight stream needs one chip constant, an effective latency of 200 ns
 (the dependent chase measures 300; a streaming slice gets some overlap), and with it seven kernels land within 14%, six within
-10%. This is t0 as a function of the code. It also says what the chain is made of: pure issue is 60-75% of the k-step (the
-MMAs at 3.2 ns each are 51 of it), the rest is the load-to-use wait and the store-to-load through threadgroup memory. The
+10%. This is t0 as a function of the code. It also says what the chain is made of: pure issue is 60-75% of the k-step (~~the
+MMAs at 3.2 ns each are 51 of it~~ the 16 MMAs are 14 of it at one slot each; what the matrix pipe costs the simdgroup beyond
+that is the evening's open question), the rest is the load-to-use wait and the store-to-load through threadgroup memory. The
 generic tile's 110-130 ns "cached chain" over the SoA tile's 69 is, in these terms, 12-110 more instructions to issue plus
 a dequant sequence that waits on its loads instead of hiding them.
 
@@ -460,7 +465,7 @@ simdgroups per threadgroup would measure it directly.
 | 4 f32 + 4 f16 (32 + 32) | 49.4 | = the 64-op control: **no FP32+FP16 dual issue** |
 | 4 f32 + 4 int (32 + 64 int ops) | 41.8 | = 28.5 + 15.8 (each alone): **no FP32+INT dual issue** |
 | 4 f16 + 4 int | 42.5 | same |
-| 32 MMA + 128 f32 fma | 180.0 | vs 105.8 + 89.4 alone: **MMA and ALU do not overlap** (8%) |
+| ~~32 MMA~~ 8 MMA + 128 f32 fma | 180.0 | vs 105.8 + 89.4 alone: ~~**MMA and ALU do not overlap** (8%)~~ RETRACTED (evening): the "32 MMA" probe held 8 (the compiler folded four identical accumulator chains into one), and its 105.8 is a dependent chain of 8 at 13 ns - see below |
 
 A simdgroup issues one instruction at a time whatever its class, MMA included: the simulator's in-order single-issue assumption
 is right. (The int chain, shift+xor, ran at 0.25 ns per op - half the FP rate - so either the pair fused or the integer pipe
@@ -473,8 +478,9 @@ Then the same kernels with 1, 2, 4, 8, 16, 32 simdgroups in one threadgroup (one
 | f32 fma, core throughput (sg-instr/ns) | 1.12 | 2.25 | 4.5 | 5.4 | 5.8 | 6.0 |
 | f16 fma | 1.3 | - | 5.2 | 5.8 | 6.05 | - |
 | f32 + f16 mixed streams | 1.3 | - | 5.2 | 6.85 | **7.7** | - |
-| MMA (8x8x8 half -> float), MMA/ns | 0.30 | - | 1.21 | 1.41 | 1.49 | - |
-| 32 MMA + 128 fma per iteration | - | - | - | - | 0.77 MMA/ns + 3.07 fma/ns | - |
+| ~~MMA (8x8x8 half -> float), MMA/ns~~ (folded probe, 4x too high) | ~~0.30~~ | - | ~~1.21~~ | ~~1.41~~ | ~~1.49~~ | - |
+| MMA, clean probe (evening: `mma16_regs`, 16 distinct products from operands loaded once) | 0.086 | - | 0.34 | 0.37 | **0.38** | - |
+| ~~32 MMA + 128 fma per iteration~~ (folded) | - | - | - | - | ~~0.77 MMA/ns + 3.07 fma/ns~~ | - |
 
 - **Four simdgroups run at full single-simdgroup speed; the core saturates at 6.0 scalar instructions/ns for one class.** At
   1.5 GHz that is four instructions per clock = 128 lanes: the four ports the ceiling fit inferred are real, and a port issues
@@ -483,17 +489,26 @@ Then the same kernels with 1, 2, 4, 8, 16, 32 simdgroups in one threadgroup (one
 - **FP32 and FP16 are separate pipes behind the ports.** Mixed streams from different simdgroups reach 7.7/ns against 6.0 for
   either class alone: the 6.0 is a pipe limit, and the port/issue limit is above 7.7. Dequant-heavy loops that mix FP16
   converts with FP32 accumulation get some of this at residency; the ceiling model does not yet account for it.
-- **MMA shares the ports and costs four slots.** 1.49 MMA/ns per core = one 8x8x8 per clock; the mixed stream's shares sum
+- ~~**MMA shares the ports and costs four slots.** 1.49 MMA/ns per core = one 8x8x8 per clock; the mixed stream's shares sum
   to 103% (52% of MMA capacity + 51% of scalar), so the two compete for the same issue resource, one MMA = four scalar slots -
-  the 3.2 ns single-simdgroup MMA issue is the port's four clocks.
-- **The MMA pipe is far above what any tile reaches.** 1.49 MMA/ns/core x 1024 flop x 20 cores = 30 TFLOPS of half->float
+  the 3.2 ns single-simdgroup MMA issue is the port's four clocks.~~ RETRACTED the same day (evening): the MMA probes
+  (`mma_f16_indep4_u16`, `mma4_u8`, `mma4_f32x16_u8`) had four accumulator chains with identical inputs and the compiler
+  folded them into one - 8 MMAs per iteration where 32 were counted, so every MMA figure above was 4x too good. Measured
+  cleanly (operands loaded once before the loop, 16 distinct products): **one MMA costs a port 16 clocks (10.5-10.7 ns), the
+  core does 0.38 MMA/ns, and one simdgroup starts back-to-back MMAs 11.7 ns apart.** An 8x8x8 MMA is 512 lane-FMAs = 16 per
+  lane: it runs at the FMA lanes' rate, i.e. this GPU has no matrix unit (consistent with Apple first adding one in the M5).
+- ~~**The MMA pipe is far above what any tile reaches.** 1.49 MMA/ns/core x 1024 flop x 20 cores = 30 TFLOPS of half->float
   matrix work, against the 7 TFLOPS the mul_mm prefill tiles sit at. The "MMA roof" the mm rows were scored against is the
   best kernel, not the hardware: the prefill tiles are issue-, stage- and load-bound at a quarter of the matrix pipe. That
-  reopens the mm family (95% of a roof that is itself 25% of the pipe).
+  reopens the mm family (95% of a roof that is itself 25% of the pipe).~~ RETRACTED: 0.38 MMA/ns/core x 1024 x 20 = 7.8 TFLOPS,
+  the same number as the FP32 FMA roof (6.0 instr/ns x 32 lanes x 2 x 20 = 7.7), and the mul_mm acch n64 tile runs at 7.54
+  isolated: **the tiles are at 97-98% of the hardware's matrix rate**. The mm family stays closed by the roof. Section below.
 
 For the ceiling model the refinement is: per k-step, slots per pipe (FP32-pipe instructions, FP16-pipe instructions, MMA at
-four slots, loads on the load path), ceiling = min over the binding pipe of 4 per clock, and the load path - instead of one
-undifferentiated issue sum. Not yet done; the one-sum version placed seven kernels within 15%.
+~~four~~ **sixteen** slots on the FP16 pipe, loads on the load path), ceiling = min over the binding pipe of 4 per clock, and the
+load path - instead of one undifferentiated issue sum. Not yet done; the one-sum version placed seven kernels within 15%. For
+the skinny tiles the MMA term is not binding (16 MMAs x 10.6 ns per simdgroup k-step -> 23.6 k-steps/us/core against the
+load path's 15.6); for the mul_mm tiles it is the whole story.
 
 *What R was.* At pad 24576 the core holds exactly one threadgroup (two simdgroups) and the counter reads 0.51: the APS "inflight"
 value is about a quarter of the resident simdgroups, so the t0 = 91 ns and X of the earlier sections are the physical 390 ns
@@ -502,13 +517,70 @@ T = threadgroups per core x k-steps x t_TG(resident) with t_TG(1) from the simul
 several resident simdgroups share four issue ports and the load path - which the same simulator can produce by running N
 instruction streams against shared ports.
 
+*Where the mul_mm tile's three quarters went (evening; owner: "now I can't wait to see where the other 3/4 go";
+`agx-mm-units.txt`, `mm-isolated.txt`, `perf/agx-latency/agx-mm-*-m4pro-2026-10-30.txt`).* Nowhere: there were no three
+quarters. The chase ran like this. The `kernel_mul_mm_acch_n64_q4_0_f16` tile (64x64 output per threadgroup, 32-wide k per
+iteration, 4 simdgroups; per simdgroup-iteration 64 MMAs, 32 `simdgroup_load`s of 8x8 half tiles from threadgroup memory,
+16 scattered 2-byte staging stores + 2 vector stores, ~100 dequant ALU ops, two threadgroup barriers) runs its census join
+through the simulator at 310 ns per simdgroup-iteration - but its MMA is opcode 860 (half accumulate), which the table did not
+have, so it was priced as a 1.6 ns FP16 op. Unit costs were then measured one at a time (one simdgroup, then 1-16 simdgroups
+per core; ns):
+
+| unit (probe) | one simdgroup | per port at 4 simdgroups per port | note |
+|---|---|---|---|
+| MMA half->half 860, dependent chain (`mma_h_u16`) | 11.7 latency | | same as half->float |
+| MMA, 16 distinct products, operands in registers (`mma16_regs_u16`) | **11.7 per MMA** back-to-back | **10.5** | half->float (`mmaf16_regs`): 11.9 / 10.7 |
+| 8 tile loads + 16 MMAs, the tile's 8-wide k sub-step (`substep_h_u16`) | 257 | 191 (= 16 x 11.9) | MMA-bound at 2 simdgroups per port already |
+| tile load -> ALU use (`ld1_te1`) / -> MMA use (`ld1_mma1`) | 58 / ~72 latency | | 2-3 ns per extra load; core >= 1.4 tile loads/ns |
+| scattered 2-byte staging store, the tile's exact pattern (`tst16_u16`) | 3.3 each | 0.7 each (1.44/ns/core) | a 16-byte vector store: 11.7 / 1.25 |
+| threadgroup barrier with 4 simdgroups in lockstep (`barrier_u16` at 128 threads) | +25 per barrier | | +30 at 8, +37 at 16 simdgroups |
+| 16 MMAs + 64 FP32 FMAs (`mma16_f32x64`) | 223 = 15 x 11.7 + 64 x 0.76 | 749 vs 675 + 170 apart | at the core 56% of the FMAs hide under the MMAs |
+| 16 MMAs + 64 FP16 FMAs | 223 | 833 vs 844 apart | additive: FP16 FMAs and MMAs share a pipe |
+| 16 MMAs + 64 INT ops | 200 vs 219 apart | 694 vs 767 apart | INT hides 59% in the simdgroup, 79% at the core |
+| 16 MMAs + 32 tile loads | 301 vs 332 apart | 802 vs 1078 apart | loads hide 21% / 68% |
+
+The first probe of the set (`mma_h_indep4_u32`, the half->half copy of the morning's `mma_f16_indep4_u16`) gave the morning's
+3.3 ns per MMA again, and `mma4_h_ctl_u4` - four MMAs on one register pair - ran at 25 ns per iteration with ONE MMA in its
+machine code: the compiler had folded four accumulators with identical inputs (same a, same b, all zero) into one chain. The
+morning's MMA probes have the same shape, and their MIR shows 8 MMAs per iteration where 32 were counted (checked for all four).
+With operands loaded once before the loop and 16 distinct products nothing folds, and the number is 11.7 ns between
+back-to-back MMAs from one simdgroup, 10.5 ns per MMA per port - **16 clocks at 1.5 GHz, one MMA = 512 lane-FMAs = 16 FMA
+slots per lane. The matrix work runs on the FMA lanes; the MMA roof is the FMA roof, 7.7-7.8 TFLOPS.**
+
+The tile against that roof: in the census graph 11994 us per call = 689 ns per threadgroup-iteration per core (isolated:
+12107 us, 7.54 TFLOPS; the f32-accumulate n64 tile 7.15, the acch n32 tile 7.35). One threadgroup-iteration is four
+simdgroup-iterations on four ports, 64 MMAs each: 64 x 10.5-10.7 = 672-685 ns of the port's MMA capacity against 689 measured.
+**The acch n64 tile is at 97-99% of the matrix rate. Everything else in its iteration - the 32 tile loads, 18 stores,
+~100 dequant instructions, two barriers - hides under the MMAs at the core level** (the mixed probes above say how: FP32 and
+INT work from other simdgroups overlaps the pipe, the dequant is FP32 + bitfield + convert). The single-simdgroup chain (the
+simulator says 955 ns per iteration with the 11.7 spacing enforced: 659 of it MMA-to-MMA, the rest the once-per-sub-step tile
+load latency of ~60-70 ns exposed because the sub-step's loads sit behind the previous sub-step's MMAs in program order) is
+hidden by the 3.3 resident threadgroups per core. So: the mm family is not reopened. Its rows sit on the hardware, the
+remaining 1-3% are not worth a tile, and the only lever that could move an mm row is fewer MMAs (a different accumulation
+shape or a sparse/skipped block), not a better schedule.
+
+Two things this changes for the model. (a) *The MMA rule in the simulator.* Measured: an MMA holds the simdgroup's matrix pipe
+11.7 ns and the FP16 pipe with it; FP32, INT and load instructions issue beside it to a varying degree (26%, 59%, 21% hidden
+in one simdgroup when placed after a 16-MMA group - the compiler groups MMAs and drops `simdgroup_barrier(mem_none)` fences,
+so an interleaved program order could not be forced). Enforcing the 11.7 spacing in program order over-predicts the skinny
+k-steps by 16-27% on q4_0/q4_K/q5_K (their 16 MMAs are grouped at the end of the k-step and the measured k-step, 307 ns for
+230 instructions, is below 16 x 11.7 + the rest); pricing an MMA at one issue slot lands within 7% on five of seven (the table
+above, re-scored). The one-slot rule is the default (`latency.json` mma_pipe 0, `--mma-pipe 11.7` enforces the spacing;
+`kstep-validate.txt` carries both); how a real tile overlaps its MMA group with the next k-step's dequant is the open
+mechanism, and it is the next thing a per-instruction probe of a real tile should settle. (b) *The harness has a trap.*
+Independent chains must differ in their inputs or the compiler folds them; the dependent-chain latencies and the ALU
+dual-issue probes (distinct initial values per chain) were not affected, every MMA throughput number from the morning was.
+The folded kernels stay in `kernels.metal` marked as such.
+
 What this leaves: (1) **the contention curve from the simulator** - run N simdgroup streams against four shared issue
 ports and the load path and compare with the pad ladders (R 0.5 -> 3.1) and the grid curve; if it reproduces them, the whole
 skinny family is predicted from code plus five chip constants (latency table, 200 ns stream, 4 ports, 9 KB/us/core, the
 resident count from smem/registers); (2) **the four ports are measured** (6.0 sg-instr/ns/core, four simdgroups at full speed); still to measure: the
-load-path figure (a streaming micro-kernel at 1-6 resident threadgroups), and the per-pipe ceiling (FP32 / FP16 / MMA-at-4-slots)
-against the pad ladders; (2b) **the mm family is reopened**: the MMA pipe is ~30 TFLOPS and the prefill tiles reach 7 -
-the simulator on a mul_mm tile's loop body says where the other three quarters go; (3) the simulator's misses: iq4_xs -13% (the lookup-table gathers: price them with a gather micro-kernel) and q8_0 -16%
+load-path figure (a streaming micro-kernel at 1-6 resident threadgroups), and the per-pipe ceiling (FP32 / FP16 / MMA at
+sixteen slots) against the pad ladders; ~~(2b) **the mm family is reopened**: the MMA pipe is ~30 TFLOPS and the prefill tiles
+reach 7 - the simulator on a mul_mm tile's loop body says where the other three quarters go~~ (2b) RETRACTED: the MMA rate
+is 7.8 TFLOPS and the mm tiles sit at 97-99% of it (evening section); what remains open there is the single-simdgroup
+MMA/ALU overlap rule for the simulator; (3) the simulator's misses: iq4_xs -13% (the lookup-table gathers: price them with a gather micro-kernel) and q8_0 -16%
 (its join is the 5120x48 row - rejoin at 17408x5120); the loop-body rule and the activation-load heuristic are the fragile parts; (4) the small-grid under-fill (why four queued threadgroups leave a core at a quarter of
 the counter) is unchanged; (5) the other latency-bound families get the same treatment: a join, the simulator, a ladder to
 check - fa decode first.
@@ -519,9 +591,15 @@ check - fa decode first.
   skinny tile refuted a third time; no model transferred to llama.cpp). Its timing host (`exp/m4-measurement-harness`
   41d5ffa8b) is a qualified ISOLATED timer; useful for calibration pairs, not for the target.
 - 2026-10-30 night: first fit + intervention scorecard + residency ladder, section above. Branch exp/kernel-perf-model.
-- 2026-10-30 13:00: dual issue settled - one simdgroup never dual-issues (FP32/FP16/INT/MMA all serial), the core has four ports
-  at one instruction per clock with separate FP32 and FP16 pipes (mixed 7.7/ns vs 6.0), MMA = four slots; the MMA pipe is ~4x
-  what the mul_mm tiles reach - the mm 'roof' was the best kernel, not the hardware.
+- 2026-10-30 evening: the mul_mm chase. The morning's MMA probes were folded by the compiler (8 MMAs where 32 were counted);
+  clean probes: an MMA costs a port 16 clocks (10.5 ns), 0.38 MMA/ns/core = 7.8 TFLOPS = the FMA roof - no matrix unit on this
+  GPU. The acch n64 tile is at 97-99% of it; the mm family stays closed. Unit costs for tile loads, staging stores and barriers
+  measured; simulator MMA rule = one slot (the 11.7 spacing enforced over-predicts the skinny k-steps), validation re-scored
+  (5 of 7 within 7%); the single-simdgroup MMA/ALU overlap is the open mechanism. Section above.
+- 2026-10-30 13:00: dual issue settled - one simdgroup never dual-issues (FP32/FP16/INT ~~/MMA~~ all serial), the core has four ports
+  at one instruction per clock with separate FP32 and FP16 pipes (mixed 7.7/ns vs 6.0), ~~MMA = four slots; the MMA pipe is ~4x
+  what the mul_mm tiles reach - the mm 'roof' was the best kernel, not the hardware~~ (the MMA half RETRACTED the same evening:
+  folded probes; MMA = sixteen slots, the tiles are at the roof).
 - 2026-10-30 12:40: six cached points - no bits trend, repeats to 0.1%; misses are iq4_xs (LUT gathers) and q8_0 (wrong-shape join).
 - 2026-10-30 12:10: THE T0 FORMULA: latency table from micro-kernels (perf/agx-latency), in-order k-step simulator over the
   MIR join (perf/kstep-sim.py); cached chain within 10% on four kernels with nothing fitted, stream within 14% on seven with one

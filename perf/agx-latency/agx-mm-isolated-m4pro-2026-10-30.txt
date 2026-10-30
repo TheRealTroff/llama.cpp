@@ -1,0 +1,13 @@
+== isolated acch n64 tile at the census shape (q4_0_soa 17408x512x5120), three routes
+--- variant: default(acch n64)
+  MUL_MAT(type_a=q4_0_soa,type_b=f32,m=17408,n=512,k=5120,bs=[1,1],nr=[1,1],per=[0,1,2,3],k_v=0,o=1):                     84 runs - 12107.21 us/run -  91.27 GFLOP/run - [1;34m  7.54 TFLOPS[0m
+  MUL_MAT(type_a=q4_0_soa,type_b=f32,m=17408,n=512,k=5120,bs=[1,1],nr=[1,1],per=[0,1,2,3],k_v=0,o=1): ggml_metal_free: deallocating
+                    84 runs - 12102.39 us/run -  91.27 GFLOP/run - [1;34m  7.54 TFLOPS[0m
+--- variant: GGML_MM_ACC_HALF=0
+  MUL_MAT(type_a=q4_0_soa,type_b=f32,m=17408,n=512,k=5120,bs=[1,1],nr=[1,1],per=[0,1,2,3],k_v=0,o=1):                     80 runs - 12762.76 us/run -  91.27 GFLOP/run - [1;34m  7.15 TFLOPS[0m
+  MUL_MAT(type_a=q4_0_soa,type_b=f32,m=17408,n=512,k=5120,bs=[1,1],nr=[1,1],per=[0,1,2,3],k_v=0,o=1): ggml_metal_free: deallocating
+                    80 runs - 12752.23 us/run -  91.27 GFLOP/run - [1;34m  7.16 TFLOPS[0m
+--- variant: GGML_MM_N64=0
+  MUL_MAT(type_a=q4_0_soa,type_b=f32,m=17408,n=512,k=5120,bs=[1,1],nr=[1,1],per=[0,1,2,3],k_v=0,o=1):                     82 runs - 12419.29 us/run -  91.27 GFLOP/run - [1;34m  7.35 TFLOPS[0m
+  MUL_MAT(type_a=q4_0_soa,type_b=f32,m=17408,n=512,k=5120,bs=[1,1],nr=[1,1],per=[0,1,2,3],k_v=0,o=1): ggml_metal_free: deallocating
+                    82 runs - 12409.23 us/run -  91.27 GFLOP/run - [1;34m  7.35 TFLOPS[0m
