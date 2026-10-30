@@ -10,9 +10,9 @@ J = {'q4_0 SoA': 'census-1024-q4-w8-dec/dec00-mul_mat-q4_0_soa-5120x17408-n8', '
      'q5_K': 'census-1024-ud-w8-dec/dec01-mul_mat-q5_K_soa-5120x17408-n8', 'q3_K': 'census-1024-ud-w8-dec/dec15-mul_mat-q3_K_soa-5120x17408-n8',
      'iq4_xs': 'census-1024-ud-w8-dec/dec00-mul_mat-iq4_xs_soa-5120x17408-n8', 'q6_K': 'census-1024-ud-w8-dec/dec08-mul_mat-q6_K_soa-5120x248320-n8',
      'q8_0': 'census-1024-ud-w8-dec/dec06-mul_mat-q8_0-5120x48-n8'}
-# ns per threadgroup k-step at pad 24576 (smem-pad*/README.txt us/run / 2176), stream and cached; X from tstep-fit.txt; bits per weight
+# ns per threadgroup k-step at pad 24576 (cached = PROBE=2 ladders, 6 kernels by 12:40) (smem-pad*/README.txt us/run / 2176), stream and cached; X from tstep-fit.txt; bits per weight
 MEAS = {'q4_0 SoA': (390, 307, 15.95, 4.5), 'q4_K': (636, 482, 15.35, 4.5), 'q5_K': (710, 560, 13.10, 5.5), 'q3_K': (626, 492, 12.80, 3.4375),
-        'iq4_xs': (650, None, 13.75, 4.25), 'q6_K': (661, None, 11.35, 6.5625), 'q8_0': (627, None, 7.45, 8.5)}
+        'iq4_xs': (650, 485, 13.75, 4.25), 'q6_K': (661, 510, 11.35, 6.5625), 'q8_0': (627, 443, 7.45, 8.5)}
 PORTS, LOADPATH_KB_US = 4, 9.0
 a = argparse.ArgumentParser(); a.add_argument('--stream-ns', default='200'); a = a.parse_args()
 def sim(k, loads):

@@ -419,6 +419,17 @@ MMAs at 3.2 ns each are 51 of it), the rest is the load-to-use wait and the stor
 generic tile's 110-130 ns "cached chain" over the SoA tile's 69 is, in these terms, 12-110 more instructions to issue plus
 a dequant sequence that waits on its loads instead of hiding them.
 
+*Six cached points (12:40; owner asked whether the simulator's error rose with bits on the first three: q3_K -5%, q4_K +5%,
+q5_K +7%).* PROBE=2 ladders added for iq4_xs, q6_K, q8_0 (`smem-pad-{iq4_xs_soa,q6_K_soa,q8_0}-probe2/`; cached t0 / X:
+108 / 13.3, 117 / 13.0, 105 / 14.5 - q8_0's ceiling doubles from 7.45 when the stream leaves DRAM, the load-path cap in person).
+Cached k-step, simulator vs measured, by bits per weight: q3_K (3.4) -5%, iq4_xs (4.25) -13%, q4_K (4.5) +4%, q5_K (5.5) +7%,
+q6_K (6.6) -4%, q8_0 (8.5) -16%. **No trend with bits**; the two ladder repeats agree to 0.1%, so the errors are structural
+and kernel-specific. The two misses: iq4_xs under-predicted 13% both cached and streamed - its dequant gathers from a
+threadgroup-memory lookup table (32 `s32` loads per iteration, lane-indexed), which the simulator prices as plain 37 ns loads
+and which bank conflicts would make slower (a gather micro-kernel would price it); q8_0 under-predicted 16% from a join taken
+on the 5120x48 census row (two threadgroups; rejoin at 17408x5120 before reading anything into it). The four other generic
+kernels and the SoA tile sit within -5..+10%.
+
 *What the simulator says about the ceiling.* If a core issues from four simdgroups at once (four 32-lane pipes), the per-core
 ceiling in k-steps/us is 4 / (issue time per k-step), capped by the load path:
 
@@ -449,9 +460,8 @@ What this leaves: (1) **the contention curve from the simulator** - run N simdgr
 ports and the load path and compare with the pad ladders (R 0.5 -> 3.1) and the grid curve; if it reproduces them, the whole
 skinny family is predicted from code plus five chip constants (latency table, 200 ns stream, 4 ports, 9 KB/us/core, the
 resident count from smem/registers); (2) **measure the four ports** (2/4/8 simdgroups per threadgroup micro-kernel) and the
-load-path figure (a streaming micro-kernel at 1-6 resident threadgroups); (3) the simulator's misses: iq4_xs -10% stream /
-+15% ceiling and q8_0 -14% (its join is the 5120x48 row - rejoin at 17408x5120); the loop-body rule and the activation-load
-heuristic are the fragile parts; (4) the small-grid under-fill (why four queued threadgroups leave a core at a quarter of
+load-path figure (a streaming micro-kernel at 1-6 resident threadgroups); (3) the simulator's misses: iq4_xs -13% (the lookup-table gathers: price them with a gather micro-kernel) and q8_0 -16%
+(its join is the 5120x48 row - rejoin at 17408x5120); the loop-body rule and the activation-load heuristic are the fragile parts; (4) the small-grid under-fill (why four queued threadgroups leave a core at a quarter of
 the counter) is unchanged; (5) the other latency-bound families get the same treatment: a join, the simulator, a ladder to
 check - fa decode first.
 
@@ -461,6 +471,7 @@ check - fa decode first.
   skinny tile refuted a third time; no model transferred to llama.cpp). Its timing host (`exp/m4-measurement-harness`
   41d5ffa8b) is a qualified ISOLATED timer; useful for calibration pairs, not for the target.
 - 2026-10-30 night: first fit + intervention scorecard + residency ladder, section above. Branch exp/kernel-perf-model.
+- 2026-10-30 12:40: six cached points - no bits trend, repeats to 0.1%; misses are iq4_xs (LUT gathers) and q8_0 (wrong-shape join).
 - 2026-10-30 12:10: THE T0 FORMULA: latency table from micro-kernels (perf/agx-latency), in-order k-step simulator over the
   MIR join (perf/kstep-sim.py); cached chain within 10% on four kernels with nothing fitted, stream within 14% on seven with one
   constant (200 ns); ceiling X = min(4 ports / issue time, 9 KB/us/core / bytes) within 15% on seven. Section above.
