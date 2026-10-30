@@ -32,6 +32,31 @@ one level down, and it bit the `GGML_MV_EXT_V2` work on 2026-08-22.
 
 ## The prod pick
 
+**2026-10-31 small hours (owner, Oct 30 night: "I agree with your recommendation, but I assume you'll pull the brakes if something..
+breaks"): the half-B skinny lever `GGML_MM_SKINNY_HALFB=1` + the f16 twins `GGML_FUSE_SMALL=63` PICKED on the ud line (BI class;
+q4 stays at mask 60), on top of the hazard-tracker fix `a2d0c7217` (both lines, no knob): `ggml_mem_ranges_check` tested half-open
+ranges with `>=`, so ABUTTING allocations counted as hazards, and with the twin tails every skinny matmul of the width-8 round ran
+alone in its concurrency group - the whole -4.5% that had been read as "mask 63's cost". Manifest `424ac6dba` (the commit messages
+and the mint TAG say 11-01: mis-dated, the work ran Oct 30 night into Oct 31; `kernel-perf-model.md` 'The half-B lever, built').**
+The width-6..8 skinny tile reads its B operand from src1's f16 twin (half strides, `FC_mul_mm_sk_halfb`) instead of converting f32
+in the k-loop: per call -3.6..-5.1%, byte-identical (12/12 seeded dumps); width-8 ud round 28.18 (pick) -> 28.25 (mask 63 alone,
+= pick after the fix) -> 29.12 t/s (63 + lever) = +3.3%, sha `ce826d8a3cbd` x9, 0 `fuse-alias` hits, 14824/14824 backend tests;
+the lever's kernels run only at verify widths 6-8, so the controller rounds see less. **Mint `prodpick-nov01-halfb-{ud,q4}` (prod
+`424ac6dba`, binary 10-30 23:21, run 23:21-00:21):** ud f16 32.28 / 32.25 at 300 (`9c53aaade052`), 32.34 / 32.35 at 600
+(`86b6e9b02cf0`), partial 14.84, MTP 20.30, b1 13.41 (`9c53aaade052`); Turbo4 32.62 at 300 (`d180ae89f168`), 29.63 / 30.34 at 600
+(`abc0c5af7300` x2), turbo4-b1 13.16 (`d180ae89f168`). q4 f16 32.99 / 32.99 at 300 (`d2953fccfb41`), 34.61 / 34.65 at 600
+(`441120c66064`), partial 22.60 (`95fb10b8e7da`), MTP 24.33, b1 14.83; Turbo4 34.91 at 300 (`f07b0f8c58e6`), 34.34 / 34.63 at
+600 (`801cb0758d4e` x2), turbo4-b1 14.68 (`7c5254d01b12`). **Every sha = the Oct 26 mint's on both lines, the controller arms
+included; 0 `fuse-alias` hits in every log; multi-slot split + classes PASS (short + long extents), vision one-slot + multi-slot
+PASS, both lines.** ud f16 +1.0..1.6% over Oct 26 at the controller rounds, Turbo4 +0.9..1.0% at 300/600-r2; q4 (no pick change,
+the hazard fix alone) +0.3..+2.1%, machine state not separated. Replay gate `halfbrg-oct31` (record under `GGML_MM_SKINNY_HALFB=0
+GGML_FUSE_SMALL=60`, replay x3 under the pick, 1200 tokens requested): ud `d30a59f643c8` x4, 375 picks, 0 desync, 0 past-trace
+(replays 30.42-30.66 vs the old-flag record 29.70 t/s on the same tokens); q4 `e3cb684c753a` x4 (= the Oct 25 gate's record sha),
+309 picks, 0 desync. **The Sep 10 mask-63 drafter-trace item (`small-op-fusion.md` 'from the drafter's side') was a q4 Turbo4 600
+finding (~1 in 20 runs; ud never moved in that series and has not here: 11 mint arms + 4 gate runs canonical); q4 stays at 60 and
+the item stays open on q4.** Serving picks the manifest up on its next launch. Logs `kvquant-experiments/results/
+prodpick-nov01-halfb-{ud,q4}.log`, `halfbrg-oct31.log`, `perfmodel-oct30/halfb/`.
+
 **2026-10-26 evening (owner: "Might as well mint"): mint `prodpick-oct26-probes-{q4,ud}` (prod `d4b3ab5f8`, binary 10-26 02:17 -
 the first mint carrying the Oct 26 merges: the census byte-floor / instructions-per-type columns `c4fa0869d` and the skinny-route
 probe knobs `d4b3ab5f8` (`issue-probes.md`), both inert unset; no pick change, no manifest change).** q4 f16 32.75 / 32.83 at 300

@@ -892,7 +892,7 @@ every opcode of the q3_K chain was reached from source within three forms once t
 ushort for 17168, a `constant` table indexed by a register for 13555), and the one that could not be reached (12288) was priced
 by the in-kernel A/B instead. The archive route is the tool to keep for an opcode none of those three ways produces.
 
-*Three levers the model names, priced as probe arms (2026-11-01 small hours; owner: "want to take a stab at improving a kernel?";
+*Three levers the model names, priced as probe arms (2026-10-31 (mis-dated 11-01 in the commits); owner: "want to take a stab at improving a kernel?";
 `GGML_MM_SKINNY_PROBE=9|10|11` on the generic tile, translator-verified; `lever-probes.txt`).* Arm 9: the B staging reads a HALF
 activation buffer (the f32 buffer read as half here: the lever's instruction mix and byte count - 8 rounds gone from the FP32
 pipe the MMA holds, half the activation bytes; the real lever would read the Y16 half copy the mul_mv path already makes -
@@ -916,7 +916,7 @@ layout decision (the -SOA-V3 head file, owner's), not a kernel form. Of the thre
 building if ~3.5% per skinny call pays for the plumbing (route the width-6..8 skinny op's src1 to the Y16 half copy in
 ggml-metal-ops; byte-identical, no gate beyond the sha): at the width-8 round's skinny share that is roughly -1.5% of the round.
 
-*The half-B lever, built (2026-11-01; owner: "Half B looks like a win anyway?"; `GGML_MM_SKINNY_HALFB=1`, commit b6fecdc19;
+*The half-B lever, built (2026-10-31 (mis-dated 11-01 in the commits); owner: "Half B looks like a win anyway?"; `GGML_MM_SKINNY_HALFB=1`, commit b6fecdc19;
 results `halfb/gate.txt`, `halfb/w8decomp.log`).* The generic skinny tile's B staging reads the f16 copy of the activations
 instead of f32: the dispatcher encodes `kernel_cvt_f32_f16_cont` (the mul_mv f16y copy's kernel) into the scratch after dst,
 resets concurrency, and binds the copy with half strides; the kernel takes `FC_mul_mm_sk_halfb` (FC_MUL_MM + 15, pipeline name
@@ -1023,6 +1023,14 @@ check - fa decode first.
 
 ## Log
 
+- 2026-10-31 small hours: ADOPTED on prod (owner Oct 30 night: "I agree with your recommendation ... pull the brakes if something
+  breaks"): hazard-interval fix a2d0c7217 both lines, manifest 424ac6dba = GGML_MM_SKINNY_HALFB=1 + GGML_FUSE_SMALL=63 on ud, q4 at
+  60. Mint prodpick-nov01-halfb-{ud,q4}: 22/22 shas = the Oct 26 record, 0 fuse-alias hits, multi-slot + vision PASS both lines;
+  ud f16 +1.0..1.6% at the controller rounds (the lever runs at widths 6-8 only), q4 within machine state. Replay gate halfbrg-oct31
+  (record under the old flags, x3 under the pick): ud d30a59f643c8 x4 / 375 picks, q4 e3cb684c753a x4 / 309 picks, 0 desync. No
+  brakes pulled. What the model did and did not do here: it priced the kernel (per call -3.6..-5.1%, inside the simulator's band)
+  and named the lever; it could not price the lever IN THE GRAPH, where the result was set by grouping (mask 63's hazard
+  serialization) - the op-interaction model (groups, hazards, exposed time) is the next target, item (3) under 'What this leaves'.
 - 2026-10-29: stub opened after the Oct 27-29 prediction campaign (six `exp/m4-*` branches, one commit each; prefetch on the
   skinny tile refuted a third time; no model transferred to llama.cpp). Its timing host (`exp/m4-measurement-harness`
   41d5ffa8b) is a qualified ISOLATED timer; useful for calibration pairs, not for the target.
@@ -1042,15 +1050,15 @@ check - fa decode first.
   price (A/B flat), 17165 immediate-bfe 2.33 -> 0.9 (was the register form's price), 13555 constant gather = one slot + 25 ns (was
   classed as an int op); rule re-fit: 2884 holds FP32 8 ns, 860 6 ns -> sim within 5% on q4_0/q4_K/q5_K/q3_K at 3/port, iq4_xs/q6_K
   -13..-15, mean 7% at 2 and 3 per port, harness 7.6%. Below-source routes answered (AIR cannot pick opcodes; binary archive can).
-- 2026-11-01: half-B BUILT (GGML_MM_SKINNY_HALFB, b6fecdc19 + twin path): per call -3.6..-5.1%, 12/12 dumps and every graph
+- 2026-10-31 (mis-dated 11-01 in the commits and the mint TAG): half-B BUILT (GGML_MM_SKINNY_HALFB, b6fecdc19 + twin path): per call -3.6..-5.1%, 12/12 dumps and every graph
   sha canonical; in-graph the cast form (=2, cast + reset per op) is -4.3% t/s (the reset breaks the concurrency groups), the
   twin form (=1) needs GGML_FUSE_SMALL mask 63, which itself costs -4.5% on the width-8 round (new finding), lever +3.5% over 63,
   -1.2% net vs the pick. Not a win as the pick stands. Mask 63's 4.5% located: the twin tail serializes the skinny matmuls that
   shared a concurrency group under 60 (summed group walls 161.7 -> 169.1 ms/round, hiding 1.12 -> 1.07x; kernel time unchanged) -
   a hazard-tracking item on the fusion branch; fixed, 63 + lever ~ +2.5% over the pick. CHASED: the tracker's interval test
   `p1 >= q0` counted ABUTTING allocations as a hazard (upstream line); `>=` -> `>`: mask 63 28.25 (= 60), 63 + HALFB=1 29.12
-  = +3.3% over the pick, sha canonical x9, 0 alias hits. Adoption = the owner's mask-63 question.
-- 2026-11-01 small hours: three levers priced as arms 9/10/11 (lever-probes.txt): half-B-copy staging -3.4% (byte-identical,
+  = +3.3% over the pick, sha canonical x9, 0 alias hits. ADOPTED on prod 2026-10-31 (manifest 424ac6dba; mint + replay gate clean, README 'The prod pick').
+- 2026-10-31 small hours: three levers priced as arms 9/10/11 (lever-probes.txt): half-B-copy staging -3.4% (byte-identical,
   buildable via the Y16 copy), half accumulators -4..-5% (numerics), bit-trick q3_K dequant 0 (refuted in the real kernel: the
   five-op chain is already minimal). The dequant's share is structural; the large lever is fewer elements per lane = a layout decision.
 - 2026-10-31 later: both candidate mechanisms probed. Skinny-pattern tg memory: strided tile loads +18%, A staging stores 2x the
