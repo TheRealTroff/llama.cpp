@@ -342,6 +342,22 @@ Real output, `mul_mv_ext` at nr0=2 on an M4 Pro:
 `--all` adds threadgroup atomics, texture ops, `ComputeBufferPrefetch` promotion, the
 compiler `Remarks` (unroll and prolog/epilog decisions), and compile timings.
 
+## Profile one kernel at several residencies, and read stall as operand wait (2026-10-31, `perf/kernel-perf-model.md`)
+
+`perf/run-profile-pads.sh` (fork) runs this skill's capture -> replay -> per-instruction profile -> MIR join on one skinny
+tile at chosen `GGML_MM_SKINNY_SMEM_PAD` residencies; `perf/stall-sites.py <join>` charges each hot-loop site's measured
+stall to its pipe and to the pipe of its operand producer; `perf/stall-diff.py <lo> <hi> --t-lo --t-hi` aligns two joins of
+the same binary by offset. Two facts that make the columns readable: (1) the join needs EVERY function constant the pipeline
+name carries in `agx-cost-dataset.py` FAMILIES (the skinny tiles added `_probe=N_rp=N` on 2026-10-26; without them the
+offline binary differs and the align step says "profile does not match this binary at N offsets"); (2) at a lone simdgroup
+the non-stall share times the measured k-step equals the instruction count times one clock, so **stall = waiting on
+operands, non-stall = ready or issuing** - and the operand wait SHRINKS with residency (q3_K 65% -> 15% from pad 24576 to
+pad 0) while ready-not-issued time grows 5x. A kernel at its ceiling with 85% "issue" is not issue-bound; it is waiting for
+the port to serve it. Pair the profile with a deletion ladder (`GGML_MM_SKINNY_PROBE=4..8` on the generic skinny tile: no
+MMA / no tile loads / no dequant / no A stores / no B staging; verify each arm's static deltas with the translator before
+timing - the first "no A stores" arm silently dropped 3/4 of the dequant because only one element was consumed) before
+naming a unit: on q3_K at the ceiling deleting the whole dequant was +6%, and no arm bought more than 12%.
+
 ## Where the data lives
 
 The headless wrapper preserves replay output as `<output>/streamData` and `<output>/raw/`:
@@ -541,3 +557,13 @@ accumulator rescale; a running max in staging). Two cheap steps found where:
   (`(as_type<uint>(x) & 0x7f800000) == 0x7f800000`; `isfinite` may fold to true under the fork's fast math) + one
   `simd_any` + one barrier is complete detection at zero hot-loop cost. The rare tile then redoes the whole K loop with
   the scales applied from the start. +0.2% per op, -0.9% e2e on antares-1b (only the overflowing column tiles redo).
+
+## Lost overlap: per-op profile -> group walls -> concurrency trace diff (2026-11-01, `perf/kernel-perf-model.md` half-B)
+
+A lever that is faster per call and per serialized op can still lose on the wall. The diagnostic chain that found a 4.5% loss in
+an hour: (1) `GGML_METAL_PROFILE=1` buckets equal between arms -> not kernel time; (2) `GGML_METAL_PROFILE=2` + `census-groups.py`:
+summed group walls grew and the big matmuls went from 2-3 per group to 1 -> lost concurrency; (3) `GGML_METAL_GRAPH_DEBUG=3` on
+a short run (`NPRED=4 LV=5`) in both arms, diff the `(concurrent)` marks per node name and read the printed overlap pairs -> every
+pair was `src [a, b)` vs `dst [b, c)`: the tracker's `p1 >= q0` counted abutting allocations as a hazard (upstream line; fixed to
+`>`). Position-balance the A/B (each arm in each slot) - an ABAB pair put one arm in the slow slot and looked like a machine effect;
+and the w8-decomp round~= column compared different spec-prof windows until the parser took the fullest one (t/s is the clean number).

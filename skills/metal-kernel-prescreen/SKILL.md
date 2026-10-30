@@ -592,3 +592,37 @@ paired fresh-process harness with A/A and B/B controls (`exp/m4-measurement-harn
   (`exp/m4-skinny-prefetch` a338a2b23) and `perf/prefetch-window-results.md` (`exp/m4-skinny-pingpong` 542d1dfd6);
   the timing host `perf/metal-measurement.md` (`exp/m4-measurement-harness` 41d5ffa8b). Worktrees may be parked;
   the branches hold the files.
+
+## Port costs per opcode on the M4 Pro, and the check every micro-benchmark needs (2026-10-30, `perf/kernel-perf-model.md` on `exp/kernel-perf-model`)
+
+Measured with `perf/agx-latency` (Swift harness + MSL probes, one threadgroup = one core, 4-16 simdgroups): a core has four ports
+chosen by simdgroup index; behind each port the pipes FP32, FP16 (+MMA), INT (+converts +bitfield), tile load, threadgroup store
+and device load run concurrently and hide 76-100% of each other. Port time per 32-lane instruction: f32/f16 math, int add/and/
+select, f32->half: 1 clock; **int<->float and int<->half converts, bitfield extract: 3.5-4 clocks** (a quarter-rate path);
+MMA 8x8x8: 16 clocks (the matrix work runs on the FMA lanes - 7.8 TFLOPS is the FMA roof; the mul_mm tiles are at 97-99%);
+tile load 4; 2-byte tg store 4. Design rules: converts and bit extracts are the expensive dequant instructions; FP16 math competes
+with the MMAs while FP32 and integer work hides under them. Per-core DRAM stream 37 KB/us; the fleet's 9 KB/us/core is the chip share.
+`perf/pipe-ceiling.py --skinny` turns a census join into per-pipe port time and a throughput ceiling (5 of 7 skinny kernels within 6%).
+
+**Check the loop body before timing it** (`perf/agx-latency/mir-check.py <kernels.metal> <kernel>...`, the backend MIR per loop
+block). Three probe families were not what their source said: four MMA accumulator chains with identical inputs folded into one
+(the morning's MMA throughput was 4x too good and reopened the mm family for six hours); a shift/xor chain folded to 21 of 128
+ops; `thread_elements()[0]` turned a 128-byte tile load into a 2-byte load; `float(half(v))` became one round op;
+`simdgroup_barrier(mem_none)` fences are dropped and MMAs regrouped regardless of source order. Independent chains must differ
+in their inputs; consume whole values; read the histogram.
+
+- 2026-10-31 night (perf/kernel-perf-model.md "The skeleton in the harness"): **a harness replica of a kernel's loop beats probing the
+  kernel itself.** perf/agx-latency/kernels.metal skel_* runs the skinny tile's k-step in 2-simdgroup threadgroups on the REAL grid
+  and REAL threadgroup memory (`bench --tg 544 --threads 64 --smem 5184+pad`) with the real footprints (shared activations, contiguous
+  weight stream) and lands within 5-10% of the real tile with and without the dequant; every part is then removable and
+  `mir-check.py` says what the compiler kept. Deletion arms inside the real kernel need the same care: consume every element the
+  deleted part produced (or 3/4 of the dequant goes with the stores) and keep the byte stream's SHAPE (arm 6 walked 32 rows per
+  threadgroup and became DRAM-bound). Standalone opcode probes often cannot emit the kernel's opcode (the compiler rewrites the
+  select, the fused f32-mul-to-half, the ushort extract): A/B the source form inside the real kernel and verify the swap with the
+  translator before timing.
+- 2026-10-31 later: **to make the compiler emit the kernel's opcode in a probe, match the kernel's TYPES, not its expression** - a
+  device-loaded `ushort` gives the 16-bit immediate extract (17168), a `constant` table indexed by a register gives the invariant
+  constant-space gather (13555); `ushort(d[t])` and arithmetic stand-ins get rewritten. Two prices this fixed in perf/agx-pipes.py:
+  the immediate bfe 17165 is ~0.9 ns (2.33 is the register-offset form 17166) and 13555 is one issue slot + ~25 ns latency (its MIR
+  text is `(invariant load ... addrspace 2)` - regexes wanting `(load` miss it). The simulator's MMA rule (nstream-sim --mma-fp32 8
+  --mma-fp32-h 6: the MMA holds the FP32 pipe for most of its 10.6 ns) brought the six skinny ladders within 7% mean.
