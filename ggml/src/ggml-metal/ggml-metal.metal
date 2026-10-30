@@ -19447,7 +19447,7 @@ kernel void kernel_mul_mm_skinny_q4_0_f32(
     x += NK/32;
 
     for (int loop_k = 0; loop_k < args.ne00; loop_k += NK) {
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        if (FC_mul_mm_sk_probe != 3) { threadgroup_barrier(mem_flags::mem_threadgroup); }   // PROBE=3: no per-k-step barriers (timing arm, wrong results; perf/kernel-perf-model.md 2026-10-31)
 
         threadgroup half4 * pa = (threadgroup half4 *)(sa + ar*NK + 32*il0);
         pa[0] = ta0[0];
@@ -19467,7 +19467,7 @@ kernel void kernel_mul_mm_skinny_q4_0_f32(
 
         y += NK;
 
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        if (FC_mul_mm_sk_probe != 3) { threadgroup_barrier(mem_flags::mem_threadgroup); }   // PROBE=3: no per-k-step barriers (timing arm, wrong results; perf/kernel-perf-model.md 2026-10-31)
 
         // prefetch slice t+1 while the MACs below run
         if (loop_k + NK < args.ne00) {
@@ -19620,7 +19620,7 @@ kernel void kernel_mul_mm_skinny_t(
     kx += NK;
 
     for (int loop_k = 0; loop_k < args.ne00; loop_k += NK) {
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        if (FC_mul_mm_sk_probe != 3) { threadgroup_barrier(mem_flags::mem_threadgroup); }   // PROBE=3: no per-k-step barriers (timing arm, wrong results; perf/kernel-perf-model.md 2026-10-31)
 
         threadgroup a4_t * pa = (threadgroup a4_t *)(sa + ar*NK + 32*il0);
         pa[0] = ta0[0];
@@ -19653,7 +19653,7 @@ kernel void kernel_mul_mm_skinny_t(
 
         y += NK;
 
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        if (FC_mul_mm_sk_probe != 3) { threadgroup_barrier(mem_flags::mem_threadgroup); }   // PROBE=3: no per-k-step barriers (timing arm, wrong results; perf/kernel-perf-model.md 2026-10-31)
 
         // prefetch slice t+1 while the MACs below run
         if (loop_k + NK < args.ne00) {

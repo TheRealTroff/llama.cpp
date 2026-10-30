@@ -682,6 +682,25 @@ core capacity measured at 1.23 tile loads/ns with latency growing from 37 to ~13
 on the skinny tile is not the mul_mm one that was probed) and the two per-k-step barriers between a threadgroup's two
 simdgroups, which sit on different ports and so wait on each other's port load. Both are probe-able; both are tomorrow's.
 
+*Both probed (owner: "probe away"; `barrier-probe-q3_K.txt`, `op-costs.txt` tldS/tldC/tstA/tstB, `nstream-sim.txt` second block).*
+- **Threadgroup memory under the skinny tile's own patterns.** Its A tiles are row-major with a 128-byte row stride, so a tile load
+  touches 8 rows in one bank group; its A staging is 8 half4 stores per lane at a 64-byte lane stride. Measured at 16 simdgroups:
+  the strided tile loads cost 18% more than contiguous ones (core capacity 1.11 vs 1.32 loads/ns, both slow from 1 to 4
+  simdgroups on separate ports - the threadgroup-memory unit is also core-wide), the A stores 3.9 ns each core-wide (2x the
+  mul_mm pattern), the scalar B stores 1.2. Per round of 16 k-steps that is ~750 ns of a unit that has 1250 available: 60% busy,
+  not binding. With the unit in the simulator (`--tgmem-core`) q3_K at four per port moves from 888 to 883 ns.
+- **The two per-k-step barriers.** A probe arm (`GGML_MM_SKINNY_PROBE=3`, function constant, barriers skipped, wrong results,
+  valid timing) on the q3_K pad ladder: 421.5 -> 393.9 us at pad 0 (3 per port), 464.4 -> 425.4 at pad 4096, 684.0 -> 646.2 at
+  pad 12288. **Barriers cost 5.5-8.5% of the k-step at every residency** - real, part of the model now, and not the gap.
+
+Where the gap stands after both: at three per port (the ladder's pad-0 point, 11.4 resident simdgroups) the simulator with
+every measured unit is 6% low on q4_0 SoA and 23-33% low on the four ud tiles (q4_K 1000 vs 768, q5_K 1126 vs 869, q3_K 1106
+vs 764, iq4_xs 1062 vs 713); barriers account for ~7 of those points. The ud tiles differ from the q4_0 SoA tile in the ~100
+extra dequant instructions and in dequantizing the NEXT k-step into registers before the MMA loop (a long live range); the
+mechanism that turns that into 20% more contention than the pipes, the convert unit, the memory unit and the barriers together
+is the open item. It is not a per-port issue rate, fetch, registers, selects, gathers, strided loads or the barriers - each of
+those now has a number.
+
 What this leaves: (1) **the contention curve from the simulator** - run N simdgroup streams against four shared issue
 ports and the load path and compare with the pad ladders (R 0.5 -> 3.1) and the grid curve; if it reproduces them, the whole
 skinny family is predicted from code plus five chip constants (latency table, 200 ns stream, 4 ports, 9 KB/us/core, the
@@ -703,6 +722,10 @@ check - fa decode first.
   skinny tile refuted a third time; no model transferred to llama.cpp). Its timing host (`exp/m4-measurement-harness`
   41d5ffa8b) is a qualified ISOLATED timer; useful for calibration pairs, not for the target.
 - 2026-10-30 night: first fit + intervention scorecard + residency ladder, section above. Branch exp/kernel-perf-model.
+- 2026-10-31 later: both candidate mechanisms probed. Skinny-pattern tg memory: strided tile loads +18%, A staging stores 2x the
+  mul_mm pattern, the unit is core-wide, ~60% busy at the ceiling - not binding (sim with it: 883 vs 1250). Barriers (PROBE=3 arm,
+  branch only): 5.5-8.5% of the k-step at every residency - real, not the gap. Remaining: ud tiles 23-33% slower at 3 sg/port than
+  all measured units allow (q4_0 SoA within 6%); mechanism open.
 - 2026-10-31 small hours: contention curve from the pad ladders (t_step x resident TGs = per-sg k-step at 1-4 sg/port: lone sg
   unaffected, 4/port = 1.6-2.1x); nstream-sim.py (N streams x 4 ports, per-port pipes, core-wide convert unit) matches N=1-2 and the
   DRAM-bound kernels, over-predicts q3_K/iq4_xs by 40-60% (real core overlaps ~1.7 pipes, sim 2.4). Refuted as the cause by probes:

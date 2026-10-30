@@ -59,3 +59,30 @@
       2        8            808          9.9   XU(core) 0.50 FP16 0.39 INT 0.24 TLD 0.14 TST 0.08 FP32 0.06
       3       12           1048         11.4   XU(core) 0.59 FP16 0.46 INT 0.28 TLD 0.17 TST 0.09 FP32 0.08
       4       16           1402         11.4   XU(core) 0.60 FP16 0.46 INT 0.28 TLD 0.17 TST 0.09 FP32 0.08
+
+# nstream-sim with --tgmem-core (tg memory one core-wide unit: tile load 0.9, 16-B store 3.9, 2-B store 1.2)
+== q3_K
+      1        4            692          5.8   FP16 0.24 TGMEM(core) 0.20 INT 0.19 XU(core) 0.16 FP32 0.04
+      2        8            712         11.2   FP16 0.46 TGMEM(core) 0.39 INT 0.37 XU(core) 0.30 FP32 0.08 DLD 0.03
+      3       12            764         15.7   FP16 0.63 TGMEM(core) 0.54 INT 0.51 XU(core) 0.42 FP32 0.11 DLD 0.03
+      4       16            883         18.1   FP16 0.71 TGMEM(core) 0.61 INT 0.57 XU(core) 0.47 FP32 0.12 DLD 0.04
+== iq4_xs
+      1        4            640          6.3   FP16 0.26 TGMEM(core) 0.22 INT 0.13 XU(core) 0.11 FP32 0.04
+      2        8            656         12.2   FP16 0.50 TGMEM(core) 0.43 INT 0.25 XU(core) 0.22 FP32 0.08
+      3       12            713         16.8   FP16 0.65 TGMEM(core) 0.55 INT 0.32 XU(core) 0.29 FP32 0.10
+      4       16            777         20.6   FP16 0.79 TGMEM(core) 0.67 INT 0.39 XU(core) 0.35 FP32 0.13 DLD 0.02
+== q4_0
+      1        4            474          8.4   FP16 0.43 XU(core) 0.31 TGMEM(core) 0.29 INT 0.07
+      2        8            577         13.9   FP16 0.71 XU(core) 0.51 TGMEM(core) 0.48 INT 0.11
+      3       12            832         14.4   FP16 0.68 XU(core) 0.48 TGMEM(core) 0.46 INT 0.11
+      4       16           1164         13.7   FP16 0.63 XU(core) 0.45 TGMEM(core) 0.43 INT 0.10
+== q4_K
+      1        4            724          5.5   FP16 0.23 TGMEM(core) 0.19 XU(core) 0.13 INT 0.09 FP32 0.04
+      2        8            735         10.9   FP16 0.45 TGMEM(core) 0.38 XU(core) 0.25 INT 0.18 FP32 0.09
+      3       12            768         15.6   FP16 0.62 TGMEM(core) 0.53 XU(core) 0.35 INT 0.25 FP32 0.12 DLD 0.02
+      4       16            837         19.1   FP16 0.75 TGMEM(core) 0.63 XU(core) 0.42 INT 0.30 FP32 0.14 DLD 0.03
+== q5_K
+      1        4            812          4.9   FP16 0.20 TGMEM(core) 0.17 INT 0.17 XU(core) 0.15 FP32 0.04
+      2        8            839          9.5   FP16 0.39 TGMEM(core) 0.33 INT 0.32 XU(core) 0.29 FP32 0.07
+      3       12            869         13.8   FP16 0.55 TGMEM(core) 0.47 INT 0.45 XU(core) 0.41 FP32 0.10 DLD 0.02
+      4       16            988         16.2   FP16 0.65 TGMEM(core) 0.55 INT 0.53 XU(core) 0.48 FP32 0.12 DLD 0.03

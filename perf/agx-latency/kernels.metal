@@ -1183,3 +1183,78 @@ kernel void mixind_u128(device const uint * d [[buffer(0)]], device float * o [[
     float a = 1.0f + as_type<float>(d[t+2]) * 1e-30f, b = as_type<float>(d[t+1]) * 1e-30f;
     for (uint i = 0; i < n; ++i) { v0 = fma(v0, a, b); y0 = y0 + c0; z0 = z0 ^ y8; w0 = (w0 & 0x3F7FFFFFu) + c0; v1 = fma(v1, a, b); y1 = y1 + c1; z1 = z1 ^ y9; w1 = (w1 & 0x3F7FFFFFu) + c1; v2 = fma(v2, a, b); y2 = y2 + c2; z2 = z2 ^ y10; w2 = (w2 & 0x3F7FFFFFu) + c2; v3 = fma(v3, a, b); y3 = y3 + c3; z3 = z3 ^ y11; w3 = (w3 & 0x3F7FFFFFu) + c3; v4 = fma(v4, a, b); y4 = y4 + c4; z4 = z4 ^ y0; w4 = (w4 & 0x3F7FFFFFu) + c4; v5 = fma(v5, a, b); y5 = y5 + c5; z5 = z5 ^ y1; w5 = (w5 & 0x3F7FFFFFu) + c5; v6 = fma(v6, a, b); y6 = y6 + c6; z6 = z6 ^ y2; w6 = (w6 & 0x3F7FFFFFu) + c6; v7 = fma(v7, a, b); y7 = y7 + c7; z7 = z7 ^ y3; w7 = (w7 & 0x3F7FFFFFu) + c7; v0 = fma(v0, a, b); y0 = y0 + c0; z0 = z0 ^ y8; w0 = (w0 & 0x3F7FFFFFu) + c0; v1 = fma(v1, a, b); y1 = y1 + c1; z1 = z1 ^ y9; w1 = (w1 & 0x3F7FFFFFu) + c1; v2 = fma(v2, a, b); y2 = y2 + c2; z2 = z2 ^ y10; w2 = (w2 & 0x3F7FFFFFu) + c2; v3 = fma(v3, a, b); y3 = y3 + c3; z3 = z3 ^ y11; w3 = (w3 & 0x3F7FFFFFu) + c3; v4 = fma(v4, a, b); y4 = y4 + c4; z4 = z4 ^ y0; w4 = (w4 & 0x3F7FFFFFu) + c4; v5 = fma(v5, a, b); y5 = y5 + c5; z5 = z5 ^ y1; w5 = (w5 & 0x3F7FFFFFu) + c5; v6 = fma(v6, a, b); y6 = y6 + c6; z6 = z6 ^ y2; w6 = (w6 & 0x3F7FFFFFu) + c6; v7 = fma(v7, a, b); y7 = y7 + c7; z7 = z7 ^ y3; w7 = (w7 & 0x3F7FFFFFu) + c7; v0 = fma(v0, a, b); y0 = y0 + c0; z0 = z0 ^ y8; w0 = (w0 & 0x3F7FFFFFu) + c0; v1 = fma(v1, a, b); y1 = y1 + c1; z1 = z1 ^ y9; w1 = (w1 & 0x3F7FFFFFu) + c1; v2 = fma(v2, a, b); y2 = y2 + c2; z2 = z2 ^ y10; w2 = (w2 & 0x3F7FFFFFu) + c2; v3 = fma(v3, a, b); y3 = y3 + c3; z3 = z3 ^ y11; w3 = (w3 & 0x3F7FFFFFu) + c3; v4 = fma(v4, a, b); y4 = y4 + c4; z4 = z4 ^ y0; w4 = (w4 & 0x3F7FFFFFu) + c4; v5 = fma(v5, a, b); y5 = y5 + c5; z5 = z5 ^ y1; w5 = (w5 & 0x3F7FFFFFu) + c5; v6 = fma(v6, a, b); y6 = y6 + c6; z6 = z6 ^ y2; w6 = (w6 & 0x3F7FFFFFu) + c6; v7 = fma(v7, a, b); y7 = y7 + c7; z7 = z7 ^ y3; w7 = (w7 & 0x3F7FFFFFu) + c7; v0 = fma(v0, a, b); y0 = y0 + c0; z0 = z0 ^ y8; w0 = (w0 & 0x3F7FFFFFu) + c0; v1 = fma(v1, a, b); y1 = y1 + c1; z1 = z1 ^ y9; w1 = (w1 & 0x3F7FFFFFu) + c1; v2 = fma(v2, a, b); y2 = y2 + c2; z2 = z2 ^ y10; w2 = (w2 & 0x3F7FFFFFu) + c2; v3 = fma(v3, a, b); y3 = y3 + c3; z3 = z3 ^ y11; w3 = (w3 & 0x3F7FFFFFu) + c3; v4 = fma(v4, a, b); y4 = y4 + c4; z4 = z4 ^ y0; w4 = (w4 & 0x3F7FFFFFu) + c4; v5 = fma(v5, a, b); y5 = y5 + c5; z5 = z5 ^ y1; w5 = (w5 & 0x3F7FFFFFu) + c5; v6 = fma(v6, a, b); y6 = y6 + c6; z6 = z6 ^ y2; w6 = (w6 & 0x3F7FFFFFu) + c6; v7 = fma(v7, a, b); y7 = y7 + c7; z7 = z7 ^ y3; w7 = (w7 & 0x3F7FFFFFu) + c7; }
     o[t] = v0 + v1 + v2 + v3 + v4 + v5 + v6 + v7 + float((y0 ^ z0 ^ w0 ^ y1 ^ z1 ^ w1 ^ y2 ^ z2 ^ w2 ^ y3 ^ z3 ^ w3 ^ y4 ^ z4 ^ w4 ^ y5 ^ z5 ^ w5 ^ y6 ^ z6 ^ w6 ^ y7 ^ z7 ^ w7 ^ y8 ^ y9 ^ y10 ^ y11) & 1); }
+
+// ---- the skinny tile's threadgroup-memory traffic (2026-10-31): its A tiles sit row-major with a 64-half (128-byte) row stride, so an 8x8
+// simdgroup_load touches 8 rows 128 bytes apart (one bank group), unlike the mul_mm tile's contiguous 64-half tiles; its staging stores
+// are 8 half4 per lane at a 64-B lane stride. Per iteration per simdgroup: 16 strided A loads + 8 contiguous B loads (tldS), the same
+// 24 loads all contiguous (tldC), the 8 half4 A stores (tstA), the 8 scalar B stores (tstB)
+kernel void tldS_u24(device const uint * d [[buffer(0)]], device float * o [[buffer(1)]], constant uint & n [[buffer(2)]], uint t [[thread_position_in_grid]], uint tid [[thread_position_in_threadgroup]], uint tpg [[threads_per_threadgroup]], uint sg [[simdgroup_index_in_threadgroup]], constant uint & nbytes [[buffer(3)]], threadgroup half * sm [[threadgroup(0)]]) {
+    FILL_TG(sm)
+    simdgroup_half8x8 m0, m1, m2, m3, m4, m5, m6, m7; uint y = d[t];
+    for (uint i = 0; i < n; ++i) { threadgroup const half * la = sm + (sg & 3) * 1024 + (i & 1) * 4096; threadgroup const half * lb = sm + 2048 + (i & 1) * 4096;
+        simdgroup_load(m0, la + 8 * 0 + 0, 64, 0, false); y ^= W(m0);
+        simdgroup_load(m1, la + 8 * 0 + 512, 64, 0, false); y ^= W(m1);
+        simdgroup_load(m2, la + 8 * 1 + 0, 64, 0, false); y ^= W(m2);
+        simdgroup_load(m3, la + 8 * 1 + 512, 64, 0, false); y ^= W(m3);
+        simdgroup_load(m4, la + 8 * 2 + 0, 64, 0, false); y ^= W(m4);
+        simdgroup_load(m5, la + 8 * 2 + 512, 64, 0, false); y ^= W(m5);
+        simdgroup_load(m6, la + 8 * 3 + 0, 64, 0, false); y ^= W(m6);
+        simdgroup_load(m7, la + 8 * 3 + 512, 64, 0, false); y ^= W(m7);
+        simdgroup_load(m0, la + 8 * 4 + 0, 64, 0, false); y ^= W(m0);
+        simdgroup_load(m1, la + 8 * 4 + 512, 64, 0, false); y ^= W(m1);
+        simdgroup_load(m2, la + 8 * 5 + 0, 64, 0, false); y ^= W(m2);
+        simdgroup_load(m3, la + 8 * 5 + 512, 64, 0, false); y ^= W(m3);
+        simdgroup_load(m4, la + 8 * 6 + 0, 64, 0, false); y ^= W(m4);
+        simdgroup_load(m5, la + 8 * 6 + 512, 64, 0, false); y ^= W(m5);
+        simdgroup_load(m6, la + 8 * 7 + 0, 64, 0, false); y ^= W(m6);
+        simdgroup_load(m7, la + 8 * 7 + 512, 64, 0, false); y ^= W(m7);
+        simdgroup_load(m0, lb + 64 * 0, 8, 0, false); y ^= W(m0);
+        simdgroup_load(m1, lb + 64 * 1, 8, 0, false); y ^= W(m1);
+        simdgroup_load(m2, lb + 64 * 2, 8, 0, false); y ^= W(m2);
+        simdgroup_load(m3, lb + 64 * 3, 8, 0, false); y ^= W(m3);
+        simdgroup_load(m4, lb + 64 * 4, 8, 0, false); y ^= W(m4);
+        simdgroup_load(m5, lb + 64 * 5, 8, 0, false); y ^= W(m5);
+        simdgroup_load(m6, lb + 64 * 6, 8, 0, false); y ^= W(m6);
+        simdgroup_load(m7, lb + 64 * 7, 8, 0, false); y ^= W(m7);
+    }
+    o[t] = float(y & 1); }
+kernel void tldC_u24(device const uint * d [[buffer(0)]], device float * o [[buffer(1)]], constant uint & n [[buffer(2)]], uint t [[thread_position_in_grid]], uint tid [[thread_position_in_threadgroup]], uint tpg [[threads_per_threadgroup]], uint sg [[simdgroup_index_in_threadgroup]], constant uint & nbytes [[buffer(3)]], threadgroup half * sm [[threadgroup(0)]]) {
+    FILL_TG(sm)
+    simdgroup_half8x8 m0, m1, m2, m3, m4, m5, m6, m7; uint y = d[t];
+    for (uint i = 0; i < n; ++i) { threadgroup const half * la = sm + (sg & 3) * 1024 + (i & 1) * 4096; threadgroup const half * lb = sm + 2048 + (i & 1) * 4096;
+        simdgroup_load(m0, la + 64 * 0, 8, 0, false); y ^= W(m0);
+        simdgroup_load(m1, la + 64 * 1, 8, 0, false); y ^= W(m1);
+        simdgroup_load(m2, la + 64 * 2, 8, 0, false); y ^= W(m2);
+        simdgroup_load(m3, la + 64 * 3, 8, 0, false); y ^= W(m3);
+        simdgroup_load(m4, la + 64 * 4, 8, 0, false); y ^= W(m4);
+        simdgroup_load(m5, la + 64 * 5, 8, 0, false); y ^= W(m5);
+        simdgroup_load(m6, la + 64 * 6, 8, 0, false); y ^= W(m6);
+        simdgroup_load(m7, la + 64 * 7, 8, 0, false); y ^= W(m7);
+        simdgroup_load(m0, la + 64 * 8, 8, 0, false); y ^= W(m0);
+        simdgroup_load(m1, la + 64 * 9, 8, 0, false); y ^= W(m1);
+        simdgroup_load(m2, la + 64 * 10, 8, 0, false); y ^= W(m2);
+        simdgroup_load(m3, la + 64 * 11, 8, 0, false); y ^= W(m3);
+        simdgroup_load(m4, la + 64 * 12, 8, 0, false); y ^= W(m4);
+        simdgroup_load(m5, la + 64 * 13, 8, 0, false); y ^= W(m5);
+        simdgroup_load(m6, la + 64 * 14, 8, 0, false); y ^= W(m6);
+        simdgroup_load(m7, la + 64 * 15, 8, 0, false); y ^= W(m7);
+        simdgroup_load(m0, lb + 64 * 0, 8, 0, false); y ^= W(m0);
+        simdgroup_load(m1, lb + 64 * 1, 8, 0, false); y ^= W(m1);
+        simdgroup_load(m2, lb + 64 * 2, 8, 0, false); y ^= W(m2);
+        simdgroup_load(m3, lb + 64 * 3, 8, 0, false); y ^= W(m3);
+        simdgroup_load(m4, lb + 64 * 4, 8, 0, false); y ^= W(m4);
+        simdgroup_load(m5, lb + 64 * 5, 8, 0, false); y ^= W(m5);
+        simdgroup_load(m6, lb + 64 * 6, 8, 0, false); y ^= W(m6);
+        simdgroup_load(m7, lb + 64 * 7, 8, 0, false); y ^= W(m7);
+    }
+    o[t] = float(y & 1); }
+kernel void tstA_u8(device const uint * d [[buffer(0)]], device float * o [[buffer(1)]], constant uint & n [[buffer(2)]], uint t [[thread_position_in_grid]], uint tid [[thread_position_in_threadgroup]], uint tpg [[threads_per_threadgroup]], uint sg [[simdgroup_index_in_threadgroup]], constant uint & nbytes [[buffer(3)]], threadgroup half * sm [[threadgroup(0)]]) {
+    FILL_TG(sm)
+    const short ar = (tid / 2) % 16, il0 = tid % 2; half v = half(d[t] & 7) * half(1e-3f);
+    for (uint i = 0; i < n; ++i) { threadgroup half4 * pa = (threadgroup half4 *)(sm + (sg & 3) * 1024 + (i & 1) * 4096 + ar * 64 + 32 * il0); v += half(1e-4f); pa[0] = half4(v, v, v, v) + half4(0e-4h); pa[1] = half4(v, v, v, v) + half4(1e-4h); pa[2] = half4(v, v, v, v) + half4(2e-4h); pa[3] = half4(v, v, v, v) + half4(3e-4h); pa[4] = half4(v, v, v, v) + half4(4e-4h); pa[5] = half4(v, v, v, v) + half4(5e-4h); pa[6] = half4(v, v, v, v) + half4(6e-4h); pa[7] = half4(v, v, v, v) + half4(7e-4h); }
+    threadgroup_barrier(mem_flags::mem_threadgroup); o[t] = float(sm[tid]); }
+kernel void tstB_u8(device const uint * d [[buffer(0)]], device float * o [[buffer(1)]], constant uint & n [[buffer(2)]], uint t [[thread_position_in_grid]], uint tid [[thread_position_in_threadgroup]], uint tpg [[threads_per_threadgroup]], uint sg [[simdgroup_index_in_threadgroup]], constant uint & nbytes [[buffer(3)]], threadgroup half * sm [[threadgroup(0)]]) {
+    FILL_TG(sm)
+    const short bsx = tid % 8, col = (tid / 8) % 8; half v = half(d[t] & 7) * half(1e-3f);
+    for (uint i = 0; i < n; ++i) { threadgroup half * sb = sm + 2048 + (sg & 3) * 512 + (i & 1) * 4096; v += half(1e-4f); sb[(8 * bsx + 0) * 8 + col] = v + half(0e-4f); sb[(8 * bsx + 1) * 8 + col] = v + half(1e-4f); sb[(8 * bsx + 2) * 8 + col] = v + half(2e-4f); sb[(8 * bsx + 3) * 8 + col] = v + half(3e-4f); sb[(8 * bsx + 4) * 8 + col] = v + half(4e-4f); sb[(8 * bsx + 5) * 8 + col] = v + half(5e-4f); sb[(8 * bsx + 6) * 8 + col] = v + half(6e-4f); sb[(8 * bsx + 7) * 8 + col] = v + half(7e-4f); }
+    threadgroup_barrier(mem_flags::mem_threadgroup); o[t] = float(sm[tid]); }

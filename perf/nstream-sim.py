@@ -31,11 +31,13 @@ ap = argparse.ArgumentParser(); ap.add_argument('join'); ap.add_argument('--sgs'
 ap.add_argument('--iters', type=int, default=24); ap.add_argument('--issue', type=float, default=0.76); ap.add_argument('--port-slot', type=float, default=0.333)
 ap.add_argument('--mma-queue', type=int, default=64); ap.add_argument('--ports', type=int, default=4); ap.add_argument('--xu', type=float, default=0.67, help='core-wide convert/bfe unit, ns per op')
 ap.add_argument('--table', default=os.path.join(HERE, 'agx-latency', 'latency.json'))
+ap.add_argument('--tgmem-core', action='store_true', help='threadgroup memory as ONE core-wide unit: tile load 0.9 ns, 16-byte store 3.9, 2-byte store 1.2 (tldS/tstA/tstB probes at 16 simdgroups) instead of per-port pipes')
 a = ap.parse_args()
 T = json.load(open(a.table)); LAT_OP = {int(k): v for k, v in T['opcodes'].items()}; MEM = T['memory']
 DEFAULT_LAT = {'FP32': 1.7, 'FP16': 1.6, 'INT': 1.8, 'CVT': 2.5, 'BFE': 2.0, 'SHF': 2.0, 'MMA': 11.7, 'TLD': MEM['tg_load'], 'TST2': MEM['tg_store_to_load'] - MEM['tg_load'], 'TST16': MEM['tg_store_to_load'] - MEM['tg_load'], 'DST': 1.0, 'DLD': MEM['device_l1'], 'NONE': 1.0}
 OWN = {'TST2': 3.3, 'TST16': 11.7, 'CVT': 1.4, 'BFE': 1.3, 'MMA': 11.7 if a.mma_queue == 0 else 0.0}   # one simdgroup's own spacing per kind
 XU = {'CVT', 'BFE'}   # the core-wide unit
+TGM = {'TLD': 0.9, 'TST16': 3.9, 'TST2': 1.2}   # core-wide threadgroup-memory costs when --tgmem-core
 stream_lat = MEM['device_l1'] if a.loads == 'cached' else float(a.loads)
 body = pipes.hot_body(json.load(open(a.join))['instructions'])
 P = []
@@ -50,7 +52,7 @@ for i in body:
     act = sub == 'DLD' and '<4 x s32>' in t and base and len(base) == 1 and '_' in REG.search(rhs).group(1)
     P.append(dict(d=d, u=u, sub=sub, pipe=pipe, cost=cost, lat=lat, act=act, op=i['op']))
 def run(N):
-    pipe_free = defaultdict(float); port_free = defaultdict(float); xu_free = 0.0
+    pipe_free = defaultdict(float); port_free = defaultdict(float); xu_free = 0.0; tgm_free = 0.0
     st = [dict(port=k % a.ports, pc=0, it=0, last=-a.issue + (k * 131.0) % 400, ready={}, tst=[], wload=False, own=defaultdict(float), iter_end=[]) for k in range(N * a.ports)]
     busy = Counter(); total = len(st) * a.iters; done = 0
     while done < total:
@@ -69,6 +71,8 @@ def run(N):
         start = max(t, port_free[port])
         if p['sub'] in XU:
             start = max(start, xu_free); xu_free = start + a.xu; busy['XU(core)'] += a.xu; done_t = start + lat
+        elif a.tgmem_core and p['sub'] in TGM:
+            start = max(start, tgm_free); tgm_free = start + TGM[p['sub']]; busy['TGMEM(core)'] += TGM[p['sub']]; done_t = start + lat
         elif p['sub'] == 'MMA' and a.mma_queue > 0:
             key = (port, p['pipe']); pipe_start = max(pipe_free[key], start); pipe_free[key] = pipe_start + p['cost']; busy[p['pipe']] += p['cost']
             done_t = pipe_start + lat
@@ -87,7 +91,7 @@ def run(N):
         e = s['iter_end']; h = len(e) // 2; per.append((e[-1] - e[h - 1]) / (len(e) - h))
     t_sg = sum(per) / len(per)
     span = max(s['iter_end'][-1] for s in st); n_ports = a.ports
-    util = {k: (busy[k] / span) / (n_ports if k != 'XU(core)' else 1) for k in busy}
+    util = {k: (busy[k] / span) / (n_ports if not k.endswith('(core)') else 1) for k in busy}
     return t_sg, util
 print(f"{os.path.basename(a.join)}: {len(P)} instructions per iteration; loads {a.loads}; issue {a.issue}; port slot {a.port_slot}; MMA queue {a.mma_queue}; {a.ports} ports; convert unit {a.xu} ns core-wide")
 print(f"{'sg/port':>7s} {'sgs/core':>8s} {'ns per sg-iter':>14s} {'iter/us/core':>12s}   busy share (per-port pipes averaged; XU = the core's convert/bfe unit)")
