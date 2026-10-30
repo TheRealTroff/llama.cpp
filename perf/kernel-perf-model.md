@@ -251,10 +251,58 @@ held-out test, land within 0-7% (median 3%) from their own ladders; the q4-calib
 is: per-kernel (t0, X) from one ladder, R from the grid, geometry from the shapes. What it does not yet do is predict (t0, X)
 or R without measuring them.
 
-What this leaves: (1) **R has to come from the grid** - the seven q4_0 shapes and the ten ud shapes draw one saturating
-curve of R against threadgroups per core (8 -> 1.6-1.9, 16 -> 2.5-2.7, 27 -> 2.8-3.1, 388 -> 3.3-3.85) with the pad-0 cap
-set by the register count; two more grid sizes per kernel (e.g. 32 and 64 threadgroups per core via M) would pin the curve
-and settle whether the 8-per-core misses are R's time-average or a real ramp; (2) **t0 from the MIR** - the load-use distance
+**Residency against the grid (2026-10-30 morning, owner: "run it"; `run-grid-aps.sh`, `grid-fit.py`, `grid/`; branch build
+of test-backend-ops with the `GGML_TEST_MM_SHAPES` hook - the perf list is hard-coded; the branch binary gives 312 us on the
+calibration shape vs 308-311 from the prod binary).** 23 shapes at n=8, pad 0: q4_0 SoA at K=5120 with 2, 4, 6, 8, 9, 10, 11, 12,
+14, 16, 20, 24, 32, 64, 128 threadgroups per core (M = 640 x n), two unbalanced grids (8.5 and 12.5 per core), a K ladder at 8
+per core (K = 1280 .. 20480), and q5_K at 8 and 16 per core. Two mirrored timing passes after a warm-up run, one capture each.
+
+| q4_0 SoA, K=5120: TG/core | 2 | 4 | 6 | 8 | 8.5 | 9 | 10 | 11 | 12 | 12.5 | 14 | 16 | 20 | 24 | 32 | 64 | 128 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| R | 0.43 | 0.89 | 1.13 | 1.55 | 1.59 | 1.59 | 1.76 | 1.91 | 2.15 | 2.19 | 2.36 | 2.71 | 2.85 | 2.94 | 3.18 | 3.53 | 3.71 |
+| us/run | 55 | 64 | 89 | 102 | 112 | 123 | 134 | 146 | 150 | 158 | 180 | 195 | 232 | 285 | 350 | 664 | 1283 |
+| implied t_step ns | 74 | 88 | 104 | 124 | 131 | 136 | 147 | 158 | 168 | 173 | 189 | 206 | 207 | 218 | 218 | 229 | 232 |
+| k-steps/us/core | 5.8 | 10.1 | 10.8 | 12.5 | 12.1 | 11.7 | 12.0 | 12.1 | 12.8 | 12.7 | 12.5 | 13.1 | 13.8 | 13.5 | 14.6 | 15.4 | 16.0 |
+| model (own t0/X, R measured, fractional waves) | +28% | +21% | +11% | +8% | +3% | 0% | -3% | -5% | -3% | -5% | -8% | -7% | -3% | -6% | +1% | +5% | +8% |
+
+| K ladder, 8 TG/core | K 1280 | 2560 | 5120 | 10240 | 20480 |
+|---|---|---|---|---|---|
+| R | 1.38 | 1.47 | 1.55 | 1.68 | 1.69 |
+| implied t_step | 129 | 121 | 124 | 147 | 141 |
+| model | -3% | +7% | +8% | -6% | -1% |
+
+q5_K: 8 per core R 1.70, 153 us, model +5%; 16 per core R 2.48, 290 us, model -9% (implied t_step 281 vs its ladder law 254).
+
+What the design answered:
+
+- **No staircase.** Time against the grid is a smooth curve; the unbalanced grids (8.5, 12.5 per core) sit between their
+  neighbours, not on the next integer. The ceil-of-waves form is dead; the fractional form stands. The per-core counter reads
+  the same value on all 20 cores to three digits from 4 threadgroups per core up (at 2 per core it spreads 0.23-0.66): the
+  dispatcher spreads work evenly, and nothing in the model needs a max over cores.
+- **R is a function of the grid, not of threadgroup lifetime.** K from 1280 to 20480 (time x14) moves R 1.38 -> 1.69 at 8
+  per core while the grid moves it 0.43 -> 3.71. A fixed launch rate (Little's law) is refuted: resident threadgroups per
+  lifetime would be 0.4-2 per us across the points. `R(n) = 3.89 (1 - exp(-n / 15.9))` fits the 17 q4_0 points within 9% and is
+  the grid-to-residency predictor the model lacked.
+- **The per-core ceiling is real and is reached only above ~64 threadgroups per core:** throughput rises monotonically to 16.0
+  k-steps/us/core at 128 per core, the pad ladder's fitted X = 15.95. Every production shape (8-27 per core) runs at 70-90% of it.
+- **The model is a +-8% model on this family at production grids** (17 of 23 points within 8%; all 15 points at 8-64 per core
+  within 8%). The misses have a shape: small grids (2-6 per core) are over-predicted 11-28% because their k-step (74-104 ns)
+  is below the pad ladder's floor t0 = 91 ns (the pad-24576 point, R 0.51, measured 99 ns; the 2-per-core grid, R 0.43, 74
+  ns): **t_step at a given R depends on how that R came about** - fewer threadgroups queued vs less threadgroup-memory room
+  differ by up to 9% at equal R (grid n=14-16: implied 189-206 vs law 174-192; pad: within 3%). R is the right first
+  variable and not the whole story.
+- **The counter's meaning is now the open question, not the model's form.** At 4 per core every core reads 0.89 simdgroups
+  with 4 threadgroups queued on it - under one threadgroup in flight per core. The Oct 26 no-stream arm left the reading
+  unchanged (3.10 vs 3.11), so it is not a count that excludes memory-stalled simdgroups; it says the chip keeps a small grid
+  under-filled. Time per threadgroup-per-core is 9.7 us (= 160 sg-k-steps / X) from 16 per core up and cheaper below. Why a
+  core with four threadgroups queued holds less than one is the mechanism to find; it is where 10-30% of a small-grid
+  kernel's time lives, and the small-grid rows (projections at 5120 x 1024 and 5120 x 48, the drafter) are exactly the
+  census rows no model has placed.
+
+What this leaves: (1) **R from the grid is measured** (R(n) above, 17 points, 9%); what is NOT explained is why a core with
+four threadgroups queued holds under one in flight - the dispatch policy on small grids, to be read off a per-core timeline
+(the counter's samples are 33k ticks apart; a finer sample or the threadgroup start/end timestamps would show whether
+threadgroups are launched one at a time per core); (2) **t0 from the MIR** - the load-use distance
 is the candidate (4 points); the regpad ladder on q4_0 (R flat 2.76, time +5..+17%) is the direct test of what moves t0 at
 fixed geometry; (3) **the ceiling X** - 13-16 k-steps/us/core, not instructions, not DRAM (183 GB/s of weight bytes at the q4_0
 ceiling); the MMA pipe and the threadgroup-memory path are the candidates, and the Oct 26 no-stream arm (-10..-15%, R
@@ -268,6 +316,8 @@ sits at the same R.
   skinny tile refuted a third time; no model transferred to llama.cpp). Its timing host (`exp/m4-measurement-harness`
   41d5ffa8b) is a qualified ISOLATED timer; useful for calibration pairs, not for the target.
 - 2026-10-30 night: first fit + intervention scorecard + residency ladder, section above. Branch exp/kernel-perf-model.
+- 2026-10-30 09:12: residency-vs-grid design run (23 shapes): no staircase, R = f(grid) not lifetime, R(n) fitted, model
+  +-8% at 8-64 TG/core, small grids over-predicted, the counter's small-grid reading is the open mechanism. Section above.
 - 2026-10-30 02:15: fleet residency on all 92 rows (census traces replayed), the ud skinny ladders (own t0/X each), held-out
   scoring 13/17 within 5%; the earlier 'transfers within 2%' row corrected (assumed R was wrong on four shapes). Open items
   rewritten under 'What this leaves'.
