@@ -985,6 +985,26 @@ hazard check treats as part of the producer's write range) serializes the consum
 allocation/hazard-tracking item on the fusion branch, not a kernel one; fixed, mask 63 + this lever would stand ~+2.5% over the
 pick (the lever's 4.5 ms serialized, with the groups' hiding restored). Until then: lever built, inert under the pick.
 
+*Chased (owner: "do chase it"; `GGML_METAL_GRAPH_DEBUG=3` traces `gdbg60/63-*.server.log`, `halfb/square-fixed.txt`).* The
+concurrency trace of one decode graph, mask 60 vs 63: 158 nodes concurrent under 60 and barriered under 63 - 80 of them
+MUL_MATs (27 ffn_up, 14 Vcur, 14 Kcur, the z/q projections) - and every one of their printed overlaps has the form
+`src [a, b)` against `previous dst [b, c)`: the source's exclusive END equals the destination's START. Adjacent, not
+overlapping. The tracker's test in `ggml_mem_ranges_check` was `mr.p0 < cmp.p1 && mr.p1 >= cmp.p0` on half-open ranges: two
+allocations that merely abut counted as a hazard. Upstream ggml's own line (it arrived with the fork's import), conservative
+and harmless until the twin tails made consumers' inputs abut the previous output exactly; mask 60's layout left gaps there
+by luck. **Fix: `>=` -> `>`** (half-open intervals intersect iff p0 < q1 and q0 < p1). The square again, same design:
+
+| arm, interval fix in | t/s (3 runs) | mean | vs the pick before the fix (28.18) |
+|---|---|---|---|
+| mask 60 | 28.31 28.33 28.21 | 28.28 | +0.4% |
+| mask 63 | 28.23 28.28 28.24 | 28.25 | +0.2% (was -4.5%) |
+| mask 63 + HALFB=1 | 29.05 29.20 29.12 | **29.12** | **+3.3%** |
+
+Sha `ce826d8a3cbd` on all nine, 0 alias-guard hits. The twins' whole 4.5% was the interval test; with it fixed mask 63 is
+free and the half-B lever delivers +3.0% over mask 63, +3.3% over the pick as it stood. What remains for adoption is the
+owner's standing question on mask 63 (the drafter-trace divergence of `small-op-fusion.md`), not performance. The interval
+fix itself is a code default (both lines): the full `test-backend-ops test -b MTL0` suite under mask 63 + lever passes 14824/14824, and the q4 line's depth-7 anchor with the fixed binary gives sha1=86213d038a29 (the record 86213d038a29 in every prior w8decomp run) at 30.69 t/s.
+
 What this leaves: (1) ~~**the contention curve from the simulator**~~ DONE 10-31 night: `nstream-sim.py --tgmem-core --mma-fp32 8
 --mma-fp32-h 6` reproduces the six skinny tiles' ladders within 7% mean at two and three per port (iq4_xs/q6_K -13..-15 the
 worst) and fifteen harness replicas within 7.6%; open there: the loaded-core latency of the constant gather (iq4_xs), the
@@ -1027,7 +1047,9 @@ check - fa decode first.
   twin form (=1) needs GGML_FUSE_SMALL mask 63, which itself costs -4.5% on the width-8 round (new finding), lever +3.5% over 63,
   -1.2% net vs the pick. Not a win as the pick stands. Mask 63's 4.5% located: the twin tail serializes the skinny matmuls that
   shared a concurrency group under 60 (summed group walls 161.7 -> 169.1 ms/round, hiding 1.12 -> 1.07x; kernel time unchanged) -
-  a hazard-tracking item on the fusion branch; fixed, 63 + lever ~ +2.5% over the pick.
+  a hazard-tracking item on the fusion branch; fixed, 63 + lever ~ +2.5% over the pick. CHASED: the tracker's interval test
+  `p1 >= q0` counted ABUTTING allocations as a hazard (upstream line); `>=` -> `>`: mask 63 28.25 (= 60), 63 + HALFB=1 29.12
+  = +3.3% over the pick, sha canonical x9, 0 alias hits. Adoption = the owner's mask-63 question.
 - 2026-11-01 small hours: three levers priced as arms 9/10/11 (lever-probes.txt): half-B-copy staging -3.4% (byte-identical,
   buildable via the Y16 copy), half accumulators -4..-5% (numerics), bit-trick q3_K dequant 0 (refuted in the real kernel: the
   five-op chain is already minimal). The dequant's share is structural; the large lever is fewer elements per lane = a layout decision.

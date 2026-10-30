@@ -135,7 +135,10 @@ static bool ggml_mem_ranges_check(ggml_mem_ranges_t mrs, ggml_mem_range mr) {
             continue;
         }
 
-        if (mr.p0 < cmp.p1 && mr.p1 >= cmp.p0) {
+        // half-open ranges [p0, p1): they intersect iff p0 < q1 && q0 < p1. The former '>=' counted two allocations that merely
+        // ABUT as a hazard; with the f16 twin tails (GGML_FUSE_SMALL bit 1) consumers' inputs abut the previous output exactly, and
+        // every skinny matmul of the width-8 round ran in its own group (-4.5% t/s, perf/kernel-perf-model.md 2026-11-01)
+        if (mr.p0 < cmp.p1 && mr.p1 > cmp.p0) {
             if (mrs->debug > 2) {
                 GGML_LOG_DEBUG("%s: the %s range buf=%lld, [%lld, %lld) overlaps with a previous %s range buf=%lld, [%lld, %lld)\n",
                         __func__,
