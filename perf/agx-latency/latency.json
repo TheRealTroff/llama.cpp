@@ -1,0 +1,9 @@
+{"note": "AGX instruction latencies in ns, measured 2026-10-30 by perf/agx-latency/bench.swift on M4 Pro (one simdgroup, dependent chains, clocks warmed; perf/agx-latency.txt in results/perfmodel-oct30). Opcode numbers = the backend's MIR opcodes (agx-nt-opt.py mir of kernels.metal). issue = ns per instruction from one simdgroup (fma indep4: 0.89); mma issue 3.2.",
+ "issue": 0.9,
+ "opcodes": {"2212": 1.7, "3312": 1.6, "820": 1.6, "821": 1.6, "798": 1.6, "884": 1.6,
+             "11082": 1.65, "17880": 1.65, "11079": 1.65, "11080": 1.65, "11756": 3.5,
+             "17165": 2.0, "443": 2.0, "442": 2.0, "12107": 2.5, "10226": 2.5,
+             "610": 1.0, "14980": 1.0, "466": 1.0,
+             "2884": 11.7},
+ "issue_opcodes": {"2884": 3.2},
+ "memory": {"device_l1": 37.0, "device_l2": 85.0, "device_dram": 300.0, "tg_load": 37.0, "tg_store_to_load": 51.0}}

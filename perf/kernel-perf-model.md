@@ -377,15 +377,83 @@ chain, the cached chain is a property of the tile and format (69 ns SoA q4_0; 11
 weight-stream load path. For a NEW kernel of a known tile the table gives t0 within +-10% before any measurement; for a new
 tile one ladder calibrates it. That is where the first milestone ends.
 
-What this leaves: (1) **t0 is a per-tile table, not a formula** (measured: the generic tile's cached chain is 110-130 ns,
-the DRAM share a fifth); a formula needs per-instruction latencies, i.e. the critical path of the k-step read off the
-profiler's stall column - a tooling build, to be weighed against "one 2.5-minute ladder per new kernel"; (2) **X is a load-path ceiling at ~9 KB/us/core of weight stream with
-a per-format penalty for the 3-bit formats** - requests vs bytes is the open split (a same-bytes, different-load-count pair
-decides it); (3) **R from the grid is measured** (R(n), 17 points, 9%); unexplained is why a core with four threadgroups
-queued holds under one in flight (per-core timeline needed); (4) t_step at a given R depends on how the R arose
-(grid, pad, registers: up to 9%), which caps the model at +-8% until the residency variable is replaced by what it proxies;
-(5) the other latency-bound families (fa at R 1.9-2.0 on every shape, gdn, mv at 1.04-1.4x the floor) have not had this
-treatment; fa decode is the long-context wall and the next family.
+**The t0 formula (2026-10-30 11:10-12:10; owner: "the t0 formula *is* the model"). Tools: `perf/agx-latency/` (bench.swift +
+kernels.metal + latency.json), `perf/kstep-sim.py`, `perf/kstep-validate.py`; results `agx-latency.txt`, `kstep-validate.txt`.**
+
+*Latency table.* Dependent-chain micro-kernels, one simdgroup, clocks warmed, ns per instruction (the chip constants):
+
+| fma/add f32, f16 | int add/xor | int mul | shift / and / bfe | int<->half convert | L1 or threadgroup load | threadgroup store -> dependent load | L2 | DRAM (dependent chase) | MMA 8x8x8 f16->f32 | issue interval, one simdgroup | MMA issue |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 1.6-1.7 | 1.65 | 3.5 | 2.0 | 2.5 | 37 | 51 | 80-95 | 300 | 11.7 | 0.9 | 3.2 |
+
+The threadgroup barrier costs nothing for one simdgroup beyond the store-to-load it orders. The MIR opcode numbers of each
+chain come from translating the micro-kernels with `agx-nt-opt.py mir` (fma.f32 = 2212, add.f32 = 3312, f16 fma/mul = 820 /
+884 / 798, cvt = 12107 / 10226, bfe/shift = 17165 / 442 / 443, iadd = 11082, MMA = 2884, barrier = 466; loads and stores by
+their memory operand and address space, not by opcode).
+
+*Simulator.* `kstep-sim.py` takes a census MIR join, picks the loop body (basic blocks executed as often as the hottest), builds
+register dependencies from the operands (pairs and 16-bit halves), carries uses across iterations, makes threadgroup loads wait
+for the iteration's earlier threadgroup stores, and issues one simdgroup in order: an instruction issues at max(previous issue +
+its issue interval, operands ready), its result is ready one latency later. Device loads: the activation loads (the two
+`<4 x s32>` from a bare 64-bit base, read by every threadgroup) hit L1; of the weight loads the first per iteration pays the
+stream latency and the rest (same block) hit L1. Output: the steady-state iteration = one 64-wide k-step of one simdgroup.
+
+*Validation against the single-threadgroup k-step* (the pad-24576 ladder point: one 29.7 KB threadgroup per core, 27.2 of
+them per core in sequence, 80 k-steps; `kstep-validate.py`):
+
+| kernel | sim cached | measured cached (PROBE=2) | err | sim stream (L = 200 ns) | measured stream | err | pure issue per k-step |
+|---|---|---|---|---|---|---|---|
+| q4_0 SoA | 337 | 307 | +10% | 410 | 390 | +5% | 242 ns |
+| q4_K | 504 | 482 | +5% | 667 | 636 | +5% | 254 |
+| q5_K | 599 | 560 | +7% | 762 | 710 | +7% | 352 |
+| q3_K | 469 | 492 | -5% | 632 | 626 | +1% | 327 |
+| iq4_xs | 423 | - | | 586 | 650 | -10% | 252 |
+| q6_K | 490 | - | | 653 | 661 | -1% | 323 |
+| q8_0 (join from the 5120x48 row) | 374 | - | | 537 | 627 | -14% | 218 |
+
+**The cached chain is predicted from the machine code within 10% on all four probed kernels with nothing fitted**: table
+latencies, in-order issue, the dependency graph. The weight stream needs one chip constant, an effective latency of 200 ns
+(the dependent chase measures 300; a streaming slice gets some overlap), and with it seven kernels land within 14%, six within
+10%. This is t0 as a function of the code. It also says what the chain is made of: pure issue is 60-75% of the k-step (the
+MMAs at 3.2 ns each are 51 of it), the rest is the load-to-use wait and the store-to-load through threadgroup memory. The
+generic tile's 110-130 ns "cached chain" over the SoA tile's 69 is, in these terms, 12-110 more instructions to issue plus
+a dequant sequence that waits on its loads instead of hiding them.
+
+*What the simulator says about the ceiling.* If a core issues from four simdgroups at once (four 32-lane pipes), the per-core
+ceiling in k-steps/us is 4 / (issue time per k-step), capped by the load path:
+
+| kernel | issue per k-step | 4 ports / issue | 9 KB/us/core / weight bytes | X predicted | X measured (ladder) | err |
+|---|---|---|---|---|---|---|
+| q4_0 SoA | 242 ns | 16.5 | 15.6 | 15.6 | 15.95 | -2% |
+| q4_K | 254 | 15.8 | 15.6 | 15.6 | 15.35 | +2% |
+| q5_K | 352 | 11.4 | 12.8 | 11.4 | 13.10 | -13% |
+| q3_K | 327 | 12.2 | 20.5 | 12.2 | 12.80 | -4% |
+| iq4_xs | 252 | 15.9 | 16.5 | 15.9 | 13.75 | +15% |
+| q6_K | 323 | 12.4 | 10.7 | 10.7 | 11.35 | -6% |
+| q8_0 | 218 | 18.4 | 8.3 | 8.3 | 7.45 | +11% |
+
+Two chip constants (four issue ports at 0.9 ns, a load path of ~9 KB/us/core of weight bytes) place the ceiling of seven
+kernels within 15%, no per-kernel fit. It also explains the two probe arms that looked contradictory: halving q4_0's
+instructions did not move X because q4_0 sits on the load-path cap, not the issue cap; caching the stream raised X 7% because
+the load path fills faster from L2. The four-port figure is inferred from the fit, not measured: a micro-kernel with 2, 4, 8
+simdgroups per threadgroup would measure it directly.
+
+*What R was.* At pad 24576 the core holds exactly one threadgroup (two simdgroups) and the counter reads 0.51: the APS "inflight"
+value is about a quarter of the resident simdgroups, so the t0 = 91 ns and X of the earlier sections are the physical 390 ns
+per threadgroup k-step and 4 simdgroups per core seen through that proxy. Nothing above changes; the physical model is cleaner:
+T = threadgroups per core x k-steps x t_TG(resident) with t_TG(1) from the simulator, and the contention curve from how
+several resident simdgroups share four issue ports and the load path - which the same simulator can produce by running N
+instruction streams against shared ports.
+
+What this leaves: (1) **the contention curve from the simulator** - run N simdgroup streams against four shared issue
+ports and the load path and compare with the pad ladders (R 0.5 -> 3.1) and the grid curve; if it reproduces them, the whole
+skinny family is predicted from code plus five chip constants (latency table, 200 ns stream, 4 ports, 9 KB/us/core, the
+resident count from smem/registers); (2) **measure the four ports** (2/4/8 simdgroups per threadgroup micro-kernel) and the
+load-path figure (a streaming micro-kernel at 1-6 resident threadgroups); (3) the simulator's misses: iq4_xs -10% stream /
++15% ceiling and q8_0 -14% (its join is the 5120x48 row - rejoin at 17408x5120); the loop-body rule and the activation-load
+heuristic are the fragile parts; (4) the small-grid under-fill (why four queued threadgroups leave a core at a quarter of
+the counter) is unchanged; (5) the other latency-bound families get the same treatment: a join, the simulator, a ladder to
+check - fa decode first.
 
 ## Log
 
@@ -393,6 +461,9 @@ treatment; fa decode is the long-context wall and the next family.
   skinny tile refuted a third time; no model transferred to llama.cpp). Its timing host (`exp/m4-measurement-harness`
   41d5ffa8b) is a qualified ISOLATED timer; useful for calibration pairs, not for the target.
 - 2026-10-30 night: first fit + intervention scorecard + residency ladder, section above. Branch exp/kernel-perf-model.
+- 2026-10-30 12:10: THE T0 FORMULA: latency table from micro-kernels (perf/agx-latency), in-order k-step simulator over the
+  MIR join (perf/kstep-sim.py); cached chain within 10% on four kernels with nothing fitted, stream within 14% on seven with one
+  constant (200 ns); ceiling X = min(4 ports / issue time, 9 KB/us/core / bytes) within 15% on seven. Section above.
 - 2026-10-30 11:05: PROBE=2 ported to the generic tile; its cached chain is 110-130 ns (not 70): t0 is a per-tile table,
   the exposed DRAM share a fifth of the k-step on all four kernels, X unmoved by the stream on all four. First milestone ends here.
 - 2026-10-30 10:30: probe-arm ladders (half instructions: t0 +25%, X unchanged; no stream: t0 -24%, X +7%; regpad:
