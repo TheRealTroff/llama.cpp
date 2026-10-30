@@ -1,5 +1,6 @@
 #!/bin/bash
 # The threadgroup-memory pad ladder on the q4_0 SoA skinny tile WITH the resident-simdgroup counter (2026-10-30):
+# TYPE=q5_K_soa etc. selects the ud skinny kernels (same tile geometry, their own chain); OUT must differ per kernel.
 # uncaptured us/run per arm (mirrored order, REPS passes) + one capture per arm, replayed headlessly keeping raw/ so
 # perf/aps-usc-values.py can read 'Compute SIMD Groups Inflight per Core'. Same knobs and filter as the Oct 26 probes.
 B=${B:-/Users/troff/play/llama.cpp-prod}; BIN=$B/build/bin/test-backend-ops
@@ -7,9 +8,10 @@ OUT=${OUT:-/Users/troff/play/kvquant-experiments/results/perfmodel-oct30/smem-pa
 PY=${PY:-/Users/troff/play/.venv-convert/bin/python3}
 HEADLESS=/Users/troff/.claude/skills/metal-gpu-profile/references/metal-profile-headless.py
 APS=$(dirname "$0")/aps-usc-values.py
-M=${M:-17408}; K=${K:-5120}; FILT="type_a=q4_0_soa,type_b=f32,m=$M,n=8,k=$K,"
+M=${M:-17408}; K=${K:-5120}; TYPE=${TYPE:-q4_0_soa}; FILT="type_a=$TYPE,type_b=f32,m=$M,n=8,k=$K,"
 PADS=${PADS:-"0 4096 8192 12288 16384 24576"}; REPS=${REPS:-2}
-ENV="GGML_MV_REPACK=2 GGML_MM_SKINNY_BSPLIT=2"
+# EXTRA_ENV: the line's pick env for the kernel under test (the census.log "env:" string; ud kernels need GGML_MM_SKINNY_SOA=1 etc.)
+ENV="GGML_MV_REPACK=2 GGML_MM_SKINNY_BSPLIT=2 ${EXTRA_ENV:-}"
 echo "binary $BIN ($(stat -f '%Sm' $BIN)); filter $FILT" | tee "$OUT/README.txt"
 for rep in $(seq 1 $REPS); do
   order="$PADS"; [ $((rep % 2)) -eq 0 ] && order=$(echo $PADS | tr ' ' '\n' | tail -r | tr '\n' ' ')

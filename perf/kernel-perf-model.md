@@ -165,11 +165,102 @@ ceiling, not the geometry - and the shape-to-shape spread of that ratio (q4_K 1.
 w4 kernel pays one-for-one for an added instruction. The skinny tile does not (+0.5% instr -> +4.7% time at rp8, -28% -> +8.5%
 at rp32): registers cost it through the chain, not the count.
 
-What this leaves: (1) residency is a measurable per-kernel feature now (counter from a replay, 8 s per trace) - the census
-rows are being replayed from offload for it; (2) a residency-aware latency model needs the per-kernel tile geometry (waves
-and k-steps from the shapes) and a per-kernel t_step(R) - the hot loop's uncontended latency plus the contention curve;
-(3) the first held-out test of that model is the ud skinny kernels (same tile family, 65-69 registers, different chains), then
-the regpad ladder (R flat: the whole effect must come from t_step).
+**Fleet residency (`census-aps-merge.py`, `census-aps-merge.txt`; every one of the 92 rows now carries `inflight` in
+`dataset.json`, read from a fresh headless replay of its Oct 24 census trace).** Family medians (min-max): fa 1.98 (1.88-2.01),
+gdn 5.75 (4.45-5.99), mm 3.21 (2.44-3.31), mv 3.19 (0.15-5.25), skinny 2.46 (0.30-3.85), small 8.77 (0.14-10.86). The prefill
+mm tiles all sit at 3.1-3.3; FA at 1.9-2.0 on every shape, both lines. Within mv and skinny the spread is shape, not kernel:
+
+| q4_0 SoA skinny row | threadgroups / core | in-graph R | implied t_step (us_call / waves / k-steps) | t_step(R) from the ladder law | T predicted at measured R | us_call | err |
+|---|---|---|---|---|---|---|---|
+| 6144x5120 | 8.0 | 1.59 | 130 ns | 135 | 143.0 | 136.9 | +4.4% |
+| 17408x5120 | 8.0 | 1.75 | 128 | 143 | 389.1 | 349.1 | +11.5% |
+| 5120x6144 | 9.6 | 1.80 | 137 | 145 | 127.7 | 120.2 | +6.2% |
+| 5120x10240 | 16.0 | 2.72 | 192 | 194 | 185.8 | 184.0 | +1.0% |
+| 5120x12288 | 19.2 | 2.82 | 194 | 199 | 223.3 | 217.4 | +2.7% |
+| 5120x17408 (calibration shape) | 27.2 | 3.11 | 210 | 216 | 310.5 | 302.8 | +2.5% |
+| 5120x248320 (lm_head) | 388 | 3.85 | 232 | 259 | 4179.0 | 3753.7 | +11.3% |
+
+Three things this measures. (a) **R is a function of the grid, saturating near 3-4 simdgroups/core as threadgroups per core
+grow** (8/core 1.6-1.8, 16/core 2.7, 27/core 3.1, 388/core 3.85); the same holds for the ud skinny kernels (27/core 2.80-2.92,
+8/core 1.71-1.85) and for mv (the M=5120 shapes 2.8-3.0, the M=17408 shapes 4.7-5.2, lm_head mv 1.62 at 1.04x the byte floor).
+The isolated ladder's R for the calibration shape (3.119) equals its in-graph reading (3.108): the counter is a property of the
+kernel and grid, not of the host. (b) **The transfer table above assumed R = 3.12 for every shape; that assumption is wrong on
+four of the seven shapes** (measured 1.6-1.8). With the measured R the same law lands +1..+12%, worse than the assumed-R
+version: the 2% transfer was the ceil of the wave count on the wrong R compensating for a t_step 30% too high. The law itself
+holds at the measured R on the implied t_step (130-137 ns measured vs 135-145 predicted at R 1.6-1.8, 192-210 vs 194-216 at R
+2.7-3.1); the discrete-wave accounting is what breaks at 8 threadgroups per core (10 waves by R, 11 by ceil, +10%). (c) lm_head
+runs at 16.5 k-steps/us/core, above the 14.1 the ladder saw at R 3.1 and above the fitted ceiling X = 15.9 - the ceiling is a
+fit to six points below R 3.2, and at R 3.85 the chip gives more. Both (b) and (c) say the waves-x-t_step(R) form is right in
+kind and wrong in its treatment of R: R has to be predicted from the grid (it is not a constant 3.12), and the counter's
+time-average over a 10-wave kernel is not the steady-state concurrency the wave count wants.
+
+**The ud skinny kernels, each on its own pad ladder (`run-smem-pad-aps.sh TYPE=…`, fitter `perf/tstep-fit.py`, dirs
+`smem-pad-{q5_K,q4_K,iq4_xs}_soa/`, m=17408 k=5120, ud pick env; each ladder ~2.5 min).** Four kernels, one tile geometry,
+four calibrations:
+
+| kernel | regs | executed instr / sg-k-step | pad-0 R (isolated / in-graph) | t0 uncontended k-step | X per-core ceiling | X in SIMD-instr/us/core | smooth-max max err | linear / Little / hard-max |
+|---|---|---|---|---|---|---|---|---|
+| q4_0 SoA | 54 | 127 | 3.12 / 3.11 | 91 ns | 15.9 k-steps/us | 2020 | 2.9% | 9.7 / 7.0 / 11.6% |
+| q4_K SoA | 65 | 95 | 2.91 / 2.92 | 150 ns | 15.4 | 1465 | 3.5% | 7.8 / 6.9 / 8.4% |
+| iq4_xs SoA | 65 | 121 | 2.84 / 2.84 | 150 ns | 13.8 | 1660 | 3.8% | 8.0 / 8.0 / 7.6% |
+| q5_K SoA | 69 | 122 | 2.81 / 2.80 | 170 ns | 13.1 | 1590 | 2.9% | 6.0 / 6.0 / 8.4% |
+
+- **The padded residencies are identical across the four kernels** (pad 4096: 1.81 / 1.81 / 1.81 / 1.81; 8192: 1.41 / 1.41
+  / 1.40 / 1.42; 24576: 0.51 / 0.50 / 0.50 / 0.50): with threadgroup memory padded, occupancy is the smem geometry and nothing
+  else. At pad 0 it is not smem (5120 B would allow 6 threadgroups): R falls with the register count, 54 -> 65 -> 69 regs =
+  3.12 -> 2.9 / 2.84 -> 2.81, the same step the q4_0 regpad ladder showed (3.12 -> 2.76 at +16 regs). The pad-0 cap is a
+  register-file (or launch) effect and it is where every production skinny kernel runs.
+- **Neither t0 nor X is shared.** The uncontended k-step is 91 ns on the q4_0 tile and 150-170 ns on the K-quant tiles with
+  FEWER instructions per k-step (q4_K: 95 vs 127) - chain latency, not count. The ceiling X is 13.1-15.9 k-steps/us/core and,
+  in instructions, 1465-2020 per us per core - so it is not an instruction-issue ceiling either (the half-instruction probe
+  said the same). The one feature that separates 91 from 150-170 in the MIR hot loop is the load-use distance: q4_0 SoA
+  consumes its device loads 138 instructions after issuing them (the hoisted stream), the K-quant tiles after 3-8
+  (`load_use_min` in `dataset.json`; depth 5 vs 7-22 and ILP 32 vs 7-20 do not order the four). Four points, no fit -
+  an observation to test with the next kernel.
+- **Smooth-max is the form on all four** (max error 2.9-3.8%; linear and Little's law 6-10%, hard max 7.6-11.6%).
+
+**Held-out scoring of the whole thing: every census skinny row of the four kernels, in-graph `us_call`, each at its own
+calibration and its measured in-graph R, T = waves x k-steps x t_step(R), no refit (the 5120x17408 rows are the
+calibration shapes; the other 13 are held out):**
+
+| kernel: shape | TG/core | R | implied t_step / law | T (ceil waves) | T (fractional waves) | us_call | err ceil / frac |
+|---|---|---|---|---|---|---|---|
+| q4_0: 5120x6144 | 9.6 | 1.80 | 141 / 145 | 127.4 | 123.8 | 120.2 | +6.0 / +3.0% |
+| q4_0: 6144x5120 | 8.0 | 1.59 | 142 / 135 | 142.7 | 130.2 | 136.9 | +4.2 / -4.9% |
+| q4_0: 5120x10240 | 16.0 | 2.72 | 195 / 193 | 185.4 | 182.0 | 184.0 | +0.8 / -1.1% |
+| q4_0: 5120x12288 | 19.2 | 2.82 | 200 / 199 | 222.7 | 216.6 | 217.4 | +2.5 / -0.4% |
+| q4_0: 5120x17408 (cal) | 27.2 | 3.11 | 216 / 215 | 309.7 | 301.1 | 302.8 | +2.3 / -0.5% |
+| q4_0: 17408x5120 | 8.0 | 1.75 | 141 / 143 | 388.4 | 354.1 | 349.1 | +11.2 / +1.4% |
+| q4_0: 5120x248320 lm_head | 388 | 3.85 | 233 / 258 | 4167.6 | 4159.7 | 3753.7 | +11.0 / +10.8% |
+| q4_K: 5120x6144 | 9.6 | 1.95 | 188 / 196 | 156.9 | 154.6 | 147.8 | +6.2 / +4.6% |
+| q4_K: 5120x10240 | 16.0 | 2.55 | 231 / 223 | 232.2 | 224.5 | 231.9 | +0.1 / -3.2% |
+| q4_K: 5120x17408 (cal) | 27.2 | 2.92 | 241 / 242 | 367.8 | 360.6 | 359.5 | +2.3 / +0.3% |
+| q4_K: 17408x5120 | 8.0 | 1.82 | 184 / 191 | 466.7 | 456.9 | 440.2 | +6.0 / +3.8% |
+| iq4_xs: 5120x17408 (cal) | 27.2 | 2.84 | 263 / 256 | 408.9 | 391.6 | 402.6 | +1.6 / -2.7% |
+| iq4_xs: 17408x5120 | 8.0 | 1.85 | 189 / 202 | 494.4 | 474.6 | 443.9 | +11.4 / +6.9% |
+| q5_K: 6144x5120 | 8.0 | 1.71 | 213 / 215 | 206.1 | 192.9 | 191.8 | +7.5 / +0.6% |
+| q5_K: 5120x10240 | 16.0 | 2.46 | 261 / 254 | 263.9 | 263.9 | 270.9 | -2.6 / -2.6% |
+| q5_K: 5120x17408 (cal) | 27.2 | 2.80 | 274 / 273 | 437.5 | 424.9 | 425.6 | +2.8 / -0.2% |
+| q5_K: 17408x5120 | 8.0 | 1.81 | 210 / 219 | 537.1 | 527.9 | 505.0 | +6.4 / +4.5% |
+
+With fractional waves: 13 of 17 rows within 5%, all 16 non-lm_head rows within 7%, the misses all on the 8-threadgroup-per-core
+grids (+4..+7%, the law's t_step 4-7% above the implied one at R 1.6-1.9) and lm_head (+11%, the law's t_step 258 vs 233
+implied at R 3.85: above the fitted ceiling). The ceil form is worse everywhere the grid is small (+6..+11%): a 10.5-wave
+kernel does not cost 11 waves, which is what the time-averaged R was already saying. **The ud kernels, the stub's named
+held-out test, land within 0-7% (median 3%) from their own ladders; the q4-calibrated version was 24-72% off.** The model
+is: per-kernel (t0, X) from one ladder, R from the grid, geometry from the shapes. What it does not yet do is predict (t0, X)
+or R without measuring them.
+
+What this leaves: (1) **R has to come from the grid** - the seven q4_0 shapes and the ten ud shapes draw one saturating
+curve of R against threadgroups per core (8 -> 1.6-1.9, 16 -> 2.5-2.7, 27 -> 2.8-3.1, 388 -> 3.3-3.85) with the pad-0 cap
+set by the register count; two more grid sizes per kernel (e.g. 32 and 64 threadgroups per core via M) would pin the curve
+and settle whether the 8-per-core misses are R's time-average or a real ramp; (2) **t0 from the MIR** - the load-use distance
+is the candidate (4 points); the regpad ladder on q4_0 (R flat 2.76, time +5..+17%) is the direct test of what moves t0 at
+fixed geometry; (3) **the ceiling X** - 13-16 k-steps/us/core, not instructions, not DRAM (183 GB/s of weight bytes at the q4_0
+ceiling); the MMA pipe and the threadgroup-memory path are the candidates, and the Oct 26 no-stream arm (-10..-15%, R
+unchanged at 3.10) is the one existing measurement that bears on it; (4) the other latency-bound families (fa at R 1.9-2.0,
+gdn, mv at 1.04-1.4x the floor) have not been given this treatment: fa decode is the obvious next ladder since every shape
+sits at the same R.
 
 ## Log
 
@@ -177,3 +268,6 @@ the regpad ladder (R flat: the whole effect must come from t_step).
   skinny tile refuted a third time; no model transferred to llama.cpp). Its timing host (`exp/m4-measurement-harness`
   41d5ffa8b) is a qualified ISOLATED timer; useful for calibration pairs, not for the target.
 - 2026-10-30 night: first fit + intervention scorecard + residency ladder, section above. Branch exp/kernel-perf-model.
+- 2026-10-30 02:15: fleet residency on all 92 rows (census traces replayed), the ud skinny ladders (own t0/X each), held-out
+  scoring 13/17 within 5%; the earlier 'transfers within 2%' row corrected (assumed R was wrong on four shapes). Open items
+  rewritten under 'What this leaves'.
