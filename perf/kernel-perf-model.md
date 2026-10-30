@@ -892,6 +892,30 @@ every opcode of the q3_K chain was reached from source within three forms once t
 ushort for 17168, a `constant` table indexed by a register for 13555), and the one that could not be reached (12288) was priced
 by the in-kernel A/B instead. The archive route is the tool to keep for an opcode none of those three ways produces.
 
+*Three levers the model names, priced as probe arms (2026-11-01 small hours; owner: "want to take a stab at improving a kernel?";
+`GGML_MM_SKINNY_PROBE=9|10|11` on the generic tile, translator-verified; `lever-probes.txt`).* Arm 9: the B staging reads a HALF
+activation buffer (the f32 buffer read as half here: the lever's instruction mix and byte count - 8 rounds gone from the FP32
+pipe the MMA holds, half the activation bytes; the real lever would read the Y16 half copy the mul_mv path already makes -
+byte-identical since every form already rounds the activations through half). Arm 10: half accumulators (MMA op 860: the
+smaller FP32 hold; a numerics change on the ud line). Arm 11: the q3_K dequant straight to half by bit trick (no int->float, no
+f32 multiply; the harness variant ran +31% - double rounding, a numerics change). Two reps, interleaved:
+
+| arm | q3_K pad 0 | q3_K pad 4096 | q4_K pad 0 | q4_K pad 4096 |
+|---|---|---|---|---|
+| full | 414 us | 460 us | 373 us | 453 us |
+| B staging from a half copy (byte-identical) | -3.4% | -3.3% | -3.5% | -2.3% |
+| half accumulators (numerics) | -5.1% | -2.8% | -3.7% | +1.7% |
+| bit-trick q3_K dequant (numerics) | +0.1% | +1.5% | - | - |
+
+Reading. The levers the rule points at are worth 3-5% per call, not the harness's 31%: the real tile's five-instruction
+element chain is already as cheap as the bit trick's (the in-kernel form came out 79 instructions longer than the compiler's
+compact 16-bit version in the harness, and flat), half accumulation saves the 2 ns of FP32 hold per MMA and little else, and
+the half B copy saves exactly its eight rounds and sixteen bytes per thread per k-step. The dequant's 36-49% is structural -
+32 elements per lane per k-step at five instructions each - and the only large lever is fewer elements per lane, which is a
+layout decision (the -SOA-V3 head file, owner's), not a kernel form. Of the three, the half-B lever is the one worth
+building if ~3.5% per skinny call pays for the plumbing (route the width-6..8 skinny op's src1 to the Y16 half copy in
+ggml-metal-ops; byte-identical, no gate beyond the sha): at the width-8 round's skinny share that is roughly -1.5% of the round.
+
 What this leaves: (1) ~~**the contention curve from the simulator**~~ DONE 10-31 night: `nstream-sim.py --tgmem-core --mma-fp32 8
 --mma-fp32-h 6` reproduces the six skinny tiles' ladders within 7% mean at two and three per port (iq4_xs/q6_K -13..-15 the
 worst) and fifteen harness replicas within 7.6%; open there: the loaded-core latency of the constant gather (iq4_xs), the
@@ -929,6 +953,9 @@ check - fa decode first.
   price (A/B flat), 17165 immediate-bfe 2.33 -> 0.9 (was the register form's price), 13555 constant gather = one slot + 25 ns (was
   classed as an int op); rule re-fit: 2884 holds FP32 8 ns, 860 6 ns -> sim within 5% on q4_0/q4_K/q5_K/q3_K at 3/port, iq4_xs/q6_K
   -13..-15, mean 7% at 2 and 3 per port, harness 7.6%. Below-source routes answered (AIR cannot pick opcodes; binary archive can).
+- 2026-11-01 small hours: three levers priced as arms 9/10/11 (lever-probes.txt): half-B-copy staging -3.4% (byte-identical,
+  buildable via the Y16 copy), half accumulators -4..-5% (numerics), bit-trick q3_K dequant 0 (refuted in the real kernel: the
+  five-op chain is already minimal). The dequant's share is structural; the large lever is fewer elements per lane = a layout decision.
 - 2026-10-31 later: both candidate mechanisms probed. Skinny-pattern tg memory: strided tile loads +18%, A staging stores 2x the
   mul_mm pattern, the unit is core-wide, ~60% busy at the ceiling - not binding (sim with it: 883 vs 1250). Barriers (PROBE=3 arm,
   branch only): 5.5-8.5% of the k-step at every residency - real, not the gap. Remaining: ud tiles 23-33% slower at 3 sg/port than

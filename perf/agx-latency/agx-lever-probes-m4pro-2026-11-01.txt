@@ -1,0 +1,35 @@
+[100%] Built target test-backend-ops
+translator rebuilt
+arm 0: 649 static instr; MMA 2884 x16 860 x0; 1038 x8 12104 x64 3328 x64 12107 x0 884 x0 820 x0 13588 x2 13582 x0
+arm 9: 640 static instr; MMA 2884 x16 860 x0; 1038 x0 12104 x64 3328 x64 12107 x0 884 x0 820 x0 13588 x1 13582 x0
+arm 10: 650 static instr; MMA 2884 x0 860 x16; 1038 x8 12104 x64 3328 x64 12107 x0 884 x0 820 x0 13588 x2 13582 x0
+arm 11: 728 static instr; MMA 2884 x16 860 x0; 1038 x8 12104 x0 3328 x0 12107 x0 884 x64 820 x0 13588 x2 13582 x0
+q3_K_soa rep1 pad=0 probe=0 414.95 us/run
+q3_K_soa rep1 pad=0 probe=9 400.30 us/run
+q3_K_soa rep1 pad=0 probe=10 392.88 us/run
+q3_K_soa rep1 pad=0 probe=11 414.01 us/run
+q3_K_soa rep1 pad=4096 probe=0 459.56 us/run
+q3_K_soa rep1 pad=4096 probe=9 445.00 us/run
+q3_K_soa rep1 pad=4096 probe=10 446.82 us/run
+q3_K_soa rep1 pad=4096 probe=11 466.23 us/run
+q3_K_soa rep2 pad=0 probe=0 413.92 us/run
+q3_K_soa rep2 pad=0 probe=9 400.62 us/run
+q3_K_soa rep2 pad=0 probe=10 393.42 us/run
+q3_K_soa rep2 pad=0 probe=11 415.76 us/run
+q3_K_soa rep2 pad=4096 probe=0 460.53 us/run
+q3_K_soa rep2 pad=4096 probe=9 444.63 us/run
+q3_K_soa rep2 pad=4096 probe=10 447.08 us/run
+q3_K_soa rep2 pad=4096 probe=11 467.55 us/run
+q4_K_soa rep1 pad=0 probe=0 374.47 us/run
+q4_K_soa rep1 pad=0 probe=9 360.75 us/run
+q4_K_soa rep1 pad=0 probe=10 357.46 us/run
+q4_K_soa rep1 pad=4096 probe=0 447.88 us/run
+q4_K_soa rep1 pad=4096 probe=9 441.92 us/run
+q4_K_soa rep1 pad=4096 probe=10 459.97 us/run
+q4_K_soa rep2 pad=0 probe=0 371.08 us/run
+q4_K_soa rep2 pad=0 probe=9 358.41 us/run
+q4_K_soa rep2 pad=0 probe=10 360.59 us/run
+q4_K_soa rep2 pad=4096 probe=0 457.48 us/run
+q4_K_soa rep2 pad=4096 probe=9 442.58 us/run
+q4_K_soa rep2 pad=4096 probe=10 460.77 us/run
+done

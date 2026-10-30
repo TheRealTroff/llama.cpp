@@ -18984,6 +18984,25 @@ template <typename type4x4> inline void dequantize_soa_mm(device const block_iq3
 
 template <typename block_q, typename type4x4> inline void dequantize_soa_mm(device const block_q *, device const char *, int, int, short, thread type4x4 & reg) { reg = type4x4(0); }
 
+
+// 2026-11-01 lever probe (perf/kernel-perf-model.md): the q3_K stored-plane dequant straight to half by bit trick - 1024 + idx is
+// exact in half, so as_type<half>(0x6400 | idx) - 1028 = idx - 4 = the q3_K value; one f16 multiply by the sub-block scale.
+// Numerics differ from the float product (double rounding); GGML_MM_SKINNY_PROBE=11 prices it on the skinny tile only.
+template <typename type4x4>
+inline void dequantize_q3K_soa_bits(device const char * row, int K, int block_idx, short il, thread type4x4 & reg) {
+    const int nsb = K/256;
+    const int p0 = 32*block_idx + 2*il;
+    for (int p = 0; p < 2; ++p) {
+        const int pp = p0 + p;
+        const ushort lo = ((device const ushort *) row)[pp];
+        const uchar hi = ((device const uchar *) (row + 64*nsb))[pp];
+        const half dh = half(float(((device const half *) (row + 112*nsb))[pp/32]) * float(row[96*nsb + pp/2]));
+        for (int i = 0; i < 8; ++i) {
+            const ushort idx = ushort(((lo >> (2*i)) & 3) | (((hi >> i) & 1) << 2));
+            reg[2*p+i/4][i%4] = (as_type<half>(ushort(0x6400u | idx)) - 1028.0h) * dh;
+        }
+    }
+}
 // each block_q contains 16*nl weights
 #ifdef GGML_METAL_HAS_TENSOR
 template<
@@ -19584,7 +19603,8 @@ kernel void kernel_mul_mm_skinny_t(
 // its row - same instructions, the weight stream leaves DRAM (garbage output). The q4_0 SoA tile has the same arm.
 #define SKP2(IB) ((FC_mul_mm_sk_probe == 2) ? ((IB) & 1) : (IB))
 #define SKINNY_DEQ(KX, OFF, REG) \
-    if (FC_mul_mm_soa && (FC_mul_mm_iq4lut_v == 1 || FC_mul_mm_iq4lut_v == 4)) { dequantize_soa_mm_lut((device const block_q *) nullptr, xrowc, args.ne00, SKP2((KX)/(16*nl)), (short) (((KX)/16)%nl + (OFF)), REG, (threadgroup const char *) slut); } \
+    if (FC_mul_mm_sk_probe == 11) { dequantize_q3K_soa_bits(xrowc, args.ne00, SKP2((KX)/(16*nl)), (short) (((KX)/16)%nl + (OFF)), REG); } \
+    else if (FC_mul_mm_soa && (FC_mul_mm_iq4lut_v == 1 || FC_mul_mm_iq4lut_v == 4)) { dequantize_soa_mm_lut((device const block_q *) nullptr, xrowc, args.ne00, SKP2((KX)/(16*nl)), (short) (((KX)/16)%nl + (OFF)), REG, (threadgroup const char *) slut); } \
     else if (FC_mul_mm_soa) { dequantize_soa_mm((device const block_q *) nullptr, xrowc, args.ne00, SKP2((KX)/(16*nl)), (short) (((KX)/16)%nl + (OFF)), REG); } \
     else               { dequantize_func(xrow + SKP2((KX)/(16*nl)), ((KX)/16)%nl + (OFF), REG); }
 #define SKINNY_DEQ2(KX, REGA, REGB) \
@@ -19617,6 +19637,11 @@ kernel void kernel_mul_mm_skinny_t(
     // are consumed by one add per element), 5 = no tile loads (the MMAs run on the first slice's tiles kept in registers),
     // 6 = no dequant (raw bytes as the half tiles, one 16-B load), 7 = no A staging stores, 8 = no B staging (loads, rounds, stores)
     a_t probe_acc = (a_t) 0;
+    // lever probes (2026-11-01): 9 = B staging from a HALF activation copy (here the f32 buffer read as half: wrong values, the
+    // instruction mix of the lever), 10 = half accumulators (MMA op 860), 11 = the bit-trick q3_K dequant (see dequantize_q3K_soa_bits)
+    simdgroup_half8x8 mch[2];
+    mch[0] = make_filled_simdgroup_matrix<half, 8>(0.0h);
+    mch[1] = make_filled_simdgroup_matrix<half, 8>(0.0h);
 
     // prefetch slice 0
     a4x4_t ta0;
@@ -19645,6 +19670,13 @@ kernel void kernel_mul_mm_skinny_t(
 
         // the activations rounded through half in every form (f16y)
         if (FC_mul_mm_sk_probe == 8) {
+        } else if (FC_mul_mm_sk_probe == 9) {
+            device const half4 * y4h = (device const half4 *) y;
+            const half4 v0 = y4h[0];
+            const half4 v1 = y4h[1];
+            threadgroup a_t * sbp = sb + (8*bsx)*NR1 + tiitg/8;
+            sbp[0*NR1] = (a_t) v0.x; sbp[1*NR1] = (a_t) v0.y; sbp[2*NR1] = (a_t) v0.z; sbp[3*NR1] = (a_t) v0.w;
+            sbp[4*NR1] = (a_t) v1.x; sbp[5*NR1] = (a_t) v1.y; sbp[6*NR1] = (a_t) v1.z; sbp[7*NR1] = (a_t) v1.w;
         } else if (FC_mul_mm_sk_bsp == 2) {
             // split B stage, two float4 loads per thread (BVL = 8)
             device const float4 * y4 = (device const float4 *) y;
@@ -19690,6 +19722,9 @@ kernel void kernel_mul_mm_skinny_t(
 
             if (FC_mul_mm_sk_probe == 4) {
                 probe_acc += ma[0].thread_elements()[0] + ma[0].thread_elements()[1] + ma[1].thread_elements()[0] + ma[1].thread_elements()[1] + mb.thread_elements()[0] + mb.thread_elements()[1];
+            } else if (FC_mul_mm_sk_probe == 10) {
+            simdgroup_multiply_accumulate(mch[0], ma[0], mb, mch[0]);
+            simdgroup_multiply_accumulate(mch[1], ma[1], mb, mch[1]);
             } else {
             simdgroup_multiply_accumulate(mc[0], ma[0], mb, mc[0]);
             simdgroup_multiply_accumulate(mc[1], ma[1], mb, mc[1]);
@@ -19697,6 +19732,10 @@ kernel void kernel_mul_mm_skinny_t(
         }
     }
     if (FC_mul_mm_sk_probe == 4 || FC_mul_mm_sk_probe == 7) { mc[0].thread_elements()[0] += (float) probe_acc; }
+    if (FC_mul_mm_sk_probe == 10) {
+        mc[0].thread_elements()[0] = (float) mch[0].thread_elements()[0]; mc[0].thread_elements()[1] = (float) mch[0].thread_elements()[1];
+        mc[1].thread_elements()[0] = (float) mch[1].thread_elements()[0]; mc[1].thread_elements()[1] = (float) mch[1].thread_elements()[1];
+    }
 
     threadgroup_barrier(mem_flags::mem_threadgroup);
 

@@ -782,7 +782,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm_skinny(gg
     // GGML_MM_SKINNY_PROBE=2 on the generic tile: cached weights (every slice re-reads blocks 0/1; perf/kernel-perf-model.md
     // 2026-10-30, garbage output). PROBE=1 is q4_0-SoA-only; the constant is always set (the kernel reads it).
     static const int env_gen_probe = getenv("GGML_MM_SKINNY_PROBE") ? atoi(getenv("GGML_MM_SKINNY_PROBE")) : 0;
-    const int gen_probe = (env_gen_probe >= 2 && env_gen_probe <= 8) ? env_gen_probe : 0;   // 2 = cached weights, 3 = no per-k-step barriers, 4-8 = deletion arms (no MMA / no tile loads / no dequant / no A stores / no B staging)
+    const int gen_probe = (env_gen_probe >= 2 && env_gen_probe <= 11) ? env_gen_probe : 0;   // 9-11 = lever probes (half B copy / half accumulators / bit-trick q3_K dequant)   // 2 = cached weights, 3 = no per-k-step barriers, 4-8 = deletion arms (no MMA / no tile loads / no dequant / no A stores / no B staging)
     snprintf(name, 256, "%s%s%s_ne12=%d_r2=%d_r3=%d_bsp=%d%s%s%s_probe=%d", base, soa ? "_soa" : "", soa && gen_exact ? "_ex" : "", ne12, r2, r3, env_bsplit, iq4lut == 1 ? "_iq4lut=1" : iq4lut == 2 ? "_iq4lut=2" : iq4lut == 3 ? "_iq4lut=3" : iq4lut == 4 ? "_iq4lut=4" : iq4lut == 5 ? "_iq4lut=5" : iq4lut == 6 ? "_iq4lut=6" : q5k == 1 ? "_q5k=1" : "", kq2 == 1 ? "_kq2=1" : "", q6k == 1 ? "_q6k=1" : "", gen_probe);
 
     ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
