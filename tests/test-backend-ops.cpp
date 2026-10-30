@@ -11069,6 +11069,35 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
         }
     }
 
+    // GGML_TEST_MM_SHAPES="type_a:m:n:k;..." adds mul_mat perf cases at arbitrary shapes (perf/kernel-perf-model.md,
+    // 2026-10-30: the residency-vs-grid ladders need M and K the fixed list does not have). Types by ggml_type_name.
+    if (const char * shapes = getenv("GGML_TEST_MM_SHAPES")) {
+        std::string spec(shapes);
+        size_t pos = 0;
+        while (pos < spec.size()) {
+            size_t end = spec.find(';', pos);
+            if (end == std::string::npos) end = spec.size();
+            std::string item = spec.substr(pos, end - pos);
+            pos = end + 1;
+            if (item.empty()) continue;
+            char tname[64]; long long m = 0, n = 0, k = 0;
+            if (sscanf(item.c_str(), "%63[^:]:%lld:%lld:%lld", tname, &m, &n, &k) != 4) {
+                fprintf(stderr, "GGML_TEST_MM_SHAPES: cannot parse '%s'\n", item.c_str());
+                continue;
+            }
+            ggml_type ta = GGML_TYPE_COUNT;
+            for (int t = 0; t < GGML_TYPE_COUNT; t++) {
+                const char * nm = ggml_type_name((ggml_type) t);
+                if (nm && strcmp(nm, tname) == 0) { ta = (ggml_type) t; break; }
+            }
+            if (ta == GGML_TYPE_COUNT) {
+                fprintf(stderr, "GGML_TEST_MM_SHAPES: unknown type '%s'\n", tname);
+                continue;
+            }
+            test_cases.emplace_back(new test_mul_mat(ta, GGML_TYPE_F32, m, n, k, {1, 1}, {1, 1}));
+        }
+    }
+
     return test_cases;
 }
 
