@@ -916,6 +916,65 @@ layout decision (the -SOA-V3 head file, owner's), not a kernel form. Of the thre
 building if ~3.5% per skinny call pays for the plumbing (route the width-6..8 skinny op's src1 to the Y16 half copy in
 ggml-metal-ops; byte-identical, no gate beyond the sha): at the width-8 round's skinny share that is roughly -1.5% of the round.
 
+*The half-B lever, built (2026-11-01; owner: "Half B looks like a win anyway?"; `GGML_MM_SKINNY_HALFB=1`, commit b6fecdc19;
+results `halfb/gate.txt`, `halfb/w8decomp.log`).* The generic skinny tile's B staging reads the f16 copy of the activations
+instead of f32: the dispatcher encodes `kernel_cvt_f32_f16_cont` (the mul_mv f16y copy's kernel) into the scratch after dst,
+resets concurrency, and binds the copy with half strides; the kernel takes `FC_mul_mm_sk_halfb` (FC_MUL_MM + 15, pipeline name
+`_hb=1`) and reads two half4 per lane per k-step where it read two float4 and rounded. The scratch is reserved by the same
+predicate at allocation time (`ggml_metal_mul_mat_skinny_halfb`, a deliberate superset of the encode-time route: contiguous
+f32 src1, the generic-skinny format set, ne11 in the GEN range). Byte-identical by construction: every skinny form already
+rounds y through half with the same round-to-nearest the cast kernel uses.
+
+Gate so far: `test-backend-ops test -o MUL_MAT`, ud pick env, `GGML_TEST_SEED=7`, dumps off vs on - **12/12 pass, 12/12 dump
+files byte-identical** (q4_K / q5_K / iq4_xs stored formats, both FFN orientations, widths 6-8; the q3_K/q6_K stored types
+have no test-mode case at these shapes - same code path). Per call at the ceiling (pad 0, 17408x5120 n=8, the cast dispatch and
+its barrier included in the perf loop):
+
+| format | off | on | |
+|---|---|---|---|
+| q3_K | 416.8 us | 401.5 | -3.7% |
+| q4_K | 372.7 | 353.5 | -5.2% |
+| q5_K | 439.0 | 421.1 | -4.1% |
+| iq4_xs | 407.7 | 390.5 | -4.2% |
+| q6_K | 466.0 | 448.8 | -3.7% |
+
+**In-graph, the cast form LOSES (`halfb/w8decomp.log`, `halfb/anchors.txt`).** The pinned width-8 ud round (`run-w8-decomp.sh`,
+depth 7, 300 tokens, benchprompt), flag off vs on: sha `ce826d8a3cbd` on every run (the ud record - byte-identical in the
+graph), the serialized per-op profile shows every skinny bucket 3.3-3.5% faster (iq4_xs 45.50 -> 43.95 ms, q5_K 40.89 -> 39.44,
+q4_K 29.69 -> 28.72, +0.30 ms of casts in elementwise/other), and the anchor t/s is **28.2 -> 27.0 (-4.4%) in three
+interleaved pairs** (round 155.5 -> 159.6 ms). The concurrency reset the cast needs in front of every skinny op breaks the
+concurrency groups those ops live in (`census-groups.md`: the decode matmul groups overlap several ops each); the lost overlap
+is bigger than the kernel gain - the same reason the mul_mv path grew `GGML_MV_SOA_Y32` twins to avoid its own cast (3.3-3.5%
+of decode GPU time). The per-call measurement was right and beside the point: the graph pays for barriers, not kernels.
+
+**The form that can pay: the f16 twin.** Producers of decode-width activations (the norm chain's MUL, the swiglu) already write
+an f16 copy right after their output when `GGML_FUSE_SMALL` carries bit 1 (`ggml_metal_op_extra_f16_twin`, up to [17408, 8]),
+and the hazard tracking orders consumers behind the producer's allocation - no cast, no barrier. `GGML_MM_SKINNY_HALFB=1` now
+reads that twin when present (`ggml_metal_f16_twin_src`) and does nothing otherwise; `=2` is the cast form, kept for the
+record. The pick runs mask 60 (twins off) because of the open drafter-trace divergence under mask 63 (`small-op-fusion.md`:
+not a target-side finding; the twins alone were "worth about the noise" for mul_mv). For the skinny tiles they would carry
+~4.5 ms serialized per round. The twin is found for every big skinny op in the width-8 graph (ffn up / gate / down, q, k, v,
+the delta-net z; only the attention output projection's input has no twin producer; `GGML_MM_SKINNY_HALFB_DEBUG=1`).
+
+**The position-balanced square (`halfb/square.txt`; nine runs, each arm once in each position, 300 tokens, benchprompt):**
+
+| arm | t/s (3 runs) | mean | vs mask 60 | sha |
+|---|---|---|---|---|
+| mask 60 (the pick) | 28.14 28.21 28.18 | 28.18 | | ce826d8a3cbd x3 |
+| mask 63 (twins on) | 26.95 26.93 26.84 | 26.90 | **-4.5%** | ce826d8a3cbd x3 |
+| mask 63 + HALFB=1 (twin read) | 27.84 27.82 27.83 | 27.83 | -1.2% (+3.5% over 63) | ce826d8a3cbd x3 |
+
+Three readings. (1) The within-arm spread is 0.05 t/s: the "alternating slow launch" of the first ABAB pairs was the arm, not
+the position (mask 63 and the cast form both sat in the second slot) - and the round~= column compared different spec-prof
+windows (fast runs were killed before the final summary; parser fixed to take the fullest window). (2) **Mask 63 costs 4.5%
+on the width-8 ud round**, a number nobody had: the twins were priced at widths 4-5 and on the controller as "about the
+noise"; at width 8 nothing read them and their producers' cost stood alone. (3) The lever does what the per-call numbers
+said - +3.5% when its input exists for free - and no form of it beats the pick as it stands: cast -4.3%, twin -1.2% net.
+Where the 4.5% goes is the open question (`halfb/prof63.txt`, metalprof under 63 and 63 + lever): if it is the producers'
+twin writes, a twin written only for skinny consumers would carry the lever at no cost; if it is the allocation/fusion
+structure bit 1 changes, the lever waits for the twins' own fix. **Status: BUILT, byte-identical, not a win under the
+current pick; manifest `proposed` with the condition; owner decides with the mask.**
+
 What this leaves: (1) ~~**the contention curve from the simulator**~~ DONE 10-31 night: `nstream-sim.py --tgmem-core --mma-fp32 8
 --mma-fp32-h 6` reproduces the six skinny tiles' ladders within 7% mean at two and three per port (iq4_xs/q6_K -13..-15 the
 worst) and fifteen harness replicas within 7.6%; open there: the loaded-core latency of the constant gather (iq4_xs), the
@@ -953,6 +1012,10 @@ check - fa decode first.
   price (A/B flat), 17165 immediate-bfe 2.33 -> 0.9 (was the register form's price), 13555 constant gather = one slot + 25 ns (was
   classed as an int op); rule re-fit: 2884 holds FP32 8 ns, 860 6 ns -> sim within 5% on q4_0/q4_K/q5_K/q3_K at 3/port, iq4_xs/q6_K
   -13..-15, mean 7% at 2 and 3 per port, harness 7.6%. Below-source routes answered (AIR cannot pick opcodes; binary archive can).
+- 2026-11-01: half-B BUILT (GGML_MM_SKINNY_HALFB, b6fecdc19 + twin path): per call -3.6..-5.1%, 12/12 dumps and every graph
+  sha canonical; in-graph the cast form (=2, cast + reset per op) is -4.3% t/s (the reset breaks the concurrency groups), the
+  twin form (=1) needs GGML_FUSE_SMALL mask 63, which itself costs -4.5% on the width-8 round (new finding), lever +3.5% over 63,
+  -1.2% net vs the pick. Not a win as the pick stands; where mask 63's 4.5% goes is the next question (prof63.txt).
 - 2026-11-01 small hours: three levers priced as arms 9/10/11 (lever-probes.txt): half-B-copy staging -3.4% (byte-identical,
   buildable via the Y16 copy), half accumulators -4..-5% (numerics), bit-trick q3_K dequant 0 (refuted in the real kernel: the
   five-op chain is already minimal). The dequant's share is structural; the large lever is fewer elements per lane = a layout decision.

@@ -3627,9 +3627,16 @@ static bool ggml_metal_mul_mat_use_f16_src1_mm(const ggml_tensor * op) {
 // Evaluated at ALLOCATION time (the scratch) and at ENCODE time (the route) and must agree: it is deliberately a superset of the
 // encode-time route (device props and the width cap are not checked here; a reserved-but-unused scratch is harmless, an unreserved
 // one overwrites the next tensor - the 2026-09-04 trap).
-static bool ggml_metal_mul_mat_skinny_halfb(const ggml_tensor * op) {
+// =1: read src1's f16 TWIN when its producer wrote one (GGML_FUSE_SMALL bit 1, no cast and no barrier of our own) - the form that
+//     pays in the graph; =2: cast into the scratch after dst + concurrency reset before every skinny op (the first form, 2026-11-01:
+//     -3.5% per call but -4.4% t/s on the width-8 round: the reset breaks the concurrency groups the skinny ops live in)
+static int ggml_metal_mul_mat_skinny_halfb_mode(void) {
     static const int env_halfb = getenv("GGML_MM_SKINNY_HALFB") ? atoi(getenv("GGML_MM_SKINNY_HALFB")) : 0;
-    if (!env_halfb || op->src[1]->type != GGML_TYPE_F32) {
+    return env_halfb;
+}
+static bool ggml_metal_mul_mat_skinny_halfb(const ggml_tensor * op) {
+    const int env_halfb = ggml_metal_mul_mat_skinny_halfb_mode();
+    if (env_halfb != 2 || op->src[1]->type != GGML_TYPE_F32) {
         return false;
     }
     static const int env_mm_skinny_gen = getenv("GGML_MM_SKINNY_GEN") ? atoi(getenv("GGML_MM_SKINNY_GEN")) : 0;
@@ -4188,14 +4195,32 @@ static int ggml_metal_op_mul_mat_impl(ggml_metal_op_t ctx, int idx, ggml_tensor 
             ggml_metal_op_mul_mat_try_repack_q4_0(ctx, op, bid_src0, nb01_eff, &repack_soa);
 
         const bool use_n16 = env_skinny_n16 && repack_soa && ne11 > 8 && ne11 <= 16;
-        // GGML_MM_SKINNY_HALFB=1: the generic tile reads the half activation copy (see ggml_metal_mul_mat_skinny_halfb)
-        const bool halfb = generic_skinny && !repack_soa && ggml_metal_mul_mat_skinny_halfb(op);
+        // GGML_MM_SKINNY_HALFB: the generic tile reads the half activations - =1 from src1's f16 twin when the producer wrote
+        // one (ggml_metal_f16_twin_src; nothing encoded here), =2 from a cast into the scratch (ggml_metal_mul_mat_skinny_halfb)
+        const ggml_tensor * halfb_twin = (generic_skinny && !repack_soa && ggml_metal_mul_mat_skinny_halfb_mode() == 1 && op->src[1]->type == GGML_TYPE_F32)
+                                         ? ggml_metal_f16_twin_src(op->src[1]) : nullptr;
+        const bool halfb_cast = generic_skinny && !repack_soa && ggml_metal_mul_mat_skinny_halfb(op);
+        {   // GGML_MM_SKINNY_HALFB_DEBUG=1: why the twin is or is not found (once per distinct src1 producer)
+            static const bool dbg = getenv("GGML_MM_SKINNY_HALFB_DEBUG") != nullptr;
+            if (dbg && generic_skinny) {
+                const ggml_tensor * s1 = op->src[1]; const ggml_tensor * p = s1->view_src ? s1->view_src : s1;
+                GGML_LOG_WARN("halfb: %s src1=%s op=%s view_src=%s p.op=%s p.src0.op=%s cont=%d ne=[%lld,%lld,%lld,%lld] twin(p)=%zu twin_src=%s\n",
+                    op->name, s1->name, ggml_op_name(s1->op), s1->view_src ? s1->view_src->name : "-", ggml_op_name(p->op),
+                    p->src[0] ? ggml_op_name(p->src[0]->op) : "-", (int) ggml_is_contiguous(s1), (long long) s1->ne[0], (long long) s1->ne[1], (long long) s1->ne[2], (long long) s1->ne[3],
+                    ggml_metal_op_extra_f16_twin(p), halfb_twin ? halfb_twin->name : "null");
+            }
+        }
+        const bool halfb = halfb_twin != nullptr || halfb_cast;
         auto pipeline = use_n16    ? ggml_metal_library_get_pipeline_mul_mm_skinny_soa_n16(lib, op) :
                         repack_soa ? ggml_metal_library_get_pipeline_mul_mm_skinny_soa(lib, op) :
                                      ggml_metal_library_get_pipeline_mul_mm_skinny(lib, op, use_di, halfb);
 
         ggml_metal_buffer_id bid_src1 = ggml_metal_get_buffer_id(op->src[1]);
-        if (halfb) {
+        if (halfb_twin) {
+            // the twin's range is the producer's allocation: the encode loop's hazard check already ordered us behind it
+            bid_src1 = ggml_metal_get_buffer_id(halfb_twin);
+            bid_src1.offs += ggml_nbytes(halfb_twin);
+        } else if (halfb_cast) {
             assert(ggml_metal_op_mul_mat_extra_src1f16(op) != 0);
             ggml_metal_buffer_id bid_y16 = ggml_metal_get_buffer_id(op);
             bid_y16.offs += ggml_nbytes(op);

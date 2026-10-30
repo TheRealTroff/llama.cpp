@@ -76,7 +76,10 @@ sha = hashlib.sha1(d.get("content","").encode()).hexdigest()[:12]
 prof = {}
 for ln in open(sys.argv[3], errors="replace"):
     m = re.search(r'spec-prof (\S+)\s+n =\s+(\d+), avg =\s+([\d.]+) ms', ln)
-    if m: prof[m.group(1)] = (int(m.group(2)), float(m.group(3)))
+    # keep the summary with the most rounds: the server prints a mid-run window (n ~ 38) and a final one (n ~ 69) and the
+    # kill after the response races the final print, so "last line" compared different windows across runs (2026-11-01:
+    # fast runs lost the final summary and read 4% apart from slow ones on the same arm); t/s from the JSON is the clean number
+    if m and int(m.group(2)) >= prof.get(m.group(1), (0, 0.0))[0]: prof[m.group(1)] = (int(m.group(2)), float(m.group(3)))
 # loop_body's average carries the prefill batch on a long prompt (~0.9 s over 65 rounds on the 8K benchprompt);
 # the round is the GPU wait (dec_syn_tg) plus the drafter call, both per-round timers
 ds = prof.get("dec_syn_tg", (0, 0.0)); dc = prof.get("draft_call", (0, 0.0)); de = prof.get("decode", (0, 0.0))
