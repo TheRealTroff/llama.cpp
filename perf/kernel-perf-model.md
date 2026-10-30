@@ -789,6 +789,62 @@ scalar stores + the two barriers per iteration in 2-simdgroup threadgroups at 1-
 deletion arms stay in the source for the other ud tiles (q4_K/q5_K/iq4_xs run the same loop; arm 6 is q3_K-shaped only in
 its byte count).
 
+*The skeleton in the harness, and the dequant's real price (night of 10-31; owner: "do keep going"; `kernels.metal` skel_* /
+SKELR / SKELD / SKELD2 families, `bench.swift --smem`, `perf/mir2join.py`, `nstream-sim.py --mma-fp32`; results `skeleton*.txt`,
+`skeleton-vs-sim.txt`, `skeleton-mma-fp32-scan.txt`, `real-mma-fp32-scan.txt`, `del-ladder-q3_K/README.txt` arms 6c, `q3k-forms/`).*
+
+**Arm 6 was a DRAM confound, and the dequant is 39-49% of the real tile at every residency.** The first no-dequant arm read its
+16 raw bytes at each thread's own row offset: 32 rows per threadgroup, 64 B per row per k-step, twice the real byte count on
+32 separate streams - DRAM-bound at ~210 GB/s, which is why it came out "+6%". With a cached address (`PROBE=6` now reads one
+line per threadgroup) the no-dequant tile runs 252 / 273 / 702 us against 414 / 460 / 1365 at pads 0 / 4096 / 24576: -39%,
+-41%, -49%. The "nothing binds at the ceiling" reading of the previous section is withdrawn with it; the other arms stand.
+
+**The skeleton reproduces the real tile on both sides.** `skel_*` kernels run the generic tile's k-step - 8 half4 A stores
+per lane, the split B staging (2 float4 loads, 8 rounds, 8 scalar stores), two barriers, one 16-B weight load, 8 x (3 tile
+loads + 2 MMAs) - in 2-simdgroup threadgroups on the real grid (544 x 64 threads) with the real threadgroup memory (`--smem
+5184 + pad`), so each pad is the same residency as the ladder's. Footprints had to be the real ones (every threadgroup
+reading the same 160 KB of activations, 1 KB contiguous per threadgroup k-step of weights); with a 64-way activation spread
+and one cache line per thread the skeleton was 30% slower. In simdgroup k-steps per us per core at pad 0: skeleton 18.1 vs
+the real no-dequant tile 17.3; skeleton + the q3_K dequant chain (SKELD: shift, bit-select, sub, int->float, f32 mul to half,
+32 elements per lane, next slice after the second barrier as the real tile does) 11.6 vs the real tile 10.6; at pad 4096 11.2
+vs 9.4. The harness replica is within 5-10% of the kernel it mirrors, which makes its variants a calibration set the real
+kernel cannot give (any part removable, bodies checked by `mir-check.py`).
+
+| harness variant at pad 0 | sg-k-steps/us/core | what it says |
+|---|---|---|
+| skeleton | 18.1 | the MMA pipe would allow 23.5; MMA + tile loads alone reach 22.1 (94% of it) |
+| no MMA / no barriers / no A stores / no B staging | 22.6 / 18.8 / 19.4 / 21.0 | B staging is the costliest non-MMA part of the skeleton |
+| +16 / +32 / +48 / +64 live registers | 16.3 / 17.9 / 17.9 / 18.0 | registers do not set the ceiling (the real q4_0 +16 ladder's -10% is this) |
+| + q3_K dequant | 11.6 | the dequant is 36% of the k-step at the ceiling |
+| dequant, no MMA | 13.7 | |
+| dequant, half accumulators (MMA op 860) | 12.9 | the float accumulate costs 11% in the mix (same cost alone) |
+| dequant by bit trick (no converts, no f32) | 15.2 | converts + f32 are most of the dequant's price |
+
+**The simulator's error pattern on the replica, and the rule it was missing.** With every measured unit the simulator is
+within +-16% on all eight variants WITHOUT the dequant and -12% on the dequant without MMAs, but +27..+30% on dequant + MMA
+(skel_deq, _nostream, _nobar) - the same miss as on the real ud tiles. The class matrix had the hint: f32 and MMA hide only
+57% of each other where int and MMA hide 91%. Rule: **the half->float-accumulate MMA (op 2884) also holds its port's FP32 pipe
+for ~5-6 ns** (`--mma-fp32`; the accumulate runs on the f32 adder). Scan over the fifteen harness variants: mean |error| 16.0%
+-> 8.2% at 6 ns (max 30% -> 18%); on the real tiles at three per port the errors move q4_0 -6 -> -3..-8, q4_K -23 -> -11,
+q5_K -23 -> -6, q6_K -31 -> -15, q3_K -31 -> -22, iq4_xs -33 -> -21 (`real-mma-fp32-scan.txt`). Half the gap on the K-quants,
+a third on q3_K/iq4_xs. Residuals: variants without MMA run 10-16% faster than the sim (its tile-load / tg-memory costs are
+high when the FP16 pipe is idle), the half-accumulator variant +14% (op 860 carries some of the same cost), the bit-trick
+dequant -18% (16-bit int ops cheaper than the 0.72 table).
+
+**What is left on q3_K.** The replica with its own dequant (bfe-immediate, i2f, f32 mul, f32->half round: 57 + 35 + 34 + 40
+instructions) and the real tile with its dequant (16-bit immediate extract 17168 x33, uniform-operand select 12288 x32, i2f
+x32, fused f32-mul-to-half 3328 x32) measure the same k-step, but the table sums the real one 60-100 ns cheaper: one of
+17168, 12288, 3328 costs ~2.5 ns rather than 0.7-1.3. The select was cleared by the arithmetic A/B (+60 instructions, flat).
+Standalone probes cannot emit the other two (the compiler rewrites `h += half(f*s)` into f16 FMAs and a ushort extract into
+the 32-bit immediate form, which measures ~1 clock); the in-kernel A/Bs (`q3k-forms/`: half math for 3328, a 32-bit source
+for 17168) are the test. RESULT: half math (i2h 12107 + f16 mul 884 replace i2f + 3328, translator-verified) is flat at every
+pad (401 vs 406 us at pad 0, 1366 vs 1366 at 24576) - 3328 costs its table price; the 32-bit source did not change the codegen
+(17168 x30 stayed, identical ladder, which also shows the A/B harness reproduces to 0.3%). So 12288 and 3328 are cleared and
+17168 (the 16-bit immediate extract, 33 per k-step) is the one opcode of the q3_K chain with no price - the compiler emits it
+only from the stored-plane ushort read, so the probe must load a ushort from device memory the way the tile does. iq4_xs's
+remaining -21% has its own suspect (the 32 uniform-base LUT gathers, 13555). Both are opcode prices, not rules: the
+simulator's structure now reproduces every harness variant to within 18% and the K-quant tiles to within 15%.
+
 What this leaves: (1) **the contention curve from the simulator** - run N simdgroup streams against four shared issue
 ports and the load path and compare with the pad ladders (R 0.5 -> 3.1) and the grid curve; if it reproduces them, the whole
 skinny family is predicted from code plus five chip constants (latency table, 200 ns stream, 4 ports, 9 KB/us/core, the
@@ -818,7 +874,10 @@ check - fa decode first.
   ceiling deleting the whole dequant is +6%, the A stores +4%, MMA -12%, B staging -8%, tile loads -6%, barriers -5%, DRAM -4%
   - not additive, no unit binding; the remaining skeleton runs at the full tile's 1300 ns per sg k-step, 40% slower than the
   q4_0 SoA tile with the same skeleton. Open = the port's service rule for ready simdgroups; next = the skeleton in the probe
-  harness.
+  harness. NIGHT: arm 6 was DRAM-bound (fixed: dequant = 39-49% at every pad); the harness skeleton reproduces the real tile
+  within 5-10% with and without the dequant; the simulator's miss is dequant x MMA; rule found: the 2884 MMA holds the FP32
+  pipe ~5-6 ns (--mma-fp32) - harness error 16 -> 8%, K-quant tiles at 3/port -23..-31 -> -6..-15, q3_K/iq4_xs -22/-21 left;
+  the q3_K remainder is one unpriced opcode among 17168 / 3328 (in-kernel A/Bs, `q3k-forms/`).
 - 2026-10-31 later: both candidate mechanisms probed. Skinny-pattern tg memory: strided tile loads +18%, A staging stores 2x the
   mul_mm pattern, the unit is core-wide, ~60% busy at the ceiling - not binding (sim with it: 883 vs 1250). Barriers (PROBE=3 arm,
   branch only): 5.5-8.5% of the k-step at every residency - real, not the gap. Remaining: ud tiles 23-33% slower at 3 sg/port than

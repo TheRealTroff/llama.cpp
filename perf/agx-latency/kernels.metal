@@ -1285,3 +1285,179 @@ kernel void op_q3chain_ctl(device const uint * d [[buffer(0)]], device float * o
     float d0 = as_type<float>(d[t+4] & 0x3F7FFFFFu), d1 = d0 * 1.5f, d2 = d0 * 2.5f, d3 = d0 * 3.5f, d4 = d0 * 4.5f, d5 = d0 * 5.5f, d6 = d0 * 6.5f, d7 = d0 * 7.5f; half a0 = half(d[t+5] & 0xFFu), a1 = a0 + 1.0h, a2 = a0 + 2.0h, a3 = a0 + 3.0h, a4 = a0 + 4.0h, a5 = a0 + 5.0h, a6 = a0 + 6.0h, a7 = a0 + 7.0h;
     for (uint i = 0; i < n; ++i) { uint tt = c + i; a0 += half(d0 * float(int((l0 >> 0) & 3u) - int(h0 & 4u))); a1 += half(d1 * float(int((l1 >> 0) & 3u) - int(h1 & 4u))); a2 += half(d2 * float(int((l2 >> 0) & 3u) - int(h2 & 4u))); a3 += half(d3 * float(int((l3 >> 0) & 3u) - int(h3 & 4u))); a4 += half(d4 * float(int((l4 >> 0) & 3u) - int(h4 & 4u))); a5 += half(d5 * float(int((l5 >> 0) & 3u) - int(h5 & 4u))); a6 += half(d6 * float(int((l6 >> 0) & 3u) - int(h6 & 4u))); a7 += half(d7 * float(int((l7 >> 0) & 3u) - int(h7 & 4u))); h0 ^= tt; h1 ^= tt; h2 ^= tt; h3 ^= tt; h4 ^= tt; h5 ^= tt; h6 ^= tt; h7 ^= tt; l0 ^= tt; l1 ^= tt; l2 ^= tt; l3 ^= tt; l4 ^= tt; l5 ^= tt; l6 ^= tt; l7 ^= tt; a0 += half(d0 * float(int((l0 >> 2) & 3u) - int(h0 & 8u))); a1 += half(d1 * float(int((l1 >> 2) & 3u) - int(h1 & 8u))); a2 += half(d2 * float(int((l2 >> 2) & 3u) - int(h2 & 8u))); a3 += half(d3 * float(int((l3 >> 2) & 3u) - int(h3 & 8u))); a4 += half(d4 * float(int((l4 >> 2) & 3u) - int(h4 & 8u))); a5 += half(d5 * float(int((l5 >> 2) & 3u) - int(h5 & 8u))); a6 += half(d6 * float(int((l6 >> 2) & 3u) - int(h6 & 8u))); a7 += half(d7 * float(int((l7 >> 2) & 3u) - int(h7 & 8u))); h0 ^= tt; h1 ^= tt; h2 ^= tt; h3 ^= tt; h4 ^= tt; h5 ^= tt; h6 ^= tt; h7 ^= tt; l0 ^= tt; l1 ^= tt; l2 ^= tt; l3 ^= tt; l4 ^= tt; l5 ^= tt; l6 ^= tt; l7 ^= tt; a0 += half(d0 * float(int((l0 >> 4) & 3u) - int(h0 & 16u))); a1 += half(d1 * float(int((l1 >> 4) & 3u) - int(h1 & 16u))); a2 += half(d2 * float(int((l2 >> 4) & 3u) - int(h2 & 16u))); a3 += half(d3 * float(int((l3 >> 4) & 3u) - int(h3 & 16u))); a4 += half(d4 * float(int((l4 >> 4) & 3u) - int(h4 & 16u))); a5 += half(d5 * float(int((l5 >> 4) & 3u) - int(h5 & 16u))); a6 += half(d6 * float(int((l6 >> 4) & 3u) - int(h6 & 16u))); a7 += half(d7 * float(int((l7 >> 4) & 3u) - int(h7 & 16u))); h0 ^= tt; h1 ^= tt; h2 ^= tt; h3 ^= tt; h4 ^= tt; h5 ^= tt; h6 ^= tt; h7 ^= tt; l0 ^= tt; l1 ^= tt; l2 ^= tt; l3 ^= tt; l4 ^= tt; l5 ^= tt; l6 ^= tt; l7 ^= tt; a0 += half(d0 * float(int((l0 >> 6) & 3u) - int(h0 & 32u))); a1 += half(d1 * float(int((l1 >> 6) & 3u) - int(h1 & 32u))); a2 += half(d2 * float(int((l2 >> 6) & 3u) - int(h2 & 32u))); a3 += half(d3 * float(int((l3 >> 6) & 3u) - int(h3 & 32u))); a4 += half(d4 * float(int((l4 >> 6) & 3u) - int(h4 & 32u))); a5 += half(d5 * float(int((l5 >> 6) & 3u) - int(h5 & 32u))); a6 += half(d6 * float(int((l6 >> 6) & 3u) - int(h6 & 32u))); a7 += half(d7 * float(int((l7 >> 6) & 3u) - int(h7 & 32u))); h0 ^= tt; h1 ^= tt; h2 ^= tt; h3 ^= tt; h4 ^= tt; h5 ^= tt; h6 ^= tt; h7 ^= tt; l0 ^= tt; l1 ^= tt; l2 ^= tt; l3 ^= tt; l4 ^= tt; l5 ^= tt; l6 ^= tt; l7 ^= tt; }
     o[t] = float(a0 + a1 + a2 + a3 + a4 + a5 + a6 + a7) + float(y0); }
+
+// ---- the skinny tile's skeleton (perf/kernel-perf-model.md, 2026-10-31 evening): the generic tile's k-step with the dequant replaced by
+// raw bytes (= GGML_MM_SKINNY_PROBE=6), 64 threads = 2 simdgroups per threadgroup, run with the real grid (--tg 544 --threads 64) and the
+// real threadgroup memory (--smem 5184 + pad) so the residency ladder is the same as the real kernel's. Per iteration: barrier, 8 half4 A
+// stores per lane (64-B lane stride), B staging (2 float4 device loads, 8 f32->half rounds, 8 scalar stores at stride 8), barrier, one
+// 16-B weight load (prefetch of the next slice, streamed through the data ring), 8 x (3 tile loads + 2 MMAs). Flags (0/1 literals)
+// delete one part each: MMA (tiles consumed by f16 adds instead), BAR, TLD (tiles loaded once), AST (A stores -> adds), BST, STREAM
+// (the raw bytes from registers instead of a load).
+#define SKEL(NAME, MMA, BAR, TLD, AST, BST, STREAM) SKELR(NAME, MMA, BAR, TLD, AST, BST, STREAM, 0)
+// REG > 0: the real kernel's register ladder (GGML_MM_SKINNY_REGPAD): REG floats live across the loop, touched once per 1024 iterations
+#define SKELR(NAME, MMA, BAR, TLD, AST, BST, STREAM, REG) \
+kernel void NAME (device const uint * d [[buffer(0)]], device float * o [[buffer(1)]], constant uint & n [[buffer(2)]], uint t [[thread_position_in_grid]], uint tid [[thread_position_in_threadgroup]], uint tpg [[threads_per_threadgroup]], uint sg [[simdgroup_index_in_threadgroup]], constant uint & nbytes [[buffer(3)]], threadgroup half * sm [[threadgroup(0)]]) { \
+    threadgroup half * sa = sm; threadgroup half * sb = sm + 32*64; \
+    const uint tg = t / 64; const short ar = tid/2, il0 = tid%2; const short bcol = tid/8, bsx = tid%8; \
+    device const float4 * y4 = (device const float4 *)((device const char *) d + (bcol * 5120 * 4 + bsx * 32));   /* the real tile: every threadgroup reads the same 8 columns (160 KB) */ \
+    device const char * xrow = (device const char *) d + 262144 + (tg * 81920) % (nbytes - 524288) + tid * 16;   /* the real stream: 1 KB contiguous per threadgroup k-step, 80 KB per threadgroup row block */ \
+    simdgroup_float8x8 mc0 = make_filled_simdgroup_matrix<float, 8>(0.f), mc1 = make_filled_simdgroup_matrix<float, 8>(0.f); \
+    simdgroup_half8x8 ma0, ma1, mb; half acc = 0.0h; \
+    uint4 raw = *(device const uint4 *) xrow; \
+    float rp[64]; for (short j = 0; j < REG; ++j) { rp[j] = float(d[(t + 7 * j) & 1023]); } \
+    for (uint i = 0; i < n; ++i) { \
+        if (REG && (i & 1023) == 0) { for (short j = 0; j < REG; ++j) { rp[j] += float(raw.x); } } \
+        if (BAR) threadgroup_barrier(mem_flags::mem_threadgroup); \
+        if (AST) { threadgroup half4 * pa = (threadgroup half4 *)(sa + ar*64 + 32*il0); \
+            pa[0] = as_type<half4>(raw.xy); pa[1] = as_type<half4>(raw.zw); pa[2] = as_type<half4>(raw.xy); pa[3] = as_type<half4>(raw.zw); \
+            pa[4] = as_type<half4>(raw.xy); pa[5] = as_type<half4>(raw.zw); pa[6] = as_type<half4>(raw.xy); pa[7] = as_type<half4>(raw.zw); } \
+        else { const half4 s_ = as_type<half4>(raw.xy) + as_type<half4>(raw.zw); acc += s_[0] + s_[1] + s_[2] + s_[3]; } \
+        if (BST) { const float4 v0 = y4[0]; const float4 v1 = y4[1]; threadgroup half * sbp = sb + (8*bsx)*8 + tid/8; \
+            sbp[0*8] = (half) v0.x; sbp[1*8] = (half) v0.y; sbp[2*8] = (half) v0.z; sbp[3*8] = (half) v0.w; \
+            sbp[4*8] = (half) v1.x; sbp[5*8] = (half) v1.y; sbp[6*8] = (half) v1.z; sbp[7*8] = (half) v1.w; y4 += 16; } \
+        if (BAR) threadgroup_barrier(mem_flags::mem_threadgroup); \
+        if (STREAM) { raw = *(device const uint4 *)(xrow + ((i + 1) % 80) * 1024); } else { raw.x += i; } \
+        threadgroup const half * lsma = sa + 16*sg*64; \
+        for (short ik = 0; ik < 8; ik++) { \
+            simdgroup_barrier(mem_flags::mem_none); \
+            if (TLD || i == 0) { simdgroup_load(ma0, lsma + 8*ik, 64, 0, false); simdgroup_load(ma1, lsma + 8*64 + 8*ik, 64, 0, false); simdgroup_load(mb, sb + 8*ik*8, 8, 0, false); } \
+            simdgroup_barrier(mem_flags::mem_none); \
+            if (MMA) { simdgroup_multiply_accumulate(mc0, ma0, mb, mc0); simdgroup_multiply_accumulate(mc1, ma1, mb, mc1); } \
+            else { acc += ma0.thread_elements()[0] + ma0.thread_elements()[1] + ma1.thread_elements()[0] + ma1.thread_elements()[1] + mb.thread_elements()[0] + mb.thread_elements()[1]; } \
+        } \
+    } \
+    float rs = 0.f; for (short j = 0; j < REG; ++j) { rs += rp[j]; } \
+    o[t] = mc0.thread_elements()[0] + mc0.thread_elements()[1] + mc1.thread_elements()[0] + mc1.thread_elements()[1] + float(acc) + rs; }
+SKEL(skel_full,     1, 1, 1, 1, 1, 1)
+SKEL(skel_nostream, 1, 1, 1, 1, 1, 0)
+SKEL(skel_nomma,    0, 1, 1, 1, 1, 1)
+SKEL(skel_nobar,    1, 0, 1, 1, 1, 1)
+SKEL(skel_notld,    1, 1, 0, 1, 1, 1)
+SKEL(skel_noast,    1, 1, 1, 0, 1, 1)
+SKEL(skel_nobst,    1, 1, 1, 1, 0, 1)
+SKEL(skel_mmaonly,  1, 0, 1, 0, 0, 0)
+SKEL(skel_nomma_nobar, 0, 0, 1, 1, 1, 1)
+SKELR(skel_r16, 1, 1, 1, 1, 1, 1, 16)
+SKELR(skel_r32, 1, 1, 1, 1, 1, 1, 32)
+SKELR(skel_r48, 1, 1, 1, 1, 1, 1, 48)
+SKELR(skel_r64, 1, 1, 1, 1, 1, 1, 64)
+
+// ---- the skeleton plus the q3_K dequant (32 elements per lane per k-step from the 16 raw bytes: shift, bit-select, sub, int->float,
+// f32 mul to half; the next slice dequantized after the second barrier and stored at the top of the next iteration, as the real tile does)
+#define Q3DEQ(W, LO, HI, D) { W[0] = (D) * float(int(((LO) >> 0) & 3) - (((HI) >> 0) & 1 ? 0 : 4)); W[1] = (D) * float(int(((LO) >> 2) & 3) - (((HI) >> 1) & 1 ? 0 : 4)); \
+    W[2] = (D) * float(int(((LO) >> 4) & 3) - (((HI) >> 2) & 1 ? 0 : 4)); W[3] = (D) * float(int(((LO) >> 6) & 3) - (((HI) >> 3) & 1 ? 0 : 4)); \
+    W[4] = (D) * float(int(((LO) >> 8) & 3) - (((HI) >> 4) & 1 ? 0 : 4)); W[5] = (D) * float(int(((LO) >> 10) & 3) - (((HI) >> 5) & 1 ? 0 : 4)); \
+    W[6] = (D) * float(int(((LO) >> 12) & 3) - (((HI) >> 6) & 1 ? 0 : 4)); W[7] = (D) * float(int(((LO) >> 14) & 3) - (((HI) >> 7) & 1 ? 0 : 4)); }
+#define SKELD(NAME, MMA, BAR, STREAM) \
+kernel void NAME (device const uint * d [[buffer(0)]], device float * o [[buffer(1)]], constant uint & n [[buffer(2)]], uint t [[thread_position_in_grid]], uint tid [[thread_position_in_threadgroup]], uint tpg [[threads_per_threadgroup]], uint sg [[simdgroup_index_in_threadgroup]], constant uint & nbytes [[buffer(3)]], threadgroup half * sm [[threadgroup(0)]]) { \
+    threadgroup half * sa = sm; threadgroup half * sb = sm + 32*64; \
+    const uint tg = t / 64; const short ar = tid/2, il0 = tid%2; const short bcol = tid/8, bsx = tid%8; \
+    device const float4 * y4 = (device const float4 *)((device const char *) d + (bcol * 5120 * 4 + bsx * 32)); \
+    device const char * xrow = (device const char *) d + 262144 + (tg * 81920) % (nbytes - 524288) + tid * 16; \
+    simdgroup_float8x8 mc0 = make_filled_simdgroup_matrix<float, 8>(0.f), mc1 = make_filled_simdgroup_matrix<float, 8>(0.f); \
+    simdgroup_half8x8 ma0, ma1, mb; half acc = 0.0h; \
+    uint4 raw = *(device const uint4 *) xrow; half4 ta[8]; \
+    { float w[8]; const float dd = as_type<float>((raw.z & 0x007FFFFFu) | 0x3C000000u); \
+      Q3DEQ(w, raw.x & 0xFFFFu, raw.w, dd); ta[0] = half4(w[0], w[1], w[2], w[3]); ta[1] = half4(w[4], w[5], w[6], w[7]); \
+      Q3DEQ(w, raw.x >> 16, raw.w >> 8, dd); ta[2] = half4(w[0], w[1], w[2], w[3]); ta[3] = half4(w[4], w[5], w[6], w[7]); \
+      Q3DEQ(w, raw.y & 0xFFFFu, raw.w >> 16, dd); ta[4] = half4(w[0], w[1], w[2], w[3]); ta[5] = half4(w[4], w[5], w[6], w[7]); \
+      Q3DEQ(w, raw.y >> 16, raw.w >> 24, dd); ta[6] = half4(w[0], w[1], w[2], w[3]); ta[7] = half4(w[4], w[5], w[6], w[7]); } \
+    for (uint i = 0; i < n; ++i) { \
+        if (BAR) threadgroup_barrier(mem_flags::mem_threadgroup); \
+        { threadgroup half4 * pa = (threadgroup half4 *)(sa + ar*64 + 32*il0); \
+          pa[0] = ta[0]; pa[1] = ta[1]; pa[2] = ta[2]; pa[3] = ta[3]; pa[4] = ta[4]; pa[5] = ta[5]; pa[6] = ta[6]; pa[7] = ta[7]; } \
+        { const float4 v0 = y4[0]; const float4 v1 = y4[1]; threadgroup half * sbp = sb + (8*bsx)*8 + tid/8; \
+          sbp[0*8] = (half) v0.x; sbp[1*8] = (half) v0.y; sbp[2*8] = (half) v0.z; sbp[3*8] = (half) v0.w; \
+          sbp[4*8] = (half) v1.x; sbp[5*8] = (half) v1.y; sbp[6*8] = (half) v1.z; sbp[7*8] = (half) v1.w; y4 += 16; } \
+        if (BAR) threadgroup_barrier(mem_flags::mem_threadgroup); \
+        if (STREAM) { raw = *(device const uint4 *)(xrow + ((i + 1) % 80) * 1024); } else { raw.x += i; raw.w ^= i; } \
+        { float w[8]; const float dd = as_type<float>((raw.z & 0x007FFFFFu) | 0x3C000000u); \
+          Q3DEQ(w, raw.x & 0xFFFFu, raw.w, dd); ta[0] = half4(w[0], w[1], w[2], w[3]); ta[1] = half4(w[4], w[5], w[6], w[7]); \
+          Q3DEQ(w, raw.x >> 16, raw.w >> 8, dd); ta[2] = half4(w[0], w[1], w[2], w[3]); ta[3] = half4(w[4], w[5], w[6], w[7]); \
+          Q3DEQ(w, raw.y & 0xFFFFu, raw.w >> 16, dd); ta[4] = half4(w[0], w[1], w[2], w[3]); ta[5] = half4(w[4], w[5], w[6], w[7]); \
+          Q3DEQ(w, raw.y >> 16, raw.w >> 24, dd); ta[6] = half4(w[0], w[1], w[2], w[3]); ta[7] = half4(w[4], w[5], w[6], w[7]); } \
+        threadgroup const half * lsma = sa + 16*sg*64; \
+        for (short ik = 0; ik < 8; ik++) { \
+            simdgroup_barrier(mem_flags::mem_none); \
+            simdgroup_load(ma0, lsma + 8*ik, 64, 0, false); simdgroup_load(ma1, lsma + 8*64 + 8*ik, 64, 0, false); simdgroup_load(mb, sb + 8*ik*8, 8, 0, false); \
+            simdgroup_barrier(mem_flags::mem_none); \
+            if (MMA) { simdgroup_multiply_accumulate(mc0, ma0, mb, mc0); simdgroup_multiply_accumulate(mc1, ma1, mb, mc1); } \
+            else { acc += ma0.thread_elements()[0] + ma0.thread_elements()[1] + ma1.thread_elements()[0] + ma1.thread_elements()[1] + mb.thread_elements()[0] + mb.thread_elements()[1]; } \
+        } \
+    } \
+    o[t] = mc0.thread_elements()[0] + mc0.thread_elements()[1] + mc1.thread_elements()[0] + mc1.thread_elements()[1] + float(acc); }
+SKELD(skel_deq,          1, 1, 1)
+SKELD(skel_deq_nostream, 1, 1, 0)
+SKELD(skel_deq_nomma,    0, 1, 1)
+SKELD(skel_deq_nobar,    1, 0, 1)
+
+// int->half without the convert unit: 1024 + q is exact in half, so (0x6400 | (q & 7)) - 1028 = q - 4; then one f16 mul by the scale
+#define Q3H(LO, HI, I, D) ((as_type<half>(ushort(0x6400u | ((((LO) >> (2*(I))) & 3u) | ((((HI) >> (I)) & 1u) << 2)))) - 1028.0h) * (D))
+#define Q3DEQH(TA, TB, LO, HI, D) { TA = half4(Q3H(LO, HI, 0, D), Q3H(LO, HI, 1, D), Q3H(LO, HI, 2, D), Q3H(LO, HI, 3, D)); TB = half4(Q3H(LO, HI, 4, D), Q3H(LO, HI, 5, D), Q3H(LO, HI, 6, D), Q3H(LO, HI, 7, D)); }
+#define SKELD2(NAME, MMA, BAR, STREAM, ACC_T, NOCVT) \
+kernel void NAME (device const uint * d [[buffer(0)]], device float * o [[buffer(1)]], constant uint & n [[buffer(2)]], uint t [[thread_position_in_grid]], uint tid [[thread_position_in_threadgroup]], uint tpg [[threads_per_threadgroup]], uint sg [[simdgroup_index_in_threadgroup]], constant uint & nbytes [[buffer(3)]], threadgroup half * sm [[threadgroup(0)]]) { \
+    threadgroup half * sa = sm; threadgroup half * sb = sm + 32*64; \
+    const uint tg = t / 64; const short ar = tid/2, il0 = tid%2; const short bcol = tid/8, bsx = tid%8; \
+    device const float4 * y4 = (device const float4 *)((device const char *) d + (bcol * 5120 * 4 + bsx * 32)); \
+    device const char * xrow = (device const char *) d + 262144 + (tg * 81920) % (nbytes - 524288) + tid * 16; \
+    simdgroup_matrix<ACC_T, 8, 8> mc0 = make_filled_simdgroup_matrix<ACC_T, 8>((ACC_T) 0), mc1 = make_filled_simdgroup_matrix<ACC_T, 8>((ACC_T) 0); \
+    simdgroup_half8x8 ma0, ma1, mb; half acc = 0.0h; \
+    uint4 raw = *(device const uint4 *) xrow; half4 ta[8]; \
+    { float w[8]; const float dd = as_type<float>((raw.z & 0x007FFFFFu) | 0x3C000000u); \
+      Q3DEQ(w, raw.x & 0xFFFFu, raw.w, dd); ta[0] = half4(w[0], w[1], w[2], w[3]); ta[1] = half4(w[4], w[5], w[6], w[7]); \
+      Q3DEQ(w, raw.x >> 16, raw.w >> 8, dd); ta[2] = half4(w[0], w[1], w[2], w[3]); ta[3] = half4(w[4], w[5], w[6], w[7]); \
+      Q3DEQ(w, raw.y & 0xFFFFu, raw.w >> 16, dd); ta[4] = half4(w[0], w[1], w[2], w[3]); ta[5] = half4(w[4], w[5], w[6], w[7]); \
+      Q3DEQ(w, raw.y >> 16, raw.w >> 24, dd); ta[6] = half4(w[0], w[1], w[2], w[3]); ta[7] = half4(w[4], w[5], w[6], w[7]); } \
+    for (uint i = 0; i < n; ++i) { \
+        if (BAR) threadgroup_barrier(mem_flags::mem_threadgroup); \
+        { threadgroup half4 * pa = (threadgroup half4 *)(sa + ar*64 + 32*il0); \
+          pa[0] = ta[0]; pa[1] = ta[1]; pa[2] = ta[2]; pa[3] = ta[3]; pa[4] = ta[4]; pa[5] = ta[5]; pa[6] = ta[6]; pa[7] = ta[7]; } \
+        { const float4 v0 = y4[0]; const float4 v1 = y4[1]; threadgroup half * sbp = sb + (8*bsx)*8 + tid/8; \
+          sbp[0*8] = (half) v0.x; sbp[1*8] = (half) v0.y; sbp[2*8] = (half) v0.z; sbp[3*8] = (half) v0.w; \
+          sbp[4*8] = (half) v1.x; sbp[5*8] = (half) v1.y; sbp[6*8] = (half) v1.z; sbp[7*8] = (half) v1.w; y4 += 16; } \
+        if (BAR) threadgroup_barrier(mem_flags::mem_threadgroup); \
+        if (STREAM) { raw = *(device const uint4 *)(xrow + ((i + 1) % 80) * 1024); } else { raw.x += i; raw.w ^= i; } \
+        if (NOCVT) { const half dh = as_type<half>(ushort((raw.z & 0x03FFu) | 0x3C00u)); \
+          Q3DEQH(ta[0], ta[1], raw.x & 0xFFFFu, raw.w, dh); Q3DEQH(ta[2], ta[3], raw.x >> 16, raw.w >> 8, dh); \
+          Q3DEQH(ta[4], ta[5], raw.y & 0xFFFFu, raw.w >> 16, dh); Q3DEQH(ta[6], ta[7], raw.y >> 16, raw.w >> 24, dh); } \
+        else { float w[8]; const float dd = as_type<float>((raw.z & 0x007FFFFFu) | 0x3C000000u); \
+          Q3DEQ(w, raw.x & 0xFFFFu, raw.w, dd); ta[0] = half4(w[0], w[1], w[2], w[3]); ta[1] = half4(w[4], w[5], w[6], w[7]); \
+          Q3DEQ(w, raw.x >> 16, raw.w >> 8, dd); ta[2] = half4(w[0], w[1], w[2], w[3]); ta[3] = half4(w[4], w[5], w[6], w[7]); \
+          Q3DEQ(w, raw.y & 0xFFFFu, raw.w >> 16, dd); ta[4] = half4(w[0], w[1], w[2], w[3]); ta[5] = half4(w[4], w[5], w[6], w[7]); \
+          Q3DEQ(w, raw.y >> 16, raw.w >> 24, dd); ta[6] = half4(w[0], w[1], w[2], w[3]); ta[7] = half4(w[4], w[5], w[6], w[7]); } \
+        threadgroup const half * lsma = sa + 16*sg*64; \
+        for (short ik = 0; ik < 8; ik++) { \
+            simdgroup_barrier(mem_flags::mem_none); \
+            simdgroup_load(ma0, lsma + 8*ik, 64, 0, false); simdgroup_load(ma1, lsma + 8*64 + 8*ik, 64, 0, false); simdgroup_load(mb, sb + 8*ik*8, 8, 0, false); \
+            simdgroup_barrier(mem_flags::mem_none); \
+            if (MMA) { simdgroup_multiply_accumulate(mc0, ma0, mb, mc0); simdgroup_multiply_accumulate(mc1, ma1, mb, mc1); } \
+            else { acc += ma0.thread_elements()[0] + ma0.thread_elements()[1] + ma1.thread_elements()[0] + ma1.thread_elements()[1] + mb.thread_elements()[0] + mb.thread_elements()[1]; } \
+        } \
+    } \
+    o[t] = float(mc0.thread_elements()[0]) + float(mc0.thread_elements()[1]) + float(mc1.thread_elements()[0]) + float(mc1.thread_elements()[1]) + float(acc); }
+SKELD2(skel_deq_hacc,   1, 1, 1, half, 0)
+SKELD2(skel_deq_nocvt,  1, 1, 1, float, 1)
+SKELD2(skel_deq_nocvt_nomma, 0, 1, 1, float, 1)
+
+// fmul2h: f32 multiply written to half (opcode 3328 in the q3_K tile, 32 per k-step): h += half(f * s); 32 per iteration, operands rotate
+kernel void op_fmul2h(device const uint * d [[buffer(0)]], device float * o [[buffer(1)]], constant uint & n [[buffer(2)]], uint t [[thread_position_in_grid]], uint tid [[thread_position_in_threadgroup]], uint tpg [[threads_per_threadgroup]], uint sg [[simdgroup_index_in_threadgroup]], constant uint & nbytes [[buffer(3)]], threadgroup half * sm [[threadgroup(0)]]) {
+    float f0 = as_type<float>(d[t] & 0x3F7FFFFFu), f1 = f0 * 1.1f, f2 = f0 * 1.2f, f3 = f0 * 1.3f, f4 = f0 * 1.4f, f5 = f0 * 1.5f, f6 = f0 * 1.6f, f7 = f0 * 1.7f; const float s = as_type<float>(d[t+1] & 0x3F7FFFFFu); float c = as_type<float>(d[t+2] & 0x3F7FFFFFu);
+    half h0 = 0.0h, h1 = 0.0h, h2 = 0.0h, h3 = 0.0h, h4 = 0.0h, h5 = 0.0h, h6 = 0.0h, h7 = 0.0h;
+    for (uint i = 0; i < n; ++i) { c = as_type<float>(as_type<uint>(c) + i); h0 += half(f0 * s); h1 += half(f1 * s); h2 += half(f2 * s); h3 += half(f3 * s); h4 += half(f4 * s); h5 += half(f5 * s); h6 += half(f6 * s); h7 += half(f7 * s); f0 = as_type<float>(as_type<uint>(f0) ^ as_type<uint>(c)); f1 = as_type<float>(as_type<uint>(f1) ^ as_type<uint>(c)); f2 = as_type<float>(as_type<uint>(f2) ^ as_type<uint>(c)); f3 = as_type<float>(as_type<uint>(f3) ^ as_type<uint>(c)); f4 = as_type<float>(as_type<uint>(f4) ^ as_type<uint>(c)); f5 = as_type<float>(as_type<uint>(f5) ^ as_type<uint>(c)); f6 = as_type<float>(as_type<uint>(f6) ^ as_type<uint>(c)); f7 = as_type<float>(as_type<uint>(f7) ^ as_type<uint>(c)); h0 += half(f0 * s); h1 += half(f1 * s); h2 += half(f2 * s); h3 += half(f3 * s); h4 += half(f4 * s); h5 += half(f5 * s); h6 += half(f6 * s); h7 += half(f7 * s); f0 = as_type<float>(as_type<uint>(f0) ^ as_type<uint>(c)); f1 = as_type<float>(as_type<uint>(f1) ^ as_type<uint>(c)); f2 = as_type<float>(as_type<uint>(f2) ^ as_type<uint>(c)); f3 = as_type<float>(as_type<uint>(f3) ^ as_type<uint>(c)); f4 = as_type<float>(as_type<uint>(f4) ^ as_type<uint>(c)); f5 = as_type<float>(as_type<uint>(f5) ^ as_type<uint>(c)); f6 = as_type<float>(as_type<uint>(f6) ^ as_type<uint>(c)); f7 = as_type<float>(as_type<uint>(f7) ^ as_type<uint>(c)); h0 += half(f0 * s); h1 += half(f1 * s); h2 += half(f2 * s); h3 += half(f3 * s); h4 += half(f4 * s); h5 += half(f5 * s); h6 += half(f6 * s); h7 += half(f7 * s); f0 = as_type<float>(as_type<uint>(f0) ^ as_type<uint>(c)); f1 = as_type<float>(as_type<uint>(f1) ^ as_type<uint>(c)); f2 = as_type<float>(as_type<uint>(f2) ^ as_type<uint>(c)); f3 = as_type<float>(as_type<uint>(f3) ^ as_type<uint>(c)); f4 = as_type<float>(as_type<uint>(f4) ^ as_type<uint>(c)); f5 = as_type<float>(as_type<uint>(f5) ^ as_type<uint>(c)); f6 = as_type<float>(as_type<uint>(f6) ^ as_type<uint>(c)); f7 = as_type<float>(as_type<uint>(f7) ^ as_type<uint>(c)); h0 += half(f0 * s); h1 += half(f1 * s); h2 += half(f2 * s); h3 += half(f3 * s); h4 += half(f4 * s); h5 += half(f5 * s); h6 += half(f6 * s); h7 += half(f7 * s); f0 = as_type<float>(as_type<uint>(f0) ^ as_type<uint>(c)); f1 = as_type<float>(as_type<uint>(f1) ^ as_type<uint>(c)); f2 = as_type<float>(as_type<uint>(f2) ^ as_type<uint>(c)); f3 = as_type<float>(as_type<uint>(f3) ^ as_type<uint>(c)); f4 = as_type<float>(as_type<uint>(f4) ^ as_type<uint>(c)); f5 = as_type<float>(as_type<uint>(f5) ^ as_type<uint>(c)); f6 = as_type<float>(as_type<uint>(f6) ^ as_type<uint>(c)); f7 = as_type<float>(as_type<uint>(f7) ^ as_type<uint>(c)); }
+    o[t] = float(h0 + h1 + h2 + h3 + h4 + h5 + h6 + h7); }
+// fmul2h_ctl: the same body with float accumulators (f32 mul, no half destination)
+kernel void op_fmul2h_ctl(device const uint * d [[buffer(0)]], device float * o [[buffer(1)]], constant uint & n [[buffer(2)]], uint t [[thread_position_in_grid]], uint tid [[thread_position_in_threadgroup]], uint tpg [[threads_per_threadgroup]], uint sg [[simdgroup_index_in_threadgroup]], constant uint & nbytes [[buffer(3)]], threadgroup half * sm [[threadgroup(0)]]) {
+    float f0 = as_type<float>(d[t] & 0x3F7FFFFFu), f1 = f0 * 1.1f, f2 = f0 * 1.2f, f3 = f0 * 1.3f, f4 = f0 * 1.4f, f5 = f0 * 1.5f, f6 = f0 * 1.6f, f7 = f0 * 1.7f; const float s = as_type<float>(d[t+1] & 0x3F7FFFFFu); float c = as_type<float>(d[t+2] & 0x3F7FFFFFu);
+    float h0 = 0.f, h1 = 0.f, h2 = 0.f, h3 = 0.f, h4 = 0.f, h5 = 0.f, h6 = 0.f, h7 = 0.f;
+    for (uint i = 0; i < n; ++i) { c = as_type<float>(as_type<uint>(c) + i); h0 += (f0 * s); h1 += (f1 * s); h2 += (f2 * s); h3 += (f3 * s); h4 += (f4 * s); h5 += (f5 * s); h6 += (f6 * s); h7 += (f7 * s); f0 = as_type<float>(as_type<uint>(f0) ^ as_type<uint>(c)); f1 = as_type<float>(as_type<uint>(f1) ^ as_type<uint>(c)); f2 = as_type<float>(as_type<uint>(f2) ^ as_type<uint>(c)); f3 = as_type<float>(as_type<uint>(f3) ^ as_type<uint>(c)); f4 = as_type<float>(as_type<uint>(f4) ^ as_type<uint>(c)); f5 = as_type<float>(as_type<uint>(f5) ^ as_type<uint>(c)); f6 = as_type<float>(as_type<uint>(f6) ^ as_type<uint>(c)); f7 = as_type<float>(as_type<uint>(f7) ^ as_type<uint>(c)); h0 += (f0 * s); h1 += (f1 * s); h2 += (f2 * s); h3 += (f3 * s); h4 += (f4 * s); h5 += (f5 * s); h6 += (f6 * s); h7 += (f7 * s); f0 = as_type<float>(as_type<uint>(f0) ^ as_type<uint>(c)); f1 = as_type<float>(as_type<uint>(f1) ^ as_type<uint>(c)); f2 = as_type<float>(as_type<uint>(f2) ^ as_type<uint>(c)); f3 = as_type<float>(as_type<uint>(f3) ^ as_type<uint>(c)); f4 = as_type<float>(as_type<uint>(f4) ^ as_type<uint>(c)); f5 = as_type<float>(as_type<uint>(f5) ^ as_type<uint>(c)); f6 = as_type<float>(as_type<uint>(f6) ^ as_type<uint>(c)); f7 = as_type<float>(as_type<uint>(f7) ^ as_type<uint>(c)); h0 += (f0 * s); h1 += (f1 * s); h2 += (f2 * s); h3 += (f3 * s); h4 += (f4 * s); h5 += (f5 * s); h6 += (f6 * s); h7 += (f7 * s); f0 = as_type<float>(as_type<uint>(f0) ^ as_type<uint>(c)); f1 = as_type<float>(as_type<uint>(f1) ^ as_type<uint>(c)); f2 = as_type<float>(as_type<uint>(f2) ^ as_type<uint>(c)); f3 = as_type<float>(as_type<uint>(f3) ^ as_type<uint>(c)); f4 = as_type<float>(as_type<uint>(f4) ^ as_type<uint>(c)); f5 = as_type<float>(as_type<uint>(f5) ^ as_type<uint>(c)); f6 = as_type<float>(as_type<uint>(f6) ^ as_type<uint>(c)); f7 = as_type<float>(as_type<uint>(f7) ^ as_type<uint>(c)); h0 += (f0 * s); h1 += (f1 * s); h2 += (f2 * s); h3 += (f3 * s); h4 += (f4 * s); h5 += (f5 * s); h6 += (f6 * s); h7 += (f7 * s); f0 = as_type<float>(as_type<uint>(f0) ^ as_type<uint>(c)); f1 = as_type<float>(as_type<uint>(f1) ^ as_type<uint>(c)); f2 = as_type<float>(as_type<uint>(f2) ^ as_type<uint>(c)); f3 = as_type<float>(as_type<uint>(f3) ^ as_type<uint>(c)); f4 = as_type<float>(as_type<uint>(f4) ^ as_type<uint>(c)); f5 = as_type<float>(as_type<uint>(f5) ^ as_type<uint>(c)); f6 = as_type<float>(as_type<uint>(f6) ^ as_type<uint>(c)); f7 = as_type<float>(as_type<uint>(f7) ^ as_type<uint>(c)); }
+    o[t] = h0 + h1 + h2 + h3 + h4 + h5 + h6 + h7; }
+// bfe16: 2-bit field extract from a ushort at an immediate offset (opcode 17168 in the q3_K tile, 33 per k-step); 32 per iteration, sources rotate
+kernel void op_bfe16(device const uint * d [[buffer(0)]], device float * o [[buffer(1)]], constant uint & n [[buffer(2)]], uint t [[thread_position_in_grid]], uint tid [[thread_position_in_threadgroup]], uint tpg [[threads_per_threadgroup]], uint sg [[simdgroup_index_in_threadgroup]], constant uint & nbytes [[buffer(3)]], threadgroup half * sm [[threadgroup(0)]]) {
+    ushort l0 = ushort(d[t]), l1 = l0 + 11, l2 = l0 + 22, l3 = l0 + 33, l4 = l0 + 44, l5 = l0 + 55, l6 = l0 + 66, l7 = l0 + 77; uint y0 = d[t+1], y1 = y0 + 1, y2 = y0 + 2, y3 = y0 + 3, y4 = y0 + 4, y5 = y0 + 5, y6 = y0 + 6, y7 = y0 + 7; const uint c = d[t+2];
+    for (uint i = 0; i < n; ++i) { const uint tt = c + i; y0 += uint((l0 >> 0) & 3); y1 += uint((l1 >> 0) & 3); y2 += uint((l2 >> 0) & 3); y3 += uint((l3 >> 0) & 3); y4 += uint((l4 >> 0) & 3); y5 += uint((l5 >> 0) & 3); y6 += uint((l6 >> 0) & 3); y7 += uint((l7 >> 0) & 3); l0 ^= ushort(tt); l1 ^= ushort(tt); l2 ^= ushort(tt); l3 ^= ushort(tt); l4 ^= ushort(tt); l5 ^= ushort(tt); l6 ^= ushort(tt); l7 ^= ushort(tt); y0 += uint((l0 >> 2) & 3); y1 += uint((l1 >> 2) & 3); y2 += uint((l2 >> 2) & 3); y3 += uint((l3 >> 2) & 3); y4 += uint((l4 >> 2) & 3); y5 += uint((l5 >> 2) & 3); y6 += uint((l6 >> 2) & 3); y7 += uint((l7 >> 2) & 3); l0 ^= ushort(tt); l1 ^= ushort(tt); l2 ^= ushort(tt); l3 ^= ushort(tt); l4 ^= ushort(tt); l5 ^= ushort(tt); l6 ^= ushort(tt); l7 ^= ushort(tt); y0 += uint((l0 >> 4) & 3); y1 += uint((l1 >> 4) & 3); y2 += uint((l2 >> 4) & 3); y3 += uint((l3 >> 4) & 3); y4 += uint((l4 >> 4) & 3); y5 += uint((l5 >> 4) & 3); y6 += uint((l6 >> 4) & 3); y7 += uint((l7 >> 4) & 3); l0 ^= ushort(tt); l1 ^= ushort(tt); l2 ^= ushort(tt); l3 ^= ushort(tt); l4 ^= ushort(tt); l5 ^= ushort(tt); l6 ^= ushort(tt); l7 ^= ushort(tt); y0 += uint((l0 >> 6) & 3); y1 += uint((l1 >> 6) & 3); y2 += uint((l2 >> 6) & 3); y3 += uint((l3 >> 6) & 3); y4 += uint((l4 >> 6) & 3); y5 += uint((l5 >> 6) & 3); y6 += uint((l6 >> 6) & 3); y7 += uint((l7 >> 6) & 3); l0 ^= ushort(tt); l1 ^= ushort(tt); l2 ^= ushort(tt); l3 ^= ushort(tt); l4 ^= ushort(tt); l5 ^= ushort(tt); l6 ^= ushort(tt); l7 ^= ushort(tt); }
+    o[t] = float(y0 ^ y1 ^ y2 ^ y3 ^ y4 ^ y5 ^ y6 ^ y7); }
+// bfe16_ctl: the same body without the extract (y += l)
+kernel void op_bfe16_ctl(device const uint * d [[buffer(0)]], device float * o [[buffer(1)]], constant uint & n [[buffer(2)]], uint t [[thread_position_in_grid]], uint tid [[thread_position_in_threadgroup]], uint tpg [[threads_per_threadgroup]], uint sg [[simdgroup_index_in_threadgroup]], constant uint & nbytes [[buffer(3)]], threadgroup half * sm [[threadgroup(0)]]) {
+    ushort l0 = ushort(d[t]), l1 = l0 + 11, l2 = l0 + 22, l3 = l0 + 33, l4 = l0 + 44, l5 = l0 + 55, l6 = l0 + 66, l7 = l0 + 77; uint y0 = d[t+1], y1 = y0 + 1, y2 = y0 + 2, y3 = y0 + 3, y4 = y0 + 4, y5 = y0 + 5, y6 = y0 + 6, y7 = y0 + 7; const uint c = d[t+2];
+    for (uint i = 0; i < n; ++i) { const uint tt = c + i; y0 += uint(l0); y1 += uint(l1); y2 += uint(l2); y3 += uint(l3); y4 += uint(l4); y5 += uint(l5); y6 += uint(l6); y7 += uint(l7); l0 ^= ushort(tt); l1 ^= ushort(tt); l2 ^= ushort(tt); l3 ^= ushort(tt); l4 ^= ushort(tt); l5 ^= ushort(tt); l6 ^= ushort(tt); l7 ^= ushort(tt); y0 += uint(l0); y1 += uint(l1); y2 += uint(l2); y3 += uint(l3); y4 += uint(l4); y5 += uint(l5); y6 += uint(l6); y7 += uint(l7); l0 ^= ushort(tt); l1 ^= ushort(tt); l2 ^= ushort(tt); l3 ^= ushort(tt); l4 ^= ushort(tt); l5 ^= ushort(tt); l6 ^= ushort(tt); l7 ^= ushort(tt); y0 += uint(l0); y1 += uint(l1); y2 += uint(l2); y3 += uint(l3); y4 += uint(l4); y5 += uint(l5); y6 += uint(l6); y7 += uint(l7); l0 ^= ushort(tt); l1 ^= ushort(tt); l2 ^= ushort(tt); l3 ^= ushort(tt); l4 ^= ushort(tt); l5 ^= ushort(tt); l6 ^= ushort(tt); l7 ^= ushort(tt); y0 += uint(l0); y1 += uint(l1); y2 += uint(l2); y3 += uint(l3); y4 += uint(l4); y5 += uint(l5); y6 += uint(l6); y7 += uint(l7); l0 ^= ushort(tt); l1 ^= ushort(tt); l2 ^= ushort(tt); l3 ^= ushort(tt); l4 ^= ushort(tt); l5 ^= ushort(tt); l6 ^= ushort(tt); l7 ^= ushort(tt); }
+    o[t] = float(y0 ^ y1 ^ y2 ^ y3 ^ y4 ^ y5 ^ y6 ^ y7); }

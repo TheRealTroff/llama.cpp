@@ -18,3 +18,15 @@ op_iadd tg=1 threads=32 bytes=65536: t(n=4096)=108.8 us t(n=16384)=428.1 us -> 2
 op_iadd tg=1 threads=128 bytes=65536: t(n=4096)=108.8 us t(n=16384)=427.9 us -> 25.97 ns per iteration
 op_iadd tg=1 threads=256 bytes=65536: t(n=4096)=178.3 us t(n=16384)=706.0 us -> 42.95 ns per iteration
 op_iadd tg=1 threads=512 bytes=65536: t(n=4096)=321.9 us t(n=16384)=1266.3 us -> 76.86 ns per iteration
+op_fmul2h tg=1 threads=32 bytes=65536 smem=16384: t(n=4096)=171.4 us t(n=16384)=677.4 us -> 41.17 ns per iteration
+op_fmul2h tg=1 threads=128 bytes=65536 smem=16384: t(n=4096)=171.0 us t(n=16384)=677.1 us -> 41.19 ns per iteration
+op_fmul2h tg=1 threads=512 bytes=65536 smem=16384: t(n=4096)=471.3 us t(n=16384)=1878.4 us -> 114.51 ns per iteration
+op_fmul2h_ctl tg=1 threads=32 bytes=65536 smem=16384: t(n=4096)=158.0 us t(n=16384)=625.2 us -> 38.02 ns per iteration
+op_fmul2h_ctl tg=1 threads=128 bytes=65536 smem=16384: t(n=4096)=158.2 us t(n=16384)=625.4 us -> 38.01 ns per iteration
+op_fmul2h_ctl tg=1 threads=512 bytes=65536 smem=16384: t(n=4096)=492.2 us t(n=16384)=1965.7 us -> 119.91 ns per iteration
+op_bfe16 tg=1 threads=32 bytes=65536 smem=16384: t(n=4096)=208.0 us t(n=16384)=823.2 us -> 50.07 ns per iteration
+op_bfe16 tg=1 threads=128 bytes=65536 smem=16384: t(n=4096)=248.9 us t(n=16384)=983.4 us -> 59.77 ns per iteration
+op_bfe16 tg=1 threads=512 bytes=65536 smem=16384: t(n=4096)=782.0 us t(n=16384)=3118.3 us -> 190.13 ns per iteration
+op_bfe16_ctl tg=1 threads=32 bytes=65536 smem=16384: t(n=4096)=127.0 us t(n=16384)=500.9 us -> 30.43 ns per iteration
+op_bfe16_ctl tg=1 threads=128 bytes=65536 smem=16384: t(n=4096)=127.1 us t(n=16384)=501.0 us -> 30.43 ns per iteration
+op_bfe16_ctl tg=1 threads=512 bytes=65536 smem=16384: t(n=4096)=390.7 us t(n=16384)=1554.9 us -> 94.74 ns per iteration

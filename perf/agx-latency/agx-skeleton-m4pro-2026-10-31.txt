@@ -1,0 +1,120 @@
+# harness skeleton ladders (sg-k-steps/us/core = 2 x 27.2 / slope), real grid 544x64, smem 5184+pad; see perf/kernel-perf-model.md 2026-10-31 night
+skel_full tg=544 threads=64 bytes=67108864 smem=5184: t(n=160)=485.7 us t(n=640)=1923.4 us -> 2995.14 ns per iteration
+skel_nostream tg=544 threads=64 bytes=67108864 smem=5184: t(n=160)=472.9 us t(n=640)=1884.7 us -> 2941.15 ns per iteration
+skel_nomma tg=544 threads=64 bytes=67108864 smem=5184: t(n=160)=404.0 us t(n=640)=1560.6 us -> 2409.55 ns per iteration
+skel_nobar tg=544 threads=64 bytes=67108864 smem=5184: t(n=160)=466.6 us t(n=640)=1856.0 us -> 2894.53 ns per iteration
+skel_noast tg=544 threads=64 bytes=67108864 smem=5184: t(n=160)=453.6 us t(n=640)=1802.5 us -> 2810.16 ns per iteration
+skel_nobst tg=544 threads=64 bytes=67108864 smem=5184: t(n=160)=421.5 us t(n=640)=1662.5 us -> 2585.50 ns per iteration
+skel_mmaonly tg=544 threads=64 bytes=67108864 smem=5184: t(n=160)=400.6 us t(n=640)=1584.1 us -> 2465.71 ns per iteration
+skel_nomma_nobar tg=544 threads=64 bytes=67108864 smem=5184: t(n=160)=381.5 us t(n=640)=1491.2 us -> 2311.72 ns per iteration
+skel_full tg=544 threads=64 bytes=67108864 smem=9280: t(n=160)=539.4 us t(n=640)=2106.3 us -> 3264.50 ns per iteration
+skel_nostream tg=544 threads=64 bytes=67108864 smem=9280: t(n=160)=508.1 us t(n=640)=2026.5 us -> 3163.19 ns per iteration
+skel_nomma tg=544 threads=64 bytes=67108864 smem=9280: t(n=160)=601.0 us t(n=640)=2297.6 us -> 3534.63 ns per iteration
+skel_nobar tg=544 threads=64 bytes=67108864 smem=9280: t(n=160)=480.1 us t(n=640)=1902.8 us -> 2963.89 ns per iteration
+skel_noast tg=544 threads=64 bytes=67108864 smem=9280: t(n=160)=504.3 us t(n=640)=1964.8 us -> 3042.71 ns per iteration
+skel_nobst tg=544 threads=64 bytes=67108864 smem=9280: t(n=160)=437.1 us t(n=640)=1721.0 us -> 2674.83 ns per iteration
+skel_mmaonly tg=544 threads=64 bytes=67108864 smem=9280: t(n=160)=398.7 us t(n=640)=1587.1 us -> 2475.78 ns per iteration
+skel_nomma_nobar tg=544 threads=64 bytes=67108864 smem=9280: t(n=160)=467.7 us t(n=640)=1664.9 us -> 2494.01 ns per iteration
+skel_full tg=544 threads=64 bytes=67108864 smem=17472: t(n=160)=818.2 us t(n=640)=3273.1 us -> 5114.32 ns per iteration
+skel_nostream tg=544 threads=64 bytes=67108864 smem=17472: t(n=160)=697.5 us t(n=640)=2843.3 us -> 4470.23 ns per iteration
+skel_nomma tg=544 threads=64 bytes=67108864 smem=17472: t(n=160)=791.8 us t(n=640)=3077.5 us -> 4761.81 ns per iteration
+skel_nobar tg=544 threads=64 bytes=67108864 smem=17472: t(n=160)=660.2 us t(n=640)=2629.1 us -> 4101.82 ns per iteration
+skel_noast tg=544 threads=64 bytes=67108864 smem=17472: t(n=160)=760.0 us t(n=640)=2960.4 us -> 4584.20 ns per iteration
+skel_nobst tg=544 threads=64 bytes=67108864 smem=17472: t(n=160)=581.0 us t(n=640)=2165.2 us -> 3300.43 ns per iteration
+skel_mmaonly tg=544 threads=64 bytes=67108864 smem=17472: t(n=160)=432.3 us t(n=640)=1704.5 us -> 2650.52 ns per iteration
+skel_nomma_nobar tg=544 threads=64 bytes=67108864 smem=17472: t(n=160)=684.7 us t(n=640)=2601.5 us -> 3993.14 ns per iteration
+skel_full tg=544 threads=64 bytes=67108864 smem=29760: t(n=160)=1486.2 us t(n=640)=5574.8 us -> 8517.88 ns per iteration
+skel_nostream tg=544 threads=64 bytes=67108864 smem=29760: t(n=160)=1248.0 us t(n=640)=5122.8 us -> 8072.48 ns per iteration
+skel_nomma tg=544 threads=64 bytes=67108864 smem=29760: t(n=160)=1324.0 us t(n=640)=4834.0 us -> 7312.41 ns per iteration
+skel_nobar tg=544 threads=64 bytes=67108864 smem=29760: t(n=160)=1257.6 us t(n=640)=4804.7 us -> 7389.67 ns per iteration
+skel_noast tg=544 threads=64 bytes=67108864 smem=29760: t(n=160)=1357.8 us t(n=640)=4980.1 us -> 7546.53 ns per iteration
+skel_nobst tg=544 threads=64 bytes=67108864 smem=29760: t(n=160)=926.5 us t(n=640)=3511.0 us -> 5384.29 ns per iteration
+skel_mmaonly tg=544 threads=64 bytes=67108864 smem=29760: t(n=160)=608.5 us t(n=640)=2378.0 us -> 3686.46 ns per iteration
+skel_nomma_nobar tg=544 threads=64 bytes=67108864 smem=29760: t(n=160)=1090.5 us t(n=640)=3748.1 us -> 5536.72 ns per iteration
+skel_full tg=544 threads=64 bytes=67108864 smem=5184: t(n=160)=484.5 us t(n=640)=1925.5 us -> 3002.00 ns per iteration
+skel_r16 tg=544 threads=64 bytes=67108864 smem=5184: t(n=160)=541.6 us t(n=640)=2141.4 us -> 3332.81 ns per iteration
+skel_r32 tg=544 threads=64 bytes=67108864 smem=5184: t(n=160)=497.5 us t(n=640)=1953.0 us -> 3032.20 ns per iteration
+skel_r48 tg=544 threads=64 bytes=67108864 smem=5184: t(n=160)=504.6 us t(n=640)=1964.5 us -> 3041.49 ns per iteration
+skel_r64 tg=544 threads=64 bytes=67108864 smem=5184: t(n=160)=509.5 us t(n=640)=1959.7 us -> 3021.35 ns per iteration
+skel_full tg=544 threads=64 bytes=67108864 smem=9280: t(n=160)=540.6 us t(n=640)=2097.8 us -> 3244.10 ns per iteration
+skel_r16 tg=544 threads=64 bytes=67108864 smem=9280: t(n=160)=566.2 us t(n=640)=2247.9 us -> 3503.47 ns per iteration
+skel_r32 tg=544 threads=64 bytes=67108864 smem=9280: t(n=160)=545.3 us t(n=640)=2131.3 us -> 3304.25 ns per iteration
+skel_r48 tg=544 threads=64 bytes=67108864 smem=9280: t(n=160)=541.8 us t(n=640)=2132.8 us -> 3314.58 ns per iteration
+skel_r64 tg=544 threads=64 bytes=67108864 smem=9280: t(n=160)=541.8 us t(n=640)=2134.3 us -> 3317.79 ns per iteration
+skel_full tg=544 threads=64 bytes=67108864 smem=29760: t(n=160)=1403.3 us t(n=640)=5514.4 us -> 8564.93 ns per iteration
+skel_r16 tg=544 threads=64 bytes=67108864 smem=29760: t(n=160)=1412.0 us t(n=640)=5648.5 us -> 8826.04 ns per iteration
+skel_r32 tg=544 threads=64 bytes=67108864 smem=29760: t(n=160)=1528.4 us t(n=640)=5692.3 us -> 8674.83 ns per iteration
+skel_r48 tg=544 threads=64 bytes=67108864 smem=29760: t(n=160)=1521.0 us t(n=640)=5860.6 us -> 9040.89 ns per iteration
+skel_r64 tg=544 threads=64 bytes=67108864 smem=29760: t(n=160)=1473.5 us t(n=640)=5753.5 us -> 8916.58 ns per iteration
+skel_deq tg=544 threads=64 bytes=67108864 smem=5184: t(n=160)=762.7 us t(n=640)=3019.8 us -> 4702.17 ns per iteration
+skel_deq_nostream tg=544 threads=64 bytes=67108864 smem=5184: t(n=160)=663.5 us t(n=640)=2631.9 us -> 4100.69 ns per iteration
+skel_deq_nomma tg=544 threads=64 bytes=67108864 smem=5184: t(n=160)=656.9 us t(n=640)=2565.9 us -> 3977.08 ns per iteration
+skel_deq_nobar tg=544 threads=64 bytes=67108864 smem=5184: t(n=160)=753.3 us t(n=640)=2981.7 us -> 4642.45 ns per iteration
+skel_deq tg=544 threads=64 bytes=67108864 smem=9280: t(n=160)=790.3 us t(n=640)=3132.4 us -> 4879.43 ns per iteration
+skel_deq_nostream tg=544 threads=64 bytes=67108864 smem=9280: t(n=160)=675.9 us t(n=640)=2683.9 us -> 4183.33 ns per iteration
+skel_deq_nomma tg=544 threads=64 bytes=67108864 smem=9280: t(n=160)=728.0 us t(n=640)=2822.4 us -> 4363.19 ns per iteration
+skel_deq_nobar tg=544 threads=64 bytes=67108864 smem=9280: t(n=160)=755.6 us t(n=640)=2993.4 us -> 4661.98 ns per iteration
+skel_deq tg=544 threads=64 bytes=67108864 smem=29760: t(n=160)=2084.8 us t(n=640)=7488.7 us -> 11258.16 ns per iteration
+skel_deq_nostream tg=544 threads=64 bytes=67108864 smem=29760: t(n=160)=1462.1 us t(n=640)=6142.4 us -> 9750.52 ns per iteration
+skel_deq_nomma tg=544 threads=64 bytes=67108864 smem=29760: t(n=160)=2025.5 us t(n=640)=7003.8 us -> 10371.53 ns per iteration
+skel_deq_nobar tg=544 threads=64 bytes=67108864 smem=29760: t(n=160)=1797.4 us t(n=640)=6822.1 us -> 10468.14 ns per iteration
+skel_deq tg=544 threads=64 bytes=67108864 smem=5184: t(n=160)=761.8 us t(n=640)=3018.6 us -> 4701.82 ns per iteration
+skel_deq_hacc tg=544 threads=64 bytes=67108864 smem=5184: t(n=160)=683.4 us t(n=640)=2708.0 us -> 4217.97 ns per iteration
+skel_deq_nocvt tg=544 threads=64 bytes=67108864 smem=5184: t(n=160)=584.7 us t(n=640)=2308.0 us -> 3590.10 ns per iteration
+skel_deq_nocvt_nomma tg=544 threads=64 bytes=67108864 smem=5184: t(n=160)=493.6 us t(n=640)=1905.8 us -> 2942.10 ns per iteration
+skel_deq tg=544 threads=64 bytes=67108864 smem=9280: t(n=160)=791.6 us t(n=640)=3132.1 us -> 4876.04 ns per iteration
+skel_deq_hacc tg=544 threads=64 bytes=67108864 smem=9280: t(n=160)=703.1 us t(n=640)=2788.0 us -> 4343.58 ns per iteration
+skel_deq_nocvt tg=544 threads=64 bytes=67108864 smem=9280: t(n=160)=642.3 us t(n=640)=2493.7 us -> 3857.29 ns per iteration
+skel_deq_nocvt_nomma tg=544 threads=64 bytes=67108864 smem=9280: t(n=160)=648.2 us t(n=640)=2285.3 us -> 3410.59 ns per iteration
+skel_deq tg=544 threads=64 bytes=67108864 smem=29760: t(n=160)=1977.8 us t(n=640)=7857.4 us -> 12249.13 ns per iteration
+skel_deq_hacc tg=544 threads=64 bytes=67108864 smem=29760: t(n=160)=1975.4 us t(n=640)=7191.2 us -> 10866.41 ns per iteration
+skel_deq_nocvt tg=544 threads=64 bytes=67108864 smem=29760: t(n=160)=1875.1 us t(n=640)=7318.9 us -> 11341.23 ns per iteration
+skel_deq_nocvt_nomma tg=544 threads=64 bytes=67108864 smem=29760: t(n=160)=1753.0 us t(n=640)=6448.5 us -> 9782.38 ns per iteration
+
+harness skeleton variants: measured sg-k-steps/us/core at pad 0 / 4096 / 24576 (real q3_K: 10.6 / 9.4 / 3.2; q4_0 SoA 14.1 at pad 0) vs nstream-sim (--loads cached --tgmem-core) at N = 3 and 4 per port
+variant                pad0  pad4096  pad24576 |  sim N3  sim N4 err N3 vs pad0  what differs from skel_full
+skel_full              18.1     16.8       6.4 |    21.1    21.2           +16%  MMA + tile loads + A/B staging + barriers + 1 KB/TG-kstep stream, no dequant
+skel_nostream          18.5     17.2       6.7 |       -       -                 no weight stream
+skel_nomma             22.6     15.4       7.4 |    20.1    20.6           -11%  MMAs -> f16 adds
+skel_nobar             18.8     18.4       7.4 |    20.7    21.2           +10%  no barriers
+skel_noast             19.4     17.9       7.2 |    16.5    17.4           -15%  A stores -> adds
+skel_nobst             21.0     20.3      10.1 |    23.6    23.8           +12%  no B staging
+skel_mmaonly           22.1     22.0      14.8 |    19.2    19.0           -13%  MMA + tile loads only
+skel_nomma_nobar       23.5     21.8       9.8 |       -       -                 no MMA, no barriers
+skel_r16               16.3     15.5       6.2 |       -       -                 +16 live registers
+skel_r32               17.9     16.5       6.3 |       -       -                 +32
+skel_r48               17.9     16.4       6.0 |       -       -                 +48
+skel_r64               18.0     16.4       6.1 |       -       -                 +64
+skel_deq               11.6     11.1       4.8 |    14.7    15.3           +27%  + the q3_K dequant chain (converts, f32 mul)
+skel_deq_nostream      13.3     13.0       5.6 |    17.2    17.9           +30%  dequant, no stream
+skel_deq_nomma         13.7     12.5       5.2 |    12.0    12.6           -12%  dequant, MMAs -> adds
+skel_deq_nobar         11.7     11.7       5.2 |    14.7    15.0           +25%  dequant, no barriers
+
+harness variants, pad 0 (N = 3 per port in the sim): measured sg-k-steps/us/core and the sim's error for each --mma-fp32 value (ns the 2884 MMA also holds the FP32 pipe)
+variant                  meas |   fp32=0   fp32=3   fp32=4   fp32=5   fp32=6   fp32=8
+skel_full                18.1 |     +16%      +2%      -5%      +3%      +1%      -3% 
+skel_nostream            18.5 |     +11%      -4%      +2%      +1%      -1%      -5% 
+skel_nomma               22.6 |     -11%     -11%     -11%     -11%     -11%     -11% 
+skel_nobar               18.8 |     +10%     -19%      -8%      -1%      -2%      -6% 
+skel_noast               19.4 |     -15%     -14%     -12%     -13%     -12%     -13% 
+skel_nobst               21.0 |     +12%     +12%     +12%     +12%     +12%     +12% 
+skel_mmaonly             22.1 |     -13%     -13%     -13%     -13%     -13%     -13% 
+skel_nomma_nobar         23.5 |     -16%     -16%     -16%     -16%     -16%     -16% 
+skel_deq                 11.6 |     +27%     +11%      +4%      +4%      +0%     -18% 
+skel_deq_nostream        13.3 |     +30%     +10%      +6%      +3%      +0%      -7% 
+skel_deq_nomma           13.7 |     -12%     -12%     -12%     -12%     -12%     -12% 
+skel_deq_nobar           11.7 |     +25%     +10%      +4%      -1%      -2%      -4% 
+skel_deq_hacc            12.9 |     +14%     +14%     +14%     +14%     +14%     +14% 
+skel_deq_nocvt           15.2 |     -18%     -18%     -18%     -18%     -18%     -18% 
+skel_deq_nocvt_nomma     18.5 |      -9%      -9%      -9%      -9%      -9%      -9% 
+mean |err|                    |    16.0%     11.7%      9.8%      8.8%      8.2%     10.8% 
+max |err|                     |    29.7%     18.6%     18.2%     18.2%     18.2%     18.2% 
+
+real skinny tiles: per-sg k-step ns, ladder (1/2/3/4 per port) vs nstream-sim (--loads 200 --tgmem-core) with --mma-fp32 0 / 5 / 6; the 4-per-port point is capped by the DRAM share for every tile but q3_K/iq4_xs (sim does not model the chip share)
+kernel    |         ladder 1/2/3/4 |                 fp32=0 |                 fp32=5 |                 fp32=6 | err at 3/port: 0 / 5 / 6
+q4_0 SoA  |  396/ 596/ 887/1003 |  474/ 577/ 832/1164 |  474/ 561/ 863/1202 |  474/ 559/ 814/1205 |   -6% /   -3% /   -8%
+q4_K      |  633/ 747/1000/1042 |  724/ 735/ 768/ 837 |  724/ 759/ 886/1314 |  724/ 753/ 890/1316 |  -23% /  -11% /  -11%
+q5_K      |  712/ 855/1126/1221 |  812/ 839/ 869/ 988 |  812/ 858/1009/1189 |  812/ 856/1061/1249 |  -23% /  -10% /   -6%
+q3_K      |  614/ 771/1106/1250 |  692/ 712/ 764/ 883 |  692/ 725/ 862/1308 |  692/ 733/ 864/1291 |  -31% /  -22% /  -22%
+iq4_xs    |  643/ 782/1062/1164 |  640/ 656/ 713/ 777 |  640/ 663/ 801/1058 |  640/ 666/ 840/1091 |  -33% /  -25% /  -21%
+q6_K      |  670/ 880/1204/1410 |  711/ 744/ 827/1022 |  711/ 759/ 986/1336 |  711/ 778/1027/1374 |  -31% /  -18% /  -15%

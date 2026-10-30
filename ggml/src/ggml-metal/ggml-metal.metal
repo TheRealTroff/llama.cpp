@@ -19588,7 +19588,7 @@ kernel void kernel_mul_mm_skinny_t(
     else if (FC_mul_mm_soa) { dequantize_soa_mm((device const block_q *) nullptr, xrowc, args.ne00, SKP2((KX)/(16*nl)), (short) (((KX)/16)%nl + (OFF)), REG); } \
     else               { dequantize_func(xrow + SKP2((KX)/(16*nl)), ((KX)/16)%nl + (OFF), REG); }
 #define SKINNY_DEQ2(KX, REGA, REGB) \
-    if (FC_mul_mm_sk_probe == 6) { const uint4 raw_ = *(device const uint4 *)(xrowc + ((KX)/16)*16); REGA[0] = a4_t(as_type<half4>(raw_.xy)); REGA[1] = a4_t(as_type<half4>(raw_.zw)); REGA[2] = REGA[0]; REGA[3] = REGA[1]; REGB = REGA; } \
+    if (FC_mul_mm_sk_probe == 6) { const uint4 raw_ = *(device const uint4 *)(xrowc + (((KX)/16)*16 & 63)); /* cached: the first form walked 32 rows per threadgroup and doubled the stream (DRAM-bound, 2026-10-31) */ REGA[0] = a4_t(as_type<half4>(raw_.xy)); REGA[1] = a4_t(as_type<half4>(raw_.zw)); REGA[2] = REGA[0]; REGA[3] = REGA[1]; REGB = REGA; } \
     else if (FC_mul_mm_q6k_v == 1 && FC_mul_mm_soa)  { dequantize_soa_pair((device const block_q *) nullptr, xrowc, args.ne00, SKP2((KX)/(16*nl)), (short) (((KX)/16)%nl), REGA, REGB); } \
     else if (FC_mul_mm_q6k_v == 1)              { dequantize_block_pair(xrow + SKP2((KX)/(16*nl)), (short) (((KX)/16)%nl), REGA, REGB); } \
     else if (FC_mul_mm_soa && FC_mul_mm_kq2_v == 1) { dequantize_soa_mm_pair((device const block_q *) nullptr, xrowc, args.ne00, SKP2((KX)/(16*nl)), (short) (((KX)/16)%nl), REGA, REGB); } \

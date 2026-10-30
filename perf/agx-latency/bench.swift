@@ -8,8 +8,8 @@ import Foundation
 import Metal
 
 let args = CommandLine.arguments
-guard args.count >= 3 else { print("usage: bench <kernels.metal> <kernel> [--n N1,N2] [--tg T] [--threads K] [--bytes B] [--reps R]"); exit(2) }
-var ns: [UInt32] = [16384, 65536]; var tgs = 1; var threads = 32; var bytes = 4096; var reps = 9
+guard args.count >= 3 else { print("usage: bench <kernels.metal> <kernel> [--n N1,N2] [--tg T] [--threads K] [--bytes B] [--smem S] [--reps R]"); exit(2) }
+var ns: [UInt32] = [16384, 65536]; var tgs = 1; var threads = 32; var bytes = 4096; var reps = 9; var smem = 16384
 var i = 3
 while i < args.count {
     switch args[i] {
@@ -17,6 +17,7 @@ while i < args.count {
     case "--tg": tgs = Int(args[i+1])!; i += 2
     case "--threads": threads = Int(args[i+1])!; i += 2
     case "--bytes": bytes = Int(args[i+1])!; i += 2
+    case "--smem": smem = Int(args[i+1])!; i += 2   // threadgroup memory per threadgroup (residency ladders: the skinny tile is 5184 B + GGML_MM_SKINNY_SMEM_PAD)
     case "--reps": reps = Int(args[i+1])!; i += 2
     default: print("unknown arg \(args[i])"); exit(2)
     }
@@ -43,7 +44,7 @@ func time(_ n: UInt32) -> Double {
         enc.setComputePipelineState(pso); enc.setBuffer(data, offset: 0, index: 0); enc.setBuffer(out, offset: 0, index: 1)
         var nn = n; enc.setBytes(&nn, length: 4, index: 2)
         var nb = UInt32(max(bytes, 4096)); enc.setBytes(&nb, length: 4, index: 3)   // the data buffer size, for streaming kernels
-        enc.setThreadgroupMemoryLength(16384, index: 0)
+        enc.setThreadgroupMemoryLength(smem, index: 0)
         enc.dispatchThreadgroups(MTLSize(width: tgs, height: 1, depth: 1), threadsPerThreadgroup: MTLSize(width: threads, height: 1, depth: 1))
         enc.endEncoding(); cb.commit(); cb.waitUntilCompleted()
         if cb.status != .completed { print("cb error: \(String(describing: cb.error))"); exit(1) }
@@ -57,4 +58,4 @@ var best = [Double.infinity, Double.infinity]
 for _ in 0..<reps { for j in 0..<2 { best[j] = min(best[j], time(ns[j])) } }
 let t = best
 let slope = (t[1] - t[0]) / Double(ns[1] - ns[0])
-print(String(format: "%@ tg=%d threads=%d bytes=%d: t(n=%d)=%.1f us t(n=%d)=%.1f us -> %.2f ns per iteration", args[2], tgs, threads, bytes, ns[0], t[0]/1e3, ns[1], t[1]/1e3, slope))
+print(String(format: "%@ tg=%d threads=%d bytes=%d smem=%d: t(n=%d)=%.1f us t(n=%d)=%.1f us -> %.2f ns per iteration", args[2], tgs, threads, bytes, smem, ns[0], t[0]/1e3, ns[1], t[1]/1e3, slope))

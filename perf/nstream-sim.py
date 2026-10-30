@@ -32,6 +32,8 @@ ap = argparse.ArgumentParser(); ap.add_argument('join'); ap.add_argument('--sgs'
 ap.add_argument('--iters', type=int, default=24); ap.add_argument('--issue', type=float, default=0.76); ap.add_argument('--port-slot', type=float, default=0.333)
 ap.add_argument('--mma-queue', type=int, default=64); ap.add_argument('--ports', type=int, default=4); ap.add_argument('--xu', type=float, default=0.67, help='core-wide convert/bfe unit, ns per op')
 ap.add_argument('--table', default=os.path.join(HERE, 'agx-latency', 'latency.json'))
+ap.add_argument('--mma-fp32', type=float, default=0.0, help='candidate rule: each MMA also occupies its port FP32 pipe for this many ns (the half->float accumulate on the f32 adder)')
+ap.add_argument('--mma-xu', type=float, default=0.0, help='candidate rule: each MMA also occupies the core-wide convert unit for this many ns')
 ap.add_argument('--tgmem-core', action='store_true', help='threadgroup memory as ONE core-wide unit: tile load 0.9 ns, 16-byte store 3.9, 2-byte store 1.2 (tldS/tstA/tstB probes at 16 simdgroups) instead of per-port pipes')
 a = ap.parse_args()
 T = json.load(open(a.table)); LAT_OP = {int(k): v for k, v in T['opcodes'].items()}; MEM = T['memory']
@@ -75,7 +77,10 @@ def run(N):
         elif a.tgmem_core and p['sub'] in TGM:
             start = max(start, tgm_free); tgm_free = start + TGM[p['sub']]; busy['TGMEM(core)'] += TGM[p['sub']]; done_t = start + lat
         elif p['sub'] == 'MMA' and a.mma_queue > 0:
-            key = (port, p['pipe']); pipe_start = max(pipe_free[key], start); pipe_free[key] = pipe_start + p['cost']; busy[p['pipe']] += p['cost']
+            key = (port, p['pipe']); pipe_start = max(pipe_free[key], start)
+            if a.mma_fp32 > 0 and p['op'] == 2884: pipe_start = max(pipe_start, pipe_free[(port, 'FP32')]); pipe_free[(port, 'FP32')] = pipe_start + a.mma_fp32; busy['FP32'] += a.mma_fp32
+            if a.mma_xu > 0: pipe_start = max(pipe_start, xu_free); xu_free = pipe_start + a.mma_xu; busy['XU(core)'] += a.mma_xu
+            pipe_free[key] = pipe_start + p['cost']; busy[p['pipe']] += p['cost']
             done_t = pipe_start + lat
         elif p['cost'] > 0:
             key = (port, p['pipe']); start = max(start, pipe_free[key]); pipe_free[key] = start + p['cost']; busy[p['pipe']] += p['cost']; done_t = start + lat
