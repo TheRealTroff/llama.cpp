@@ -1,7 +1,8 @@
 # perf/ - start here
 
 Small-batch Metal decode and speculative-decoding work on Qwen3.8-27B, M4 Pro (20-core
-GPU, 273 GB/s), macOS 26.5.2.
+GPU, 273 GB/s), macOS 27.2.1 + Xcode 27.2 / Metal Toolchain 27B47 since 2026-11-10 (this line
+said 26.5.2 until then; the OS history is in `kernel-census.md`).
 
 **Ranked history of what moved single-stream decode: `what-moved-the-needle.md`**
 (2026-09-05). Read it before proposing a lever - it lists what paid, what was closed, and
@@ -31,6 +32,24 @@ switching branches in a worktree, too: a stale binary from another branch is the
 one level down, and it bit the `GGML_MV_EXT_V2` work on 2026-08-22.
 
 ## The prod pick
+
+**2026-11-10 small hours (owner: "New updates, both OS and Xcode ... run a smoketest to see if everything is in the same place"):
+macOS 27.0.1 -> 27.2.1 (26B131) and Xcode 27.1 -> 27.2 (27B52, Metal Toolchain 27B47, metal 32023.922). No pick change, no
+manifest change, no rebuild (binary 10-30 23:21, prod `97f6cffbb`): the served kernels are compiled at run time by the OS, so
+this mint is the gate for the OS's shader compiler. Mint `prodpick-nov10-os2721-{ud,q4}` (01:35-02:35, one throwaway warm-up
+pair per line first - the page cache and the OS shader cache were cold after the reboot; the cold first arm read 30.35 where
+its warm repeat read 32.85):** ud f16 32.85 / 32.85 at 300 (`9c53aaade052`), 32.76 / 32.72 at 600 (`86b6e9b02cf0`), partial
+14.93, MTP 20.30, b1 13.45; Turbo4 33.30 at 300 (`d180ae89f168`), 30.85 / 30.94 at 600 (`abc0c5af7300` x2), turbo4-b1 13.41.
+q4 f16 33.54 / 33.54 at 300 (`d2953fccfb41`), 35.31 / 35.20 at 600 (`441120c66064`), partial 22.83 (`95fb10b8e7da`), MTP 24.58,
+b1 14.92; Turbo4 35.23 at 300 (`f07b0f8c58e6`), 35.00 / 35.03 at 600 (`801cb0758d4e` x2), turbo4-b1 14.72 (`7c5254d01b12`).
+**Every sha = the Nov 1 mint's on both lines, the controller arms included (22/22); 0 `fuse-alias` hits in every log; multi-slot
+split + classes PASS (short + long extents), vision one-slot + multi-slot PASS, both lines.** t/s against the Nov 1 mint: q4
++0.3..+2.0%, ud 0.0..+2.1% (ud Turbo4 600-r1 +4.1% against a low Nov 1 read); a freshly rebooted machine, cause not measured.
+Before the mint: `test-backend-ops test -b MTL0` 14824/14824 under each line's Turbo4 pick env (`osupd-nov10-tbo-{ud,q4}.log`),
+and a 5-row ud width-8 census under the Oct 24 env (`census-1110-osupd-ud-w8-dec` on the 27.1 toolchain, `census-1110-xc272-ud-w8-dec`
+on 27.2): registers and spill unchanged, skinny rows within 1% of Oct 24 per call, every row joined, and the two toolchains'
+translators emit identical machine IR - tooling notes in `kernel-census.md` (2026-11-10) and `agx-backend-access.md`. Logs
+`kvquant-experiments/results/prodpick-nov10-os2721-{ud,q4}.log`, `osupd-nov10-warm-{ud,q4}.log`.
 
 **2026-10-31 small hours (owner, Oct 30 night: "I agree with your recommendation, but I assume you'll pull the brakes if something..
 breaks"): the half-B skinny lever `GGML_MM_SKINNY_HALFB=1` + the f16 twins `GGML_FUSE_SMALL=63` PICKED on the ud line (BI class;

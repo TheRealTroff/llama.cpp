@@ -11,6 +11,14 @@
 > (`AGX_PLATFORM_VERSION`, `AGX_NT_MODULE`). `VALUE_OFF=112` and the `^AIRNT` breakpoint
 > are unchanged. Verified: `print-after-all` watch = 177 accesses, `kernel_silu_back_f32` MIR (19 instr) aligns to the native
 > body. The Python must be Apple's (`xcrun python3`, 3.9) for the lldb module; the script re-execs itself there.
+>
+> **State 2026-11-10 (macOS 27.2.1, Xcode 27.2, Metal Toolchain 27B47, metal 32023.922.4): the route works unchanged.** `VALUE_OFF=112`
+> and the `^AIRNT` breakpoint hold (the script checks the help string; the value byte moved 0x4c0ab88 -> 0x4c06b98 in the new
+> backend, found by name as before), config.yaml is byte-identical (27+ -> `libapplegpu-nt`), `kernel_silu_back_f32` = the same 19
+> instructions, and the new backend emits the same machine IR as 27.1's on five census kernels (skinny iq4_xs / q5_K x2, GDN, Turbo4
+> decode FA). One script bug surfaced by the reboot: the toolchain cryptex mounts at a new path on every activation and
+> `agx-nt-debug.sh` died on its dangling links before writing the stamp - fixed (`ln -sfn`, links always refreshed). The 27.1
+> debug copy is parked as `~/.cache/agx-nt-debug.xcode27.1-toolchain` (its links die at the next reboot; the two real binaries stay).
 
 Purpose: the GPU cost-model plan (why kernel speed stays unpredictable after ~50 kernels)
 needs per-instruction *classes* for every instruction the profiler attributes stalls to.

@@ -152,6 +152,17 @@ Two facts that make the comparison valid and cheap:
 > **Every Xcode update removes the Metal Toolchain component again** (seen 2026-10-24 with Xcode 27.1): if `xcrun metal
 > --version` says "missing Metal Toolchain", re-run the download, then re-verify this route on a COPY of an existing trace
 > (profiling embeds into the bundle) and rebuild `build-air/ggml.metallib` by hand - the census only rebuilds it on a source change.
+> **2026-11-10 (macOS 27.2.1, then Xcode 27.2 / Metal Toolchain 27B47, metal 32023.922): the whole route re-verified in ~10
+> minutes, twice.** An OS or Command Line Tools update alone does NOT remove the toolchain (`xcodebuild -version` is the check; a
+> pending Xcode.app update is App Store only, so ask), but ANY reboot remounts the toolchain cryptex at a new path: run
+> `perf/agx-nt-debug.sh` first (it refreshes the debug copy's links; before the fix it died on a dangling link and every MIR join
+> after a reboot would have failed). The fastest end-to-end check of timing + capture + replay + decode + join is a short census of
+> an OLD profiled log under that census's own env string (line 2 of its `census.log`): `B=<prod> CENSUS_KV=turbo4 ENVS="<that
+> string>" TOP=3 PHASE=decode PREV=<its snapshot.json> perf/kernel-census.sh <old metalprof log> <new tag>` - five rows in 4-5
+> minutes, and regs/spill/hot-instr/us against the old snapshot say whether the OS compiler moved a kernel. To tell a SOURCE change
+> from a compiler change in a row that moved, diff the `.mir` files: the offline translator does not depend on the OS, so a
+> difference between the old census's `.mir` and tonight's under the same toolchain is the source. While the old toolchain is still
+> mounted (until the next reboot) run the census under both: the 27.1 and 27.2 translators gave identical machine IR on all five.
 
 ```sh
 references/metal-profile-headless.py \

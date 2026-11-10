@@ -43,7 +43,18 @@ match this binary at N offsets") because those kernels changed - the guard works
 pick needs a fresh census run, not a re-join. The lldb Python module is Apple's (`_lldb.cpython-39`): the script re-execs under `/usr/bin/python3` when a conda/brew python3
 cannot import it (the census already calls it through `xcrun python3`). Also: after ANY Xcode update the Metal Toolchain
 component is gone again - re-download, and rebuild `build-air/ggml.metallib` by hand (this script only rebuilds it on a source
-change). The translator metallib compile needs `-mmacosx-version-min=26.0` now
+change). **2026-11-10 (macOS 27.2.1, then Xcode 27.2 / Metal Toolchain 27B47):** an OS + Command Line Tools update alone
+keeps the toolchain (Xcode.app decides: `xcodebuild -version`), but every reboot remounts it at a new path, so run
+`perf/agx-nt-debug.sh` first - until tonight it died on its own dangling links (`ln: File exists` under `set -e`) and left the
+debug copy half-refreshed, which would have read as "no join" on every row. Quickest whole-route check after an update: this
+script on an OLD profiled log under that census's own env string (line 2 of its `census.log`), `TOP=3 PHASE=decode PREV=<its
+snapshot>` - five rows, 4-5 minutes, timing + capture + replay + decode + join. Done under both toolchains tonight
+(`census-1110-osupd-ud-w8-dec` = 27.1, `census-1110-xc272-ud-w8-dec` = 27.2, ud width 8, the Oct 24 env): all rows joined, regs /
+spill as on Oct 24 (65/0, 69/0, 34/0, 96/48 B), us/call iq4_xs 406.7 -> 406.8, q5_K 437.4 -> 437.1 and 510.4 -> 514.9, GDN 50.7
+-> 47.5 (same executed count, not explained), Turbo4 decode FA 351.4 -> 338.4 (the Oct 25 unroll, source). The skinny hot loops
+are one instruction shorter than Oct 24 (239 -> 238, 339 -> 338): a source change since then (same count from the 27.1 translator
+tonight; the offline translator does not depend on the OS). The 27.1 and 27.2 translators emit identical machine IR for all five
+kernels. The translator metallib compile needs `-mmacosx-version-min=26.0` now
 (Xcode 27's `metal` emits AIR 2.9; `applegpu-nt` targets 2.8). `PHASE=decode|prefill` limits the plan to one phase - the 8K
 benchprompt otherwise fills a top-N with prefill rows. A stuck `gpudebug` session (`gpudebug -l`, `--terminate all`) is the first
 thing to check when a row's `*.instr.txt` comes back empty.

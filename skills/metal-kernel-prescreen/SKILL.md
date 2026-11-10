@@ -66,7 +66,7 @@ module, module AIR version (2.9) is bigger than the one of the target (2.8)");~~
 hardcoded `-platform_version macos 26.0` (the macOS-26 backend); `agx-spill-probe.py` now targets the running OS (27.0 ->
 `libapplegpu-nt`, no version-min needed, AIR 2.9 fine) - and a 26 target translates kernels 1-3 instructions LONGER than the
 runtime's binary on some kernels, so never prescreen against a target the runtime is not compiling for; the Metal Toolchain is a separate
-`xcodebuild -downloadComponent MetalToolchain` (2026-09-18). Every Xcode update removes that component again (2026-10-24, Xcode 27.1): check `xcrun metal --version` first; without the version-min flag the 27.1 toolchain fails with `image not loaded: object`. `-DTURBO_USE_PAIR_LUT=1` mirrors the runtime's preprocessor macro (`ggml-metal-device.m` sets it before
+`xcodebuild -downloadComponent MetalToolchain` (2026-09-18). Every Xcode.app update removes that component again (2026-10-24 Xcode 27.1; 2026-11-10 Xcode 27.2 -> Metal Toolchain 27B47, metal 32023.922, same text/spill on the two kernels checked and identical machine IR on five census kernels; an OS-only update does not remove it): check `xcrun metal --version` first; without the version-min flag the 27.1 toolchain fails with `image not loaded: object`. `-DTURBO_USE_PAIR_LUT=1` mirrors the runtime's preprocessor macro (`ggml-metal-device.m` sets it before
 compiling the embedded source): without it the Turbo4 FA forms fail with "use of undeclared identifier
 'turbo_pairs_4bit'" and no `.air` is written (2026-09-16, macOS 27 / Xcode 26.6). Check for other macros in
 that file's `preprocessorMacros` block when a new define appears there.
